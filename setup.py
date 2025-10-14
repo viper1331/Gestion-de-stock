@@ -1,4 +1,4 @@
-from setuptools import setup
+from setuptools import find_packages, setup
 
 # Configuration pour générer un installateur Windows (setup.exe)
 # Utiliser :
@@ -12,7 +12,10 @@ setup(
     author='Sebastien Cangemi',
     author_email='contact@example.com',
     url='https://example.com/GestionStock',
-    scripts=['gestion_stock.py'],
+    packages=find_packages(include=['gestion_stock', 'gestion_stock.*']),
+    entry_points={
+        'gui_scripts': ['gestion-stock=gestion_stock.__main__:main'],
+    },
     options={
         'bdist_wininst': {
             'install_icon': None,  # Chemin vers un fichier .ico si vous en avez

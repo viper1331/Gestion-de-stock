@@ -79,5 +79,22 @@ class AdjustItemQuantityTests(unittest.TestCase):
         self.assertEqual(movement, ("OUT", -10, "tester", "test_suite", "retrait"))
 
 
+class UserManagementTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.user_db_path = Path(self.tempdir.name) / "test_users.db"
+        self.original_user_db_path = gestion_stock.USER_DB_PATH
+        gestion_stock.USER_DB_PATH = str(self.user_db_path)
+        gestion_stock.init_user_db(gestion_stock.USER_DB_PATH)
+
+    def tearDown(self):
+        gestion_stock.USER_DB_PATH = self.original_user_db_path
+        self.tempdir.cleanup()
+
+    def test_create_user_rejects_invalid_role(self):
+        with self.assertRaises(ValueError):
+            gestion_stock.create_user("alice", "password", role="manager")
+
+
 if __name__ == "__main__":
     unittest.main()
