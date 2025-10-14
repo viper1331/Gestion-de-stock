@@ -2061,75 +2061,6 @@ class StockApp(tk.Tk):
         self.destroy()
 
 
-class AlertManager:
-    """Gère les alertes de stock faible et la génération automatique de propositions."""
-
-    def __init__(self, app, threshold):
-        self.app = app
-        self.threshold = threshold
-        self.running = True
-        self.thread = threading.Thread(target=self._worker, daemon=True)
-        self.thread.start()
-
-    def stop(self):
-        self.running = False
-
-    def dispatch_low_stock_alert(self, item_id, item_name, quantity, threshold):
-        if has_recent_alert(item_id, within_hours=6):
-            return
-        message = (
-            f"Alerte stock faible pour {item_name} : {quantity} unité(s) restante(s) (seuil {threshold})."
-        )
-        record_stock_alert(item_id, message, channel='internal', alert_level='low')
-        deficit = max(threshold - quantity, 1)
-        create_suggested_purchase_order(item_id, deficit, created_by=getattr(self.app, 'current_user', 'system'))
-        if self.app and self.app.winfo_exists():
-            self.app.after(0, lambda msg=message: self._update_status(msg))
-
-    def _update_status(self, message):
-        if hasattr(self.app, 'status'):
-            try:
-                self.app.status.set(message)
-            except Exception:
-                pass
-
-    def _worker(self):
-        while self.running:
-            try:
-                self.scan_low_stock()
-            except Exception as exc:
-                print(f"[AlertManager] Erreur: {exc}")
-            for _ in range(60):
-                if not self.running:
-                    break
-                time.sleep(1)
-
-    def scan_low_stock(self):
-        conn = None
-        try:
-            with db_lock:
-                conn = sqlite3.connect(DB_PATH, timeout=30)
-                cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT id, name, quantity, COALESCE(reorder_point, ?) as threshold
-                    FROM items
-                    WHERE quantity <= COALESCE(reorder_point, ?)
-                    """,
-                    (self.threshold, self.threshold),
-                )
-                rows = cursor.fetchall()
-        except sqlite3.Error as e:
-            print(f"[AlertManager] Erreur BD: {e}")
-            rows = []
-        finally:
-            if conn:
-                conn.close()
-
-        for item_id, name, qty, threshold in rows:
-            if not has_recent_alert(item_id, within_hours=24):
-                self.dispatch_low_stock_alert(item_id, name, qty, threshold)
-
     def create_menu(self):
         menubar = tk.Menu(self)
 
@@ -3411,6 +3342,81 @@ class AlertManager:
         root.destroy()
         app = StockApp(new_user, new_role, uid)
         app.mainloop()
+
+
+class AlertManager:
+    """Gère les alertes de stock faible et la génération automatique de propositions."""
+
+    def __init__(self, app, threshold):
+        self.app = app
+        self.threshold = threshold
+        self.running = True
+        self.thread = threading.Thread(target=self._worker, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.running = False
+
+    def dispatch_low_stock_alert(self, item_id, item_name, quantity, threshold):
+        if has_recent_alert(item_id, within_hours=6):
+            return
+        message = (
+            f"Alerte stock faible pour {item_name} : {quantity} unité(s) restante(s) (seuil {threshold})."
+        )
+        record_stock_alert(item_id, message, channel='internal', alert_level='low')
+        deficit = max(threshold - quantity, 1)
+        create_suggested_purchase_order(
+            item_id,
+            deficit,
+            created_by=getattr(self.app, 'current_user', 'system'),
+        )
+        if self.app and self.app.winfo_exists():
+            self.app.after(0, lambda msg=message: self._update_status(msg))
+
+    def _update_status(self, message):
+        if hasattr(self.app, 'status'):
+            try:
+                self.app.status.set(message)
+            except Exception:
+                pass
+
+    def _worker(self):
+        while self.running:
+            try:
+                self.scan_low_stock()
+            except Exception as exc:
+                print(f"[AlertManager] Erreur: {exc}")
+            for _ in range(60):
+                if not self.running:
+                    break
+                time.sleep(1)
+
+    def scan_low_stock(self):
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT id, name, quantity, COALESCE(reorder_point, ?) as threshold
+                    FROM items
+                    WHERE quantity <= COALESCE(reorder_point, ?)
+                    """,
+                    (self.threshold, self.threshold),
+                )
+                rows = cursor.fetchall()
+        except sqlite3.Error as e:
+            print(f"[AlertManager] Erreur BD: {e}")
+            rows = []
+        finally:
+            if conn:
+                conn.close()
+
+        for item_id, name, qty, threshold in rows:
+            if not has_recent_alert(item_id, within_hours=24):
+                self.dispatch_low_stock_alert(item_id, name, qty, threshold)
+
 
 class SupplierFormDialog(tk.Toplevel):
     def __init__(self, parent, title, supplier=None):
