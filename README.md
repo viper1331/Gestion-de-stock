@@ -75,10 +75,10 @@ Au premier démarrage, l'application initialise les bases SQLite et vous demande
 
 ## Configuration
 Un fichier `config.ini` est créé dans le répertoire racine avec deux sections :
-- **Settings** : chemins (`db_path`, `user_db_path`, `barcode_dir`), index caméra, options vocales/tts, activation de la génération de codes-barres, seuil d'alerte et dernier utilisateur mémorisé.【F:gestion_stock.py†L24-L72】
-- **ColumnWidths** : mémorise automatiquement la largeur des colonnes du tableau.【F:gestion_stock.py†L1059-L1097】
+- **Settings** : chemins (`db_path`, `user_db_path`, `barcode_dir`), index caméra (`camera_index`), index microphone (`microphone_index`), options vocales/tts, activation de la génération de codes-barres, seuil d'alerte et dernier utilisateur mémorisé.【F:gestion_stock.py†L24-L82】
+- **ColumnWidths** : mémorise automatiquement la largeur des colonnes du tableau.【F:gestion_stock.py†L1070-L1108】
 
-Les paramètres peuvent être modifiés via le menu **Paramètres → Configurer Générales** ou en éditant `config.ini` (l'application réécrit le fichier lors de la fermeture). Certaines options (caméra, voix) nécessitent un redémarrage.【F:gestion_stock.py†L1448-L1478】
+Les paramètres peuvent être modifiés via le menu **Paramètres → Configuration générale** ou en éditant `config.ini` (l'application réécrit le fichier lors de la fermeture). Certaines options (caméra, voix) nécessitent un redémarrage.【F:gestion_stock.py†L1460-L1488】
 
 ## Bases de données et sauvegardes
 - `stock.db` : contient les tables `categories` et `items` ainsi qu'un index sur le nom des articles.【F:gestion_stock.py†L160-L210】
@@ -104,6 +104,7 @@ Les paramètres peuvent être modifiés via le menu **Paramètres → Configurer
 
 ### Commande vocale
 - Disponible si l'option est activée et si `SpeechRecognition` + microphone fonctionnels. Démarrer/arrêter via la barre d'outils.
+- Sélectionnez le périphérique d'entrée via **Paramètres → Configurer Micro** ou en ajustant `microphone_index` dans `config.ini`. Laisser le champ vide utilise le micro par défaut du système.【F:gestion_stock.py†L1098-L1124】【F:gestion_stock.py†L441-L508】
 - Commandes prises en charge (exemples) :
   - « ajouter 5 chemise blanche »
   - « retirer 2 basket noire »
