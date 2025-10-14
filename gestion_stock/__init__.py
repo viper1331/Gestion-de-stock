@@ -26,6 +26,8 @@ import configparser
 # Lecture de la configuration
 # ----------------------------
 CONFIG_FILE = 'config.ini'
+CONFIG_DIRECTORY = os.path.dirname(os.path.abspath(CONFIG_FILE)) or os.getcwd()
+LOG_FILE = os.path.join(CONFIG_DIRECTORY, "gestion_stock_log.txt")
 config = configparser.ConfigParser()
 default_config = {
     'db_path': 'stock.db',
@@ -85,9 +87,29 @@ if ENABLE_BARCODE_GENERATION and not os.path.exists(BARCODE_DIR):
 # Gestion des imports facultatifs
 # -----------------------------------
 if not logging.getLogger().hasHandlers():
-    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+    log_handlers = [logging.StreamHandler()]
+    file_handler_added = False
+    try:
+        file_handler = logging.FileHandler(LOG_FILE, encoding="utf-8")
+    except OSError:
+        file_handler = None
+    else:
+        log_handlers.append(file_handler)
+        file_handler_added = True
+    logging.basicConfig(
+        level=logging.INFO,
+        format="%(asctime)s - %(levelname)s - %(name)s - %(message)s",
+        handlers=log_handlers,
+    )
+else:
+    file_handler_added = any(
+        isinstance(handler, logging.FileHandler)
+        for handler in logging.getLogger().handlers
+    )
 
 logger = logging.getLogger(__name__)
+if file_handler_added:
+    logger.info("Journalisation des événements dans le fichier : %s", LOG_FILE)
 
 try:
     import cv2
