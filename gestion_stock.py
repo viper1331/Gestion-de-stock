@@ -1265,6 +1265,26 @@ class StockApp(tk.Tk):
             return 'stock_low'
         return 'stock_ok'
 
+    def _maybe_show_low_stock_alert(self, item_name, new_qty, old_qty):
+        """Affiche une alerte lorsque le stock passe sous le seuil configuré."""
+        try:
+            threshold = int(self.low_stock_threshold)
+        except (TypeError, ValueError):
+            threshold = DEFAULT_LOW_STOCK_THRESHOLD
+        try:
+            previous_qty = int(old_qty)
+        except (TypeError, ValueError):
+            previous_qty = None
+
+        if previous_qty is not None and previous_qty > threshold and new_qty <= threshold:
+            messagebox.showwarning(
+                "Stock faible",
+                (
+                    f"L'article '{item_name}' est passé sous le seuil de {threshold} unités.\n"
+                    f"Stock actuel : {new_qty}."
+                ),
+            )
+
     def apply_saved_column_widths(self):
         """
         Lit la section 'ColumnWidths' dans config.ini et applique aux colonnes existantes.
@@ -1481,6 +1501,8 @@ class StockApp(tk.Tk):
             self.status.set(
                 f"{abs(change)} unités {'ajoutées' if change > 0 else 'retirées'} pour '{name}'"
             )
+        if change < 0:
+            self._maybe_show_low_stock_alert(name, new_qty, old_qty)
         self.load_inventory()
         self.select_item_in_tree(id_)
 
@@ -1567,6 +1589,8 @@ class StockApp(tk.Tk):
                                     "Stock",
                                     "Retrait supérieur au stock disponible : réduction au minimum.",
                                 )
+                            if change < 0:
+                                self._maybe_show_low_stock_alert(name, new_qty, old_qty)
                         else:
                             messagebox.showerror("Stock", "Mise à jour impossible.")
                     except ValueError:
