@@ -28,6 +28,8 @@ Gestion Stock Pro est une application de bureau écrite en Python permettant de 
 - Intégration codes-barres : génération d'images (PNG), suppression automatique liée aux articles et scan via douchette ou caméra (OpenCV + pyzbar).【F:gestion_stock.py†L32-L59】【F:gestion_stock.py†L1339-L1382】
 - Mode vocal optionnel : reconnaissance des commandes (SpeechRecognition) et synthèse vocale (pyttsx3) pour consulter ou mettre à jour les quantités.【F:gestion_stock.py†L60-L118】【F:gestion_stock.py†L1099-L1170】
 - Outils d'administration : export CSV, sauvegarde de la base, dialogue de configuration pour personnaliser chemins, caméra, options vocales et seuils d'alerte.【F:gestion_stock.py†L1390-L1446】【F:gestion_stock.py†L1448-L1490】【F:gestion_stock.py†L1492-L1504】
+- Suivi des mouvements d'entrée/sortie avec journal horodaté alimenté par les formulaires, la douchette et les commandes vocales.【F:gestion_stock.py†L181-L214】【F:gestion_stock.py†L1071-L1168】【F:gestion_stock.py†L1235-L1346】
+- Génération d'un rapport PDF structuré incluant synthèse, tableaux des stocks critiques, histogramme par catégorie et graphique d'évolution des mouvements.【F:gestion_stock.py†L1496-L1610】
 
 ## Architecture technique
 - **Langage** : Python 3 avec bibliothèques standard (`sqlite3`, `tkinter`, `configparser`, `threading`, etc.).
@@ -91,6 +93,7 @@ Les paramètres peuvent être modifiés via le menu **Paramètres → Configurer
 
 ### Gestion du stock
 - Ajouter/modifier/supprimer un article depuis la barre d'outils ou le menu **Stock**. Les dialogues permettent de choisir la catégorie, saisir la taille (listes dédiées vêtements/chaussures) et ajuster la quantité.【F:gestion_stock.py†L1207-L1337】
+- Les actions **Entrée**/**Sortie** enregistrent automatiquement les mouvements avec commentaire et opérateur, que ce soit depuis la liste ou après un scan code-barres.【F:gestion_stock.py†L1124-L1170】【F:gestion_stock.py†L1235-L1317】
 - La zone « Rechercher » filtre instantanément le tableau sur le nom ou le code-barres.【F:gestion_stock.py†L1385-L1446】
 - Les colonnes redimensionnées sont mémorisées à la fermeture et restaurées à l'ouverture suivante.【F:gestion_stock.py†L1059-L1097】
 
@@ -112,6 +115,7 @@ Les paramètres peuvent être modifiés via le menu **Paramètres → Configurer
 ### Exports et rapports
 - **Fichier → Exporter CSV** : exporte les colonnes principales dans un fichier CSV séparé par des virgules.【F:gestion_stock.py†L1385-L1446】
 - **Rapports → Rapport Stock Faible** : affiche les articles sous un seuil choisi (par défaut depuis `config.ini`).【F:gestion_stock.py†L1467-L1504】
+- **Rapports → Exporter Rapport PDF** : crée un rapport multi-pages (synthèse, mouvements récents, graphiques) prêt à partager.【F:gestion_stock.py†L1496-L1610】
 
 ## Création d'un exécutable
 Deux options sont fournies :
