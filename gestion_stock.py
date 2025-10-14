@@ -15,7 +15,7 @@ import os
 import sys
 import shutil
 import hashlib
-from datetime import datetime
+from datetime import datetime, timedelta
 import traceback
 import configparser
 
@@ -111,11 +111,81 @@ try:
 except ImportError:
     TK_AVAILABLE = False
 
+try:
+    import matplotlib
+    matplotlib.use('Agg')
+    import matplotlib.pyplot as plt
+    from matplotlib.backends.backend_pdf import PdfPages
+    MATPLOTLIB_AVAILABLE = True
+except ImportError:
+    MATPLOTLIB_AVAILABLE = False
+
 CAMERA_AVAILABLE = CV2_AVAILABLE and BARCODE_AVAILABLE
 voice_active = False
 recognizer = None
 microphone = None
 db_lock = threading.Lock()
+
+
+def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, operator=None, note=None, timestamp=None):
+    """Insère un mouvement de stock dans la table dédiée."""
+    if quantity_change == 0:
+        return
+    if timestamp is None:
+        timestamp = datetime.now().isoformat()
+    cursor.execute(
+        """
+        INSERT INTO stock_movements (
+            item_id, quantity_change, movement_type, source, operator, note, created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?)
+        """,
+        (item_id, quantity_change, movement_type, source, operator, note, timestamp)
+    )
+
+
+def adjust_item_quantity(item_id, delta, operator='system', source='manual', note=None):
+    """Modifie la quantité d'un article et journalise le mouvement."""
+    if delta == 0:
+        return None
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute("SELECT quantity FROM items WHERE id = ?", (item_id,))
+            result = cursor.fetchone()
+            if not result:
+                return None
+            old_qty = result[0] or 0
+            new_qty = old_qty + delta
+            if new_qty < 0:
+                new_qty = 0
+            timestamp = datetime.now().isoformat()
+            cursor.execute(
+                "UPDATE items SET quantity = ?, last_updated = ? WHERE id = ?",
+                (new_qty, timestamp, item_id)
+            )
+            change = new_qty - old_qty
+            if change != 0:
+                movement_type = 'IN' if change > 0 else 'OUT'
+                log_stock_movement(
+                    cursor,
+                    item_id,
+                    change,
+                    movement_type,
+                    source,
+                    operator,
+                    note,
+                    timestamp,
+                )
+            conn.commit()
+            return new_qty, change, old_qty
+    except sqlite3.Error as e:
+        print(f"[DB Error] adjust_item_quantity: {e}")
+        return None
+    finally:
+        if conn:
+            conn.close()
 
 # ------------------------
 # INITIATION / MIGRATION BASE UTILISATEURS
@@ -197,6 +267,26 @@ def init_stock_db(db_path=DB_PATH):
         # Index sur le nom (pour recherche rapide)
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_items_name ON items(name COLLATE NOCASE)
+        ''')
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS stock_movements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id INTEGER NOT NULL,
+                quantity_change INTEGER NOT NULL,
+                movement_type TEXT NOT NULL,
+                source TEXT NOT NULL,
+                operator TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                FOREIGN KEY(item_id) REFERENCES items(id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_movements_item ON stock_movements(item_id)
+        ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_movements_date ON stock_movements(created_at)
         ''')
 
         conn.commit()
@@ -506,6 +596,9 @@ else:
 # FONCTIONS VOCALES AIDE
 # ----------------------
 def add_item_by_voice(name, qty):
+    conn = None
+    change = 0
+    final_qty = 0
     try:
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -513,22 +606,62 @@ def add_item_by_voice(name, qty):
             cursor.execute("SELECT id, quantity FROM items WHERE lower(name)=?", (name.lower(),))
             result = cursor.fetchone()
             if result:
-                new_qty = result[1] + qty
+                item_id, current_qty = result[0], result[1] or 0
+                timestamp = datetime.now().isoformat()
+                new_qty = current_qty + qty
+                if new_qty < 0:
+                    new_qty = 0
                 cursor.execute(
                     "UPDATE items SET quantity = ?, last_updated = ? WHERE id = ?",
-                    (new_qty, datetime.now().isoformat(), result[0])
+                    (new_qty, timestamp, item_id)
                 )
+                change = new_qty - current_qty
+                final_qty = new_qty
+                if change:
+                    movement_type = 'IN' if change > 0 else 'OUT'
+                    log_stock_movement(
+                        cursor,
+                        item_id,
+                        change,
+                        movement_type,
+                        'voice_command',
+                        'assistant vocal',
+                        note="Commande vocale",
+                        timestamp=timestamp,
+                    )
             else:
+                timestamp = datetime.now().isoformat()
+                initial_qty = qty if qty > 0 else 0
                 cursor.execute(
                     "INSERT INTO items (name, quantity, last_updated) VALUES (?, ?, ?)",
-                    (name, qty, datetime.now().isoformat())
+                    (name, initial_qty, timestamp)
                 )
+                item_id = cursor.lastrowid
+                change = initial_qty
+                final_qty = initial_qty
+                if initial_qty:
+                    log_stock_movement(
+                        cursor,
+                        item_id,
+                        initial_qty,
+                        'IN',
+                        'voice_command',
+                        'assistant vocal',
+                        note="Création via commande vocale",
+                        timestamp=timestamp,
+                    )
             conn.commit()
     except sqlite3.Error as e:
         print(f"[DB Error] add_item_by_voice: {e}")
     finally:
-        conn.close()
-    speak(f"Ajouté {qty} unités de {name} via commande vocale.")
+        if conn:
+            conn.close()
+    if change > 0:
+        speak(f"{change} unités ajoutées à {name}. Stock actuel : {final_qty}.")
+    elif change < 0:
+        speak(f"{abs(change)} unités retirées de {name}. Stock actuel : {final_qty}.")
+    else:
+        speak(f"Aucune modification pour {name}.")
 
 def check_quantity_by_voice(name):
     try:
@@ -974,6 +1107,9 @@ class StockApp(tk.Tk):
         stock_menu.add_command(label="Modifier Article", command=self.open_edit_selected)
         stock_menu.add_command(label="Supprimer Article", command=self.delete_selected)
         stock_menu.add_separator()
+        stock_menu.add_command(label="Entrée Stock", command=lambda: self.open_stock_adjustment(True))
+        stock_menu.add_command(label="Sortie Stock", command=lambda: self.open_stock_adjustment(False))
+        stock_menu.add_separator()
         stock_menu.add_command(label="Actualiser", command=self.load_inventory)
         menubar.add_cascade(label="Stock", menu=stock_menu)
 
@@ -984,6 +1120,7 @@ class StockApp(tk.Tk):
 
         report_menu = tk.Menu(menubar, tearoff=0)
         report_menu.add_command(label="Rapport Stock Faible", command=self.report_low_stock)
+        report_menu.add_command(label="Exporter Rapport PDF", command=self.generate_pdf_report)
         menubar.add_cascade(label="Rapports", menu=report_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -997,6 +1134,8 @@ class StockApp(tk.Tk):
         btn_add = ttk.Button(toolbar, text="Ajouter", command=self.open_add_dialog)
         btn_edit = ttk.Button(toolbar, text="Modifier", command=self.open_edit_selected)
         btn_delete = ttk.Button(toolbar, text="Supprimer", command=self.delete_selected)
+        btn_stock_in = ttk.Button(toolbar, text="Entrée", command=lambda: self.open_stock_adjustment(True))
+        btn_stock_out = ttk.Button(toolbar, text="Sortie", command=lambda: self.open_stock_adjustment(False))
         btn_scan_cam = ttk.Button(toolbar, text="Scan Caméra", command=self.scan_camera)
 
         if ENABLE_VOICE and SR_LIB_AVAILABLE:
@@ -1016,6 +1155,8 @@ class StockApp(tk.Tk):
         btn_add.pack(side=tk.LEFT, padx=2)
         btn_edit.pack(side=tk.LEFT, padx=2)
         btn_delete.pack(side=tk.LEFT, padx=2)
+        btn_stock_in.pack(side=tk.LEFT, padx=2)
+        btn_stock_out.pack(side=tk.LEFT, padx=2)
         btn_scan_cam.pack(side=tk.LEFT, padx=2)
         btn_listen.pack(side=tk.LEFT, padx=2)
         btn_stop_listen.pack(side=tk.LEFT, padx=2)
@@ -1060,7 +1201,7 @@ class StockApp(tk.Tk):
             def process_after_delay():
                 code = self.scan_var.get().strip()
                 if code:
-                    self.process_barcode(code)
+                    self.process_barcode(code, source='douchette')
                 self.scan_var.set("")
             scan_timer_id = self.after(300, process_after_delay)
 
@@ -1158,11 +1299,24 @@ class StockApp(tk.Tk):
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
                     cursor = conn.cursor()
+                    timestamp = datetime.now().isoformat()
                     cursor.execute(
                         "INSERT INTO items (name, barcode, category_id, size, quantity, last_updated) "
                         "VALUES (?, ?, ?, ?, ?, ?)",
-                        (name, barcode_value, category_id, size, qty, datetime.now().isoformat())
+                        (name, barcode_value, category_id, size, qty, timestamp)
                     )
+                    item_id = cursor.lastrowid
+                    if qty:
+                        log_stock_movement(
+                            cursor,
+                            item_id,
+                            qty,
+                            'IN',
+                            'manual_creation',
+                            self.current_user,
+                            note="Création article via formulaire",
+                            timestamp=timestamp,
+                        )
                     conn.commit()
                     self.status.set(f"Article '{name}' ajouté.")
                     if ENABLE_BARCODE_GENERATION and barcode_value:
@@ -1182,6 +1336,10 @@ class StockApp(tk.Tk):
             return
         item = self.tree.item(selected)
         id_, name, barcode_value, category_name, size_value, qty, _ = item['values']
+        try:
+            old_qty = int(qty)
+        except (TypeError, ValueError):
+            old_qty = 0
         category_id = None
         if category_name:
             try:
@@ -1203,10 +1361,28 @@ class StockApp(tk.Tk):
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
                     cursor = conn.cursor()
+                    timestamp = datetime.now().isoformat()
                     cursor.execute(
                         "UPDATE items SET name = ?, barcode = ?, category_id = ?, size = ?, quantity = ?, last_updated = ? WHERE id = ?",
-                        (new_name, new_barcode, new_category_id, new_size, new_qty, datetime.now().isoformat(), id_)
+                        (new_name, new_barcode, new_category_id, new_size, new_qty, timestamp, id_)
                     )
+                    try:
+                        new_qty_int = int(new_qty)
+                    except (TypeError, ValueError):
+                        new_qty_int = old_qty
+                    change = new_qty_int - old_qty
+                    if change:
+                        movement_type = 'IN' if change > 0 else 'OUT'
+                        log_stock_movement(
+                            cursor,
+                            id_,
+                            change,
+                            movement_type,
+                            'manual_edit',
+                            self.current_user,
+                            note="Modification via formulaire",
+                            timestamp=timestamp,
+                        )
                     conn.commit()
                     self.status.set(f"Article '{new_name}' mis à jour.")
                     if ENABLE_BARCODE_GENERATION and new_barcode:
@@ -1227,11 +1403,25 @@ class StockApp(tk.Tk):
         item = self.tree.item(selected)
         id_, name = item['values'][0], item['values'][1]
         barcode_value = item['values'][2]
+        try:
+            current_qty = int(item['values'][5])
+        except (TypeError, ValueError):
+            current_qty = 0
         if messagebox.askyesno("Confirmation", f"Supprimer l'article '{name}' ?"):
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
                     cursor = conn.cursor()
+                    if current_qty:
+                        log_stock_movement(
+                            cursor,
+                            id_,
+                            -current_qty,
+                            'OUT',
+                            'manual_delete',
+                            self.current_user,
+                            note="Suppression de l'article",
+                        )
                     cursor.execute("DELETE FROM items WHERE id = ?", (id_,))
                     conn.commit()
                 if ENABLE_BARCODE_GENERATION and barcode_value:
@@ -1247,7 +1437,63 @@ class StockApp(tk.Tk):
                 conn.close()
             self.load_inventory()
 
-    def process_barcode(self, code):
+    def open_stock_adjustment(self, is_entry):
+        selected = self.tree.selection()
+        if not selected:
+            messagebox.showwarning("Attention", "Sélectionnez un article dans la liste.")
+            return
+        item = self.tree.item(selected)
+        id_, name, _, _, size_value, qty, _ = item['values']
+        try:
+            qty = int(qty)
+        except (TypeError, ValueError):
+            qty = 0
+        title = "Entrée de stock" if is_entry else "Sortie de stock"
+        prompt = "Quantité à ajouter :" if is_entry else "Quantité à retirer :"
+        amount = simpledialog.askinteger(title, prompt, minvalue=1)
+        if amount is None:
+            return
+        note = simpledialog.askstring(title, "Commentaire (optionnel) :")
+        delta = amount if is_entry else -amount
+        source = 'manual_entry' if is_entry else 'manual_exit'
+        result = adjust_item_quantity(
+            id_,
+            delta,
+            operator=self.current_user,
+            source=source,
+            note=note,
+        )
+        if not result:
+            messagebox.showerror("Stock", "Impossible de mettre à jour la quantité.")
+            return
+        new_qty, change, old_qty = result
+        if change == 0:
+            messagebox.showinfo(
+                "Stock",
+                f"Aucune modification réalisée pour '{name}'. Stock actuel : {new_qty}",
+            )
+        else:
+            action_word = "ajoutées" if change > 0 else "retirées"
+            messagebox.showinfo(
+                "Stock",
+                f"{abs(change)} unités {action_word} pour '{name}'.\nStock : {old_qty} → {new_qty}",
+            )
+            self.status.set(
+                f"{abs(change)} unités {'ajoutées' if change > 0 else 'retirées'} pour '{name}'"
+            )
+        self.load_inventory()
+        self.select_item_in_tree(id_)
+
+    def select_item_in_tree(self, item_id):
+        for row_id in self.tree.get_children():
+            values = self.tree.item(row_id)['values']
+            if values and values[0] == item_id:
+                self.tree.selection_set(row_id)
+                self.tree.see(row_id)
+                return
+
+    def process_barcode(self, code, source='scan'):
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1261,6 +1507,7 @@ class StockApp(tk.Tk):
             conn.close()
         if result:
             id_, name, category_id, size_value, qty = result
+            self.select_item_in_tree(id_)
             speak(f"Article {name}, taille {size_value}, quant. {qty}.")
             action = simpledialog.askstring(
                 "Action",
@@ -1273,44 +1520,67 @@ class StockApp(tk.Tk):
                 if cmd == 'ajouter' and len(tokens) == 2:
                     try:
                         delta = int(tokens[1])
-                        new_qty = qty + delta
-                        with db_lock:
-                            conn = sqlite3.connect(DB_PATH, timeout=30)
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "UPDATE items SET quantity = ?, last_updated = ? WHERE id = ?",
-                                (new_qty, datetime.now().isoformat(), id_)
+                        if delta <= 0:
+                            raise ValueError
+                        update = adjust_item_quantity(
+                            id_,
+                            delta,
+                            operator=self.current_user,
+                            source=f'scan_{source}',
+                            note="Ajout via scan",
+                        )
+                        if update:
+                            new_qty, change, old_qty = update
+                            speak(
+                                f"Ajout de {change} unités sur {name}. Nouveau stock : {new_qty}."
                             )
-                            conn.commit()
-                        speak(f"Ajouté {delta} unités à {name}. Nouvelle : {new_qty}.")
+                            self.status.set(
+                                f"{change} unités ajoutées à '{name}' (scan)."
+                            )
+                        else:
+                            messagebox.showerror("Stock", "Mise à jour impossible.")
                     except ValueError:
                         messagebox.showerror("Erreur", "Quantité invalide.")
-                    finally:
-                        conn.close()
                 elif cmd == 'retirer' and len(tokens) == 2:
                     try:
                         delta = int(tokens[1])
-                        new_qty = max(0, qty - delta)
-                        with db_lock:
-                            conn = sqlite3.connect(DB_PATH, timeout=30)
-                            cursor = conn.cursor()
-                            cursor.execute(
-                                "UPDATE items SET quantity = ?, last_updated = ? WHERE id = ?",
-                                (new_qty, datetime.now().isoformat(), id_)
+                        if delta <= 0:
+                            raise ValueError
+                        update = adjust_item_quantity(
+                            id_,
+                            -delta,
+                            operator=self.current_user,
+                            source=f'scan_{source}',
+                            note="Retrait via scan",
+                        )
+                        if update:
+                            new_qty, change, old_qty = update
+                            change_abs = abs(change)
+                            speak(
+                                f"Retrait de {change_abs} unités sur {name}. Stock : {new_qty}."
                             )
-                            conn.commit()
-                        speak(f"Retiré {delta} unités de {name}. Nouvelle : {new_qty}.")
+                            self.status.set(
+                                f"{change_abs} unités retirées de '{name}' (scan)."
+                            )
+                            if change == 0:
+                                messagebox.showinfo(
+                                    "Stock",
+                                    "Retrait supérieur au stock disponible : réduction au minimum.",
+                                )
+                        else:
+                            messagebox.showerror("Stock", "Mise à jour impossible.")
                     except ValueError:
                         messagebox.showerror("Erreur", "Quantité invalide.")
-                    finally:
-                        conn.close()
                 elif cmd == 'modifier':
+                    self.select_item_in_tree(id_)
                     self.open_edit_selected()
                 elif cmd == 'générer' and len(tokens) >= 2 and tokens[1] == 'codebarre':
                     save_barcode_image(code, article_name=name)
                     speak(f"Code-barres régénéré pour {name}.")
                 else:
                     messagebox.showwarning("Attention", "Action non reconnue.")
+            self.load_inventory()
+            self.select_item_in_tree(id_)
         else:
             name = simpledialog.askstring("Nouvel Article", f"Code-barres inconnu : {code}\nEntrez le nom :")
             if not name:
@@ -1339,14 +1609,28 @@ class StockApp(tk.Tk):
             qty = simpledialog.askinteger("Quantité", f"Quantité initiale pour {name} (Taille {size}) :")
             if qty is None:
                 return
+            new_item_id = None
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
                     cursor = conn.cursor()
+                    timestamp = datetime.now().isoformat()
                     cursor.execute(
                         "INSERT OR IGNORE INTO items (name, barcode, category_id, size, quantity, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
-                        (name, code, category_id, size, qty, datetime.now().isoformat())
+                        (name, code, category_id, size, qty, timestamp)
                     )
+                    if cursor.rowcount:
+                        new_item_id = cursor.lastrowid
+                        log_stock_movement(
+                            cursor,
+                            new_item_id,
+                            qty,
+                            'IN',
+                            f'scan_{source}',
+                            self.current_user,
+                            note="Création via scan",
+                            timestamp=timestamp,
+                        )
                     conn.commit()
                 speak(f"Nouvel article {name}, taille {size}, ajouté.")
                 if ENABLE_BARCODE_GENERATION:
@@ -1358,6 +1642,10 @@ class StockApp(tk.Tk):
             finally:
                 conn.close()
         self.load_inventory()
+        if result:
+            self.select_item_in_tree(id_)
+        elif 'new_item_id' in locals() and new_item_id:
+            self.select_item_in_tree(new_item_id)
 
     def scan_camera(self):
         if not CAMERA_AVAILABLE:
@@ -1390,7 +1678,7 @@ class StockApp(tk.Tk):
         cv2.destroyAllWindows()
         self.attributes('-disabled', False)
         if found_code:
-            self.process_barcode(found_code)
+            self.process_barcode(found_code, source='camera')
         else:
             speak("Aucun code-barres détecté.")
 
@@ -1451,11 +1739,172 @@ class StockApp(tk.Tk):
             messagebox.showerror("Erreur BD", f"Impossible de générer le rapport : {e}")
             results = []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         report = '\n'.join(
             [f"{r[0]} (Barcode: {r[1]}, Catégorie: {r[2]}, Taille: {r[3]}, Quantité: {r[4]})" for r in results]
         ) or "Aucun article en dessous du seuil."
         messagebox.showinfo("Rapport Stock Faible", report)
+
+    def generate_pdf_report(self):
+        if not MATPLOTLIB_AVAILABLE:
+            messagebox.showerror(
+                "Rapport PDF",
+                "Matplotlib est requis pour générer le rapport PDF. Installez la bibliothèque pour utiliser cette fonctionnalité.",
+            )
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.pdf',
+            filetypes=[('PDF', '*.pdf')],
+            title="Exporter rapport PDF",
+            initialfile=f"rapport_stock_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf",
+        )
+        if not file_path:
+            return
+
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute("SELECT COUNT(*), COALESCE(SUM(quantity), 0) FROM items")
+                total_items, total_qty = cursor.fetchone()
+                cursor.execute(
+                    "SELECT COUNT(*) FROM items WHERE quantity <= ?",
+                    (self.low_stock_threshold,)
+                )
+                low_stock_count = cursor.fetchone()[0]
+                cursor.execute(
+                    "SELECT items.name, COALESCE(categories.name, 'Sans catégorie'), items.quantity "
+                    "FROM items LEFT JOIN categories ON items.category_id = categories.id "
+                    "WHERE items.quantity <= ? "
+                    "ORDER BY items.quantity ASC, items.name LIMIT 10",
+                    (self.low_stock_threshold,)
+                )
+                low_stock_rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT COALESCE(categories.name, 'Sans catégorie'), COALESCE(SUM(items.quantity), 0) "
+                    "FROM items LEFT JOIN categories ON items.category_id = categories.id "
+                    "GROUP BY categories.name ORDER BY SUM(items.quantity) DESC"
+                )
+                category_rows = cursor.fetchall()
+                cursor.execute(
+                    "SELECT substr(created_at,1,10) AS jour, "
+                    "SUM(CASE WHEN quantity_change > 0 THEN quantity_change ELSE 0 END) AS entrees, "
+                    "SUM(CASE WHEN quantity_change < 0 THEN -quantity_change ELSE 0 END) AS sorties "
+                    "FROM stock_movements WHERE substr(created_at,1,10) >= ? "
+                    "GROUP BY jour ORDER BY jour",
+                    ((datetime.now() - timedelta(days=30)).strftime('%Y-%m-%d'),)
+                )
+                movement_timeline = cursor.fetchall()
+                cursor.execute(
+                    "SELECT sm.created_at, COALESCE(items.name, 'Article supprimé'), sm.movement_type, "
+                    "sm.quantity_change, sm.source, IFNULL(sm.operator, '') "
+                    "FROM stock_movements sm "
+                    "LEFT JOIN items ON sm.item_id = items.id "
+                    "ORDER BY sm.created_at DESC LIMIT 10"
+                )
+                recent_movements = cursor.fetchall()
+        except sqlite3.Error as e:
+            messagebox.showerror("Rapport PDF", f"Impossible de récupérer les données : {e}")
+            return
+        finally:
+            conn.close()
+
+        try:
+            with PdfPages(file_path) as pdf:
+                fig, ax = plt.subplots(figsize=(8.27, 11.69))  # A4 portrait
+                ax.axis('off')
+                ax.set_title('Rapport de stock', fontsize=18, fontweight='bold', pad=20)
+                summary_lines = [
+                    f"Date du rapport : {datetime.now().strftime('%d/%m/%Y %H:%M')}",
+                    f"Articles distincts : {total_items}",
+                    f"Quantité totale : {total_qty}",
+                    f"Articles sous le seuil ({self.low_stock_threshold}) : {low_stock_count}",
+                ]
+                ax.text(0.05, 0.88, "\n".join(summary_lines), fontsize=12, va='top')
+
+                if low_stock_rows:
+                    table_data = [["Article", "Catégorie", "Quantité"]]
+                    for row in low_stock_rows:
+                        table_data.append([row[0], row[1], row[2] if row[2] is not None else 0])
+                    table = ax.table(
+                        cellText=table_data,
+                        loc='upper left',
+                        cellLoc='left',
+                        bbox=[0.05, 0.45, 0.9, 0.35],
+                    )
+                    table.auto_set_font_size(False)
+                    table.set_fontsize(10)
+                    ax.text(0.05, 0.82, "Articles sous le seuil", fontsize=14, fontweight='bold')
+                else:
+                    ax.text(0.05, 0.75, "Aucun article sous le seuil configuré.", fontsize=12)
+
+                if recent_movements:
+                    movements_table = [["Date", "Article", "Type", "Δ", "Source", "Opérateur"]]
+                    for created_at, item_name, movement_type, change, source, operator in recent_movements:
+                        movements_table.append([
+                            created_at.replace('T', ' '),
+                            item_name,
+                            movement_type,
+                            change,
+                            source,
+                            operator or '-'
+                        ])
+                    table2 = ax.table(
+                        cellText=movements_table,
+                        loc='lower left',
+                        cellLoc='left',
+                        bbox=[0.05, 0.05, 0.9, 0.35],
+                    )
+                    table2.auto_set_font_size(False)
+                    table2.set_fontsize(9)
+                    ax.text(0.05, 0.42, "Mouvements récents", fontsize=14, fontweight='bold')
+                else:
+                    ax.text(0.05, 0.38, "Aucun mouvement enregistré.", fontsize=12)
+
+                pdf.savefig(fig, bbox_inches='tight')
+                plt.close(fig)
+
+                if category_rows:
+                    categories = [row[0] or 'Sans catégorie' for row in category_rows[:10]]
+                    values = [row[1] or 0 for row in category_rows[:10]]
+                    fig, ax = plt.subplots(figsize=(11.69, 8.27))  # A4 paysage
+                    ax.barh(categories[::-1], values[::-1], color='#1976d2')
+                    ax.set_xlabel('Quantité totale')
+                    ax.set_title('Top catégories par stock disponible')
+                    for index, value in enumerate(values[::-1]):
+                        ax.text(value, index, f" {value}", va='center', fontsize=10)
+                    pdf.savefig(fig, bbox_inches='tight')
+                    plt.close(fig)
+
+                if movement_timeline:
+                    days = [row[0] for row in movement_timeline]
+                    entries = [row[1] or 0 for row in movement_timeline]
+                    exits = [row[2] or 0 for row in movement_timeline]
+                    fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                    ax.plot(days, entries, marker='o', label='Entrées')
+                    ax.plot(days, exits, marker='o', label='Sorties')
+                    ax.set_title('Mouvements de stock - 30 derniers jours')
+                    ax.set_xlabel('Date')
+                    ax.set_ylabel('Quantités')
+                    ax.legend()
+                    ax.grid(True, linestyle='--', alpha=0.5)
+                    plt.xticks(rotation=45, ha='right')
+                    pdf.savefig(fig, bbox_inches='tight')
+                    plt.close(fig)
+                else:
+                    fig, ax = plt.subplots(figsize=(11.69, 8.27))
+                    ax.axis('off')
+                    ax.text(0.5, 0.5, "Aucun mouvement enregistré sur les 30 derniers jours.",
+                            ha='center', va='center', fontsize=14)
+                    pdf.savefig(fig, bbox_inches='tight')
+                    plt.close(fig)
+        except Exception as e:
+            messagebox.showerror("Rapport PDF", f"Erreur lors de la génération du PDF : {e}")
+            return
+
+        messagebox.showinfo("Rapport PDF", f"Rapport généré : {file_path}")
+        self.status.set(f"Rapport PDF exporté : {os.path.basename(file_path)}")
 
     def show_about(self):
         messagebox.showinfo("À propos", "Gestion Stock Pro v1.0\n© 2025 Sebastien Cangemi")
