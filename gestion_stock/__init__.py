@@ -249,6 +249,7 @@ def init_stock_db(db_path=DB_PATH):
     Crée tables categories et items (avec colonne size).
     Crée un index sur items.name.
     """
+    conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=30)
         cursor = conn.cursor()
@@ -304,7 +305,8 @@ def init_stock_db(db_path=DB_PATH):
     except sqlite3.Error as e:
         print(f"[DB Error] init_stock_db: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # ------------------------
 # FONCTIONS UTILISATEURS (base séparée USER_DB_PATH)
@@ -317,6 +319,9 @@ def create_user(username: str, password: str, role: str = 'user') -> bool:
     Crée un nouvel utilisateur dans USER_DB_PATH. role ∈ {'admin','user'}.
     Retourne True si succès, False sinon.
     """
+    if role not in {'admin', 'user'}:
+        raise ValueError("Le rôle doit être 'admin' ou 'user'.")
+    conn = None
     try:
         pwd_hash = hash_password(password)
         with db_lock:
@@ -334,12 +339,14 @@ def create_user(username: str, password: str, role: str = 'user') -> bool:
         print(f"[DB Error] create_user: {e}")
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def verify_user(username: str, password: str):
     """
     Vérifie les identifiants dans USER_DB_PATH. Retourne (True, role) si succès, sinon (False, None).
     """
+    conn = None
     try:
         pwd_hash = hash_password(password)
         with db_lock:
@@ -355,12 +362,14 @@ def verify_user(username: str, password: str):
         print(f"[DB Error] verify_user: {e}")
         return False, None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def users_exist() -> bool:
     """
     Indique s'il existe au moins un utilisateur dans USER_DB_PATH.
     """
+    conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(USER_DB_PATH, timeout=30)
@@ -372,12 +381,14 @@ def users_exist() -> bool:
         print(f"[DB Error] users_exist: {e}")
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def fetch_all_users():
     """
     Récupère tous les utilisateurs (id, username, role) depuis USER_DB_PATH.
     """
+    conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(USER_DB_PATH, timeout=30)
@@ -389,41 +400,50 @@ def fetch_all_users():
         print(f"[DB Error] fetch_all_users: {e}")
         return []
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def delete_user_by_id(user_id: int) -> bool:
     """
     Supprime un utilisateur par son ID dans USER_DB_PATH. Retourne True si succès.
     """
+    conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(USER_DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
+            deleted = cursor.rowcount
             conn.commit()
-        return True
+        return deleted > 0
     except sqlite3.Error as e:
         print(f"[DB Error] delete_user_by_id: {e}")
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 def update_user_role(user_id: int, new_role: str) -> bool:
     """
     Met à jour le rôle d'un utilisateur dans USER_DB_PATH. new_role ∈ {'admin','user'}.
     """
+    if new_role not in {'admin', 'user'}:
+        raise ValueError("Le rôle doit être 'admin' ou 'user'.")
+    conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(USER_DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, user_id))
+            updated = cursor.rowcount
             conn.commit()
-        return True
+        return updated > 0
     except sqlite3.Error as e:
         print(f"[DB Error] update_user_role: {e}")
         return False
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # ------------------------
 # SYNTHÈSE VOCALE
@@ -685,6 +705,7 @@ def add_item_by_voice(name, qty):
         speak(f"Aucune modification pour {name}.")
 
 def check_quantity_by_voice(name):
+    conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -695,7 +716,8 @@ def check_quantity_by_voice(name):
         print(f"[DB Error] check_quantity_by_voice: {e}")
         result = None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
     if result:
         qty = result[0]
         speak(f"La quantité de {name} est {qty}.")
@@ -755,6 +777,7 @@ def generate_barcode_for_item(name):
     if not ENABLE_BARCODE_GENERATION:
         speak("La génération de code-barres est désactivée.")
         return
+    conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -765,7 +788,8 @@ def generate_barcode_for_item(name):
         print(f"[DB Error] generate_barcode_for_item: {e}")
         result = None
     finally:
-        conn.close()
+        if conn:
+            conn.close()
     if not result or not result[0]:
         speak(f"Impossible de générer : l'article {name} n'existe pas ou n'a pas de code-barres.")
         return
@@ -1246,6 +1270,8 @@ class StockApp(tk.Tk):
         search_text = self.entry_search.get().lower().strip()
         for row in self.tree.get_children():
             self.tree.delete(row)
+        conn = None
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1267,7 +1293,8 @@ class StockApp(tk.Tk):
             messagebox.showerror("Erreur BD", f"Impossible de charger l'inventaire : {e}")
             rows = []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         for item in rows:
             tag = self._get_stock_tag(item[5])
             self.tree.insert('', tk.END, values=item, tags=(tag,))
@@ -1336,6 +1363,7 @@ class StockApp(tk.Tk):
         dialog = ItemDialog(self, "Ajouter Article")
         if dialog.result:
             name, barcode_value, category_id, size, qty = dialog.result
+            conn = None
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1367,7 +1395,8 @@ class StockApp(tk.Tk):
             except sqlite3.Error as e:
                 messagebox.showerror("Erreur BD", f"Erreur lors de l'ajout : {e}")
             finally:
-                conn.close()
+                if conn:
+                    conn.close()
             self.load_inventory()
 
     def open_edit_selected(self):
@@ -1383,6 +1412,7 @@ class StockApp(tk.Tk):
             old_qty = 0
         category_id = None
         if category_name:
+            conn = None
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1394,10 +1424,12 @@ class StockApp(tk.Tk):
             except sqlite3.Error:
                 category_id = None
             finally:
-                conn.close()
+                if conn:
+                    conn.close()
         dialog = ItemDialog(self, "Modifier Article", name, barcode_value, category_id, size_value, qty)
         if dialog.result:
             new_name, new_barcode, new_category_id, new_size, new_qty = dialog.result
+            conn = None
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1433,7 +1465,8 @@ class StockApp(tk.Tk):
             except sqlite3.Error as e:
                 messagebox.showerror("Erreur BD", f"Erreur lors de la modification : {e}")
             finally:
-                conn.close()
+                if conn:
+                    conn.close()
             self.load_inventory()
 
     def delete_selected(self):
@@ -1449,6 +1482,7 @@ class StockApp(tk.Tk):
         except (TypeError, ValueError):
             current_qty = 0
         if messagebox.askyesno("Confirmation", f"Supprimer l'article '{name}' ?"):
+            conn = None
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1475,7 +1509,8 @@ class StockApp(tk.Tk):
             except sqlite3.Error as e:
                 messagebox.showerror("Erreur BD", f"Erreur lors de la suppression : {e}")
             finally:
-                conn.close()
+                if conn:
+                    conn.close()
             self.load_inventory()
 
     def open_stock_adjustment(self, is_entry):
@@ -1547,7 +1582,8 @@ class StockApp(tk.Tk):
             messagebox.showerror("Erreur BD", f"Erreur traitement code-barres : {e}")
             result = None
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         if result:
             id_, name, category_id, size_value, qty = result
             self.select_item_in_tree(id_)
@@ -1634,6 +1670,7 @@ class StockApp(tk.Tk):
             category_id = dlg.result
             if category_id is None:
                 return
+            conn = None
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1643,7 +1680,8 @@ class StockApp(tk.Tk):
             except sqlite3.Error:
                 cat_name_db = ""
             finally:
-                conn.close()
+                if conn:
+                    conn.close()
 
             if "chaussure" in cat_name_db.lower():
                 size = simpledialog.askstring("Taille Chaussure", f"Taille (30–60) pour {name} :")
@@ -1655,6 +1693,7 @@ class StockApp(tk.Tk):
             if qty is None:
                 return
             new_item_id = None
+            conn = None
             try:
                 with db_lock:
                     conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1685,7 +1724,8 @@ class StockApp(tk.Tk):
             except sqlite3.Error as e:
                 messagebox.showerror("Erreur BD", f"Erreur lors de l'ajout : {e}")
             finally:
-                conn.close()
+                if conn:
+                    conn.close()
         self.load_inventory()
         if result:
             self.select_item_in_tree(id_)
@@ -1736,6 +1776,7 @@ class StockApp(tk.Tk):
         file_path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
         if not file_path:
             return
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1749,7 +1790,8 @@ class StockApp(tk.Tk):
             messagebox.showerror("Erreur BD", f"Impossible d'exporter en CSV : {e}")
             rows = []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         try:
             with open(file_path, 'w', encoding='utf-8') as f:
                 f.write('Nom,Code-Barres,Catégorie,Taille,Quantité,Dernière MAJ\n')
@@ -1769,6 +1811,7 @@ class StockApp(tk.Tk):
         )
         if threshold is None:
             threshold = default_threshold
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1853,7 +1896,8 @@ class StockApp(tk.Tk):
             messagebox.showerror("Rapport PDF", f"Impossible de récupérer les données : {e}")
             return
         finally:
-            conn.close()
+            if conn:
+                conn.close()
 
         try:
             with PdfPages(file_path) as pdf:
@@ -2068,6 +2112,7 @@ class StockApp(tk.Tk):
             sys.exit(0)
         new_user = login.username
         new_role = login.role
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(USER_DB_PATH, timeout=30)
@@ -2077,7 +2122,8 @@ class StockApp(tk.Tk):
         except:
             uid = None
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         root.destroy()
         app = StockApp(new_user, new_role, uid)
         app.mainloop()
@@ -2208,6 +2254,7 @@ class CategoryDialog(tk.Toplevel):
 
     def load_categories(self):
         self.category_list.delete(0, tk.END)
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -2218,7 +2265,8 @@ class CategoryDialog(tk.Toplevel):
             messagebox.showerror("Erreur BD", f"Impossible de charger catégories : {e}")
             rows = []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         for r in rows:
             self.category_list.insert(tk.END, r[0])
 
@@ -2227,6 +2275,7 @@ class CategoryDialog(tk.Toplevel):
         if not name:
             messagebox.showerror("Erreur", "Nom de catégorie vide.")
             return
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -2238,7 +2287,8 @@ class CategoryDialog(tk.Toplevel):
         except sqlite3.Error as e:
             messagebox.showerror("Erreur BD", f"Impossible d'ajouter catégorie : {e}")
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         self.new_category_var.set("")
         self.load_categories()
         self.result = True
@@ -2249,6 +2299,7 @@ class CategoryDialog(tk.Toplevel):
             messagebox.showwarning("Attention", "Aucune catégorie sélectionnée.")
             return
         name = self.category_list.get(selection[0])
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -2263,7 +2314,8 @@ class CategoryDialog(tk.Toplevel):
         except sqlite3.Error as e:
             messagebox.showerror("Erreur BD", f"Impossible de supprimer catégorie : {e}")
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         self.load_categories()
         self.result = True
 
@@ -2294,6 +2346,7 @@ class CategorySelectionDialog(tk.Toplevel):
         self.wait_window(self)
 
     def load_categories(self):
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -2303,7 +2356,8 @@ class CategorySelectionDialog(tk.Toplevel):
         except sqlite3.Error:
             rows = []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         self.category_ids = [r[0] for r in rows]
         self.cat_combobox['values'] = [r[1] for r in rows]
         if rows:
@@ -2377,6 +2431,7 @@ class ItemDialog(tk.Toplevel):
         self.wait_window(self)
 
     def load_categories(self):
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -2386,7 +2441,8 @@ class ItemDialog(tk.Toplevel):
         except sqlite3.Error:
             rows = []
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         self.category_ids = [r[0] for r in rows]
         self.category_names = [r[1] for r in rows]
         self.cat_combobox['values'] = self.category_names
@@ -2409,6 +2465,7 @@ class ItemDialog(tk.Toplevel):
         name = simpledialog.askstring("Nouvelle Catégorie", "Entrez le nom de la nouvelle catégorie :", parent=self)
         if not name:
             return
+        conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -2420,7 +2477,8 @@ class ItemDialog(tk.Toplevel):
         except sqlite3.Error as e:
             messagebox.showerror("Erreur BD", f"Impossible d'ajouter catégorie : {e}")
         finally:
-            conn.close()
+            if conn:
+                conn.close()
         self.load_categories()
 
     def on_ok(self):
@@ -2460,8 +2518,13 @@ def run_tests():
     for f in (test_stock_db, test_user_db):
         if os.path.exists(f):
             os.remove(f)
-    init_stock_db(test_stock_db)
-    init_user_db(test_user_db)
+    global DB_PATH, USER_DB_PATH
+    original_db_path = DB_PATH
+    original_user_db_path = USER_DB_PATH
+    DB_PATH = test_stock_db
+    USER_DB_PATH = test_user_db
+    init_stock_db(DB_PATH)
+    init_user_db(USER_DB_PATH)
     try:
         # Tester utilisateur
         pwd_hash = hash_password("testpwd")
@@ -2512,6 +2575,8 @@ def run_tests():
     except Exception as e:
         print(f"[Test Error] {e}\n{traceback.format_exc()}")
     finally:
+        DB_PATH = original_db_path
+        USER_DB_PATH = original_user_db_path
         for f in (test_stock_db, test_user_db):
             if os.path.exists(f):
                 os.remove(f)
@@ -2520,36 +2585,50 @@ def run_tests():
 # ---------------------------
 # DÉMARRAGE PRINCIPAL
 # ---------------------------
-if __name__ == '__main__':
-    if len(sys.argv) > 1 and sys.argv[1] == '--test':
+def main(argv=None):
+    """Point d'entrée principal de l'application graphique."""
+    args = sys.argv[1:] if argv is None else list(argv)
+    if args and args[0] == '--test':
         run_tests()
-    else:
-        if not TK_AVAILABLE:
-            print("Erreur : Tkinter non disponible. Le programme ne peut pas démarrer.")
-            sys.exit(1)
+        return 0
 
-        # Initialiser bases séparées
-        init_stock_db(DB_PATH)
-        init_user_db(USER_DB_PATH)
+    if not TK_AVAILABLE:
+        print("Erreur : Tkinter non disponible. Le programme ne peut pas démarrer.")
+        return 1
 
-        root = tk.Tk()
-        root.withdraw()
-        login = LoginDialog(root)
-        if not login.result:
-            root.destroy()
-            sys.exit(0)
-        current_user = login.username
-        current_role = login.role
-        try:
-            with db_lock:
-                conn = sqlite3.connect(USER_DB_PATH, timeout=30)
-                cursor = conn.cursor()
-                cursor.execute("SELECT id FROM users WHERE username = ?", (current_user,))
-                current_user_id = cursor.fetchone()[0]
-        except:
-            current_user_id = None
-        finally:
-            conn.close()
+    init_stock_db(DB_PATH)
+    init_user_db(USER_DB_PATH)
+
+    root = tk.Tk()
+    root.withdraw()
+    login = LoginDialog(root)
+    if not login.result:
         root.destroy()
-        app = StockApp(current_user, current_role, current_user_id)
-        app.mainloop()
+        return 0
+
+    current_user = login.username
+    current_role = login.role
+    current_user_id = None
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(USER_DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute("SELECT id FROM users WHERE username = ?", (current_user,))
+            row = cursor.fetchone()
+            if row:
+                current_user_id = row[0]
+    except sqlite3.Error as exc:
+        print(f"[DB Error] main: {exc}")
+    finally:
+        if conn:
+            conn.close()
+
+    root.destroy()
+    app = StockApp(current_user, current_role, current_user_id)
+    app.mainloop()
+    return 0
+
+
+if __name__ == '__main__':  # pragma: no cover - compatibilité exécution directe
+    sys.exit(main())

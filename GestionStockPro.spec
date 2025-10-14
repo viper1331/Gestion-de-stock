@@ -6,7 +6,7 @@ from PyInstaller.utils.hooks import collect_dynamic_libs
 pyzbar_binaries = collect_dynamic_libs("pyzbar")
 
 a = Analysis(
-    ['gestion_stock.py'],
+    ['gestion_stock/__main__.py'],
     pathex=[],
     binaries=pyzbar_binaries,
     datas=[],
