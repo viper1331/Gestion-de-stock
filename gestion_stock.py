@@ -30,6 +30,7 @@ default_config = {
     'user_db_path': 'users.db',
     'barcode_dir': 'barcodes',
     'camera_index': '0',
+    'microphone_index': '',
     'enable_voice': 'true',
     'enable_tts': 'true',
     'enable_barcode_generation': 'true',
@@ -46,6 +47,8 @@ else:
     if 'Settings' not in config:
         config['Settings'] = default_config
     else:
+        if 'microphone_index' not in config['Settings']:
+            config['Settings']['microphone_index'] = config['Settings'].get('camera_index', default_config['camera_index'])
         for key, val in default_config.items():
             if key not in config['Settings']:
                 config['Settings'][key] = val
@@ -62,6 +65,11 @@ try:
     CAMERA_INDEX = int(config['Settings'].get('camera_index', default_config['camera_index']))
 except ValueError:
     CAMERA_INDEX = 0
+microphone_value = config['Settings'].get('microphone_index', '').strip()
+try:
+    MICROPHONE_INDEX = int(microphone_value) if microphone_value else None
+except ValueError:
+    MICROPHONE_INDEX = None
 ENABLE_VOICE = config['Settings'].getboolean('enable_voice', fallback=True)
 ENABLE_TTS = config['Settings'].getboolean('enable_tts', fallback=True)
 ENABLE_BARCODE_GENERATION = config['Settings'].getboolean('enable_barcode_generation', fallback=True)
@@ -196,6 +204,7 @@ def init_user_db(user_db_path=USER_DB_PATH):
     Initialise la base de données des utilisateurs, distincte de la base de stock.
     Crée la table users et ajoute la colonne role si manquante.
     """
+    conn = None
     try:
         conn = sqlite3.connect(user_db_path, timeout=30)
         cursor = conn.cursor()
@@ -228,7 +237,8 @@ def init_user_db(user_db_path=USER_DB_PATH):
     except sqlite3.Error as e:
         print(f"[DB Error] init_user_db: {e}")
     finally:
-        conn.close()
+        if conn:
+            conn.close()
 
 # ------------------------
 # INITIATION / MIGRATION BASE STOCK
@@ -457,10 +467,20 @@ if ENABLE_VOICE and SR_LIB_AVAILABLE:
         global recognizer, microphone, voice_active
         recognizer = sr.Recognizer()
         try:
-            microphone = sr.Microphone(device_index=CAMERA_INDEX) if CAMERA_INDEX is not None else sr.Microphone()
+            mic_kwargs = {}
+            if MICROPHONE_INDEX is not None and MICROPHONE_INDEX >= 0:
+                mic_kwargs['device_index'] = MICROPHONE_INDEX
+            microphone = sr.Microphone(**mic_kwargs)
             with microphone as source:
                 pass
-            print(f"[DEBUG_VOICE] Micro initialisé avec index {CAMERA_INDEX} : {sr.Microphone.list_microphone_names()[CAMERA_INDEX]}")
+            mic_names = sr.Microphone.list_microphone_names()
+            if MICROPHONE_INDEX is not None and 0 <= MICROPHONE_INDEX < len(mic_names):
+                selected_name = mic_names[MICROPHONE_INDEX]
+                debug_index = MICROPHONE_INDEX
+            else:
+                selected_name = 'défaut système'
+                debug_index = 'défaut'
+            print(f"[DEBUG_VOICE] Micro initialisé avec index {debug_index} : {selected_name}")
         except Exception as e:
             microphone = None
             print(f"[DEBUG_VOICE] Impossible d'initialiser le microphone ({e}). Reconnaissance vocale désactivée.")
@@ -1089,7 +1109,7 @@ class StockApp(tk.Tk):
         menubar.add_cascade(label="Fichier", menu=file_menu)
 
         settings_menu = tk.Menu(menubar, tearoff=0)
-        settings_menu.add_command(label="Configurer Générales", command=self.open_config_dialog)
+        settings_menu.add_command(label="Configuration générale", command=self.open_config_dialog)
         settings_menu.add_command(label="Gérer Catégories", command=self.open_category_dialog)
         if self.current_role == 'admin':
             settings_menu.add_command(label="Gérer Utilisateurs", command=self.open_user_management)
@@ -1938,26 +1958,39 @@ class StockApp(tk.Tk):
         if not (ENABLE_VOICE and SR_LIB_AVAILABLE):
             messagebox.showwarning("Vocal", "Reconnaissance vocale non disponible.")
             return
-        global CAMERA_INDEX
+        global MICROPHONE_INDEX
         idx = choose_microphone(self)
         if idx is not None:
-            CAMERA_INDEX = idx
+            MICROPHONE_INDEX = idx
+            config['Settings']['microphone_index'] = str(idx)
+            with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+                config.write(f)
             init_recognizer()
-            messagebox.showinfo("Micro", f"Micro sélectionné : {sr.Microphone.list_microphone_names()[CAMERA_INDEX]}")
+            mic_names = sr.Microphone.list_microphone_names()
+            if 0 <= idx < len(mic_names):
+                selected = mic_names[idx]
+            else:
+                selected = f"index {idx}"
+            messagebox.showinfo("Micro", f"Micro sélectionné : {selected}")
 
     def open_config_dialog(self):
         dialog = ConfigDialog(self)
         if dialog.result:
+            global CAMERA_INDEX, MICROPHONE_INDEX
             config['Settings']['db_path'] = dialog.result['db_path']
             config['Settings']['user_db_path'] = dialog.result['user_db_path']
             config['Settings']['barcode_dir'] = dialog.result['barcode_dir']
             config['Settings']['camera_index'] = str(dialog.result['camera_index'])
+            microphone_index = dialog.result['microphone_index']
+            config['Settings']['microphone_index'] = '' if microphone_index is None else str(microphone_index)
             config['Settings']['enable_voice'] = str(dialog.result['enable_voice']).lower()
             config['Settings']['enable_tts'] = str(dialog.result['enable_tts']).lower()
             config['Settings']['enable_barcode_generation'] = str(dialog.result['enable_barcode_generation']).lower()
             config['Settings']['low_stock_threshold'] = str(dialog.result['low_stock_threshold'])
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 config.write(f)
+            CAMERA_INDEX = dialog.result['camera_index']
+            MICROPHONE_INDEX = microphone_index
             try:
                 self.low_stock_threshold = int(dialog.result['low_stock_threshold'])
             except (TypeError, ValueError):
@@ -2055,14 +2088,15 @@ class StockApp(tk.Tk):
 class ConfigDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
-        self.title("Configuration Générales")
+        self.title("Configuration générale")
         self.resizable(False, False)
         self.result = None
 
         var_db = tk.StringVar(value=DB_PATH)
         var_user_db = tk.StringVar(value=USER_DB_PATH)
         var_barcode = tk.StringVar(value=BARCODE_DIR)
-        var_camera = tk.IntVar(value=CAMERA_INDEX)
+        var_camera = tk.StringVar(value=str(CAMERA_INDEX))
+        var_microphone = tk.StringVar(value="" if MICROPHONE_INDEX is None else str(MICROPHONE_INDEX))
         var_enable_voice = tk.BooleanVar(value=ENABLE_VOICE)
         var_enable_tts = tk.BooleanVar(value=ENABLE_TTS)
         var_enable_barcode = tk.BooleanVar(value=ENABLE_BARCODE_GENERATION)
@@ -2084,33 +2118,54 @@ class ConfigDialog(tk.Toplevel):
         entry_camera = ttk.Entry(self, textvariable=var_camera, width=5)
         entry_camera.grid(row=3, column=1, sticky=tk.W, padx=10, pady=5)
 
-        chk_voice = ttk.Checkbutton(self, text="Activer reconnaissance vocale", variable=var_enable_voice)
-        chk_voice.grid(row=4, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
-        chk_tts = ttk.Checkbutton(self, text="Activer synthèse vocale", variable=var_enable_tts)
-        chk_tts.grid(row=5, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
-        chk_barcode = ttk.Checkbutton(self, text="Activer génération de codes-barres", variable=var_enable_barcode)
-        chk_barcode.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        ttk.Label(self, text="Index microphone (laisser vide pour défaut) :").grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
+        entry_microphone = ttk.Entry(self, textvariable=var_microphone, width=5)
+        entry_microphone.grid(row=4, column=1, sticky=tk.W, padx=10, pady=5)
 
-        ttk.Label(self, text="Seuil stock faible :").grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
+        chk_voice = ttk.Checkbutton(self, text="Activer reconnaissance vocale", variable=var_enable_voice)
+        chk_voice.grid(row=5, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_tts = ttk.Checkbutton(self, text="Activer synthèse vocale", variable=var_enable_tts)
+        chk_tts.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_barcode = ttk.Checkbutton(self, text="Activer génération de codes-barres", variable=var_enable_barcode)
+        chk_barcode.grid(row=7, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+
+        ttk.Label(self, text="Seuil stock faible :").grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
         entry_threshold = ttk.Entry(self, textvariable=var_low_stock, width=5)
-        entry_threshold.grid(row=7, column=1, sticky=tk.W, padx=10, pady=5)
+        entry_threshold.grid(row=8, column=1, sticky=tk.W, padx=10, pady=5)
 
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=8, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="OK", command=lambda: self.on_ok(
-            var_db, var_user_db, var_barcode, var_camera, var_enable_voice, var_enable_tts, var_enable_barcode, var_low_stock
+            var_db, var_user_db, var_barcode, var_camera, var_microphone,
+            var_enable_voice, var_enable_tts, var_enable_barcode, var_low_stock
         )).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
 
         self.grab_set()
         self.wait_window(self)
 
-    def on_ok(self, var_db, var_user_db, var_barcode, var_camera, var_enable_voice, var_enable_tts, var_enable_barcode, var_low_stock):
+    def on_ok(self, var_db, var_user_db, var_barcode, var_camera, var_microphone, var_enable_voice, var_enable_tts, var_enable_barcode, var_low_stock):
+        camera_raw = var_camera.get().strip()
+        microphone_raw = var_microphone.get().strip()
+        try:
+            camera_index = int(camera_raw) if camera_raw else 0
+        except ValueError:
+            messagebox.showerror("Configuration", "Index caméra invalide.")
+            return
+        if microphone_raw:
+            try:
+                microphone_index = int(microphone_raw)
+            except ValueError:
+                messagebox.showerror("Configuration", "Index microphone invalide.")
+                return
+        else:
+            microphone_index = None
         self.result = {
             'db_path': var_db.get().strip(),
             'user_db_path': var_user_db.get().strip(),
             'barcode_dir': var_barcode.get().strip(),
-            'camera_index': var_camera.get(),
+            'camera_index': camera_index,
+            'microphone_index': microphone_index,
             'enable_voice': var_enable_voice.get(),
             'enable_tts': var_enable_tts.get(),
             'enable_barcode_generation': var_enable_barcode.get(),
