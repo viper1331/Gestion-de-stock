@@ -1,10 +1,14 @@
 # -*- mode: python ; coding: utf-8 -*-
 
+from PyInstaller.utils.hooks import collect_dynamic_libs
+
+
+pyzbar_binaries = collect_dynamic_libs("pyzbar")
 
 a = Analysis(
     ['gestion_stock.py'],
     pathex=[],
-    binaries=[],
+    binaries=pyzbar_binaries,
     datas=[],
     hiddenimports=[],
     hookspath=[],
