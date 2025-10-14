@@ -64,7 +64,7 @@ source .venv/bin/activate  # Windows : .venv\Scripts\activate
 
 # Installer les dépendances
 pip install --upgrade pip
-pip install opencv-python pyzbar python-barcode[images] Pillow SpeechRecognition pyttsx3 pyaudio
+pip install -r requirements.txt
 ```
 
 ## Lancement de l'application
@@ -119,13 +119,18 @@ Les paramètres peuvent être modifiés via le menu **Paramètres → Configurer
 
 ## Création d'un exécutable
 Deux options sont fournies :
-1. **PyInstaller (recommandé)** :
+1. **Script automatisé (recommandé)** :
    ```bash
-   pip install -r requirements.txt  # ajuster selon vos dépendances
+   python build_exe.py
+   ```
+   Ce script met automatiquement à jour `pip`, installe PyInstaller ainsi que toutes les dépendances présentes dans `requirements.txt`, puis lance la génération de l'exécutable via `GestionStockPro.spec`.
+2. **PyInstaller (manuel)** :
+   ```bash
+   pip install -r requirements.txt
    pyinstaller --onefile --windowed --name GestionStockPro gestion_stock.py
    ```
    Le fichier `GestionStockPro.spec` donne un exemple de configuration PyInstaller.【F:GestionStockPro.spec†L1-L33】
-2. **Installateur Windows classique** : utiliser `setup.py` avec `python setup.py bdist_wininst` pour générer un installeur `.exe`.【F:setup.py†L1-L28】
+3. **Installateur Windows classique** : utiliser `setup.py` avec `python setup.py bdist_wininst` pour générer un installeur `.exe`.【F:setup.py†L1-L28】
 
 ## Dépannage
 - **Le scan caméra ne fonctionne pas** : vérifier que la caméra est accessible et que `opencv-python` et `pyzbar` sont installés. Sur Linux, installer `libzbar0`.
