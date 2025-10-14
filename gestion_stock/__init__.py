@@ -392,8 +392,6 @@ def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, 
 
 def adjust_item_quantity(item_id, delta, operator='system', source='manual', note=None):
     """Modifie la quantité d'un article et journalise le mouvement."""
-    if delta == 0:
-        return None
     conn = None
     try:
         with db_lock:
@@ -404,6 +402,8 @@ def adjust_item_quantity(item_id, delta, operator='system', source='manual', not
             if not result:
                 return None
             old_qty = result[0] or 0
+            if delta == 0:
+                return old_qty, 0, old_qty
             new_qty = old_qty + delta
             if new_qty < 0:
                 new_qty = 0
