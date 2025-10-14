@@ -17,6 +17,7 @@ import shutil
 import zipfile
 import hashlib
 import json
+import logging
 from datetime import datetime, timedelta
 import traceback
 import configparser
@@ -83,6 +84,11 @@ if ENABLE_BARCODE_GENERATION and not os.path.exists(BARCODE_DIR):
 # -----------------------------------
 # Gestion des imports facultatifs
 # -----------------------------------
+if not logging.getLogger().hasHandlers():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(name)s - %(message)s")
+
+logger = logging.getLogger(__name__)
+
 try:
     import cv2
     CV2_AVAILABLE = True
@@ -4554,26 +4560,32 @@ def run_tests():
 def main(argv=None):
     """Point d'entrée principal de l'application graphique."""
     args = sys.argv[1:] if argv is None else list(argv)
+    logger.info("Lancement de gestion_stock.main avec les arguments : %s", args if args else "<aucun>")
     if args and args[0] == '--test':
+        logger.info("Exécution du mode test demandé depuis la ligne de commande.")
         run_tests()
         return 0
 
     if not TK_AVAILABLE:
+        logger.error("Tkinter est indisponible : arrêt de l'application.")
         print("Erreur : Tkinter non disponible. Le programme ne peut pas démarrer.")
         return 1
 
     init_stock_db(DB_PATH)
     init_user_db(USER_DB_PATH)
+    logger.info("Initialisation des bases de données terminée.")
 
     root = tk.Tk()
     root.withdraw()
     login = LoginDialog(root)
     if not login.result:
+        logger.info("Connexion annulée par l'utilisateur depuis la boîte de dialogue de connexion.")
         root.destroy()
         return 0
 
     current_user = login.username
     current_role = login.role
+    logger.info("Utilisateur connecté : %s (rôle : %s)", current_user, current_role)
     current_user_id = None
     conn = None
     try:
@@ -4584,7 +4596,9 @@ def main(argv=None):
             row = cursor.fetchone()
             if row:
                 current_user_id = row[0]
+                logger.info("Identifiant interne récupéré pour l'utilisateur %s : %s", current_user, current_user_id)
     except sqlite3.Error as exc:
+        logger.exception("Erreur lors de la récupération de l'identifiant utilisateur pour %s", current_user)
         print(f"[DB Error] main: {exc}")
     finally:
         if conn:
@@ -4592,7 +4606,9 @@ def main(argv=None):
 
     root.destroy()
     app = StockApp(current_user, current_role, current_user_id)
+    logger.info("Lancement de l'interface graphique principale.")
     app.mainloop()
+    logger.info("Fermeture de l'application graphique.")
     return 0
 
 
