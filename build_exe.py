@@ -19,12 +19,32 @@ REQUIREMENTS_FILE = ROOT_DIR / "requirements.txt"
 SPEC_FILE = ROOT_DIR / "GestionStockPro.spec"
 
 
-def run_command(command: list[str], description: str) -> None:
-    """Exécute une commande système tout en affichant une description."""
+def run_command(command: list[str], description: str, *, allow_fail: bool = False) -> None:
+    """Exécute une commande système tout en affichant une description.
+
+    Parameters
+    ----------
+    command:
+        Commande à lancer en tant que liste d'arguments.
+    description:
+        Texte affiché avant l'exécution pour contextualiser la commande.
+    allow_fail:
+        Lorsqu'il est défini à ``True``, un code de retour non nul n'interrompt
+        pas le script : un avertissement est affiché mais l'exécution
+        continue. Cela permet de rendre certaines étapes optionnelles (par
+        exemple la mise à jour de ``pip``) afin de ne pas bloquer la
+        génération de l'exécutable sur des environnements verrouillés.
+    """
     print(f"\n=== {description} ===")
     print("Commande :", " ".join(command))
     completed = subprocess.run(command, check=False)
     if completed.returncode != 0:
+        if allow_fail:
+            print(
+                "Avertissement : la commande a échoué mais le script va continuer.\n"
+                "Vous pouvez réessayer manuellement si nécessaire."
+            )
+            return
         raise SystemExit(
             f"La commande '{' '.join(command)}' s'est terminée avec le code "
             f"{completed.returncode}. Abandon."
@@ -34,7 +54,11 @@ def run_command(command: list[str], description: str) -> None:
 def ensure_requirements() -> None:
     """Installe pip, PyInstaller et les dépendances du projet."""
     # Mise à jour optionnelle de pip pour éviter les incompatibilités.
-    run_command([sys.executable, "-m", "pip", "install", "--upgrade", "pip"], "Mise à jour de pip")
+    run_command(
+        [sys.executable, "-m", "pip", "install", "--upgrade", "pip"],
+        "Mise à jour de pip",
+        allow_fail=True,
+    )
 
     # PyInstaller est requis pour générer l'exécutable.
     run_command([sys.executable, "-m", "pip", "install", "pyinstaller"], "Installation de PyInstaller")
