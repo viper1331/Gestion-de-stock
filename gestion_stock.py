@@ -14,6 +14,7 @@ import time
 import os
 import sys
 import shutil
+import zipfile
 import hashlib
 from datetime import datetime, timedelta
 import traceback
@@ -1968,21 +1969,29 @@ class StockApp(tk.Tk):
             pass
 
     def backup_database(self):
-        default_name = f"backup_stock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.db"
+        default_name = f"backup_gestion_stock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
         file_path = filedialog.asksaveasfilename(
-            title="Sauvegarder base de données",
-            defaultextension=".db",
+            title="Sauvegarder bases de données",
+            defaultextension=".zip",
             initialfile=default_name,
-            filetypes=[("Base SQLite", "*.db"), ("Tous fichiers", "*.*")]
+            filetypes=[("Archive ZIP", "*.zip"), ("Tous fichiers", "*.*")]
         )
         if not file_path:
             return
         try:
-            shutil.copy2(DB_PATH, file_path)
+            with zipfile.ZipFile(file_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
+                if os.path.exists(DB_PATH):
+                    archive.write(DB_PATH, arcname=os.path.basename(DB_PATH))
+                else:
+                    raise FileNotFoundError(f"Base stock introuvable : {DB_PATH}")
+                if os.path.exists(USER_DB_PATH):
+                    archive.write(USER_DB_PATH, arcname=os.path.basename(USER_DB_PATH))
+                else:
+                    raise FileNotFoundError(f"Base utilisateurs introuvable : {USER_DB_PATH}")
         except Exception as e:
-            messagebox.showerror("Erreur Backup", f"Impossible de sauvegarder la base : {e}")
+            messagebox.showerror("Erreur Backup", f"Impossible de sauvegarder les bases : {e}")
             return
-        messagebox.showinfo("Backup réussi", f"Base sauvegardée vers : {file_path}")
+        messagebox.showinfo("Backup réussi", f"Bases sauvegardées vers : {file_path}")
         self.status.set(f"Backup : {os.path.basename(file_path)}")
 
     def logout(self):
