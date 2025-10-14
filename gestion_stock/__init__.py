@@ -111,6 +111,68 @@ logger = logging.getLogger(__name__)
 if file_handler_added:
     logger.info("Journalisation des événements dans le fichier : %s", LOG_FILE)
 
+
+class StartupEventListener:
+    """Collecte les événements de démarrage pour faciliter le diagnostic."""
+
+    def __init__(self, logger_instance: logging.Logger, *, enabled: bool = True) -> None:
+        self._logger = logger_instance
+        self._enabled = enabled
+        self._events: list[str] = []
+        self._lock = threading.Lock()
+        self._listening = enabled
+
+    def reset(self) -> None:
+        """Réinitialise la collecte des événements."""
+        if not self._enabled:
+            return
+        with self._lock:
+            self._events.clear()
+            self._listening = True
+
+    def record(self, message: str, level: int = logging.INFO) -> None:
+        """Ajoute un événement horodaté et le journalise."""
+        if not self._enabled:
+            return
+        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        entry = f"{timestamp} | {message}"
+        with self._lock:
+            if self._listening:
+                self._events.append(entry)
+        self._logger.log(level, "[Startup] %s", message)
+
+    def stop(self) -> None:
+        """Arrête l'écoute des événements supplémentaires."""
+        if not self._enabled:
+            return
+        with self._lock:
+            if not self._listening:
+                return
+            self._listening = False
+        self._logger.debug("[Startup] Arrêt de l'écoute des événements de démarrage.")
+
+    def flush_to_logger(self, level: int = logging.INFO) -> None:
+        """Envoie la chronologie collectée vers le journal."""
+        if not self._enabled:
+            return
+        with self._lock:
+            events_snapshot = list(self._events)
+        if not events_snapshot:
+            return
+        self._logger.log(level, "[Startup] Chronologie (%d événement(s)) :", len(events_snapshot))
+        for entry in events_snapshot:
+            self._logger.log(level, "[Startup] %s", entry)
+
+    @property
+    def listening(self) -> bool:
+        if not self._enabled:
+            return False
+        with self._lock:
+            return self._listening
+
+
+startup_listener = StartupEventListener(logger)
+
 try:
     import cv2
     CV2_AVAILABLE = True
@@ -242,6 +304,10 @@ def init_user_db(user_db_path=USER_DB_PATH):
     Initialise la base de données des utilisateurs, distincte de la base de stock.
     Crée la table users et ajoute la colonne role si manquante.
     """
+    startup_listener.record(
+        f"Initialisation de la base utilisateurs : {os.path.abspath(user_db_path)}",
+        level=logging.DEBUG,
+    )
     conn = None
     try:
         conn = sqlite3.connect(user_db_path, timeout=30)
@@ -272,7 +338,12 @@ def init_user_db(user_db_path=USER_DB_PATH):
             conn.commit()
 
         conn.commit()
+        startup_listener.record("Base utilisateurs prête.", level=logging.DEBUG)
     except sqlite3.Error as e:
+        startup_listener.record(
+            f"Échec lors de l'initialisation de la base utilisateurs : {e}",
+            level=logging.ERROR,
+        )
         print(f"[DB Error] init_user_db: {e}")
     finally:
         if conn:
@@ -287,6 +358,10 @@ def init_stock_db(db_path=DB_PATH):
     Crée tables categories et items (avec colonne size).
     Crée un index sur items.name.
     """
+    startup_listener.record(
+        f"Initialisation de la base stock : {os.path.abspath(db_path)}",
+        level=logging.DEBUG,
+    )
     conn = None
     try:
         conn = sqlite3.connect(db_path, timeout=30)
@@ -476,7 +551,12 @@ def init_stock_db(db_path=DB_PATH):
             cursor.execute("ALTER TABLE items ADD COLUMN preferred_supplier_id INTEGER")
 
         conn.commit()
+        startup_listener.record("Base stock prête.", level=logging.DEBUG)
     except sqlite3.Error as e:
+        startup_listener.record(
+            f"Échec lors de l'initialisation de la base stock : {e}",
+            level=logging.ERROR,
+        )
         print(f"[DB Error] init_stock_db: {e}")
     finally:
         if conn:
@@ -1909,6 +1989,10 @@ class StockApp(tk.Tk):
     SHOE_SIZES = [str(i) for i in range(30, 61)]
 
     def __init__(self, current_user, current_role, current_user_id):
+        startup_listener.record(
+            "Construction de l'interface principale StockApp.",
+            level=logging.DEBUG,
+        )
         super().__init__()
         self.current_user = current_user
         self.current_role = current_role
@@ -1929,19 +2013,34 @@ class StockApp(tk.Tk):
         self.create_toolbar()
         self.create_statusbar()
         self.create_main_frames()
+        startup_listener.record(
+            "Menus et composants principaux créés.",
+            level=logging.DEBUG,
+        )
 
         try:
+            startup_listener.record(
+                "Initialisation de la base stock depuis StockApp.",
+                level=logging.DEBUG,
+            )
             init_stock_db(DB_PATH)
         except Exception as e:
+            startup_listener.record(
+                f"Échec d'initialisation de la base stock dans StockApp : {e}",
+                level=logging.ERROR,
+            )
             messagebox.showerror("Erreur BD", f"Impossible d'initialiser la base du stock : {e}")
             self.destroy()
             return
 
         # Appliquer largeurs sauvegardées
         self.apply_saved_column_widths()
+        startup_listener.record("Largeurs de colonnes restaurées.", level=logging.DEBUG)
         self.load_inventory()
+        startup_listener.record("Inventaire initial chargé.", level=logging.DEBUG)
 
         self.alert_manager = AlertManager(self, threshold=self.low_stock_threshold)
+        startup_listener.record("Gestionnaire d'alertes initialisé.", level=logging.DEBUG)
 
         if ENABLE_VOICE and SR_LIB_AVAILABLE:
             if microphone is None:
@@ -4581,33 +4680,61 @@ def run_tests():
 # ---------------------------
 def main(argv=None):
     """Point d'entrée principal de l'application graphique."""
+    startup_listener.reset()
     args = sys.argv[1:] if argv is None else list(argv)
+    startup_listener.record(
+        "Appel de gestion_stock.main.",
+        level=logging.DEBUG,
+    )
+    startup_listener.record(
+        "Arguments reçus : %s" % (args if args else "<aucun>"),
+        level=logging.DEBUG,
+    )
     logger.info("Lancement de gestion_stock.main avec les arguments : %s", args if args else "<aucun>")
     if args and args[0] == '--test':
         logger.info("Exécution du mode test demandé depuis la ligne de commande.")
         run_tests()
+        startup_listener.record("Mode test exécuté : arrêt avant le démarrage graphique.")
+        startup_listener.stop()
+        startup_listener.flush_to_logger(level=logging.DEBUG)
         return 0
 
     if not TK_AVAILABLE:
         logger.error("Tkinter est indisponible : arrêt de l'application.")
         print("Erreur : Tkinter non disponible. Le programme ne peut pas démarrer.")
+        startup_listener.record(
+            "Tkinter indisponible, démarrage interrompu.",
+            level=logging.ERROR,
+        )
+        startup_listener.stop()
+        startup_listener.flush_to_logger(level=logging.ERROR)
         return 1
 
     init_stock_db(DB_PATH)
     init_user_db(USER_DB_PATH)
     logger.info("Initialisation des bases de données terminée.")
+    startup_listener.record("Initialisation des bases de données terminée.", level=logging.DEBUG)
 
     root = tk.Tk()
+    startup_listener.record("Création du conteneur Tkinter racine.", level=logging.DEBUG)
     root.withdraw()
     login = LoginDialog(root)
+    startup_listener.record("Boîte de dialogue de connexion affichée.", level=logging.DEBUG)
     if not login.result:
         logger.info("Connexion annulée par l'utilisateur depuis la boîte de dialogue de connexion.")
+        startup_listener.record("Connexion annulée par l'utilisateur.", level=logging.INFO)
         root.destroy()
+        startup_listener.stop()
+        startup_listener.flush_to_logger(level=logging.DEBUG)
         return 0
 
     current_user = login.username
     current_role = login.role
     logger.info("Utilisateur connecté : %s (rôle : %s)", current_user, current_role)
+    startup_listener.record(
+        f"Utilisateur connecté : {current_user} (rôle : {current_role}).",
+        level=logging.INFO,
+    )
     current_user_id = None
     conn = None
     try:
@@ -4619,16 +4746,32 @@ def main(argv=None):
             if row:
                 current_user_id = row[0]
                 logger.info("Identifiant interne récupéré pour l'utilisateur %s : %s", current_user, current_user_id)
+                startup_listener.record(
+                    f"Identifiant interne récupéré pour {current_user} : {current_user_id}.",
+                    level=logging.DEBUG,
+                )
     except sqlite3.Error as exc:
         logger.exception("Erreur lors de la récupération de l'identifiant utilisateur pour %s", current_user)
         print(f"[DB Error] main: {exc}")
+        startup_listener.record(
+            f"Erreur lors de la récupération de l'identifiant utilisateur : {exc}",
+            level=logging.ERROR,
+        )
     finally:
         if conn:
             conn.close()
 
+    startup_listener.record("Fermeture de la fenêtre de connexion.", level=logging.DEBUG)
     root.destroy()
     app = StockApp(current_user, current_role, current_user_id)
     logger.info("Lancement de l'interface graphique principale.")
+    startup_listener.record("Fenêtre principale initialisée.", level=logging.INFO)
+    startup_listener.record(
+        "Entrée dans la boucle principale Tkinter : lancement complet.",
+        level=logging.INFO,
+    )
+    startup_listener.stop()
+    startup_listener.flush_to_logger(level=logging.DEBUG)
     app.mainloop()
     logger.info("Fermeture de l'application graphique.")
     return 0
