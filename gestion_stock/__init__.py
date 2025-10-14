@@ -1,4 +1,6 @@
 # -*- coding: utf-8 -*-
+from __future__ import annotations
+
 # Copyright (c) 2025 Sebastien Cangemi
 # Tous droits réservés.
 # Gestion Stock Pro - Interface graphique professionnelle
@@ -8,6 +10,7 @@
 #   pip install -r requirements.txt
 #   pyinstaller --onefile --windowed --name GestionStockPro gestion_stock.py
 
+import csv
 import sqlite3
 import threading
 import time
@@ -18,6 +21,7 @@ import zipfile
 import hashlib
 import json
 import logging
+import webbrowser
 from datetime import datetime, timedelta
 import traceback
 import configparser
@@ -35,6 +39,7 @@ DEFAULT_INVENTORY_COLUMNS = (
     'Nom',
     'Code-Barres',
     'Catégorie',
+    'Fournisseur',
     'Taille',
     'Quantité',
     'Dernière MAJ',
@@ -56,6 +61,63 @@ def _normalize_inventory_columns_section(section: configparser.SectionProxy) -> 
     hidden = [col.strip() for col in hidden_raw.split(',') if col.strip()]
     hidden = [col for col in hidden if col in DEFAULT_INVENTORY_COLUMNS]
     section['hidden'] = ','.join(hidden)
+
+
+def export_rows_to_csv(file_path: str, headers: tuple[str, ...], rows: list[tuple]) -> None:
+    """Écrit un fichier CSV en utilisant un séparateur point-virgule."""
+    with open(file_path, 'w', newline='', encoding='utf-8') as csv_file:
+        writer = csv.writer(csv_file, delimiter=';')
+        writer.writerow(headers)
+        for row in rows:
+            sanitized = ["" if value is None else value for value in row]
+            writer.writerow(sanitized)
+
+
+def parse_user_date(date_str: Optional[str]) -> Optional[str]:
+    """Convertit une date JJ/MM/AAAA en ISO (AAAA-MM-JJ)."""
+    if not date_str:
+        return None
+    cleaned = date_str.strip()
+    if not cleaned:
+        return None
+    for fmt in ("%d/%m/%Y", "%Y-%m-%d"):
+        try:
+            return datetime.strptime(cleaned, fmt).date().isoformat()
+        except ValueError:
+            continue
+    raise ValueError("Format de date invalide. Utilisez JJ/MM/AAAA.")
+
+
+def format_display_date(date_str: Optional[str]) -> str:
+    """Affiche une date stockée en ISO au format JJ/MM/AAAA."""
+    if not date_str:
+        return ''
+    cleaned = str(date_str).strip()
+    if not cleaned:
+        return ''
+    for fmt in ("%Y-%m-%d",):
+        try:
+            return datetime.strptime(cleaned, fmt).strftime("%d/%m/%Y")
+        except ValueError:
+            continue
+    try:
+        return datetime.fromisoformat(cleaned).strftime("%d/%m/%Y")
+    except ValueError:
+        pass
+    try:
+        return datetime.strptime(cleaned, "%d/%m/%Y").strftime("%d/%m/%Y")
+    except ValueError:
+        return cleaned
+
+
+def format_display_datetime(value: Optional[str]) -> str:
+    """Affiche une date/heure ISO en JJ/MM/AAAA HH:MM."""
+    if not value:
+        return ''
+    try:
+        return datetime.fromisoformat(value).strftime("%d/%m/%Y %H:%M")
+    except ValueError:
+        return value
 
 
 default_config = {
@@ -800,16 +862,28 @@ def fetch_all_users():
 # FONCTIONS FOURNISSEURS / APPROVISIONNEMENTS
 # ------------------------
 
-def fetch_suppliers():
+def fetch_suppliers(search: Optional[str] = None):
     conn = None
     try:
+        params: list = []
+        query = (
+            "SELECT id, name, contact_name, email, phone, notes, created_at "
+            "FROM suppliers"
+        )
+        if search:
+            like = f"%{search.lower()}%"
+            query += (
+                " WHERE lower(COALESCE(name,'')) LIKE ?"
+                " OR lower(COALESCE(contact_name,'')) LIKE ?"
+                " OR lower(COALESCE(email,'')) LIKE ?"
+                " OR lower(COALESCE(phone,'')) LIKE ?"
+            )
+            params.extend([like, like, like, like])
+        query += " ORDER BY name"
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, name, contact_name, email, phone, notes, created_at "
-                "FROM suppliers ORDER BY name"
-            )
+            cursor.execute(query, params)
             return cursor.fetchall()
     except sqlite3.Error as e:
         print(f"[DB Error] fetch_suppliers: {e}")
@@ -916,6 +990,12 @@ def create_purchase_order(supplier_id, expected_date, note, created_by, lines, s
     conn = None
     try:
         timestamp = datetime.now().isoformat()
+        normalized_expected = None
+        if expected_date:
+            try:
+                normalized_expected = parse_user_date(expected_date)
+            except ValueError:
+                normalized_expected = expected_date.strip()
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
@@ -924,7 +1004,7 @@ def create_purchase_order(supplier_id, expected_date, note, created_by, lines, s
                 INSERT INTO purchase_orders (supplier_id, status, expected_date, created_at, created_by, note)
                 VALUES (?, ?, ?, ?, ?, ?)
                 """,
-                (supplier_id, status, expected_date, timestamp, created_by, note),
+                (supplier_id, status, normalized_expected, timestamp, created_by, note),
             )
             po_id = cursor.lastrowid
             for line in lines:
@@ -952,7 +1032,7 @@ def create_purchase_order(supplier_id, expected_date, note, created_by, lines, s
             conn.close()
 
 
-def fetch_purchase_orders(status=None):
+def fetch_purchase_orders(status=None, search: Optional[str] = None):
     conn = None
     try:
         query = (
@@ -960,10 +1040,33 @@ def fetch_purchase_orders(status=None):
             "purchase_orders.received_at, suppliers.name, purchase_orders.note, purchase_orders.created_by "
             "FROM purchase_orders LEFT JOIN suppliers ON suppliers.id = purchase_orders.supplier_id"
         )
-        params = []
+        params: list = []
+        clauses: list[str] = []
         if status:
-            query += " WHERE purchase_orders.status = ?"
-            params.append(status)
+            if isinstance(status, (list, tuple, set)):
+                placeholders = ','.join('?' for _ in status)
+                clauses.append(f"purchase_orders.status IN ({placeholders})")
+                params.extend(status)
+            elif status == 'active':
+                clauses.append("purchase_orders.status IN ('PENDING', 'PARTIAL', 'SUGGESTED')")
+            elif status == 'closed':
+                clauses.append("purchase_orders.status IN ('RECEIVED', 'CANCELLED')")
+            else:
+                clauses.append("purchase_orders.status = ?")
+                params.append(status)
+        if search:
+            like = f"%{search.lower()}%"
+            clauses.append(
+                "(" 
+                "lower(COALESCE(suppliers.name,'')) LIKE ? OR "
+                "lower(COALESCE(purchase_orders.note,'')) LIKE ? OR "
+                "lower(COALESCE(purchase_orders.created_by,'')) LIKE ? OR "
+                "CAST(purchase_orders.id AS TEXT) LIKE ?"
+                ")"
+            )
+            params.extend([like, like, like, f"%{search}%"])
+        if clauses:
+            query += " WHERE " + " AND ".join(clauses)
         query += " ORDER BY purchase_orders.created_at DESC"
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1007,15 +1110,34 @@ def fetch_purchase_order_items(purchase_order_id):
 def update_purchase_order_status(purchase_order_id, status, reviewer, receipt_lines=None, note=None):
     conn = None
     try:
-        timestamp = datetime.now().isoformat()
+        now = datetime.now()
+        timestamp_iso = now.isoformat()
+        display_timestamp = now.strftime('%d/%m/%Y %H:%M')
+        operator = reviewer or 'système'
+        trimmed_note = (note or '').strip()
+        status_label = status.upper()
+        log_entry = f"[{display_timestamp}] {operator} - Statut {status_label}"
+        if trimmed_note:
+            log_entry += f" | {trimmed_note}"
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute(
-                "UPDATE purchase_orders SET status = ?, received_at = ?, note = COALESCE(note, '') || ? WHERE id = ?",
-                (status, timestamp if status in ('RECEIVED', 'PARTIAL') else None, f"\n{note}" if note else '', purchase_order_id),
+                "SELECT note, received_at FROM purchase_orders WHERE id = ?",
+                (purchase_order_id,),
             )
-            if receipt_lines:
+            row = cursor.fetchone()
+            existing_note = row[0] if row and row[0] else ''
+            current_received_at = row[1] if row else None
+            combined_note = f"{existing_note}\n{log_entry}" if existing_note else log_entry
+            new_received_at = current_received_at
+            if status in ('RECEIVED', 'PARTIAL'):
+                new_received_at = timestamp_iso
+            cursor.execute(
+                "UPDATE purchase_orders SET status = ?, received_at = ?, note = ? WHERE id = ?",
+                (status, new_received_at, combined_note, purchase_order_id),
+            )
+            if status in ('RECEIVED', 'PARTIAL') and receipt_lines:
                 for item_id, received_qty in receipt_lines.items():
                     cursor.execute(
                         """
@@ -1031,7 +1153,7 @@ def update_purchase_order_status(purchase_order_id, status, reviewer, receipt_li
                     new_qty = (current_qty or 0) + received_qty
                     cursor.execute(
                         "UPDATE items SET quantity = ?, last_updated = ? WHERE id = ?",
-                        (new_qty, timestamp, item_id),
+                        (new_qty, timestamp_iso, item_id),
                     )
                     log_stock_movement(
                         cursor,
@@ -1041,7 +1163,7 @@ def update_purchase_order_status(purchase_order_id, status, reviewer, receipt_li
                         'purchase_order_receipt',
                         reviewer,
                         note=f"Réception bon #{purchase_order_id}",
-                        timestamp=timestamp,
+                        timestamp=timestamp_iso,
                     )
             conn.commit()
             return True
@@ -1228,7 +1350,7 @@ def delete_collaborator(collaborator_id):
             conn.close()
 
 
-def fetch_collaborator_gear(collaborator_id=None):
+def fetch_collaborator_gear(collaborator_id=None, status=None):
     conn = None
     try:
         query = (
@@ -1240,9 +1362,22 @@ def fetch_collaborator_gear(collaborator_id=None):
             " JOIN items ON items.id = collaborator_gear.item_id"
         )
         params = []
+        conditions: list[str] = []
         if collaborator_id:
-            query += " WHERE collaborator_gear.collaborator_id = ?"
+            conditions.append("collaborator_gear.collaborator_id = ?")
             params.append(collaborator_id)
+        if status:
+            if isinstance(status, (list, tuple, set)):
+                placeholders = ','.join('?' for _ in status)
+                conditions.append(f"collaborator_gear.status IN ({placeholders})")
+                params.extend(status)
+            elif status == 'active':
+                conditions.append("collaborator_gear.status NOT IN ('returned', 'lost', 'damaged')")
+            else:
+                conditions.append("collaborator_gear.status = ?")
+                params.append(status)
+        if conditions:
+            query += " WHERE " + " AND ".join(conditions)
         query += " ORDER BY collaborator_gear.issued_at DESC"
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1261,15 +1396,25 @@ def assign_collaborator_gear(collaborator_id, item_id, quantity, size, due_date,
     conn = None
     try:
         issued_at = datetime.now().isoformat()
+        normalized_due = None
+        if due_date:
+            normalized_due = parse_user_date(due_date)
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
+            cursor.execute("SELECT quantity FROM items WHERE id = ?", (item_id,))
+            row = cursor.fetchone()
+            if not row:
+                raise ValueError("Article introuvable dans l'inventaire")
+            available = row[0] or 0
+            if quantity > available:
+                raise ValueError(f"Stock insuffisant : {available} article(s) disponible(s)")
             cursor.execute(
                 """
                 INSERT INTO collaborator_gear (collaborator_id, item_id, size, quantity, issued_at, due_date, notes)
                 VALUES (?, ?, ?, ?, ?, ?, ?)
                 """,
-                (collaborator_id, item_id, size, quantity, issued_at, due_date, notes),
+                (collaborator_id, item_id, size, quantity, issued_at, normalized_due, notes),
             )
             conn.commit()
         adjust_item_quantity(
@@ -1280,6 +1425,8 @@ def assign_collaborator_gear(collaborator_id, item_id, quantity, size, due_date,
             note=f"Attribution collaborateur #{collaborator_id}",
         )
         return True
+    except ValueError:
+        raise
     except sqlite3.Error as e:
         print(f"[DB Error] assign_collaborator_gear: {e}")
         return False
@@ -1288,10 +1435,15 @@ def assign_collaborator_gear(collaborator_id, item_id, quantity, size, due_date,
             conn.close()
 
 
-def close_collaborator_gear(gear_id, quantity, operator, response_note='', status='returned'):
+def close_collaborator_gear(gear_id, quantity, operator, response_note='', status='returned', restock=True):
     conn = None
     try:
         returned_at = datetime.now().isoformat()
+        note_suffix = ''
+        if response_note:
+            timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
+            author = operator or 'système'
+            note_suffix = f"\n[{timestamp}] {author} - {response_note}"
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
@@ -1301,24 +1453,56 @@ def close_collaborator_gear(gear_id, quantity, operator, response_note='', statu
                 SET status = ?, returned_at = ?, notes = COALESCE(notes, '') || ?
                 WHERE id = ?
                 """,
-                (status, returned_at, f"\n{response_note}" if response_note else '', gear_id),
+                (status, returned_at, note_suffix, gear_id),
             )
             conn.commit()
-        item_info = get_item_from_gear(gear_id)
-        if item_info:
-            item_id, stored_quantity = item_info
-            quantity_to_add = abs(quantity if quantity is not None else stored_quantity or 0)
-            if quantity_to_add:
-                adjust_item_quantity(
-                    item_id,
-                    quantity_to_add,
-                    operator=operator,
-                    source='collaborator_return',
-                    note=f"Retour dotation #{gear_id}",
-                )
+        if restock:
+            item_info = get_item_from_gear(gear_id)
+            if item_info:
+                item_id, stored_quantity = item_info
+                quantity_to_add = abs(quantity if quantity is not None else stored_quantity or 0)
+                if quantity_to_add:
+                    adjust_item_quantity(
+                        item_id,
+                        quantity_to_add,
+                        operator=operator,
+                        source='collaborator_return',
+                        note=f"Retour dotation #{gear_id}",
+                    )
         return True
     except sqlite3.Error as e:
         print(f"[DB Error] close_collaborator_gear: {e}")
+        return False
+    finally:
+        if conn:
+            conn.close()
+
+
+def update_collaborator_gear_due_date(gear_id, new_due_date, operator, note=''):
+    conn = None
+    try:
+        normalized = parse_user_date(new_due_date) if new_due_date else None
+        message = "Échéance supprimée"
+        if normalized:
+            message = f"Échéance ajustée au {format_display_date(normalized)}"
+        if note:
+            message = f"{message} ({note})"
+        timestamp = datetime.now().strftime('%d/%m/%Y %H:%M')
+        author = operator or 'système'
+        suffix = f"\n[{timestamp}] {author} - {message}"
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE collaborator_gear SET due_date = ?, notes = COALESCE(notes, '') || ? WHERE id = ?",
+                (normalized, suffix, gear_id),
+            )
+            conn.commit()
+        return True
+    except ValueError:
+        raise
+    except sqlite3.Error as e:
+        print(f"[DB Error] update_collaborator_gear_due_date: {e}")
         return False
     finally:
         if conn:
@@ -2841,18 +3025,18 @@ class StockApp(tk.Tk):
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
+                base_query = (
+                    "SELECT items.id, items.name, items.barcode, categories.name, suppliers.name, items.size, items.quantity, items.last_updated, items.reorder_point, items.unit_cost "
+                    "FROM items LEFT JOIN categories ON items.category_id = categories.id "
+                    "LEFT JOIN suppliers ON suppliers.id = items.preferred_supplier_id"
+                )
                 if search_text:
                     cursor.execute(
-                        "SELECT items.id, items.name, items.barcode, categories.name, items.size, items.quantity, items.last_updated, items.reorder_point, items.unit_cost "
-                        "FROM items LEFT JOIN categories ON items.category_id = categories.id "
-                        "WHERE lower(items.name) LIKE ? OR items.barcode LIKE ?",
-                        (f'%{search_text}%', f'%{search_text}%')
+                        base_query + " WHERE lower(items.name) LIKE ? OR items.barcode LIKE ? OR lower(COALESCE(suppliers.name,'')) LIKE ?",
+                        (f'%{search_text}%', f'%{search_text}%', f'%{search_text}%')
                     )
                 else:
-                    cursor.execute(
-                        "SELECT items.id, items.name, items.barcode, categories.name, items.size, items.quantity, items.last_updated, items.reorder_point, items.unit_cost "
-                        "FROM items LEFT JOIN categories ON items.category_id = categories.id"
-                    )
+                    cursor.execute(base_query)
                 rows = cursor.fetchall()
         except sqlite3.Error as e:
             messagebox.showerror("Erreur BD", f"Impossible de charger l'inventaire : {e}")
@@ -2866,6 +3050,7 @@ class StockApp(tk.Tk):
                 name,
                 barcode,
                 category,
+                supplier_name,
                 size,
                 quantity,
                 last_updated,
@@ -2873,7 +3058,16 @@ class StockApp(tk.Tk):
                 unit_cost,
             ) = item
             tag = self._get_stock_tag(quantity, reorder_point)
-            display_values = (item_id, name, barcode, category, size, quantity, last_updated)
+            display_values = (
+                item_id,
+                name,
+                barcode,
+                category,
+                supplier_name or '',
+                size,
+                quantity,
+                last_updated,
+            )
             self.tree.insert('', tk.END, values=display_values, tags=(tag,))
         count = len(self.tree.get_children())
         self.status.set(f"Articles listés : {count}")
@@ -3576,26 +3770,28 @@ class StockApp(tk.Tk):
         if not file_path:
             return
         conn = None
+        rows = []
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT items.name, items.barcode, categories.name, items.size, items.quantity, items.last_updated "
-                    "FROM items LEFT JOIN categories ON items.category_id = categories.id"
+                    "SELECT items.name, items.barcode, categories.name, suppliers.name, items.size, items.quantity, items.last_updated "
+                    "FROM items LEFT JOIN categories ON items.category_id = categories.id "
+                    "LEFT JOIN suppliers ON suppliers.id = items.preferred_supplier_id"
                 )
                 rows = cursor.fetchall()
         except sqlite3.Error as e:
             messagebox.showerror("Erreur BD", f"Impossible d'exporter en CSV : {e}")
-            rows = []
         finally:
             if conn:
                 conn.close()
         try:
-            with open(file_path, 'w', encoding='utf-8') as f:
-                f.write('Nom,Code-Barres,Catégorie,Taille,Quantité,Dernière MAJ\n')
-                for r in rows:
-                    f.write(','.join(map(str, r)) + '\n')
+            export_rows_to_csv(
+                file_path,
+                ('Nom', 'Code-Barres', 'Catégorie', 'Fournisseur', 'Taille', 'Quantité', 'Dernière MAJ'),
+                rows,
+            )
             messagebox.showinfo("Export CSV", f"Données exportées vers {file_path}")
             self.status.set(f"Exporté vers {os.path.basename(file_path)}")
         except Exception as e:
@@ -4063,63 +4259,215 @@ class SupplierManagementDialog(tk.Toplevel):
         super().__init__(parent)
         self.parent = parent
         self.title("Fournisseurs")
-        self.geometry("650x400")
+        self.geometry("780x480")
+        self.suppliers_cache: list[tuple] = []
 
-        cols = ("Nom", "Contact", "Email", "Téléphone", "Créé le")
-        self.tree = ttk.Treeview(self, columns=cols, show='headings')
-        for col in cols:
+        search_frame = ttk.Frame(self)
+        search_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+        ttk.Label(search_frame, text="Rechercher :").pack(side=tk.LEFT, padx=(0, 5))
+        self.search_var = tk.StringVar()
+        self.entry_search = ttk.Entry(search_frame, textvariable=self.search_var, width=30)
+        self.entry_search.pack(side=tk.LEFT, padx=5)
+        self.search_var.trace_add('write', lambda *_: self.refresh())
+        ttk.Button(search_frame, text="Exporter CSV", command=self.export_suppliers).pack(side=tk.RIGHT, padx=5)
+
+        columns = ("Nom", "Contact", "Email", "Téléphone", "Créé le")
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='browse')
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+        for col in columns:
             self.tree.heading(col, text=col)
-            self.tree.column(col, width=120, anchor=tk.W)
-        self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            width = 160 if col == "Nom" else 140
+            self.tree.column(col, width=width, anchor=tk.W)
+        self.tree.bind('<<TreeviewSelect>>', lambda *_: self.show_selected_details())
+        self.tree.bind('<Double-1>', lambda *_: self.edit_supplier())
+
+        detail_frame = ttk.LabelFrame(self, text="Détails du fournisseur")
+        detail_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        self.detail_vars = {
+            'contact': tk.StringVar(value=''),
+            'email': tk.StringVar(value=''),
+            'phone': tk.StringVar(value=''),
+            'created_at': tk.StringVar(value=''),
+        }
+        info_fields = [
+            ("Contact", 'contact'),
+            ("Email", 'email'),
+            ("Téléphone", 'phone'),
+            ("Créé le", 'created_at'),
+        ]
+        for idx, (label, key) in enumerate(info_fields):
+            ttk.Label(detail_frame, text=f"{label} :").grid(row=0, column=idx * 2, padx=5, pady=5, sticky=tk.W)
+            ttk.Label(detail_frame, textvariable=self.detail_vars[key]).grid(row=0, column=idx * 2 + 1, padx=5, pady=5, sticky=tk.W)
+
+        ttk.Label(detail_frame, text="Notes :").grid(row=1, column=0, padx=5, pady=5, sticky=tk.NW)
+        self.note_text = tk.Text(detail_frame, height=4, width=80, state='disabled', wrap=tk.WORD)
+        self.note_text.grid(row=1, column=1, columnspan=7, padx=5, pady=5, sticky=tk.EW)
+        detail_frame.columnconfigure(1, weight=1)
 
         btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         ttk.Button(btn_frame, text="Ajouter", command=self.add_supplier).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Modifier", command=self.edit_supplier).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Supprimer", command=self.delete_supplier).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Copier email", command=self.copy_selected_email).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Copier téléphone", command=self.copy_selected_phone).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Ouvrir email", command=self.open_mail_client).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Fermer", command=self.destroy).pack(side=tk.RIGHT, padx=5)
 
         self.refresh()
+        self.after(100, self.entry_search.focus_set)
 
     def refresh(self):
+        selected = self.tree.selection()
+        selected_id = selected[0] if selected else None
         for child in self.tree.get_children():
             self.tree.delete(child)
-        for supplier in fetch_suppliers():
+        search = self.search_var.get().strip()
+        self.suppliers_cache = fetch_suppliers(search if search else None)
+        for supplier in self.suppliers_cache:
             supplier_id, name, contact, email, phone, notes, created_at = supplier
-            self.tree.insert('', tk.END, iid=supplier_id, values=(name, contact, email, phone, created_at))
+            created_display = format_display_datetime(created_at)
+            self.tree.insert(
+                '',
+                tk.END,
+                iid=str(supplier_id),
+                values=(name, contact or '', email or '', phone or '', created_display),
+            )
+        if selected_id and self.tree.exists(selected_id):
+            self.tree.selection_set(selected_id)
+            self.tree.focus(selected_id)
+        elif self.tree.get_children():
+            first = self.tree.get_children()[0]
+            self.tree.selection_set(first)
+            self.tree.focus(first)
+        self.show_selected_details()
+
+    def get_selected_supplier_id(self):
+        selection = self.tree.selection()
+        if not selection:
+            return None
+        return int(selection[0])
+
+    def get_supplier_from_cache(self, supplier_id):
+        return next((s for s in self.suppliers_cache if s[0] == supplier_id), None)
+
+    def show_selected_details(self):
+        supplier_id = self.get_selected_supplier_id()
+        supplier = self.get_supplier_from_cache(supplier_id) if supplier_id else None
+        for key in self.detail_vars:
+            self.detail_vars[key].set('')
+        self.note_text.configure(state='normal')
+        self.note_text.delete('1.0', tk.END)
+        self.note_text.configure(state='disabled')
+        if not supplier:
+            return
+        _, name, contact, email, phone, notes, created_at = supplier
+        self.detail_vars['contact'].set(contact or '')
+        self.detail_vars['email'].set(email or '')
+        self.detail_vars['phone'].set(phone or '')
+        self.detail_vars['created_at'].set(format_display_datetime(created_at))
+        if notes:
+            self.note_text.configure(state='normal')
+            self.note_text.insert('1.0', notes)
+            self.note_text.configure(state='disabled')
 
     def add_supplier(self):
         dialog = SupplierFormDialog(self, "Ajouter un fournisseur")
         if dialog.result:
             name, contact, email, phone, notes = dialog.result
-            if save_supplier(name, contact, email, phone, notes):
+            result = save_supplier(name, contact, email, phone, notes)
+            if result:
                 self.refresh()
+            else:
+                messagebox.showerror("Fournisseurs", "Échec de l'enregistrement.", parent=self)
 
     def edit_supplier(self):
-        selection = self.tree.selection()
-        if not selection:
+        supplier_id = self.get_selected_supplier_id()
+        if supplier_id is None:
             messagebox.showwarning("Fournisseurs", "Sélectionnez un fournisseur.", parent=self)
             return
-        supplier_id = int(selection[0])
-        supplier = next((s for s in fetch_suppliers() if s[0] == supplier_id), None)
+        supplier = self.get_supplier_from_cache(supplier_id)
+        if not supplier:
+            supplier = next((s for s in fetch_suppliers() if s[0] == supplier_id), None)
         if not supplier:
             messagebox.showerror("Fournisseurs", "Fournisseur introuvable.", parent=self)
             return
         dialog = SupplierFormDialog(self, "Modifier le fournisseur", supplier)
         if dialog.result:
             name, contact, email, phone, notes = dialog.result
-            save_supplier(name, contact, email, phone, notes, supplier_id=supplier_id)
-            self.refresh()
+            if save_supplier(name, contact, email, phone, notes, supplier_id=supplier_id):
+                self.refresh()
+            else:
+                messagebox.showerror("Fournisseurs", "Impossible de mettre à jour le fournisseur.", parent=self)
 
     def delete_supplier(self):
-        selection = self.tree.selection()
-        if not selection:
+        supplier_id = self.get_selected_supplier_id()
+        if supplier_id is None:
             messagebox.showwarning("Fournisseurs", "Sélectionnez un fournisseur.", parent=self)
             return
-        supplier_id = int(selection[0])
         if messagebox.askyesno("Confirmation", "Supprimer ce fournisseur ?", parent=self):
-            delete_supplier(supplier_id)
-            self.refresh()
+            if delete_supplier(supplier_id):
+                self.refresh()
+            else:
+                messagebox.showerror("Fournisseurs", "Suppression impossible.", parent=self)
+
+    def copy_selected_email(self):
+        supplier_id = self.get_selected_supplier_id()
+        supplier = self.get_supplier_from_cache(supplier_id) if supplier_id else None
+        email = supplier[3] if supplier else ''
+        if email:
+            self.clipboard_clear()
+            self.clipboard_append(email)
+            self.parent.status.set(f"Email copié : {email}") if hasattr(self.parent, 'status') else None
+        else:
+            messagebox.showinfo("Fournisseurs", "Aucun email à copier.", parent=self)
+
+    def copy_selected_phone(self):
+        supplier_id = self.get_selected_supplier_id()
+        supplier = self.get_supplier_from_cache(supplier_id) if supplier_id else None
+        phone = supplier[4] if supplier else ''
+        if phone:
+            self.clipboard_clear()
+            self.clipboard_append(phone)
+            self.parent.status.set(f"Téléphone copié : {phone}") if hasattr(self.parent, 'status') else None
+        else:
+            messagebox.showinfo("Fournisseurs", "Aucun téléphone à copier.", parent=self)
+
+    def open_mail_client(self):
+        supplier_id = self.get_selected_supplier_id()
+        supplier = self.get_supplier_from_cache(supplier_id) if supplier_id else None
+        email = supplier[3] if supplier else ''
+        if email:
+            webbrowser.open(f"mailto:{email}")
+        else:
+            messagebox.showinfo("Fournisseurs", "Aucune adresse email disponible.", parent=self)
+
+    def export_suppliers(self):
+        file_path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
+        if not file_path:
+            return
+        rows = [
+            (name, contact or '', email or '', phone or '', format_display_datetime(created_at), notes or '')
+            for _, name, contact, email, phone, notes, created_at in self.suppliers_cache
+        ]
+        try:
+            export_rows_to_csv(
+                file_path,
+                ('Nom', 'Contact', 'Email', 'Téléphone', 'Créé le', 'Notes'),
+                rows,
+            )
+            messagebox.showinfo("Fournisseurs", f"Export réalisé vers {file_path}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Fournisseurs", f"Impossible d'exporter : {exc}", parent=self)
 
 
 class PurchaseOrderEditor(tk.Toplevel):
@@ -4224,9 +4572,17 @@ class PurchaseOrderEditor(tk.Toplevel):
             return
         supplier_index = self.supplier_combobox.current()
         supplier_id = self.supplier_ids[supplier_index] if supplier_index >= 0 else None
+        expected_date = None
+        raw_due = self.entry_due.get().strip()
+        if raw_due:
+            try:
+                expected_date = parse_user_date(raw_due)
+            except ValueError as exc:
+                messagebox.showerror("Bon de commande", str(exc), parent=self)
+                return
         self.result = {
             'supplier_id': supplier_id,
-            'expected_date': self.entry_due.get().strip() or None,
+            'expected_date': expected_date,
             'note': self.text_note.get('1.0', tk.END).strip(),
             'lines': self.lines,
         }
@@ -4279,41 +4635,248 @@ class PurchaseOrderReceiveDialog(tk.Toplevel):
             qty = max(0, min(int(var.get()), remaining))
             if qty:
                 receipt_lines[item_id] = qty
-        self.result = (self.status_var.get(), receipt_lines, self.note_text.get('1.0', tk.END).strip())
+        status = self.status_var.get()
+        note = self.note_text.get('1.0', tk.END).strip()
+        if status == 'CANCELLED':
+            if receipt_lines:
+                messagebox.showerror(
+                    "Bon de commande",
+                    "Aucune réception ne peut être enregistrée pour un bon annulé.",
+                    parent=self,
+                )
+                return
+            if not note:
+                messagebox.showerror(
+                    "Bon de commande",
+                    "Merci d'indiquer un motif d'annulation.",
+                    parent=self,
+                )
+                return
+        self.result = (status, receipt_lines, note)
         self.destroy()
 
 
 class PurchaseOrderManagementDialog(tk.Toplevel):
+    STATUS_FILTERS = {
+        'Actifs': 'active',
+        'Tous': None,
+        'En attente': 'PENDING',
+        'Partiels': 'PARTIAL',
+        'Réceptionnés': 'RECEIVED',
+        'Annulés': 'CANCELLED',
+        'Suggérés': 'SUGGESTED',
+    }
+    STATUS_DISPLAY = {
+        'PENDING': 'En attente',
+        'PARTIAL': 'Partiel',
+        'RECEIVED': 'Réceptionné',
+        'CANCELLED': 'Annulé',
+        'SUGGESTED': 'Suggéré',
+    }
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
         self.title("Bons de commande")
-        self.geometry("780x420")
+        self.geometry("880x520")
+        self.orders_cache: dict[int, dict] = {}
 
-        cols = ("ID", "Fournisseur", "Statut", "Création", "Échéance", "Note")
-        self.tree = ttk.Treeview(self, columns=cols, show='headings')
-        for col in cols:
+        filter_frame = ttk.Frame(self)
+        filter_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+        ttk.Label(filter_frame, text="Statut :").pack(side=tk.LEFT, padx=(0, 5))
+        self.status_var = tk.StringVar(value='Actifs')
+        self.status_combobox = ttk.Combobox(
+            filter_frame,
+            state='readonly',
+            textvariable=self.status_var,
+            values=list(self.STATUS_FILTERS.keys()),
+            width=15,
+        )
+        self.status_combobox.pack(side=tk.LEFT, padx=5)
+        self.status_combobox.bind('<<ComboboxSelected>>', lambda *_: self.refresh())
+
+        ttk.Label(filter_frame, text="Rechercher :").pack(side=tk.LEFT, padx=(15, 5))
+        self.search_var = tk.StringVar()
+        self.search_entry = ttk.Entry(filter_frame, textvariable=self.search_var, width=30)
+        self.search_entry.pack(side=tk.LEFT, padx=5)
+        self.search_var.trace_add('write', lambda *_: self.refresh())
+
+        ttk.Button(filter_frame, text="Exporter CSV", command=self.export_orders).pack(side=tk.RIGHT, padx=5)
+
+        columns = ("ID", "Fournisseur", "Statut", "Création", "Échéance", "Réception", "Note")
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='browse')
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+        for col in columns:
             self.tree.heading(col, text=col)
             width = 80 if col == 'ID' else 140
+            if col == 'Note':
+                width = 200
             self.tree.column(col, width=width, anchor=tk.W)
-        self.tree.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+        self.tree.bind('<<TreeviewSelect>>', lambda *_: self.show_selected_order_details())
+
+        detail_frame = ttk.LabelFrame(self, text="Détails du bon sélectionné")
+        detail_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        info_frame = ttk.Frame(detail_frame)
+        info_frame.pack(fill=tk.X, padx=5, pady=5)
+        self.order_detail_vars = {
+            'id': tk.StringVar(value=''),
+            'supplier': tk.StringVar(value=''),
+            'status': tk.StringVar(value=''),
+            'created': tk.StringVar(value=''),
+            'expected': tk.StringVar(value=''),
+            'received': tk.StringVar(value=''),
+            'created_by': tk.StringVar(value=''),
+        }
+        info_fields = [
+            ("ID", 'id'),
+            ("Fournisseur", 'supplier'),
+            ("Statut", 'status'),
+            ("Créé le", 'created'),
+            ("Échéance", 'expected'),
+            ("Réception", 'received'),
+            ("Créé par", 'created_by'),
+        ]
+        for idx, (label, key) in enumerate(info_fields):
+            row = idx // 3
+            col = (idx % 3) * 2
+            ttk.Label(info_frame, text=f"{label} :").grid(row=row, column=col, padx=5, pady=2, sticky=tk.W)
+            ttk.Label(info_frame, textvariable=self.order_detail_vars[key]).grid(row=row, column=col + 1, padx=5, pady=2, sticky=tk.W)
+        for col in range(6):
+            info_frame.columnconfigure(col, weight=1)
+
+        note_label = ttk.Label(detail_frame, text="Note :")
+        note_label.pack(anchor=tk.W, padx=5)
+        self.order_note_text = tk.Text(detail_frame, height=3, state='disabled', wrap=tk.WORD)
+        self.order_note_text.pack(fill=tk.X, padx=5, pady=(0, 5))
+
+        lines_frame = ttk.Frame(detail_frame)
+        lines_frame.pack(fill=tk.BOTH, expand=True, padx=5, pady=5)
+        line_columns = ("Article", "Commandé", "Reçu", "Restant", "Coût unitaire")
+        self.line_tree = ttk.Treeview(lines_frame, columns=line_columns, show='headings', height=6)
+        vsb_lines = ttk.Scrollbar(lines_frame, orient=tk.VERTICAL, command=self.line_tree.yview)
+        hsb_lines = ttk.Scrollbar(lines_frame, orient=tk.HORIZONTAL, command=self.line_tree.xview)
+        self.line_tree.configure(yscrollcommand=vsb_lines.set, xscrollcommand=hsb_lines.set)
+        self.line_tree.grid(row=0, column=0, sticky='nsew')
+        vsb_lines.grid(row=0, column=1, sticky='ns')
+        hsb_lines.grid(row=1, column=0, sticky='ew')
+        lines_frame.columnconfigure(0, weight=1)
+        lines_frame.rowconfigure(0, weight=1)
+        for col in line_columns:
+            width = 180 if col == 'Article' else 110
+            self.line_tree.heading(col, text=col)
+            self.line_tree.column(col, width=width, anchor=tk.W)
 
         btn_frame = ttk.Frame(self)
-        btn_frame.pack(fill=tk.X, padx=10, pady=5)
+        btn_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
         ttk.Button(btn_frame, text="Créer", command=self.create_order).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Réceptionner", command=self.receive_order).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Annuler", command=self.cancel_order).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Rafraîchir", command=self.refresh).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Fermer", command=self.destroy).pack(side=tk.RIGHT, padx=5)
 
         self.refresh()
 
+    def get_selected_order_id(self):
+        selection = self.tree.selection()
+        if not selection:
+            return None
+        return int(selection[0])
+
     def refresh(self):
+        selected = self.tree.selection()
+        selected_id = selected[0] if selected else None
         for child in self.tree.get_children():
             self.tree.delete(child)
-        for order in fetch_purchase_orders():
+        status_label = self.status_var.get()
+        status_filter = self.STATUS_FILTERS.get(status_label, None)
+        search = self.search_var.get().strip()
+        orders = fetch_purchase_orders(status=status_filter, search=search if search else None)
+        self.orders_cache.clear()
+        for order in orders:
             order_id, created_at, status, expected_date, received_at, supplier_name, note, created_by = order
-            supplier_display = supplier_name or 'Non défini'
-            self.tree.insert('', tk.END, iid=order_id, values=(order_id, supplier_display, status, created_at, expected_date or '', note or ''))
+            display_status = self.STATUS_DISPLAY.get(status, status)
+            self.orders_cache[order_id] = {
+                'id': order_id,
+                'created_at': created_at,
+                'status': status,
+                'expected_date': expected_date,
+                'received_at': received_at,
+                'supplier_name': supplier_name,
+                'note': note,
+                'created_by': created_by,
+            }
+            self.tree.insert(
+                '',
+                tk.END,
+                iid=str(order_id),
+                values=(
+                    order_id,
+                    supplier_name or 'Non défini',
+                    display_status,
+                    format_display_datetime(created_at),
+                    format_display_date(expected_date),
+                    format_display_datetime(received_at),
+                    (note or '')[:60],
+                ),
+            )
+        if selected_id and self.tree.exists(selected_id):
+            self.tree.selection_set(selected_id)
+            self.tree.focus(selected_id)
+        elif self.tree.get_children():
+            first = self.tree.get_children()[0]
+            self.tree.selection_set(first)
+            self.tree.focus(first)
+        self.show_selected_order_details()
+
+    def show_selected_order_details(self):
+        order_id = self.get_selected_order_id()
+        order = self.orders_cache.get(order_id) if order_id else None
+        for key in self.order_detail_vars:
+            self.order_detail_vars[key].set('')
+        self.order_note_text.configure(state='normal')
+        self.order_note_text.delete('1.0', tk.END)
+        self.order_note_text.configure(state='disabled')
+        for child in self.line_tree.get_children():
+            self.line_tree.delete(child)
+        if not order:
+            return
+        self.order_detail_vars['id'].set(str(order['id']))
+        self.order_detail_vars['supplier'].set(order['supplier_name'] or 'Non défini')
+        self.order_detail_vars['status'].set(self.STATUS_DISPLAY.get(order['status'], order['status']))
+        self.order_detail_vars['created'].set(format_display_datetime(order['created_at']))
+        self.order_detail_vars['expected'].set(format_display_date(order['expected_date']))
+        self.order_detail_vars['received'].set(format_display_datetime(order['received_at']))
+        self.order_detail_vars['created_by'].set(order['created_by'] or '')
+        if order['note']:
+            self.order_note_text.configure(state='normal')
+            self.order_note_text.insert('1.0', order['note'])
+            self.order_note_text.configure(state='disabled')
+        self.load_order_lines(order['id'])
+
+    def load_order_lines(self, order_id):
+        items = fetch_purchase_order_items(order_id)
+        for child in self.line_tree.get_children():
+            self.line_tree.delete(child)
+        for line_id, item_name, qty_ordered, qty_received, unit_cost, item_id in items:
+            ordered = qty_ordered or 0
+            received = qty_received or 0
+            remaining = max(ordered - received, 0)
+            cost_display = f"{unit_cost or 0:.2f}"
+            self.line_tree.insert(
+                '',
+                tk.END,
+                iid=str(line_id),
+                values=(item_name, ordered, received, remaining, cost_display),
+            )
 
     def create_order(self):
         editor = PurchaseOrderEditor(self)
@@ -4330,15 +4893,15 @@ class PurchaseOrderManagementDialog(tk.Toplevel):
         if po_id:
             messagebox.showinfo("Bon de commande", f"Bon #{po_id} créé.", parent=self)
             self.refresh()
+            self.select_order(po_id)
         else:
             messagebox.showerror("Bon de commande", "Échec de la création.", parent=self)
 
     def receive_order(self):
-        selection = self.tree.selection()
-        if not selection:
+        order_id = self.get_selected_order_id()
+        if order_id is None:
             messagebox.showwarning("Bon de commande", "Sélectionnez un bon.", parent=self)
             return
-        order_id = int(selection[0])
         items = fetch_purchase_order_items(order_id)
         if not items:
             messagebox.showinfo("Bon de commande", "Aucune ligne à réceptionner.", parent=self)
@@ -4346,11 +4909,89 @@ class PurchaseOrderManagementDialog(tk.Toplevel):
         dialog = PurchaseOrderReceiveDialog(self, order_id, items)
         if dialog.result:
             status, receipt_lines, note = dialog.result
-            update_purchase_order_status(order_id, status, self.parent.current_user, receipt_lines, note)
-            self.parent.load_inventory()
+            success = update_purchase_order_status(
+                order_id,
+                status,
+                self.parent.current_user,
+                receipt_lines,
+                note,
+            )
+            if success:
+                self.parent.load_inventory()
+                self.refresh()
+                self.select_order(order_id)
+            else:
+                messagebox.showerror(
+                    "Bon de commande",
+                    "La mise à jour du bon a échoué.",
+                    parent=self,
+                )
+
+    def cancel_order(self):
+        order_id = self.get_selected_order_id()
+        if order_id is None:
+            messagebox.showwarning("Bon de commande", "Sélectionnez un bon.", parent=self)
+            return
+        if not messagebox.askyesno("Confirmation", "Annuler ce bon de commande ?", parent=self):
+            return
+        note = simpledialog.askstring("Annulation", "Motif d'annulation :", parent=self)
+        if note is None:
+            return
+        note = note.strip()
+        if not note:
+            messagebox.showerror(
+                "Bon de commande",
+                "Le motif d'annulation est obligatoire.",
+                parent=self,
+            )
+            return
+        if update_purchase_order_status(order_id, 'CANCELLED', self.parent.current_user, note=note):
+            messagebox.showinfo(
+                "Bon de commande",
+                "Bon annulé avec succès.",
+                parent=self,
+            )
             self.refresh()
+            self.select_order(order_id)
+        else:
+            messagebox.showerror("Bon de commande", "Impossible d'annuler ce bon.", parent=self)
 
+    def select_order(self, order_id):
+        if order_id is None:
+            return
+        if self.tree.exists(str(order_id)):
+            self.tree.selection_set(str(order_id))
+            self.tree.focus(str(order_id))
+            self.tree.see(str(order_id))
+            self.show_selected_order_details()
 
+    def export_orders(self):
+        file_path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
+        if not file_path:
+            return
+        rows = []
+        for order in self.orders_cache.values():
+            rows.append(
+                (
+                    order['id'],
+                    order['supplier_name'] or 'Non défini',
+                    self.STATUS_DISPLAY.get(order['status'], order['status']),
+                    format_display_datetime(order['created_at']),
+                    format_display_date(order['expected_date']),
+                    format_display_datetime(order['received_at']),
+                    order['created_by'] or '',
+                    order['note'] or '',
+                )
+            )
+        try:
+            export_rows_to_csv(
+                file_path,
+                ('ID', 'Fournisseur', 'Statut', 'Création', 'Échéance', 'Réception', 'Créé par', 'Note'),
+                rows,
+            )
+            messagebox.showinfo("Bons de commande", f"Export réalisé vers {file_path}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Bons de commande", f"Impossible d'exporter : {exc}", parent=self)
 class CollaboratorFormDialog(tk.Toplevel):
     def __init__(self, parent, title, collaborator=None):
         super().__init__(parent)
@@ -4459,48 +5100,181 @@ class AssignGearDialog(tk.Toplevel):
 
 
 class CollaboratorGearDialog(tk.Toplevel):
+    STATUS_FILTERS = {
+        'Actives': 'active',
+        'Toutes': None,
+        'Retournées': 'returned',
+        'Perdues': 'lost',
+        'Endommagées': 'damaged',
+    }
+
     def __init__(self, parent):
         super().__init__(parent)
         self.parent = parent
         self.title("Dotations collaborateurs")
-        self.geometry("900x450")
+        self.geometry("960x520")
+        self.collaborators_cache: list[tuple] = []
+        self.current_gear_cache: list[tuple] = []
+
+        filter_frame = ttk.Frame(self)
+        filter_frame.pack(fill=tk.X, padx=10, pady=(10, 0))
+        ttk.Label(filter_frame, text="Rechercher collaborateur :").pack(side=tk.LEFT, padx=(0, 5))
+        self.collab_search_var = tk.StringVar()
+        self.collab_search_entry = ttk.Entry(filter_frame, textvariable=self.collab_search_var, width=30)
+        self.collab_search_entry.pack(side=tk.LEFT, padx=5)
+        self.collab_search_var.trace_add('write', lambda *_: self.load_collaborators())
+
+        ttk.Label(filter_frame, text="Filtre dotations :").pack(side=tk.LEFT, padx=(15, 5))
+        self.status_filter_var = tk.StringVar(value='Actives')
+        self.status_filter_combobox = ttk.Combobox(
+            filter_frame,
+            state='readonly',
+            textvariable=self.status_filter_var,
+            values=list(self.STATUS_FILTERS.keys()),
+            width=18,
+        )
+        self.status_filter_combobox.pack(side=tk.LEFT, padx=5)
+        self.status_filter_combobox.bind('<<ComboboxSelected>>', lambda *_: self.load_gear())
+
+        ttk.Button(filter_frame, text="Exporter collaborateurs", command=self.export_collaborators).pack(side=tk.RIGHT, padx=5)
 
         main_frame = ttk.Frame(self)
         main_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
-
-        self.collab_tree = ttk.Treeview(main_frame, columns=("Nom", "Service", "Fonction"), show='headings', height=12)
-        for col in ("Nom", "Service", "Fonction"):
-            self.collab_tree.heading(col, text=col)
-            self.collab_tree.column(col, width=150, anchor=tk.W)
-        self.collab_tree.bind('<<TreeviewSelect>>', lambda e: self.load_gear())
-        self.collab_tree.grid(row=0, column=0, sticky='nsew')
-
-        self.gear_tree = ttk.Treeview(main_frame, columns=("Article", "Taille", "Quantité", "Statut", "Échéance"), show='headings', height=12)
-        for col in ("Article", "Taille", "Quantité", "Statut", "Échéance"):
-            self.gear_tree.heading(col, text=col)
-            width = 140 if col == "Article" else 100
-            self.gear_tree.column(col, width=width, anchor=tk.W)
-        self.gear_tree.grid(row=0, column=1, sticky='nsew', padx=10)
-
         main_frame.columnconfigure(0, weight=1)
         main_frame.columnconfigure(1, weight=1)
         main_frame.rowconfigure(0, weight=1)
 
-        left_btns = ttk.Frame(main_frame)
-        left_btns.grid(row=1, column=0, pady=5, sticky='w')
-        ttk.Button(left_btns, text="Ajouter collaborateur", command=self.add_collaborator).pack(side=tk.LEFT, padx=5)
-        ttk.Button(left_btns, text="Modifier", command=self.edit_collaborator).pack(side=tk.LEFT, padx=5)
-        ttk.Button(left_btns, text="Supprimer", command=self.delete_collaborator).pack(side=tk.LEFT, padx=5)
+        # Collaborators panel
+        collab_panel = ttk.Frame(main_frame)
+        collab_panel.grid(row=0, column=0, sticky='nsew', padx=(0, 10))
+        collab_columns = ("Nom", "Service", "Fonction")
+        self.collab_tree = ttk.Treeview(collab_panel, columns=collab_columns, show='headings', height=12)
+        collab_vsb = ttk.Scrollbar(collab_panel, orient=tk.VERTICAL, command=self.collab_tree.yview)
+        self.collab_tree.configure(yscrollcommand=collab_vsb.set)
+        self.collab_tree.grid(row=0, column=0, sticky='nsew')
+        collab_vsb.grid(row=0, column=1, sticky='ns')
+        collab_panel.columnconfigure(0, weight=1)
+        collab_panel.rowconfigure(0, weight=1)
+        for col in collab_columns:
+            self.collab_tree.heading(col, text=col)
+            width = 160 if col == "Nom" else 140
+            self.collab_tree.column(col, width=width, anchor=tk.W)
+        self.collab_tree.bind('<<TreeviewSelect>>', lambda *_: (self.show_selected_collaborator_details(), self.load_gear()))
+        self.collab_tree.bind('<Double-1>', lambda *_: self.edit_collaborator())
 
-        right_btns = ttk.Frame(main_frame)
-        right_btns.grid(row=1, column=1, pady=5, sticky='e')
-        ttk.Button(right_btns, text="Attribuer équipement", command=self.assign_gear).pack(side=tk.LEFT, padx=5)
-        ttk.Button(right_btns, text="Marquer retour", command=self.return_gear).pack(side=tk.LEFT, padx=5)
-        ttk.Button(right_btns, text="Rafraîchir", command=self.load_gear).pack(side=tk.LEFT, padx=5)
+        collab_detail = ttk.LabelFrame(collab_panel, text="Collaborateur")
+        collab_detail.grid(row=1, column=0, columnspan=2, sticky='ew', pady=8)
+        self.collab_detail_vars = {
+            'department': tk.StringVar(value=''),
+            'job': tk.StringVar(value=''),
+            'email': tk.StringVar(value=''),
+            'phone': tk.StringVar(value=''),
+            'hire_date': tk.StringVar(value=''),
+        }
+        detail_fields = [
+            ("Service", 'department'),
+            ("Fonction", 'job'),
+            ("Email", 'email'),
+            ("Téléphone", 'phone'),
+            ("Embauche", 'hire_date'),
+        ]
+        for idx, (label, key) in enumerate(detail_fields):
+            ttk.Label(collab_detail, text=f"{label} :").grid(row=idx, column=0, padx=5, pady=2, sticky=tk.W)
+            ttk.Label(collab_detail, textvariable=self.collab_detail_vars[key]).grid(row=idx, column=1, padx=5, pady=2, sticky=tk.W)
+        ttk.Label(collab_detail, text="Notes :").grid(row=len(detail_fields), column=0, padx=5, pady=5, sticky=tk.NW)
+        self.collab_notes_text = tk.Text(collab_detail, height=4, width=40, state='disabled', wrap=tk.WORD)
+        self.collab_notes_text.grid(row=len(detail_fields), column=1, padx=5, pady=5, sticky=tk.EW)
+        collab_detail.columnconfigure(1, weight=1)
+
+        collab_btns = ttk.Frame(collab_panel)
+        collab_btns.grid(row=2, column=0, columnspan=2, sticky='w', pady=(5, 0))
+        ttk.Button(collab_btns, text="Ajouter", command=self.add_collaborator).pack(side=tk.LEFT, padx=5)
+        ttk.Button(collab_btns, text="Modifier", command=self.edit_collaborator).pack(side=tk.LEFT, padx=5)
+        ttk.Button(collab_btns, text="Supprimer", command=self.delete_collaborator).pack(side=tk.LEFT, padx=5)
+
+        # Gear panel
+        gear_panel = ttk.Frame(main_frame)
+        gear_panel.grid(row=0, column=1, sticky='nsew')
+        gear_columns = ("Article", "Taille", "Quantité", "Statut", "Échéance")
+        self.gear_tree = ttk.Treeview(gear_panel, columns=gear_columns, show='headings', height=12)
+        gear_vsb = ttk.Scrollbar(gear_panel, orient=tk.VERTICAL, command=self.gear_tree.yview)
+        self.gear_tree.configure(yscrollcommand=gear_vsb.set)
+        self.gear_tree.grid(row=0, column=0, sticky='nsew')
+        gear_vsb.grid(row=0, column=1, sticky='ns')
+        gear_panel.columnconfigure(0, weight=1)
+        gear_panel.rowconfigure(0, weight=1)
+        for col in gear_columns:
+            width = 160 if col == "Article" else 110
+            self.gear_tree.heading(col, text=col)
+            self.gear_tree.column(col, width=width, anchor=tk.W)
+        self.gear_tree.bind('<<TreeviewSelect>>', lambda *_: self.show_selected_gear_details())
+        self.gear_tree.tag_configure('gear_returned', background='#e0f7fa')
+        self.gear_tree.tag_configure('gear_lost', background='#ffebee')
+        self.gear_tree.tag_configure('gear_damaged', background='#fff3e0')
+        self.gear_tree.tag_configure('gear_overdue', background='#fff8e1')
+
+        gear_detail = ttk.LabelFrame(gear_panel, text="Dotation")
+        gear_detail.grid(row=1, column=0, columnspan=2, sticky='ew', pady=8)
+        self.gear_detail_vars = {
+            'item': tk.StringVar(value=''),
+            'status': tk.StringVar(value=''),
+            'quantity': tk.StringVar(value=''),
+            'issued': tk.StringVar(value=''),
+            'due': tk.StringVar(value=''),
+            'returned': tk.StringVar(value=''),
+        }
+        gear_fields = [
+            ("Article", 'item'),
+            ("Statut", 'status'),
+            ("Quantité", 'quantity'),
+            ("Attribué", 'issued'),
+            ("Échéance", 'due'),
+            ("Retour", 'returned'),
+        ]
+        for idx, (label, key) in enumerate(gear_fields):
+            ttk.Label(gear_detail, text=f"{label} :").grid(row=idx, column=0, padx=5, pady=2, sticky=tk.W)
+            ttk.Label(gear_detail, textvariable=self.gear_detail_vars[key]).grid(row=idx, column=1, padx=5, pady=2, sticky=tk.W)
+        ttk.Label(gear_detail, text="Notes :").grid(row=len(gear_fields), column=0, padx=5, pady=5, sticky=tk.NW)
+        self.gear_notes_text = tk.Text(gear_detail, height=4, width=40, state='disabled', wrap=tk.WORD)
+        self.gear_notes_text.grid(row=len(gear_fields), column=1, padx=5, pady=5, sticky=tk.EW)
+        gear_detail.columnconfigure(1, weight=1)
+
+        gear_btns = ttk.Frame(gear_panel)
+        gear_btns.grid(row=2, column=0, columnspan=2, sticky='w', pady=(5, 0))
+        ttk.Button(gear_btns, text="Attribuer équipement", command=self.assign_gear).pack(side=tk.LEFT, padx=5)
+        ttk.Button(gear_btns, text="Marquer retour", command=self.return_gear).pack(side=tk.LEFT, padx=5)
+        ttk.Button(gear_btns, text="Prolonger", command=self.extend_due_date).pack(side=tk.LEFT, padx=5)
+        ttk.Button(gear_btns, text="Déclarer perdu", command=lambda: self.mark_gear_status('lost', restock=False)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(gear_btns, text="Déclarer endommagé", command=lambda: self.mark_gear_status('damaged', restock=False)).pack(side=tk.LEFT, padx=5)
+        ttk.Button(gear_btns, text="Exporter dotations", command=self.export_assignments).pack(side=tk.LEFT, padx=5)
 
         ttk.Button(self, text="Fermer", command=self.destroy).pack(pady=5)
 
         self.load_collaborators()
+
+    def load_collaborators(self):
+        selected = self.collab_tree.selection()
+        selected_id = selected[0] if selected else None
+        for child in self.collab_tree.get_children():
+            self.collab_tree.delete(child)
+        search = self.collab_search_var.get().lower().strip()
+        self.collaborators_cache = []
+        for collab in fetch_collaborators():
+            collab_id, full_name, department, job_title, email, phone, hire_date, notes = collab
+            haystack = ' '.join(filter(None, [full_name, department, job_title, email, phone or '', hire_date or ''])).lower()
+            if search and search not in haystack:
+                continue
+            self.collaborators_cache.append(collab)
+            self.collab_tree.insert('', tk.END, iid=str(collab_id), values=(full_name, department or '', job_title or ''))
+        if selected_id and self.collab_tree.exists(selected_id):
+            self.collab_tree.selection_set(selected_id)
+            self.collab_tree.focus(selected_id)
+        elif self.collab_tree.get_children():
+            first = self.collab_tree.get_children()[0]
+            self.collab_tree.selection_set(first)
+            self.collab_tree.focus(first)
+        self.show_selected_collaborator_details()
+        self.load_gear()
 
     def get_selected_collaborator(self):
         selection = self.collab_tree.selection()
@@ -4508,23 +5282,101 @@ class CollaboratorGearDialog(tk.Toplevel):
             return None
         return int(selection[0])
 
-    def load_collaborators(self):
-        for child in self.collab_tree.get_children():
-            self.collab_tree.delete(child)
-        for collab in fetch_collaborators():
-            collab_id, full_name, department, job_title, email, phone, hire_date, notes = collab
-            self.collab_tree.insert('', tk.END, iid=collab_id, values=(full_name, department or '', job_title or ''))
-        self.load_gear()
+    def show_selected_collaborator_details(self):
+        collab_id = self.get_selected_collaborator()
+        collab = next((c for c in self.collaborators_cache if c[0] == collab_id), None)
+        for key in self.collab_detail_vars:
+            self.collab_detail_vars[key].set('')
+        self.collab_notes_text.configure(state='normal')
+        self.collab_notes_text.delete('1.0', tk.END)
+        self.collab_notes_text.configure(state='disabled')
+        if not collab:
+            return
+        _, full_name, department, job_title, email, phone, hire_date, notes = collab
+        self.collab_detail_vars['department'].set(department or '')
+        self.collab_detail_vars['job'].set(job_title or '')
+        self.collab_detail_vars['email'].set(email or '')
+        self.collab_detail_vars['phone'].set(phone or '')
+        self.collab_detail_vars['hire_date'].set(hire_date or '')
+        if notes:
+            self.collab_notes_text.configure(state='normal')
+            self.collab_notes_text.insert('1.0', notes)
+            self.collab_notes_text.configure(state='disabled')
 
     def load_gear(self):
         for child in self.gear_tree.get_children():
             self.gear_tree.delete(child)
         collab_id = self.get_selected_collaborator()
         if not collab_id:
+            self.current_gear_cache = []
+            self.show_selected_gear_details()
             return
-        for gear in fetch_collaborator_gear(collab_id):
+        status_label = self.status_filter_var.get()
+        status_filter = self.STATUS_FILTERS.get(status_label, None)
+        self.current_gear_cache = fetch_collaborator_gear(collab_id, status=status_filter)
+        for gear in self.current_gear_cache:
             gear_id, collab_name, item_name, size, quantity, issued_at, due_date, status, returned_at, notes, item_id, collaborator_id = gear
-            self.gear_tree.insert('', tk.END, iid=gear_id, values=(item_name, size or '', quantity, status, due_date or ''))
+            tags = []
+            if status == 'returned':
+                tags.append('gear_returned')
+            elif status == 'lost':
+                tags.append('gear_lost')
+            elif status == 'damaged':
+                tags.append('gear_damaged')
+            if self._is_overdue(due_date, status):
+                tags.append('gear_overdue')
+            display_item = item_name if not size else f"{item_name} ({size})"
+            self.gear_tree.insert(
+                '',
+                tk.END,
+                iid=str(gear_id),
+                values=(display_item, size or '', quantity, status.upper(), format_display_date(due_date)),
+                tags=tags,
+            )
+        if self.gear_tree.get_children():
+            self.gear_tree.selection_set(self.gear_tree.get_children()[0])
+        self.show_selected_gear_details()
+
+    def _is_overdue(self, due_date, status):
+        if not due_date or status != 'issued':
+            return False
+        try:
+            due = datetime.fromisoformat(due_date).date()
+        except ValueError:
+            try:
+                due = datetime.strptime(due_date, '%d/%m/%Y').date()
+            except ValueError:
+                return False
+        return due < datetime.now().date()
+
+    def get_selected_gear(self):
+        selection = self.gear_tree.selection()
+        if not selection:
+            return None
+        gear_id = int(selection[0])
+        return next((g for g in self.current_gear_cache if g[0] == gear_id), None)
+
+    def show_selected_gear_details(self):
+        gear = self.get_selected_gear()
+        for key in self.gear_detail_vars:
+            self.gear_detail_vars[key].set('')
+        self.gear_notes_text.configure(state='normal')
+        self.gear_notes_text.delete('1.0', tk.END)
+        self.gear_notes_text.configure(state='disabled')
+        if not gear:
+            return
+        gear_id, collab_name, item_name, size, quantity, issued_at, due_date, status, returned_at, notes, item_id, collaborator_id = gear
+        display_item = item_name if not size else f"{item_name} ({size})"
+        self.gear_detail_vars['item'].set(display_item)
+        self.gear_detail_vars['status'].set(status.upper())
+        self.gear_detail_vars['quantity'].set(str(quantity))
+        self.gear_detail_vars['issued'].set(format_display_datetime(issued_at))
+        self.gear_detail_vars['due'].set(format_display_date(due_date))
+        self.gear_detail_vars['returned'].set(format_display_datetime(returned_at))
+        if notes:
+            self.gear_notes_text.configure(state='normal')
+            self.gear_notes_text.insert('1.0', notes)
+            self.gear_notes_text.configure(state='disabled')
 
     def add_collaborator(self):
         dialog = CollaboratorFormDialog(self, "Nouveau collaborateur")
@@ -4582,35 +5434,117 @@ class CollaboratorGearDialog(tk.Toplevel):
         dialog = AssignGearDialog(self)
         if dialog.result:
             data = dialog.result
-            if assign_collaborator_gear(
-                collab_id,
-                data['item_id'],
-                data['quantity'],
-                data['size'],
-                data['due_date'],
-                data['notes'],
-                operator=self.parent.current_user,
-            ):
+            try:
+                success = assign_collaborator_gear(
+                    collab_id,
+                    data['item_id'],
+                    data['quantity'],
+                    data['size'],
+                    data['due_date'],
+                    data['notes'],
+                    operator=self.parent.current_user,
+                )
+            except ValueError as exc:
+                messagebox.showerror("Dotations", str(exc), parent=self)
+                return
+            if success:
                 self.parent.load_inventory()
                 self.load_gear()
+            else:
+                messagebox.showerror("Dotations", "Impossible d'attribuer l'équipement.", parent=self)
 
     def return_gear(self):
-        selection = self.gear_tree.selection()
-        if not selection:
+        gear = self.get_selected_gear()
+        if not gear:
             messagebox.showwarning("Collaborateurs", "Sélectionnez une dotation.", parent=self)
             return
-        gear_id = int(selection[0])
-        gear = next((g for g in fetch_collaborator_gear() if g[0] == gear_id), None)
-        if not gear:
-            messagebox.showerror("Collaborateurs", "Dotation introuvable.", parent=self)
-            return
+        gear_id = gear[0]
         quantity = gear[4]
         if messagebox.askyesno("Confirmation", "Confirmer le retour de cet équipement ?", parent=self):
             close_collaborator_gear(gear_id, quantity, self.parent.current_user, status='returned')
             self.parent.load_inventory()
             self.load_gear()
 
+    def extend_due_date(self):
+        gear = self.get_selected_gear()
+        if not gear:
+            messagebox.showwarning("Collaborateurs", "Sélectionnez une dotation.", parent=self)
+            return
+        gear_id = gear[0]
+        new_due = simpledialog.askstring("Prolongation", "Nouvelle échéance (JJ/MM/AAAA) :", parent=self)
+        if new_due is None:
+            return
+        try:
+            update_collaborator_gear_due_date(gear_id, new_due, self.parent.current_user)
+            self.load_gear()
+        except ValueError as exc:
+            messagebox.showerror("Collaborateurs", str(exc), parent=self)
 
+    def mark_gear_status(self, status, restock):
+        gear = self.get_selected_gear()
+        if not gear:
+            messagebox.showwarning("Collaborateurs", "Sélectionnez une dotation.", parent=self)
+            return
+        gear_id = gear[0]
+        quantity = gear[4]
+        status_label = status.upper()
+        if not messagebox.askyesno("Confirmation", f"Confirmer le statut {status_label} ?", parent=self):
+            return
+        note = simpledialog.askstring("Commentaire", "Ajouter un commentaire :", parent=self)
+        close_collaborator_gear(gear_id, quantity, self.parent.current_user, response_note=note, status=status, restock=restock)
+        if not restock:
+            # Réduire le stock n'est pas ajusté lors des pertes/endommagés
+            pass
+        self.parent.load_inventory()
+        self.load_gear()
+
+    def export_collaborators(self):
+        file_path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
+        if not file_path:
+            return
+        rows = [
+            (full_name, department or '', job_title or '', email or '', phone or '', hire_date or '', notes or '')
+            for _, full_name, department, job_title, email, phone, hire_date, notes in self.collaborators_cache
+        ]
+        try:
+            export_rows_to_csv(
+                file_path,
+                ('Nom', 'Service', 'Fonction', 'Email', 'Téléphone', 'Embauche', 'Notes'),
+                rows,
+            )
+            messagebox.showinfo("Collaborateurs", f"Export réalisé vers {file_path}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Collaborateurs", f"Impossible d'exporter : {exc}", parent=self)
+
+    def export_assignments(self):
+        file_path = filedialog.asksaveasfilename(defaultextension='.csv', filetypes=[('CSV', '*.csv')])
+        if not file_path:
+            return
+        rows = []
+        for gear in self.current_gear_cache:
+            gear_id, collab_name, item_name, size, quantity, issued_at, due_date, status, returned_at, notes, item_id, collaborator_id = gear
+            display_item = item_name if not size else f"{item_name} ({size})"
+            rows.append(
+                (
+                    collab_name,
+                    display_item,
+                    quantity,
+                    status.upper(),
+                    format_display_datetime(issued_at),
+                    format_display_date(due_date),
+                    format_display_datetime(returned_at),
+                    notes or '',
+                )
+            )
+        try:
+            export_rows_to_csv(
+                file_path,
+                ('Collaborateur', 'Article', 'Quantité', 'Statut', 'Attribué', 'Échéance', 'Retour', 'Notes'),
+                rows,
+            )
+            messagebox.showinfo("Dotations", f"Export réalisé vers {file_path}", parent=self)
+        except Exception as exc:
+            messagebox.showerror("Dotations", f"Impossible d'exporter : {exc}", parent=self)
 class ApprovalQueueDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
