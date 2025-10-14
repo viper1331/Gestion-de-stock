@@ -21,7 +21,7 @@ import logging
 from datetime import datetime, timedelta
 import traceback
 import configparser
-from typing import Optional
+from typing import Dict, Optional
 
 # ----------------------------
 # Lecture de la configuration
@@ -212,6 +212,104 @@ class StartupEventListener:
 
 
 startup_listener = StartupEventListener(logger)
+
+
+def _check_directory_permissions(directory: str) -> tuple[bool, str]:
+    """Retourne ``(ok, detail)`` en vérifiant l'accès en écriture au dossier."""
+
+    target = directory or "."
+    target = os.path.abspath(target)
+    if not os.path.exists(target):
+        return False, f"Dossier inexistant : {target}"
+    if not os.path.isdir(target):
+        return False, f"Chemin non valide (pas un dossier) : {target}"
+    if not os.access(target, os.W_OK):
+        return False, f"Dossier non inscriptible : {target}"
+    return True, f"Dossier accessible : {target}"
+
+
+def collect_environment_diagnostics() -> Dict[str, Dict[str, object]]:
+    """Analyse l'environnement et indique la disponibilité des composants clés."""
+
+    diagnostics: Dict[str, Dict[str, object]] = {}
+    diagnostics["tkinter"] = {
+        "ok": TK_AVAILABLE,
+        "detail": "Tkinter importé" if TK_AVAILABLE else "Tkinter indisponible",
+    }
+
+    if sys.platform.startswith("linux"):
+        display = os.environ.get("DISPLAY", "").strip()
+        diagnostics["display"] = {
+            "ok": bool(display),
+            "detail": f"DISPLAY={display or '<non défini>'}",
+        }
+    else:
+        diagnostics["display"] = {
+            "ok": True,
+            "detail": "Vérification non requise sur ce système",
+        }
+
+    diagnostics["barcode_camera"] = {
+        "ok": CAMERA_AVAILABLE,
+        "detail": (
+            "OpenCV + pyzbar disponibles" if CAMERA_AVAILABLE else "Installer opencv-python et pyzbar"
+        ),
+    }
+
+    diagnostics["barcode_generation"] = {
+        "ok": BARCODE_GENERATOR_LIB,
+        "detail": (
+            "Bibliothèque python-barcode prête" if BARCODE_GENERATOR_LIB else "Installer python-barcode[images] et Pillow"
+        ),
+    }
+
+    diagnostics["voice_recognition"] = {
+        "ok": SR_LIB_AVAILABLE,
+        "detail": "SpeechRecognition disponible" if SR_LIB_AVAILABLE else "Installer SpeechRecognition (+ PyAudio)",
+    }
+
+    diagnostics["text_to_speech"] = {
+        "ok": PYTTS3_LIB_AVAILABLE,
+        "detail": "pyttsx3 disponible" if PYTTS3_LIB_AVAILABLE else "Installer pyttsx3",
+    }
+
+    db_directory = os.path.dirname(os.path.abspath(DB_PATH)) or "."
+    db_ok, db_detail = _check_directory_permissions(db_directory)
+    diagnostics["database_directory"] = {"ok": db_ok, "detail": db_detail}
+
+    user_db_directory = os.path.dirname(os.path.abspath(USER_DB_PATH)) or "."
+    user_db_ok, user_db_detail = _check_directory_permissions(user_db_directory)
+    diagnostics["user_database_directory"] = {
+        "ok": user_db_ok,
+        "detail": user_db_detail,
+    }
+
+    barcode_dir = os.path.abspath(BARCODE_DIR)
+    if os.path.exists(barcode_dir):
+        barcode_ok, barcode_detail = _check_directory_permissions(barcode_dir)
+    else:
+        parent_dir = os.path.dirname(barcode_dir) or "."
+        parent_ok, parent_detail = _check_directory_permissions(parent_dir)
+        barcode_ok = parent_ok
+        barcode_detail = parent_detail if parent_ok else parent_detail
+        if parent_ok:
+            barcode_detail = f"Le dossier sera créé à l'utilisation : {barcode_dir}"
+    diagnostics["barcode_directory"] = {
+        "ok": barcode_ok,
+        "detail": barcode_detail,
+    }
+
+    return diagnostics
+
+
+def format_environment_diagnostics(diagnostics: Dict[str, Dict[str, object]]) -> str:
+    """Formate les diagnostics sous forme de texte lisible."""
+
+    lines = []
+    for key, info in diagnostics.items():
+        status = "OK" if info.get("ok") else "KO"
+        lines.append(f"- {key}: {status} – {info.get('detail', '')}")
+    return "\n".join(lines)
 
 try:
     import cv2
@@ -5191,6 +5289,27 @@ def main(argv=None):
         startup_listener.flush_to_logger(level=logging.DEBUG)
         return 0
 
+    if args and args[0] == '--diagnostics':
+        logger.info("Exécution du diagnostic d'environnement demandé depuis la ligne de commande.")
+        diagnostics = collect_environment_diagnostics()
+        diagnostic_output = format_environment_diagnostics(diagnostics)
+        print("Diagnostic de l'environnement :")
+        print(diagnostic_output)
+        missing_components = [key for key, info in diagnostics.items() if not info.get('ok')]
+        if missing_components:
+            logger.warning("Composants indisponibles détectés : %s", ", ".join(missing_components))
+            startup_listener.record(
+                f"Diagnostic terminé – composants manquants : {', '.join(missing_components)}.",
+                level=logging.WARNING,
+            )
+            startup_listener.stop()
+            startup_listener.flush_to_logger(level=logging.DEBUG)
+            return 1
+        startup_listener.record("Diagnostic terminé – tous les composants essentiels sont disponibles.")
+        startup_listener.stop()
+        startup_listener.flush_to_logger(level=logging.DEBUG)
+        return 0
+
     if not TK_AVAILABLE:
         logger.error("Tkinter est indisponible : arrêt de l'application.")
         print("Erreur : Tkinter non disponible. Le programme ne peut pas démarrer.")
@@ -5207,7 +5326,18 @@ def main(argv=None):
     logger.info("Initialisation des bases de données terminée.")
     startup_listener.record("Initialisation des bases de données terminée.", level=logging.DEBUG)
 
-    root = tk.Tk()
+    try:
+        root = tk.Tk()
+    except tk.TclError as exc:
+        logger.exception("Impossible d'initialiser l'interface Tkinter.")
+        print("Erreur : impossible d'initialiser Tkinter. Vérifiez la disponibilité d'un affichage graphique (DISPLAY).")
+        startup_listener.record(
+            f"Initialisation Tkinter échouée : {exc}",
+            level=logging.ERROR,
+        )
+        startup_listener.stop()
+        startup_listener.flush_to_logger(level=logging.ERROR)
+        return 1
     startup_listener.record("Création du conteneur Tkinter racine.", level=logging.DEBUG)
     root.withdraw()
     login = LoginDialog(root)

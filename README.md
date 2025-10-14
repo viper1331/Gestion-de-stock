@@ -73,6 +73,13 @@ python -m gestion_stock
 ```
 Au premier démarrage, l'application initialise les bases SQLite et vous demande de créer un administrateur. Après authentification, la fenêtre principale affiche le tableau des articles, la barre d'outils et les menus.
 
+Pour vérifier rapidement que l'environnement dispose des dépendances nécessaires (Tkinter, bibliothèques optionnelles, droits d'écriture sur les bases, etc.), lancez :
+
+```bash
+python -m gestion_stock --diagnostics
+```
+La commande affiche un récapitulatif indiquant les composants manquants ou mal configurés.
+
 ## Configuration
 Un fichier `config.ini` est créé dans le répertoire racine avec deux sections :
 - **Settings** : chemins (`db_path`, `user_db_path`, `barcode_dir`), index caméra (`camera_index`), index microphone (`microphone_index`), options vocales/tts, activation de la génération de codes-barres, seuil d'alerte et dernier utilisateur mémorisé.【F:gestion_stock/__init__.py†L24-L82】
