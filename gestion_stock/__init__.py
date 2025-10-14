@@ -1254,44 +1254,71 @@ def has_recent_alert(item_id, within_hours=24):
             conn.close()
 
 
-def fetch_dashboard_metrics(low_stock_threshold):
+def fetch_dashboard_metrics(low_stock_threshold, category_id=None, sales_days=30, movement_days=14):
     conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
-            cursor.execute("SELECT COUNT(*), COALESCE(SUM(quantity),0), COALESCE(SUM(quantity * COALESCE(unit_cost,0)),0) FROM items")
-            total_items, total_quantity, stock_value = cursor.fetchone()
-            cursor.execute(
-                "SELECT COUNT(*) FROM items WHERE quantity <= COALESCE(reorder_point, ?)",
-                (low_stock_threshold,),
+            item_query = (
+                "SELECT COUNT(*), COALESCE(SUM(quantity),0), "
+                "COALESCE(SUM(quantity * COALESCE(unit_cost,0)),0) FROM items"
             )
+            item_params = []
+            if category_id is not None:
+                item_query += " WHERE category_id = ?"
+                item_params.append(category_id)
+            cursor.execute(item_query, item_params)
+            total_items, total_quantity, stock_value = cursor.fetchone()
+
+            low_stock_query = (
+                "SELECT COUNT(*) FROM items "
+                "WHERE quantity <= COALESCE(reorder_point, ?)"
+            )
+            low_stock_params = [low_stock_threshold]
+            if category_id is not None:
+                low_stock_query += " AND category_id = ?"
+                low_stock_params.append(category_id)
+            cursor.execute(low_stock_query, low_stock_params)
             low_stock_count = cursor.fetchone()[0]
-            cursor.execute(
+
+            sales_since = (datetime.now() - timedelta(days=sales_days)).isoformat()
+            top_sales_query = (
                 """
                 SELECT items.name, ABS(SUM(stock_movements.quantity_change)) AS total_movement
                 FROM stock_movements
                 JOIN items ON items.id = stock_movements.item_id
                 WHERE stock_movements.movement_type = 'OUT' AND stock_movements.created_at >= ?
+                {category_filter}
                 GROUP BY items.name
                 ORDER BY total_movement DESC
                 LIMIT 5
-                """,
-                ((datetime.now() - timedelta(days=30)).isoformat(),),
-            )
-            top_sales = cursor.fetchall()
-            cursor.execute(
                 """
-                SELECT DATE(substr(created_at, 1, 10)) AS jour,
-                       SUM(CASE WHEN movement_type = 'IN' THEN quantity_change ELSE 0 END) AS entrees,
-                       SUM(CASE WHEN movement_type = 'OUT' THEN ABS(quantity_change) ELSE 0 END) AS sorties
+            ).format(category_filter="AND items.category_id = ?" if category_id is not None else "")
+            top_sales_params = [sales_since]
+            if category_id is not None:
+                top_sales_params.append(category_id)
+            cursor.execute(top_sales_query, top_sales_params)
+            top_sales = cursor.fetchall()
+
+            movement_since = (datetime.now() - timedelta(days=movement_days)).isoformat()
+            movement_query = (
+                """
+                SELECT DATE(substr(stock_movements.created_at, 1, 10)) AS jour,
+                       SUM(CASE WHEN stock_movements.movement_type = 'IN' THEN stock_movements.quantity_change ELSE 0 END) AS entrees,
+                       SUM(CASE WHEN stock_movements.movement_type = 'OUT' THEN ABS(stock_movements.quantity_change) ELSE 0 END) AS sorties
                 FROM stock_movements
-                WHERE created_at >= ?
+                JOIN items ON items.id = stock_movements.item_id
+                WHERE stock_movements.created_at >= ?
+                {category_filter}
                 GROUP BY jour
                 ORDER BY jour
-                """,
-                ((datetime.now() - timedelta(days=14)).isoformat(),),
-            )
+                """
+            ).format(category_filter="AND items.category_id = ?" if category_id is not None else "")
+            movement_params = [movement_since]
+            if category_id is not None:
+                movement_params.append(category_id)
+            cursor.execute(movement_query, movement_params)
             movement_history = cursor.fetchall()
         return {
             'total_items': total_items,
@@ -2250,6 +2277,72 @@ class StockApp(tk.Tk):
         ttk.Label(summary_frame, text="Stocks faibles", font=('Segoe UI', 12, 'bold')).grid(row=0, column=3, padx=10, pady=5)
         ttk.Label(summary_frame, textvariable=self.dashboard_vars['low_stock_count']).grid(row=1, column=3, padx=10)
 
+        self._dashboard_filter_update_blocked = False
+        self.dashboard_selected_category_id = None
+
+        filter_frame = ttk.LabelFrame(self.dashboard_frame, text="Filtres", padding=10)
+        filter_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+
+        ttk.Label(filter_frame, text="Catégorie :").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_category_var = tk.StringVar()
+        self.dashboard_category_combobox = ttk.Combobox(
+            filter_frame,
+            state='readonly',
+            textvariable=self.dashboard_category_var,
+            width=30,
+        )
+        self.dashboard_category_combobox.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_category_combobox.bind("<<ComboboxSelected>>", self.on_dashboard_filter_change)
+
+        self.dashboard_category_ids = []
+        self.load_dashboard_categories()
+
+        ttk.Label(filter_frame, text="Période ventes :").grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_sales_period_map = {
+            "7 jours": 7,
+            "14 jours": 14,
+            "30 jours": 30,
+            "90 jours": 90,
+        }
+        self.dashboard_sales_period_default_label = "30 jours"
+        self.dashboard_sales_period_var = tk.StringVar(value=self.dashboard_sales_period_default_label)
+        self.dashboard_sales_period_combobox = ttk.Combobox(
+            filter_frame,
+            state='readonly',
+            textvariable=self.dashboard_sales_period_var,
+            values=list(self.dashboard_sales_period_map.keys()),
+            width=12,
+        )
+        self.dashboard_sales_period_combobox.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_sales_period_combobox.set(self.dashboard_sales_period_default_label)
+        self.dashboard_sales_period_combobox.bind("<<ComboboxSelected>>", self.on_dashboard_filter_change)
+
+        ttk.Label(filter_frame, text="Historique mouvements :").grid(row=0, column=4, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_movement_period_map = {
+            "7 jours": 7,
+            "14 jours": 14,
+            "30 jours": 30,
+            "60 jours": 60,
+        }
+        self.dashboard_movement_period_default_label = "14 jours"
+        self.dashboard_movement_period_var = tk.StringVar(value=self.dashboard_movement_period_default_label)
+        self.dashboard_movement_period_combobox = ttk.Combobox(
+            filter_frame,
+            state='readonly',
+            textvariable=self.dashboard_movement_period_var,
+            values=list(self.dashboard_movement_period_map.keys()),
+            width=12,
+        )
+        self.dashboard_movement_period_combobox.grid(row=0, column=5, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_movement_period_combobox.set(self.dashboard_movement_period_default_label)
+        self.dashboard_movement_period_combobox.bind("<<ComboboxSelected>>", self.on_dashboard_filter_change)
+
+        ttk.Button(filter_frame, text="Rafraîchir", command=self.refresh_dashboard).grid(row=0, column=6, padx=5, pady=5)
+        ttk.Button(filter_frame, text="Réinitialiser", command=self.reset_dashboard_filters).grid(row=0, column=7, padx=5, pady=5)
+
+        for col in (1, 3, 5):
+            filter_frame.grid_columnconfigure(col, weight=1)
+
         if MATPLOTLIB_AVAILABLE and FigureCanvasTkAgg is not None:
             self.dashboard_figure = Figure(figsize=(10, 4), dpi=100)
             self.dashboard_canvas = FigureCanvasTkAgg(self.dashboard_figure, master=self.dashboard_frame)
@@ -2263,6 +2356,78 @@ class StockApp(tk.Tk):
             ).pack(fill=tk.X, padx=10, pady=10)
 
         self.dashboard_job = None
+        self.refresh_dashboard()
+
+    def load_dashboard_categories(self):
+        conn = None
+        rows = []
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, name FROM categories ORDER BY name")
+                rows = cursor.fetchall()
+        except sqlite3.Error as exc:
+            print(f"[DB Error] load_dashboard_categories: {exc}")
+        finally:
+            if conn:
+                conn.close()
+
+        labels = ["Toutes"]
+        ids = [-1]
+        for cat_id, name in rows:
+            labels.append(name)
+            ids.append(cat_id)
+
+        self._dashboard_filter_update_blocked = True
+        try:
+            self.dashboard_category_ids = ids
+            self.dashboard_category_combobox['values'] = labels
+            if labels:
+                self.dashboard_category_combobox.current(0)
+                self.dashboard_category_var.set(labels[0])
+            else:
+                self.dashboard_category_var.set('')
+            self.dashboard_selected_category_id = None
+        finally:
+            self._dashboard_filter_update_blocked = False
+
+    def _update_dashboard_category_selection(self):
+        if not hasattr(self, 'dashboard_category_combobox'):
+            return
+        try:
+            idx = self.dashboard_category_combobox.current()
+        except tk.TclError:
+            idx = -1
+        if idx is None:
+            idx = -1
+        if idx > 0 and idx < len(getattr(self, 'dashboard_category_ids', [])):
+            self.dashboard_selected_category_id = self.dashboard_category_ids[idx]
+        else:
+            self.dashboard_selected_category_id = None
+
+    def on_dashboard_filter_change(self, event=None):
+        if getattr(self, '_dashboard_filter_update_blocked', False):
+            return
+        self._update_dashboard_category_selection()
+        self.refresh_dashboard()
+
+    def reset_dashboard_filters(self):
+        self._dashboard_filter_update_blocked = True
+        try:
+            if getattr(self, 'dashboard_category_combobox', None) is not None:
+                if self.dashboard_category_combobox['values']:
+                    self.dashboard_category_combobox.current(0)
+                    self.dashboard_category_var.set(self.dashboard_category_combobox['values'][0])
+            self.dashboard_selected_category_id = None
+            if getattr(self, 'dashboard_sales_period_combobox', None) is not None:
+                self.dashboard_sales_period_var.set(self.dashboard_sales_period_default_label)
+                self.dashboard_sales_period_combobox.set(self.dashboard_sales_period_default_label)
+            if getattr(self, 'dashboard_movement_period_combobox', None) is not None:
+                self.dashboard_movement_period_var.set(self.dashboard_movement_period_default_label)
+                self.dashboard_movement_period_combobox.set(self.dashboard_movement_period_default_label)
+        finally:
+            self._dashboard_filter_update_blocked = False
         self.refresh_dashboard()
 
     def load_inventory(self):
@@ -2376,7 +2541,25 @@ class StockApp(tk.Tk):
                 self.alert_manager.dispatch_low_stock_alert(item_id, item_name, new_qty, threshold)
 
     def refresh_dashboard(self):
-        metrics = fetch_dashboard_metrics(self.low_stock_threshold)
+        if hasattr(self, '_dashboard_filter_update_blocked') and not getattr(
+            self, '_dashboard_filter_update_blocked', False
+        ):
+            self._update_dashboard_category_selection()
+
+        category_id = getattr(self, 'dashboard_selected_category_id', None)
+        sales_label = getattr(self, 'dashboard_sales_period_var', None)
+        sales_choice = sales_label.get() if sales_label is not None else '30 jours'
+        sales_days = getattr(self, 'dashboard_sales_period_map', {}).get(sales_choice, 30)
+        movement_label = getattr(self, 'dashboard_movement_period_var', None)
+        movement_choice = movement_label.get() if movement_label is not None else '14 jours'
+        movement_days = getattr(self, 'dashboard_movement_period_map', {}).get(movement_choice, 14)
+
+        metrics = fetch_dashboard_metrics(
+            self.low_stock_threshold,
+            category_id=category_id,
+            sales_days=sales_days,
+            movement_days=movement_days,
+        )
         self.dashboard_vars['total_items'].set(str(metrics['total_items']))
         self.dashboard_vars['total_quantity'].set(str(metrics['total_quantity']))
         self.dashboard_vars['stock_value'].set(f"{metrics['stock_value']:.2f} €")
@@ -2390,7 +2573,7 @@ class StockApp(tk.Tk):
                 names = [row[0] for row in top_sales]
                 values = [row[1] for row in top_sales]
                 ax1.bar(names, values, color='#1976d2')
-                ax1.set_title('Top sorties (30j)')
+                ax1.set_title(f'Top sorties ({sales_days} j)')
                 ax1.tick_params(axis='x', rotation=45, labelsize=8)
             else:
                 ax1.text(0.5, 0.5, 'Pas de données', ha='center', va='center')
@@ -2405,7 +2588,7 @@ class StockApp(tk.Tk):
                 exits = [row[2] or 0 for row in history]
                 ax2.plot(dates, entries, label='Entrées', marker='o')
                 ax2.plot(dates, exits, label='Sorties', marker='o')
-                ax2.set_title('Mouvements (14j)')
+                ax2.set_title(f'Mouvements ({movement_days} j)')
                 ax2.tick_params(axis='x', rotation=45, labelsize=8)
                 ax2.legend()
             else:
