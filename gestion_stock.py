@@ -910,6 +910,11 @@ class StockApp(tk.Tk):
         self.style = ttk.Style(self)
         self.style.theme_use("clam")
 
+        self.low_stock_threshold = config['Settings'].getint(
+            'low_stock_threshold',
+            fallback=DEFAULT_LOW_STOCK_THRESHOLD
+        )
+
         self.create_menu()
         self.create_toolbar()
         self.create_statusbar()
@@ -1069,6 +1074,12 @@ class StockApp(tk.Tk):
             self.tree.column(col, anchor=tk.CENTER)
         self.tree.pack(fill=tk.BOTH, expand=True)
 
+        # Configuration des couleurs de lignes selon le niveau de stock
+        self.tree.tag_configure('stock_zero', background='#f8d7da', foreground='#721c24')
+        self.tree.tag_configure('stock_low', background='#fff3cd', foreground='#856404')
+        self.tree.tag_configure('stock_ok', background='#e8f5e9', foreground='#1b5e20')
+        self.tree.tag_configure('stock_unknown', background='#f0f0f0', foreground='#333333')
+
     def load_inventory(self):
         search_text = self.entry_search.get().lower().strip()
         for row in self.tree.get_children():
@@ -1096,9 +1107,22 @@ class StockApp(tk.Tk):
         finally:
             conn.close()
         for item in rows:
-            self.tree.insert('', tk.END, values=item)
+            tag = self._get_stock_tag(item[5])
+            self.tree.insert('', tk.END, values=item, tags=(tag,))
         count = len(self.tree.get_children())
         self.status.set(f"Articles listés : {count}")
+
+    def _get_stock_tag(self, quantity):
+        """Retourne le tag à appliquer selon la quantité disponible."""
+        try:
+            qty = int(quantity)
+        except (TypeError, ValueError):
+            return 'stock_unknown'
+        if qty <= 0:
+            return 'stock_zero'
+        if qty <= self.low_stock_threshold:
+            return 'stock_low'
+        return 'stock_ok'
 
     def apply_saved_column_widths(self):
         """
@@ -1404,9 +1428,14 @@ class StockApp(tk.Tk):
             messagebox.showerror("Erreur Fichier", f"Impossible d'écrire le CSV : {e}")
 
     def report_low_stock(self):
-        threshold = simpledialog.askinteger("Seuil", f"Afficher articles avec quantité <= : (défaut {DEFAULT_LOW_STOCK_THRESHOLD})", minvalue=0)
+        default_threshold = self.low_stock_threshold
+        threshold = simpledialog.askinteger(
+            "Seuil",
+            f"Afficher articles avec quantité <= : (défaut {default_threshold})",
+            minvalue=0
+        )
         if threshold is None:
-            threshold = DEFAULT_LOW_STOCK_THRESHOLD
+            threshold = default_threshold
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -1455,7 +1484,12 @@ class StockApp(tk.Tk):
             config['Settings']['low_stock_threshold'] = str(dialog.result['low_stock_threshold'])
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 config.write(f)
-            messagebox.showinfo("Paramètres", "Configuration enregistrée. Redémarrez pour prendre en compte.")
+            try:
+                self.low_stock_threshold = int(dialog.result['low_stock_threshold'])
+            except (TypeError, ValueError):
+                self.low_stock_threshold = DEFAULT_LOW_STOCK_THRESHOLD
+            self.load_inventory()
+            messagebox.showinfo("Paramètres", "Configuration enregistrée. Redémarrez pour certaines options.")
 
     def open_category_dialog(self):
         dialog = CategoryDialog(self)
