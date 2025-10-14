@@ -3477,7 +3477,17 @@ class StockApp(tk.Tk):
             messagebox.showwarning("Attention", "Sélectionnez un article dans la liste.")
             return
         item = self.tree.item(selected)
-        id_, name, _, _, size_value, qty, _ = item['values']
+        values = item.get('values', [])
+        if len(values) < 4:
+            messagebox.showerror(
+                "Stock",
+                "Les informations de l'article sélectionné sont incomplètes."
+            )
+            return
+        id_ = values[0]
+        name = values[1] if len(values) > 1 else ""
+        size_value = values[5] if len(values) > 5 else ""
+        qty = values[6] if len(values) > 6 else 0
         try:
             qty = int(qty)
         except (TypeError, ValueError):
