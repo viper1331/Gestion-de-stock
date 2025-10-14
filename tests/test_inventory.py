@@ -78,6 +78,38 @@ class AdjustItemQuantityTests(unittest.TestCase):
             movement = cursor.fetchone()
         self.assertEqual(movement, ("OUT", -10, "tester", "test_suite", "retrait"))
 
+    def test_adjust_item_quantity_noop_returns_current_state(self):
+        result = gestion_stock.adjust_item_quantity(
+            self.item_id,
+            0,
+            operator="tester",
+            source="test_suite",
+            note="aucun",
+        )
+        self.assertEqual(result, (10, 0, 10))
+        with sqlite3.connect(gestion_stock.DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT quantity, last_updated FROM items WHERE id = ?", (self.item_id,))
+            quantity, last_updated = cursor.fetchone()
+            self.assertEqual(quantity, 10)
+            self.assertIsNone(last_updated)
+            cursor.execute(
+                "SELECT COUNT(*) FROM stock_movements WHERE item_id = ?",
+                (self.item_id,),
+            )
+            movement_count = cursor.fetchone()[0]
+        self.assertEqual(movement_count, 0)
+
+    def test_adjust_item_quantity_returns_none_for_unknown_item(self):
+        result = gestion_stock.adjust_item_quantity(
+            999,
+            5,
+            operator="tester",
+            source="test_suite",
+            note="inconnu",
+        )
+        self.assertIsNone(result)
+
 
 class UserManagementTests(unittest.TestCase):
     def setUp(self):

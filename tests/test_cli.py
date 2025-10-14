@@ -37,3 +37,12 @@ def test_main_gracefully_handles_tkinit_failure(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert exit_code == 1
     assert "impossible d'initialiser Tkinter" in captured.out
+
+
+def test_collect_environment_diagnostics_handles_missing_barcode_dir(monkeypatch, tmp_path):
+    missing_dir = tmp_path / "barcodes"
+    monkeypatch.setattr(gestion_stock, "BARCODE_DIR", str(missing_dir))
+    diagnostics = gestion_stock.collect_environment_diagnostics()
+    barcode_info = diagnostics["barcode_directory"]
+    assert barcode_info["ok"] is True
+    assert str(missing_dir) in barcode_info["detail"]
