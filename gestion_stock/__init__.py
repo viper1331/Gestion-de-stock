@@ -2046,6 +2046,20 @@ class StockApp(tk.Tk):
             if microphone is None:
                 init_recognizer()
 
+    def on_closing(self):
+        self.save_column_widths()
+        if hasattr(self, 'dashboard_job') and self.dashboard_job:
+            try:
+                self.after_cancel(self.dashboard_job)
+            except Exception:
+                pass
+            self.dashboard_job = None
+        if hasattr(self, 'alert_manager') and self.alert_manager:
+            self.alert_manager.stop()
+        global voice_active
+        voice_active = False
+        self.destroy()
+
 
 class AlertManager:
     """Gère les alertes de stock faible et la génération automatique de propositions."""
@@ -2115,20 +2129,6 @@ class AlertManager:
         for item_id, name, qty, threshold in rows:
             if not has_recent_alert(item_id, within_hours=24):
                 self.dispatch_low_stock_alert(item_id, name, qty, threshold)
-
-    def on_closing(self):
-        self.save_column_widths()
-        if hasattr(self, 'dashboard_job') and self.dashboard_job:
-            try:
-                self.after_cancel(self.dashboard_job)
-            except Exception:
-                pass
-            self.dashboard_job = None
-        if hasattr(self, 'alert_manager') and self.alert_manager:
-            self.alert_manager.stop()
-        global voice_active
-        voice_active = False
-        self.destroy()
 
     def create_menu(self):
         menubar = tk.Menu(self)
