@@ -21,6 +21,7 @@ import logging
 from datetime import datetime, timedelta
 import traceback
 import configparser
+from typing import Optional
 
 # ----------------------------
 # Lecture de la configuration
@@ -29,6 +30,34 @@ CONFIG_FILE = 'config.ini'
 CONFIG_DIRECTORY = os.path.dirname(os.path.abspath(CONFIG_FILE)) or os.getcwd()
 LOG_FILE = os.path.join(CONFIG_DIRECTORY, "gestion_stock_log.txt")
 config = configparser.ConfigParser()
+DEFAULT_INVENTORY_COLUMNS = (
+    'ID',
+    'Nom',
+    'Code-Barres',
+    'Catégorie',
+    'Taille',
+    'Quantité',
+    'Dernière MAJ',
+)
+
+
+def _normalize_inventory_columns_section(section: configparser.SectionProxy) -> None:
+    """Assure la présence d'une configuration cohérente pour les colonnes d'inventaire."""
+
+    order_raw = section.get('order', '')
+    order = [col.strip() for col in order_raw.split(',') if col.strip()]
+    order = [col for col in order if col in DEFAULT_INVENTORY_COLUMNS]
+    for col in DEFAULT_INVENTORY_COLUMNS:
+        if col not in order:
+            order.append(col)
+    section['order'] = ','.join(order)
+
+    hidden_raw = section.get('hidden', '')
+    hidden = [col.strip() for col in hidden_raw.split(',') if col.strip()]
+    hidden = [col for col in hidden if col in DEFAULT_INVENTORY_COLUMNS]
+    section['hidden'] = ','.join(hidden)
+
+
 default_config = {
     'db_path': 'stock.db',
     'user_db_path': 'users.db',
@@ -44,6 +73,10 @@ default_config = {
 if not os.path.exists(CONFIG_FILE):
     config['Settings'] = default_config
     config['ColumnWidths'] = {}
+    config['InventoryColumns'] = {
+        'order': ','.join(DEFAULT_INVENTORY_COLUMNS),
+        'hidden': '',
+    }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         config.write(f)
 else:
@@ -58,6 +91,13 @@ else:
                 config['Settings'][key] = val
     if 'ColumnWidths' not in config:
         config['ColumnWidths'] = {}
+    if 'InventoryColumns' not in config:
+        config['InventoryColumns'] = {
+            'order': ','.join(DEFAULT_INVENTORY_COLUMNS),
+            'hidden': '',
+        }
+    else:
+        _normalize_inventory_columns_section(config['InventoryColumns'])
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         config.write(f)
 
@@ -1981,6 +2021,190 @@ class AddUserDialog(tk.Toplevel):
         self.result = None
         self.destroy()
 
+
+class ColumnManagerDialog(tk.Toplevel):
+    """Boîte de dialogue pour ajuster l'ordre et la visibilité des colonnes d'inventaire."""
+
+    def __init__(
+        self,
+        master: tk.Misc,
+        *,
+        columns: tuple[str, ...],
+        order: list[str],
+        hidden: set[str],
+    ) -> None:
+        super().__init__(master)
+        self.title("Personnalisation des colonnes")
+        self.transient(master)
+        self.grab_set()
+        self.resizable(False, False)
+        self.protocol("WM_DELETE_WINDOW", self._on_cancel)
+
+        self.result: Optional[tuple[list[str], set[str]]] = None
+        self.default_columns = list(columns)
+        self.column_order = list(order)
+        self.hidden_columns = set(hidden)
+
+        main_frame = ttk.Frame(self, padding=10)
+        main_frame.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        ttk.Label(main_frame, text="Ordre d'affichage :").grid(
+            row=0,
+            column=0,
+            columnspan=2,
+            sticky=tk.W,
+        )
+
+        list_frame = ttk.Frame(main_frame)
+        list_frame.grid(row=1, column=0, rowspan=4, sticky="nsew")
+        main_frame.rowconfigure(1, weight=1)
+        main_frame.columnconfigure(0, weight=1)
+
+        self.listbox = tk.Listbox(
+            list_frame,
+            exportselection=False,
+            height=max(7, len(self.column_order)),
+        )
+        self.listbox.grid(row=0, column=0, sticky="nsew")
+        list_frame.columnconfigure(0, weight=1)
+        list_frame.rowconfigure(0, weight=1)
+
+        scrollbar = ttk.Scrollbar(
+            list_frame,
+            orient=tk.VERTICAL,
+            command=self.listbox.yview,
+        )
+        scrollbar.grid(row=0, column=1, sticky="ns")
+        self.listbox.configure(yscrollcommand=scrollbar.set)
+
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=1, column=1, rowspan=4, sticky="n", padx=(10, 0))
+
+        btn_up = ttk.Button(button_frame, text="Monter", command=self._move_up)
+        btn_down = ttk.Button(button_frame, text="Descendre", command=self._move_down)
+        self.toggle_button = ttk.Button(
+            button_frame,
+            text="Afficher/Masquer",
+            command=self._toggle_selected,
+        )
+        btn_reset = ttk.Button(button_frame, text="Réinitialiser", command=self._reset_defaults)
+
+        btn_up.grid(row=0, column=0, sticky="ew", pady=(0, 5))
+        btn_down.grid(row=1, column=0, sticky="ew", pady=(0, 5))
+        self.toggle_button.grid(row=2, column=0, sticky="ew", pady=(0, 5))
+        btn_reset.grid(row=3, column=0, sticky="ew")
+
+        action_frame = ttk.Frame(self, padding=(10, 0, 10, 10))
+        action_frame.grid(row=1, column=0, sticky="e")
+
+        btn_cancel = ttk.Button(action_frame, text="Annuler", command=self._on_cancel)
+        btn_ok = ttk.Button(action_frame, text="Enregistrer", command=self._on_validate)
+        btn_cancel.grid(row=0, column=0, padx=(0, 5))
+        btn_ok.grid(row=0, column=1)
+
+        self.listbox.bind('<<ListboxSelect>>', self._on_selection_changed)
+        self.listbox.bind('<Double-Button-1>', lambda _event: self._toggle_selected())
+        self.bind('<Return>', lambda _event: self._on_validate())
+        self.bind('<Escape>', lambda _event: self._on_cancel())
+
+        self._refresh_listbox()
+        if self.column_order:
+            self.listbox.selection_set(0)
+            self._update_toggle_button()
+
+        self.wait_visibility()
+        self.focus_set()
+
+    def _refresh_listbox(self) -> None:
+        self.listbox.delete(0, tk.END)
+        for col in self.column_order:
+            marker = '✓' if col not in self.hidden_columns else '✗'
+            self.listbox.insert(tk.END, f"[{marker}] {col}")
+
+    def _current_index(self) -> Optional[int]:
+        selection = self.listbox.curselection()
+        if not selection:
+            return None
+        return int(selection[0])
+
+    def _move_up(self) -> None:
+        idx = self._current_index()
+        if idx is None or idx <= 0:
+            return
+        self.column_order[idx - 1], self.column_order[idx] = (
+            self.column_order[idx],
+            self.column_order[idx - 1],
+        )
+        self._refresh_listbox()
+        self.listbox.selection_set(idx - 1)
+        self._update_toggle_button()
+
+    def _move_down(self) -> None:
+        idx = self._current_index()
+        if idx is None or idx >= len(self.column_order) - 1:
+            return
+        self.column_order[idx + 1], self.column_order[idx] = (
+            self.column_order[idx],
+            self.column_order[idx + 1],
+        )
+        self._refresh_listbox()
+        self.listbox.selection_set(idx + 1)
+        self._update_toggle_button()
+
+    def _toggle_selected(self) -> None:
+        idx = self._current_index()
+        if idx is None:
+            return
+        column = self.column_order[idx]
+        if column in self.hidden_columns:
+            self.hidden_columns.remove(column)
+        else:
+            self.hidden_columns.add(column)
+        self._refresh_listbox()
+        self.listbox.selection_set(idx)
+        self._update_toggle_button()
+
+    def _reset_defaults(self) -> None:
+        self.column_order = list(self.default_columns)
+        self.hidden_columns.clear()
+        self._refresh_listbox()
+        if self.column_order:
+            self.listbox.selection_clear(0, tk.END)
+            self.listbox.selection_set(0)
+        self._update_toggle_button()
+
+    def _on_selection_changed(self, _event=None) -> None:
+        self._update_toggle_button()
+
+    def _update_toggle_button(self) -> None:
+        idx = self._current_index()
+        if idx is None:
+            self.toggle_button.config(text="Afficher/Masquer", state=tk.DISABLED)
+            return
+        column = self.column_order[idx]
+        if column in self.hidden_columns:
+            self.toggle_button.config(text="Afficher", state=tk.NORMAL)
+        else:
+            self.toggle_button.config(text="Masquer", state=tk.NORMAL)
+
+    def _on_validate(self) -> None:
+        visible_columns = [col for col in self.column_order if col not in self.hidden_columns]
+        if not visible_columns:
+            messagebox.showerror(
+                "Colonnes",
+                "Sélectionnez au moins une colonne à afficher.",
+                parent=self,
+            )
+            return
+        self.result = (list(self.column_order), set(self.hidden_columns))
+        self.destroy()
+
+    def _on_cancel(self) -> None:
+        self.result = None
+        self.destroy()
+
 # ----------------------
 # CLASSE PRINCIPALE DE L'APPLICATION
 # ----------------------
@@ -2047,6 +2271,7 @@ class StockApp(tk.Tk):
                 init_recognizer()
 
     def on_closing(self):
+        self.save_inventory_column_preferences()
         self.save_column_widths()
         if hasattr(self, 'dashboard_job') and self.dashboard_job:
             try:
@@ -2077,6 +2302,7 @@ class StockApp(tk.Tk):
         settings_menu = tk.Menu(menubar, tearoff=0)
         settings_menu.add_command(label="Configuration générale", command=self.open_config_dialog)
         settings_menu.add_command(label="Gérer Catégories", command=self.open_category_dialog)
+        settings_menu.add_command(label="Personnaliser colonnes", command=self.open_column_manager)
         if self.current_role == 'admin':
             settings_menu.add_command(label="Gérer Utilisateurs", command=self.open_user_management)
         if ENABLE_VOICE and SR_LIB_AVAILABLE:
@@ -2146,6 +2372,7 @@ class StockApp(tk.Tk):
             command=lambda: self.generate_barcode_dialog()
         )
         btn_export = ttk.Button(toolbar, text="Exporter CSV", command=self.export_csv)
+        btn_columns = ttk.Button(toolbar, text="Colonnes", command=self.open_column_manager)
 
         btn_add.pack(side=tk.LEFT, padx=2)
         btn_edit.pack(side=tk.LEFT, padx=2)
@@ -2157,6 +2384,7 @@ class StockApp(tk.Tk):
         btn_stop_listen.pack(side=tk.LEFT, padx=2)
         btn_barcode_gen.pack(side=tk.LEFT, padx=2)
         btn_export.pack(side=tk.LEFT, padx=2)
+        btn_columns.pack(side=tk.LEFT, padx=2)
 
         toolbar.pack(fill=tk.X)
 
@@ -2212,11 +2440,12 @@ class StockApp(tk.Tk):
         self.scan_var.trace_add('write', scan_var_callback)
         scan_frame.pack(fill=tk.X, pady=5)
 
-        cols = ('ID', 'Nom', 'Code-Barres', 'Catégorie', 'Taille', 'Quantité', 'Dernière MAJ')
+        cols = DEFAULT_INVENTORY_COLUMNS
         self.tree = ttk.Treeview(inventory_frame, columns=cols, show='headings', selectmode='browse')
         for col in cols:
             self.tree.heading(col, text=col)
             self.tree.column(col, anchor=tk.CENTER)
+        self.load_inventory_column_preferences()
         self.tree.pack(fill=tk.BOTH, expand=True)
 
         # Configuration des couleurs de lignes selon le niveau de stock
@@ -2226,6 +2455,80 @@ class StockApp(tk.Tk):
         self.tree.tag_configure('stock_unknown', background='#f0f0f0', foreground='#333333')
 
         self.create_dashboard_tab()
+
+    def load_inventory_column_preferences(self) -> None:
+        """Charge l'ordre et la visibilité des colonnes de l'inventaire."""
+        if 'InventoryColumns' not in config:
+            config['InventoryColumns'] = {
+                'order': ','.join(DEFAULT_INVENTORY_COLUMNS),
+                'hidden': '',
+            }
+        _normalize_inventory_columns_section(config['InventoryColumns'])
+        section = config['InventoryColumns']
+        order_values = [col.strip() for col in section.get('order', '').split(',') if col.strip()]
+        self.inventory_column_order = [
+            col for col in order_values if col in DEFAULT_INVENTORY_COLUMNS
+        ]
+        for col in DEFAULT_INVENTORY_COLUMNS:
+            if col not in self.inventory_column_order:
+                self.inventory_column_order.append(col)
+        hidden_values = [
+            col.strip() for col in section.get('hidden', '').split(',') if col.strip()
+        ]
+        self.inventory_hidden_columns = {
+            col for col in hidden_values if col in DEFAULT_INVENTORY_COLUMNS
+        }
+        self._apply_inventory_column_preferences()
+
+    def _apply_inventory_column_preferences(self) -> None:
+        display_columns = [
+            col for col in self.inventory_column_order if col not in self.inventory_hidden_columns
+        ]
+        if not display_columns:
+            self.inventory_hidden_columns.clear()
+            display_columns = list(self.inventory_column_order)
+        valid_display = [
+            col for col in display_columns if col in self.tree['columns']
+        ]
+        if not valid_display:
+            valid_display = list(DEFAULT_INVENTORY_COLUMNS)
+        self.tree.configure(displaycolumns=valid_display)
+
+    def save_inventory_column_preferences(self) -> None:
+        if 'InventoryColumns' not in config:
+            config['InventoryColumns'] = {}
+        config['InventoryColumns']['order'] = ','.join(self.inventory_column_order)
+        hidden_order = [
+            col for col in self.inventory_column_order if col in self.inventory_hidden_columns
+        ]
+        for col in DEFAULT_INVENTORY_COLUMNS:
+            if col in self.inventory_hidden_columns and col not in hidden_order:
+                hidden_order.append(col)
+        config['InventoryColumns']['hidden'] = ','.join(hidden_order)
+        _normalize_inventory_columns_section(config['InventoryColumns'])
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            config.write(f)
+
+    def open_column_manager(self) -> None:
+        dialog = ColumnManagerDialog(
+            self,
+            columns=DEFAULT_INVENTORY_COLUMNS,
+            order=list(self.inventory_column_order),
+            hidden=set(self.inventory_hidden_columns),
+        )
+        self.wait_window(dialog)
+        if dialog.result:
+            order, hidden = dialog.result
+            normalized_order = [col for col in order if col in DEFAULT_INVENTORY_COLUMNS]
+            for col in DEFAULT_INVENTORY_COLUMNS:
+                if col not in normalized_order:
+                    normalized_order.append(col)
+            self.inventory_column_order = normalized_order
+            self.inventory_hidden_columns = {
+                col for col in hidden if col in DEFAULT_INVENTORY_COLUMNS
+            }
+            self._apply_inventory_column_preferences()
+            self.save_inventory_column_preferences()
 
     def create_dashboard_tab(self):
         self.dashboard_vars = {
