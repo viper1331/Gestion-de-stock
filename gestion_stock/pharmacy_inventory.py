@@ -555,6 +555,88 @@ class PharmacyInventoryManager:
                 conn.close()
         return summary
 
+    def list_batches(
+        self,
+        *,
+        search: Optional[str] = None,
+        include_zero: bool = True,
+        db_path: Optional[str] = None,
+    ) -> list[PharmacyBatch]:
+        """Retourne l'ensemble des lots en respectant le filtre fourni."""
+
+        normalized_search = search.strip().lower() if search else None
+        wildcard = f"%{normalized_search}%" if normalized_search else None
+        query = [
+            "SELECT",
+            "    b.id,",
+            "    b.item_id,",
+            "    i.name,",
+            "    b.lot_number,",
+            "    b.expiration_date,",
+            "    b.quantity,",
+            "    i.dosage,",
+            "    i.medication_form,",
+            "    COALESCE(b.storage_condition, i.storage_condition),",
+            "    b.prescription_required",
+            "  FROM pharmacy_inventory AS b",
+            "  JOIN items AS i ON i.id = b.item_id",
+        ]
+        conditions: list[str] = []
+        params: list[object] = []
+        if normalized_search:
+            conditions.append(
+                "(LOWER(i.name) LIKE ? OR LOWER(b.lot_number) LIKE ? OR LOWER(COALESCE(i.barcode, '')) LIKE ?)"
+            )
+            params.extend([wildcard, wildcard, wildcard])
+        if not include_zero:
+            conditions.append("b.quantity > 0")
+        if conditions:
+            query.append(" WHERE ")
+            query.append(" AND ".join(conditions))
+        query.append(
+            " ORDER BY i.name COLLATE NOCASE, b.expiration_date IS NULL, b.expiration_date"
+        )
+        sql = "".join(query)
+
+        batches: list[PharmacyBatch] = []
+        with self._lock:
+            conn = self._open_connection(db_path)
+            try:
+                cursor = conn.cursor()
+                self._ensure_schema(cursor)
+                cursor.execute(sql, tuple(params))
+                rows = cursor.fetchall()
+            finally:
+                conn.close()
+
+        for row in rows:
+            expiration_str = row[4]
+            days_left: Optional[int]
+            if expiration_str:
+                try:
+                    expiration_date = datetime.fromisoformat(expiration_str).date()
+                    days_left = (expiration_date - datetime.now().date()).days
+                except ValueError:
+                    days_left = None
+            else:
+                days_left = None
+            batches.append(
+                PharmacyBatch(
+                    id=row[0],
+                    item_id=row[1],
+                    name=row[2],
+                    lot_number=row[3],
+                    expiration_date=row[4],
+                    quantity=row[5] or 0,
+                    dosage=row[6],
+                    form=row[7],
+                    storage_condition=row[8],
+                    prescription_required=bool(row[9]),
+                    days_left=days_left,
+                )
+            )
+        return batches
+
 
 __all__ = [
     "PharmacyInventoryManager",
