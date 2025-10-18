@@ -1710,8 +1710,58 @@ def update_user_role(user_id: int, new_role: str) -> bool:
 # SYNTHÈSE VOCALE
 # ------------------------
 if ENABLE_TTS and PYTTS3_LIB_AVAILABLE:
+    def _configure_tts_engine(engine: "pyttsx3.Engine") -> None:
+        """Ajuste la voix et la vitesse pour un rendu plus naturel."""
+
+        try:
+            voices = engine.getProperty("voices") or []
+        except Exception as voices_err:  # pragma: no cover - dépend du backend TTS
+            print(f"[TTS] Impossible de récupérer les voix : {voices_err}")
+            voices = []
+
+        def _matches_french_voice(voice: "pyttsx3.voice.Voice") -> bool:
+            voice_id = getattr(voice, "id", "") or ""
+            languages = []
+            try:
+                languages = list(getattr(voice, "languages", []) or [])
+            except Exception:
+                languages = []
+            normalized_langs = []
+            for lang in languages:
+                if isinstance(lang, bytes):
+                    normalized_langs.append(lang.decode("utf-8", errors="ignore"))
+                elif isinstance(lang, str):
+                    normalized_langs.append(lang)
+            normalized_langs.append(voice_id)
+            return any("fr" in (lang or "").lower() for lang in normalized_langs)
+
+        selected_voice = next((voice for voice in voices if _matches_french_voice(voice)), None)
+        if selected_voice is not None:
+            try:
+                engine.setProperty("voice", selected_voice.id)
+                print(f"[TTS] Voix sélectionnée : {getattr(selected_voice, 'name', selected_voice.id)}")
+            except Exception as voice_err:  # pragma: no cover - dépend du backend TTS
+                print(f"[TTS] Impossible de sélectionner la voix '{selected_voice.id}': {voice_err}")
+
+        try:
+            current_rate = engine.getProperty("rate")
+            if isinstance(current_rate, (int, float)):
+                # Une vitesse légèrement réduite donne un rendu plus naturel.
+                target_rate = max(140, min(180, int(current_rate * 0.9)))
+                engine.setProperty("rate", target_rate)
+                print(f"[TTS] Vitesse ajustée à {target_rate} (anciennement {current_rate})")
+        except Exception as rate_err:  # pragma: no cover - dépend du backend TTS
+            print(f"[TTS] Impossible d'ajuster la vitesse : {rate_err}")
+
+        try:
+            engine.setProperty("volume", 1.0)
+        except Exception as volume_err:  # pragma: no cover - dépend du backend TTS
+            print(f"[TTS] Impossible d'ajuster le volume : {volume_err}")
+
     try:
         tts_engine = pyttsx3.init()
+        _configure_tts_engine(tts_engine)
+
         def speak(text):
             print(f"[SPEAK] {text}")
             try:
@@ -1721,6 +1771,7 @@ if ENABLE_TTS and PYTTS3_LIB_AVAILABLE:
                 print(f"[TTS erreur] {e} | Texte à lire : {text}")
     except Exception as init_err:
         print(f"[TTS désactivé à l'init] {init_err}")
+
         def speak(text):
             print(f"[SPEAK-DISABLED] {text}")
 else:
