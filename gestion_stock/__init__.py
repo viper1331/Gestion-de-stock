@@ -465,9 +465,10 @@ db_lock = threading.Lock()
 
 
 try:
-    from .pharmacy_inventory import PharmacyInventoryManager
+    from .pharmacy_inventory import PharmacyInventoryManager, PharmacyBatch
 except Exception:  # pragma: no cover - import errors reported during initialization
     PharmacyInventoryManager = None  # type: ignore[assignment]
+    PharmacyBatch = None  # type: ignore[assignment]
 
 
 def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, operator=None, note=None, timestamp=None):
@@ -557,6 +558,23 @@ def summarize_pharmacy_stock(*, db_path: Optional[str] = None) -> dict:
     if pharmacy_inventory_manager is None:
         raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
     return pharmacy_inventory_manager.summarize_stock(db_path=db_path)
+
+
+def list_pharmacy_batches(
+    *,
+    search: Optional[str] = None,
+    include_zero: bool = True,
+    db_path: Optional[str] = None,
+):
+    """Retourne les lots pharmaceutiques pour l'interface graphique."""
+
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.list_batches(
+        search=search,
+        include_zero=include_zero,
+        db_path=db_path,
+    )
 
 def adjust_item_quantity(item_id, delta, operator='system', source='manual', note=None):
     """Modifie la quantité d'un article et journalise le mouvement."""
@@ -2525,6 +2543,154 @@ class AddUserDialog(tk.Toplevel):
         self.destroy()
 
 
+class PharmacyBatchDialog(tk.Toplevel):
+    """Boîte de dialogue pour créer un lot pharmaceutique."""
+
+    def __init__(self, parent: tk.Misc, title: str) -> None:
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+        self.result: Optional[dict] = None
+
+        self.var_name = tk.StringVar()
+        self.var_lot = tk.StringVar()
+        self.var_quantity = tk.StringVar(value="0")
+        self.var_expiration = tk.StringVar()
+        self.var_barcode = tk.StringVar()
+        self.var_category = tk.StringVar()
+        self.var_dosage = tk.StringVar()
+        self.var_form = tk.StringVar()
+        self.var_storage = tk.StringVar()
+        self.var_prescription = tk.BooleanVar(value=False)
+
+        content = ttk.Frame(self, padding=10)
+        content.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        ttk.Label(content, text="Nom du médicament :").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.entry_name = ttk.Entry(content, textvariable=self.var_name, width=40)
+        self.entry_name.grid(row=0, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Numéro de lot :").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.entry_lot = ttk.Entry(content, textvariable=self.var_lot, width=40)
+        self.entry_lot.grid(row=1, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Quantité :").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.entry_quantity = ttk.Entry(content, textvariable=self.var_quantity, width=15)
+        self.entry_quantity.grid(row=2, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Péremption (JJ/MM/AAAA) :").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.entry_expiration = ttk.Entry(content, textvariable=self.var_expiration, width=20)
+        self.entry_expiration.grid(row=3, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Code-barres :").grid(row=4, column=0, sticky=tk.W, pady=2)
+        self.entry_barcode = ttk.Entry(content, textvariable=self.var_barcode, width=40)
+        self.entry_barcode.grid(row=4, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Catégorie :").grid(row=5, column=0, sticky=tk.W, pady=2)
+        self.entry_category = ttk.Entry(content, textvariable=self.var_category, width=40)
+        self.entry_category.grid(row=5, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Dosage :").grid(row=6, column=0, sticky=tk.W, pady=2)
+        self.entry_dosage = ttk.Entry(content, textvariable=self.var_dosage, width=40)
+        self.entry_dosage.grid(row=6, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Forme :").grid(row=7, column=0, sticky=tk.W, pady=2)
+        self.entry_form = ttk.Entry(content, textvariable=self.var_form, width=40)
+        self.entry_form.grid(row=7, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Condition de stockage :").grid(row=8, column=0, sticky=tk.W, pady=2)
+        self.entry_storage = ttk.Entry(content, textvariable=self.var_storage, width=40)
+        self.entry_storage.grid(row=8, column=1, sticky=tk.W, pady=2)
+
+        ttk.Checkbutton(
+            content,
+            text="Ordonnance requise",
+            variable=self.var_prescription,
+        ).grid(row=9, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Note :").grid(row=10, column=0, sticky=tk.NW, pady=2)
+        self.note_text = tk.Text(content, width=40, height=4)
+        self.note_text.grid(row=10, column=1, sticky=tk.W, pady=2)
+
+        button_frame = ttk.Frame(content)
+        button_frame.grid(row=11, column=0, columnspan=2, pady=(10, 0))
+        ttk.Button(button_frame, text="Valider", command=self.on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
+
+        self.bind('<Return>', lambda _event: self.on_ok())
+        self.bind('<Escape>', lambda _event: self.on_cancel())
+        self.entry_name.focus_set()
+
+        self.grab_set()
+        self.wait_window(self)
+
+    def on_ok(self):
+        name = self.var_name.get().strip()
+        lot = self.var_lot.get().strip()
+        quantity_raw = self.var_quantity.get().strip()
+        expiration_raw = self.var_expiration.get().strip()
+        barcode = self.var_barcode.get().strip() or None
+        category = self.var_category.get().strip() or None
+        dosage = self.var_dosage.get().strip() or None
+        form = self.var_form.get().strip() or None
+        storage = self.var_storage.get().strip() or None
+        note_text = self.note_text.get('1.0', tk.END).strip()
+        note = note_text or None
+
+        if not name:
+            messagebox.showerror("Erreur", "Le nom du médicament est requis.", parent=self)
+            return
+        if not lot:
+            messagebox.showerror("Erreur", "Le numéro de lot est requis.", parent=self)
+            return
+        try:
+            quantity = int(quantity_raw)
+        except (TypeError, ValueError):
+            messagebox.showerror("Erreur", "La quantité doit être un entier positif.", parent=self)
+            return
+        if quantity < 0:
+            messagebox.showerror("Erreur", "La quantité doit être positive ou nulle.", parent=self)
+            return
+
+        expiration_value: Optional[str]
+        if expiration_raw:
+            try:
+                expiration_value = parse_user_date(expiration_raw)
+            except ValueError:
+                messagebox.showerror(
+                    "Erreur",
+                    "Format de date invalide. Utilisez JJ/MM/AAAA.",
+                    parent=self,
+                )
+                return
+        else:
+            expiration_value = None
+
+        self.result = {
+            "name": name,
+            "lot_number": lot,
+            "quantity": quantity,
+            "expiration_date": expiration_value,
+            "barcode": barcode,
+            "category": category,
+            "dosage": dosage,
+            "form": form,
+            "storage_condition": storage,
+            "prescription_required": bool(self.var_prescription.get()),
+            "note": note,
+        }
+        self.destroy()
+
+    def on_cancel(self):
+        self.result = None
+        self.destroy()
+
+
 class ColumnManagerDialog(tk.Toplevel):
     """Boîte de dialogue pour ajuster l'ordre et la visibilité des colonnes d'inventaire."""
 
@@ -2910,6 +3076,9 @@ class StockApp(tk.Tk):
         self.dashboard_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.dashboard_frame, text="Tableau de bord")
 
+        self.pharmacy_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.pharmacy_frame, text="Pharmacie")
+
         search_frame = ttk.Frame(inventory_frame)
         ttk.Label(search_frame, text="Rechercher :").pack(side=tk.LEFT, padx=5)
         self.entry_search = ttk.Entry(search_frame)
@@ -2958,6 +3127,7 @@ class StockApp(tk.Tk):
         self.tree.tag_configure('stock_unknown', background='#f0f0f0', foreground='#333333')
 
         self.create_dashboard_tab()
+        self.create_pharmacy_tab()
 
     def load_inventory_column_preferences(self) -> None:
         """Charge l'ordre et la visibilité des colonnes de l'inventaire."""
@@ -3128,14 +3298,432 @@ class StockApp(tk.Tk):
             self.dashboard_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         else:
             self.dashboard_figure = None
-            self.dashboard_canvas = None
-            ttk.Label(
-                self.dashboard_frame,
-                text="Matplotlib n'est pas disponible : visualisation désactivée.",
-            ).pack(fill=tk.X, padx=10, pady=10)
+        self.dashboard_canvas = None
+        ttk.Label(
+            self.dashboard_frame,
+            text="Matplotlib n'est pas disponible : visualisation désactivée.",
+        ).pack(fill=tk.X, padx=10, pady=10)
 
         self.dashboard_job = None
         self.refresh_dashboard()
+
+    def create_pharmacy_tab(self):
+        if getattr(self, "pharmacy_frame", None) is None:
+            return
+
+        for child in self.pharmacy_frame.winfo_children():
+            child.destroy()
+
+        if pharmacy_inventory_manager is None:
+            ttk.Label(
+                self.pharmacy_frame,
+                text="Module pharmacie indisponible : vérifiez l'installation.",
+                foreground="#721c24",
+            ).pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
+            return
+
+        try:
+            ensure_pharmacy_inventory_schema()
+        except Exception as exc:  # pragma: no cover - affichage d'une erreur critique
+            ttk.Label(
+                self.pharmacy_frame,
+                text="Impossible d'initialiser les structures pharmaceutiques.",
+                foreground="#721c24",
+            ).pack(fill=tk.X, padx=10, pady=(15, 5))
+            ttk.Label(
+                self.pharmacy_frame,
+                text=str(exc),
+                wraplength=500,
+                foreground="#721c24",
+            ).pack(fill=tk.X, padx=10, pady=(0, 15))
+            return
+
+        self.pharmacy_summary_vars = {
+            "total_batches": tk.StringVar(value="0"),
+            "total_quantity": tk.StringVar(value="0"),
+            "prescription_required": tk.StringVar(value="0"),
+            "prescription_not_required": tk.StringVar(value="0"),
+        }
+
+        summary_frame = ttk.LabelFrame(self.pharmacy_frame, text="Résumé", padding=10)
+        summary_frame.pack(fill=tk.X, padx=10, pady=(10, 5))
+
+        summary_items = [
+            ("Lots suivis", "total_batches"),
+            ("Quantité totale", "total_quantity"),
+            ("Sous ordonnance", "prescription_required"),
+            ("Sans ordonnance", "prescription_not_required"),
+        ]
+        for column, (title, key) in enumerate(summary_items):
+            ttk.Label(summary_frame, text=title, font=("Segoe UI", 11, "bold")).grid(
+                row=0, column=column, padx=10, pady=5
+            )
+            ttk.Label(summary_frame, textvariable=self.pharmacy_summary_vars[key]).grid(
+                row=1, column=column, padx=10
+            )
+
+        control_frame = ttk.Frame(self.pharmacy_frame)
+        control_frame.pack(fill=tk.X, padx=10, pady=5)
+
+        ttk.Label(control_frame, text="Recherche :").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.pharmacy_search_var = tk.StringVar()
+        search_entry = ttk.Entry(control_frame, textvariable=self.pharmacy_search_var, width=30)
+        search_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        search_entry.bind("<Return>", lambda _event: self.refresh_pharmacy_batches())
+
+        self.pharmacy_include_zero_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            control_frame,
+            text="Afficher lots vides",
+            variable=self.pharmacy_include_zero_var,
+            command=self.refresh_pharmacy_batches,
+        ).grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+
+        ttk.Button(
+            control_frame,
+            text="Enregistrer lot",
+            command=self.open_pharmacy_register_dialog,
+        ).grid(row=0, column=3, padx=5, pady=5)
+
+        ttk.Button(
+            control_frame,
+            text="Ajuster quantité",
+            command=self.adjust_selected_pharmacy_batch,
+        ).grid(row=0, column=4, padx=5, pady=5)
+
+        ttk.Button(
+            control_frame,
+            text="Lots à surveiller",
+            command=self.show_expiring_pharmacy_batches,
+        ).grid(row=0, column=5, padx=5, pady=5)
+
+        control_frame.grid_columnconfigure(1, weight=1)
+
+        tree_container = ttk.Frame(self.pharmacy_frame)
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        columns = (
+            "name",
+            "lot",
+            "expiration",
+            "days_left",
+            "quantity",
+            "dosage",
+            "form",
+            "storage",
+            "prescription",
+        )
+        self.pharmacy_tree = ttk.Treeview(
+            tree_container,
+            columns=columns,
+            show="headings",
+            selectmode="browse",
+        )
+        headings = {
+            "name": "Nom",
+            "lot": "Lot",
+            "expiration": "Péremption",
+            "days_left": "Jours restants",
+            "quantity": "Quantité",
+            "dosage": "Dosage",
+            "form": "Forme",
+            "storage": "Condition",
+            "prescription": "Ordonnance",
+        }
+        for key, text in headings.items():
+            self.pharmacy_tree.heading(key, text=text)
+        self.pharmacy_tree.column("name", width=180, anchor=tk.W)
+        self.pharmacy_tree.column("lot", width=120, anchor=tk.W)
+        self.pharmacy_tree.column("expiration", width=110, anchor=tk.CENTER)
+        self.pharmacy_tree.column("days_left", width=110, anchor=tk.CENTER)
+        self.pharmacy_tree.column("quantity", width=90, anchor=tk.CENTER)
+        self.pharmacy_tree.column("dosage", width=110, anchor=tk.W)
+        self.pharmacy_tree.column("form", width=110, anchor=tk.W)
+        self.pharmacy_tree.column("storage", width=150, anchor=tk.W)
+        self.pharmacy_tree.column("prescription", width=110, anchor=tk.CENTER)
+
+        vsb = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.pharmacy_tree.yview)
+        hsb = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.pharmacy_tree.xview)
+        self.pharmacy_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+
+        self.pharmacy_tree.tag_configure('pharmacy_expired', background='#f8d7da', foreground='#721c24')
+        self.pharmacy_tree.tag_configure('pharmacy_expiring', background='#fff3cd', foreground='#856404')
+        self.pharmacy_tree.tag_configure('pharmacy_empty', background='#f0f0f0', foreground='#555555')
+
+        self.pharmacy_tree.bind("<Double-1>", self.on_pharmacy_batch_double_click)
+
+        self.pharmacy_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
+        vsb.pack(side=tk.RIGHT, fill=tk.Y)
+        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+
+        self.pharmacy_batch_cache: dict[str, PharmacyBatch] = {}
+        self._pharmacy_search_job: Optional[str] = None
+        self.pharmacy_search_var.trace_add('write', self._on_pharmacy_search_change)
+
+        self.refresh_pharmacy_summary()
+        self.refresh_pharmacy_batches()
+
+    def _on_pharmacy_search_change(self, *_args):
+        if getattr(self, '_pharmacy_search_job', None):
+            try:
+                self.after_cancel(self._pharmacy_search_job)
+            except Exception:
+                pass
+        self._pharmacy_search_job = self.after(300, self.refresh_pharmacy_batches)
+
+    def refresh_pharmacy_batches(self):
+        if not hasattr(self, 'pharmacy_tree'):
+            return
+        if pharmacy_inventory_manager is None:
+            return
+        try:
+            batches = list_pharmacy_batches(
+                search=self.pharmacy_search_var.get(),
+                include_zero=self.pharmacy_include_zero_var.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur Pharmacie",
+                f"Impossible de charger les lots pharmaceutiques : {exc}",
+                parent=self,
+            )
+            return
+
+        self.pharmacy_tree.delete(*self.pharmacy_tree.get_children())
+        self.pharmacy_batch_cache.clear()
+
+        for batch in batches:
+            expiration_display = format_display_date(batch.expiration_date)
+            if batch.days_left is None:
+                days_display = "N/A"
+            else:
+                days_display = str(batch.days_left)
+            values = (
+                batch.name,
+                batch.lot_number,
+                expiration_display,
+                days_display,
+                batch.quantity,
+                batch.dosage or '',
+                batch.form or '',
+                batch.storage_condition or '',
+                "Oui" if batch.prescription_required else "Non",
+            )
+
+            tags: list[str] = []
+            if batch.quantity <= 0:
+                tags.append('pharmacy_empty')
+            if batch.days_left is not None:
+                if batch.days_left < 0:
+                    tags = ['pharmacy_expired']
+                elif batch.days_left <= 30:
+                    tags.append('pharmacy_expiring')
+
+            self.pharmacy_tree.insert('', 'end', iid=str(batch.id), values=values, tags=tags or None)
+            self.pharmacy_batch_cache[str(batch.id)] = batch
+
+        if batches:
+            self.pharmacy_tree.yview_moveto(0)
+
+    def refresh_pharmacy_summary(self):
+        if not hasattr(self, 'pharmacy_summary_vars'):
+            return
+        if pharmacy_inventory_manager is None:
+            for var in self.pharmacy_summary_vars.values():
+                var.set('—')
+            return
+        try:
+            summary = summarize_pharmacy_stock()
+        except Exception as exc:
+            for var in self.pharmacy_summary_vars.values():
+                var.set('—')
+            messagebox.showerror(
+                "Erreur Pharmacie",
+                f"Impossible de récupérer le résumé pharmacie : {exc}",
+                parent=self,
+            )
+            return
+
+        self.pharmacy_summary_vars['total_batches'].set(str(summary.get('total_batches', 0)))
+        self.pharmacy_summary_vars['total_quantity'].set(str(summary.get('total_quantity', 0)))
+        by_prescription = summary.get('by_prescription_requirement', {}) or {}
+        self.pharmacy_summary_vars['prescription_required'].set(
+            str(by_prescription.get('required', 0))
+        )
+        self.pharmacy_summary_vars['prescription_not_required'].set(
+            str(by_prescription.get('not_required', 0))
+        )
+
+    def open_pharmacy_register_dialog(self):
+        if pharmacy_inventory_manager is None:
+            messagebox.showerror(
+                "Module indisponible",
+                "La gestion pharmacie n'est pas disponible sur cette installation.",
+                parent=self,
+            )
+            return
+
+        dialog = PharmacyBatchDialog(self, "Nouveau lot pharmacie")
+        if not dialog.result:
+            return
+
+        try:
+            register_pharmacy_batch(operator=self.current_user, **dialog.result)
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur", f"Impossible d'enregistrer le lot : {exc}", parent=self
+            )
+            return
+
+        messagebox.showinfo(
+            "Succès",
+            "Le lot pharmaceutique a été enregistré avec succès.",
+            parent=self,
+        )
+        self.refresh_pharmacy_summary()
+        self.refresh_pharmacy_batches()
+
+    def adjust_selected_pharmacy_batch(self):
+        if pharmacy_inventory_manager is None or not hasattr(self, 'pharmacy_tree'):
+            return
+        selection = self.pharmacy_tree.selection()
+        if not selection:
+            messagebox.showwarning(
+                "Sélection requise",
+                "Veuillez sélectionner un lot à ajuster.",
+                parent=self,
+            )
+            return
+        batch_id = selection[0]
+        batch = self.pharmacy_batch_cache.get(batch_id)
+        prompt = "Entrez l'ajustement (positif ou négatif) :"
+        if batch is not None:
+            prompt = (
+                f"Ajustement pour {batch.name} (lot {batch.lot_number})\n"
+                "Entrez l'ajustement (positif ou négatif) :"
+            )
+        delta_str = simpledialog.askstring(
+            "Ajuster quantité",
+            prompt,
+            parent=self,
+        )
+        if delta_str is None:
+            return
+        try:
+            delta = int(delta_str.strip())
+        except (TypeError, ValueError):
+            messagebox.showerror(
+                "Valeur invalide",
+                "Veuillez entrer un entier positif ou négatif.",
+                parent=self,
+            )
+            return
+        if delta == 0:
+            return
+
+        try:
+            result = adjust_pharmacy_batch_quantity(
+                int(batch_id),
+                delta,
+                operator=self.current_user,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible d'ajuster le lot : {exc}",
+                parent=self,
+            )
+            return
+
+        if not result:
+            messagebox.showerror(
+                "Introuvable",
+                "Le lot sélectionné est introuvable ou a été supprimé.",
+                parent=self,
+            )
+            return
+
+        messagebox.showinfo(
+            "Quantité mise à jour",
+            f"Nouvelle quantité du lot : {result['quantity']}",
+            parent=self,
+        )
+        self.refresh_pharmacy_summary()
+        self.refresh_pharmacy_batches()
+
+    def show_expiring_pharmacy_batches(self):
+        if pharmacy_inventory_manager is None:
+            messagebox.showerror(
+                "Module indisponible",
+                "La gestion pharmacie n'est pas disponible sur cette installation.",
+                parent=self,
+            )
+            return
+        try:
+            batches = list_expiring_pharmacy_batches(within_days=30, include_empty=False)
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible de récupérer les lots à surveiller : {exc}",
+                parent=self,
+            )
+            return
+
+        if not batches:
+            messagebox.showinfo(
+                "Information",
+                "Aucun lot n'est proche de la péremption dans les 30 prochains jours.",
+                parent=self,
+            )
+            return
+
+        lines = []
+        for batch in batches:
+            expiration_display = format_display_date(batch.expiration_date)
+            if batch.days_left is None:
+                days_display = "N/A"
+            else:
+                days_display = str(batch.days_left)
+            lines.append(
+                f"{batch.name} - Lot {batch.lot_number}\n"
+                f"  Péremption : {expiration_display or '—'} | Jours restants : {days_display} | Qté : {batch.quantity}"
+            )
+
+        messagebox.showinfo(
+            "Lots proches de la péremption",
+            "\n\n".join(lines),
+            parent=self,
+        )
+
+    def on_pharmacy_batch_double_click(self, _event=None):
+        if not hasattr(self, 'pharmacy_tree'):
+            return
+        selection = self.pharmacy_tree.selection()
+        if not selection:
+            return
+        batch = self.pharmacy_batch_cache.get(selection[0])
+        if batch is None:
+            return
+        expiration_display = format_display_date(batch.expiration_date)
+        if batch.days_left is None:
+            days_display = "N/A"
+        else:
+            days_display = str(batch.days_left)
+        details = [
+            f"Nom : {batch.name}",
+            f"Lot : {batch.lot_number}",
+            f"Quantité : {batch.quantity}",
+            f"Péremption : {expiration_display or '—'} (Jours restants : {days_display})",
+            f"Dosage : {batch.dosage or '—'}",
+            f"Forme : {batch.form or '—'}",
+            f"Condition de stockage : {batch.storage_condition or '—'}",
+            f"Ordonnance requise : {'Oui' if batch.prescription_required else 'Non'}",
+        ]
+        messagebox.showinfo(
+            f"Détails - Lot {batch.lot_number}",
+            "\n".join(details),
+            parent=self,
+        )
 
     def load_dashboard_categories(self):
         conn = None
