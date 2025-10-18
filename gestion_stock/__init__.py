@@ -22,6 +22,7 @@ import hashlib
 import json
 import logging
 from typing import Callable, Dict, Optional
+import importlib.util
 import webbrowser
 from datetime import datetime, timedelta
 import traceback
@@ -130,6 +131,7 @@ default_config = {
     'microphone_index': '',
     'enable_voice': 'true',
     'enable_tts': 'true',
+    'tts_type': 'auto',
     'enable_barcode_generation': 'true',
     'low_stock_threshold': '5',
     'last_user': ''
@@ -180,9 +182,19 @@ except ValueError:
     MICROPHONE_INDEX = None
 ENABLE_VOICE = config['Settings'].getboolean('enable_voice', fallback=True)
 ENABLE_TTS = config['Settings'].getboolean('enable_tts', fallback=True)
+TTS_TYPE = config['Settings'].get('tts_type', default_config['tts_type']).strip().lower() or 'auto'
 ENABLE_BARCODE_GENERATION = config['Settings'].getboolean('enable_barcode_generation', fallback=True)
 DEFAULT_LOW_STOCK_THRESHOLD = config['Settings'].getint('low_stock_threshold', fallback=5)
 LAST_USER = config['Settings'].get('last_user', '')
+
+KNOWN_TTS_DRIVERS = ("sapi5", "nsss", "espeak")
+DEFAULT_TTS_TYPE_LABELS = {
+    'auto': "Automatique (détection par défaut)",
+    'sapi5': "Windows - SAPI5",
+    'nsss': "macOS - NSSpeechSynthesizer",
+    'espeak': "Linux - eSpeak",
+}
+ACTIVE_TTS_DRIVER: Optional[str] = None
 
 if ENABLE_BARCODE_GENERATION and not os.path.exists(BARCODE_DIR):
     os.makedirs(BARCODE_DIR)
@@ -332,9 +344,15 @@ def collect_environment_diagnostics() -> Dict[str, Dict[str, object]]:
         "detail": "SpeechRecognition disponible" if SR_LIB_AVAILABLE else "Installer SpeechRecognition (+ PyAudio)",
     }
 
+    if PYTTS3_LIB_AVAILABLE:
+        available = ', '.join(AVAILABLE_TTS_TYPES)
+        selected = ACTIVE_TTS_DRIVER or TTS_TYPE or 'auto'
+        tts_detail = f"pyttsx3 disponible (sélection : {selected} | options : {available})"
+    else:
+        tts_detail = "Installer pyttsx3"
     diagnostics["text_to_speech"] = {
         "ok": PYTTS3_LIB_AVAILABLE,
-        "detail": "pyttsx3 disponible" if PYTTS3_LIB_AVAILABLE else "Installer pyttsx3",
+        "detail": tts_detail,
     }
 
     db_directory = os.path.dirname(os.path.abspath(DB_PATH)) or "."
@@ -405,6 +423,14 @@ try:
     PYTTS3_LIB_AVAILABLE = True
 except ImportError:
     PYTTS3_LIB_AVAILABLE = False
+
+if PYTTS3_LIB_AVAILABLE:
+    AVAILABLE_TTS_TYPES = ['auto']
+    for driver_name in KNOWN_TTS_DRIVERS:
+        if importlib.util.find_spec(f"pyttsx3.drivers.{driver_name}") is not None:
+            AVAILABLE_TTS_TYPES.append(driver_name)
+else:
+    AVAILABLE_TTS_TYPES = ['auto']
 
 try:
     import tkinter as tk
@@ -1856,8 +1882,26 @@ if ENABLE_TTS and PYTTS3_LIB_AVAILABLE:
         except Exception as volume_err:  # pragma: no cover - dépend du backend TTS
             print(f"[TTS] Impossible d'ajuster le volume : {volume_err}")
 
+    def _create_tts_engine() -> tuple["pyttsx3.Engine", str]:
+        attempts: list[str] = []
+        preferred = (TTS_TYPE or 'auto').lower()
+        if preferred and preferred not in {'', 'auto'}:
+            attempts.append(preferred)
+        attempts.append('auto')
+        last_error: Optional[Exception] = None
+        for driver_name in attempts:
+            try:
+                init_kwargs = {} if driver_name == 'auto' else {'driverName': driver_name}
+                engine = pyttsx3.init(**init_kwargs)
+                print(f"[TTS] Moteur initialisé avec '{driver_name}'.")
+                return engine, driver_name
+            except Exception as err:  # pragma: no cover - dépend du backend TTS
+                last_error = err
+                print(f"[TTS] Échec initialisation driver '{driver_name}': {err}")
+        raise last_error or RuntimeError("Impossible d'initialiser le moteur TTS")
+
     try:
-        tts_engine = pyttsx3.init()
+        tts_engine, ACTIVE_TTS_DRIVER = _create_tts_engine()
         _configure_tts_engine(tts_engine)
 
         def speak(text):
@@ -1865,9 +1909,10 @@ if ENABLE_TTS and PYTTS3_LIB_AVAILABLE:
             try:
                 tts_engine.say(text)
                 tts_engine.runAndWait()
-            except Exception as e:
+            except Exception as e:  # pragma: no cover - dépend du backend TTS
                 print(f"[TTS erreur] {e} | Texte à lire : {text}")
     except Exception as init_err:
+        ACTIVE_TTS_DRIVER = None
         print(f"[TTS désactivé à l'init] {init_err}")
 
         def speak(text):
@@ -4210,7 +4255,7 @@ class StockApp(tk.Tk):
     def open_config_dialog(self):
         dialog = ConfigDialog(self)
         if dialog.result:
-            global CAMERA_INDEX, MICROPHONE_INDEX
+            global CAMERA_INDEX, MICROPHONE_INDEX, TTS_TYPE, ACTIVE_TTS_DRIVER
             config['Settings']['db_path'] = dialog.result['db_path']
             config['Settings']['user_db_path'] = dialog.result['user_db_path']
             config['Settings']['barcode_dir'] = dialog.result['barcode_dir']
@@ -4219,12 +4264,15 @@ class StockApp(tk.Tk):
             config['Settings']['microphone_index'] = '' if microphone_index is None else str(microphone_index)
             config['Settings']['enable_voice'] = str(dialog.result['enable_voice']).lower()
             config['Settings']['enable_tts'] = str(dialog.result['enable_tts']).lower()
+            config['Settings']['tts_type'] = dialog.result['tts_type']
             config['Settings']['enable_barcode_generation'] = str(dialog.result['enable_barcode_generation']).lower()
             config['Settings']['low_stock_threshold'] = str(dialog.result['low_stock_threshold'])
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 config.write(f)
             CAMERA_INDEX = dialog.result['camera_index']
             MICROPHONE_INDEX = microphone_index
+            TTS_TYPE = dialog.result['tts_type']
+            ACTIVE_TTS_DRIVER = dialog.result['tts_type'] if dialog.result['enable_tts'] else None
             try:
                 self.low_stock_threshold = int(dialog.result['low_stock_threshold'])
             except (TypeError, ValueError):
@@ -5886,6 +5934,12 @@ class ConfigDialog(tk.Toplevel):
         var_enable_tts = tk.BooleanVar(value=ENABLE_TTS)
         var_enable_barcode = tk.BooleanVar(value=ENABLE_BARCODE_GENERATION)
         var_low_stock = tk.IntVar(value=DEFAULT_LOW_STOCK_THRESHOLD)
+        tts_choices = {value: DEFAULT_TTS_TYPE_LABELS.get(value, value) for value in AVAILABLE_TTS_TYPES}
+        if TTS_TYPE not in tts_choices:
+            tts_choices[TTS_TYPE] = DEFAULT_TTS_TYPE_LABELS.get(TTS_TYPE, f"Personnalisé ({TTS_TYPE})")
+        self.tts_label_to_value = {label: value for value, label in tts_choices.items()}
+        initial_tts_label = tts_choices.get(TTS_TYPE, next(iter(tts_choices.values())))
+        var_tts_type = tk.StringVar(value=initial_tts_label)
 
         ttk.Label(self, text="Chemin base stock :").grid(row=0, column=0, sticky=tk.W, padx=10, pady=5)
         entry_db = ttk.Entry(self, textvariable=var_db, width=40)
@@ -5911,25 +5965,43 @@ class ConfigDialog(tk.Toplevel):
         chk_voice.grid(row=5, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
         chk_tts = ttk.Checkbutton(self, text="Activer synthèse vocale", variable=var_enable_tts)
         chk_tts.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
-        chk_barcode = ttk.Checkbutton(self, text="Activer génération de codes-barres", variable=var_enable_barcode)
-        chk_barcode.grid(row=7, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Seuil stock faible :").grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Type synthèse vocale :").grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
+        combo_tts = ttk.Combobox(
+            self,
+            textvariable=var_tts_type,
+            values=list(self.tts_label_to_value.keys()),
+            state='readonly',
+            width=40,
+        )
+        combo_tts.grid(row=7, column=1, padx=10, pady=5, sticky=tk.W)
+
+        chk_barcode = ttk.Checkbutton(self, text="Activer génération de codes-barres", variable=var_enable_barcode)
+        chk_barcode.grid(row=8, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+
+        ttk.Label(self, text="Seuil stock faible :").grid(row=9, column=0, sticky=tk.W, padx=10, pady=5)
         entry_threshold = ttk.Entry(self, textvariable=var_low_stock, width=5)
-        entry_threshold.grid(row=8, column=1, sticky=tk.W, padx=10, pady=5)
+        entry_threshold.grid(row=9, column=1, sticky=tk.W, padx=10, pady=5)
+
+        def _update_tts_state(*_args):
+            state = 'readonly' if var_enable_tts.get() else 'disabled'
+            combo_tts.configure(state=state)
+
+        var_enable_tts.trace_add('write', lambda *_: _update_tts_state())
+        _update_tts_state()
 
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=9, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=10, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="OK", command=lambda: self.on_ok(
             var_db, var_user_db, var_barcode, var_camera, var_microphone,
-            var_enable_voice, var_enable_tts, var_enable_barcode, var_low_stock
+            var_enable_voice, var_enable_tts, var_tts_type, var_enable_barcode, var_low_stock
         )).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
 
         self.grab_set()
         self.wait_window(self)
 
-    def on_ok(self, var_db, var_user_db, var_barcode, var_camera, var_microphone, var_enable_voice, var_enable_tts, var_enable_barcode, var_low_stock):
+    def on_ok(self, var_db, var_user_db, var_barcode, var_camera, var_microphone, var_enable_voice, var_enable_tts, var_tts_type, var_enable_barcode, var_low_stock):
         camera_raw = var_camera.get().strip()
         microphone_raw = var_microphone.get().strip()
         try:
@@ -5945,6 +6017,11 @@ class ConfigDialog(tk.Toplevel):
                 return
         else:
             microphone_index = None
+        selected_label = var_tts_type.get()
+        tts_type_value = self.tts_label_to_value.get(selected_label)
+        if not tts_type_value:
+            messagebox.showerror("Configuration", "Type de synthèse vocale invalide.")
+            return
         self.result = {
             'db_path': var_db.get().strip(),
             'user_db_path': var_user_db.get().strip(),
@@ -5953,6 +6030,7 @@ class ConfigDialog(tk.Toplevel):
             'microphone_index': microphone_index,
             'enable_voice': var_enable_voice.get(),
             'enable_tts': var_enable_tts.get(),
+            'tts_type': tts_type_value,
             'enable_barcode_generation': var_enable_barcode.get(),
             'low_stock_threshold': var_low_stock.get()
         }
