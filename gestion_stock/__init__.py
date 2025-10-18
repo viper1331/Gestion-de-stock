@@ -34,6 +34,7 @@ CONFIG_FILE = 'config.ini'
 CONFIG_DIRECTORY = os.path.dirname(os.path.abspath(CONFIG_FILE)) or os.getcwd()
 LOG_FILE = os.path.join(CONFIG_DIRECTORY, "gestion_stock_log.txt")
 config = configparser.ConfigParser()
+config.optionxform = str  # Préserve la casse des clés (ex: noms de colonnes)
 DEFAULT_INVENTORY_COLUMNS = (
     'ID',
     'Nom',
@@ -3276,13 +3277,19 @@ class StockApp(tk.Tk):
         """
         if 'ColumnWidths' not in config:
             return
-        for col, val in config['ColumnWidths'].items():
+        lower_to_column = {col.lower(): col for col in self.tree['columns']}
+        for col_key, val in config['ColumnWidths'].items():
             try:
                 width = int(val)
-                if col in self.tree['columns']:
-                    self.tree.column(col, width=width)
-            except:
+            except (TypeError, ValueError):
                 continue
+            target = None
+            if col_key in self.tree['columns']:
+                target = col_key
+            else:
+                target = lower_to_column.get(col_key.lower())
+            if target:
+                self.tree.column(target, width=width)
 
     def save_column_widths(self):
         """
@@ -3290,9 +3297,14 @@ class StockApp(tk.Tk):
         """
         if 'ColumnWidths' not in config:
             config['ColumnWidths'] = {}
+        section = config['ColumnWidths']
+        for key in list(section.keys()):
+            del section[key]
         for col in self.tree['columns']:
-            w = self.tree.column(col)['width']
-            config['ColumnWidths'][col] = str(w)
+            width = self.tree.column(col).get('width')
+            if width is None:
+                continue
+            section[col] = str(width)
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             config.write(f)
 
