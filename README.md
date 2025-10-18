@@ -82,7 +82,7 @@ La commande affiche un récapitulatif indiquant les composants manquants ou mal 
 
 ## Configuration
 Un fichier `config.ini` est créé dans le répertoire racine avec deux sections :
-- **Settings** : chemins (`db_path`, `user_db_path`, `barcode_dir`), index caméra (`camera_index`), index microphone (`microphone_index`), options vocales/tts, activation de la génération de codes-barres, seuil d'alerte et dernier utilisateur mémorisé.【F:gestion_stock/__init__.py†L24-L82】
+- **Settings** : chemins (`db_path`, `user_db_path`, `barcode_dir`), index caméra (`camera_index`), index microphone (`microphone_index`), options vocales/TTS (activation et type via `tts_type` : `auto`, `sapi5`, `nsss`, `espeak`), activation de la génération de codes-barres, seuil d'alerte et dernier utilisateur mémorisé.【F:gestion_stock/__init__.py†L24-L82】
 - **ColumnWidths** : mémorise automatiquement la largeur des colonnes du tableau.【F:gestion_stock/__init__.py†L1070-L1108】
 
 Les paramètres peuvent être modifiés via le menu **Paramètres → Configuration générale** ou en éditant `config.ini` (l'application réécrit le fichier lors de la fermeture). Certaines options (caméra, voix) nécessitent un redémarrage.【F:gestion_stock/__init__.py†L1460-L1488】
