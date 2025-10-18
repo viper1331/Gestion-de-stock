@@ -134,7 +134,8 @@ default_config = {
     'tts_type': 'auto',
     'enable_barcode_generation': 'true',
     'low_stock_threshold': '5',
-    'last_user': ''
+    'last_user': '',
+    'enable_pharmacy_module': 'true',
 }
 if not os.path.exists(CONFIG_FILE):
     config['Settings'] = default_config
@@ -186,6 +187,7 @@ TTS_TYPE = config['Settings'].get('tts_type', default_config['tts_type']).strip(
 ENABLE_BARCODE_GENERATION = config['Settings'].getboolean('enable_barcode_generation', fallback=True)
 DEFAULT_LOW_STOCK_THRESHOLD = config['Settings'].getint('low_stock_threshold', fallback=5)
 LAST_USER = config['Settings'].get('last_user', '')
+ENABLE_PHARMACY_MODULE = config['Settings'].getboolean('enable_pharmacy_module', fallback=True)
 
 KNOWN_TTS_DRIVERS = ("sapi5", "nsss", "espeak")
 DEFAULT_TTS_TYPE_LABELS = {
@@ -2902,6 +2904,8 @@ class StockApp(tk.Tk):
             fallback=DEFAULT_LOW_STOCK_THRESHOLD
         )
 
+        self.pharmacy_enabled = ENABLE_PHARMACY_MODULE
+
         self.create_menu()
         self.create_toolbar()
         self.create_statusbar()
@@ -3011,6 +3015,12 @@ class StockApp(tk.Tk):
         module_menu.add_command(label="Dotations collaborateurs", command=self.open_collaborator_gear)
         if self.current_role == 'admin':
             module_menu.add_command(label="Approvals en attente", command=self.open_approval_queue)
+        self.pharmacy_module_var = tk.BooleanVar(value=self.pharmacy_enabled)
+        module_menu.add_checkbutton(
+            label="Gestion Pharmacie",
+            variable=self.pharmacy_module_var,
+            command=self.on_toggle_pharmacy_module,
+        )
         menubar.add_cascade(label="Modules", menu=module_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -3076,8 +3086,9 @@ class StockApp(tk.Tk):
         self.dashboard_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.dashboard_frame, text="Tableau de bord")
 
-        self.pharmacy_frame = ttk.Frame(self.notebook)
-        self.notebook.add(self.pharmacy_frame, text="Pharmacie")
+        self.pharmacy_frame: Optional[ttk.Frame] = None
+        if self.pharmacy_enabled:
+            self.add_pharmacy_tab()
 
         search_frame = ttk.Frame(inventory_frame)
         ttk.Label(search_frame, text="Rechercher :").pack(side=tk.LEFT, padx=5)
@@ -3127,7 +3138,53 @@ class StockApp(tk.Tk):
         self.tree.tag_configure('stock_unknown', background='#f0f0f0', foreground='#333333')
 
         self.create_dashboard_tab()
+
+    def add_pharmacy_tab(self) -> None:
+        if getattr(self, "pharmacy_frame", None) is not None:
+            return
+        self.pharmacy_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.pharmacy_frame, text="Pharmacie")
         self.create_pharmacy_tab()
+
+    def remove_pharmacy_tab(self) -> None:
+        frame = getattr(self, "pharmacy_frame", None)
+        if frame is None:
+            return
+        job = getattr(self, "_pharmacy_search_job", None)
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        try:
+            self.notebook.forget(frame)
+        except tk.TclError:
+            pass
+        frame.destroy()
+        self.pharmacy_frame = None
+        for attr in (
+            "pharmacy_summary_vars",
+            "pharmacy_tree",
+            "pharmacy_batch_cache",
+            "pharmacy_search_var",
+            "pharmacy_include_zero_var",
+        ):
+            if hasattr(self, attr):
+                delattr(self, attr)
+        self._pharmacy_search_job = None
+
+    def on_toggle_pharmacy_module(self) -> None:
+        enabled = bool(self.pharmacy_module_var.get())
+        if enabled == self.pharmacy_enabled:
+            return
+        self.pharmacy_enabled = enabled
+        if enabled:
+            self.add_pharmacy_tab()
+        else:
+            self.remove_pharmacy_tab()
+        config['Settings']['enable_pharmacy_module'] = 'true' if enabled else 'false'
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            config.write(f)
 
     def load_inventory_column_preferences(self) -> None:
         """Charge l'ordre et la visibilité des colonnes de l'inventaire."""
@@ -3652,6 +3709,8 @@ class StockApp(tk.Tk):
         self.refresh_pharmacy_batches()
 
     def show_expiring_pharmacy_batches(self):
+        if getattr(self, "pharmacy_frame", None) is None or not hasattr(self, 'pharmacy_tree'):
+            return
         if pharmacy_inventory_manager is None:
             messagebox.showerror(
                 "Module indisponible",
