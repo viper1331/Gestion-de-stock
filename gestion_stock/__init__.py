@@ -21,12 +21,12 @@ import zipfile
 import hashlib
 import json
 import logging
+from typing import Callable, Dict, Optional
 import importlib.util
 import webbrowser
 from datetime import datetime, timedelta
 import traceback
 import configparser
-from typing import Dict, Optional
 
 # ----------------------------
 # Lecture de la configuration
@@ -464,6 +464,12 @@ microphone = None
 db_lock = threading.Lock()
 
 
+try:
+    from .pharmacy_inventory import PharmacyInventoryManager
+except Exception:  # pragma: no cover - import errors reported during initialization
+    PharmacyInventoryManager = None  # type: ignore[assignment]
+
+
 def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, operator=None, note=None, timestamp=None):
     """Insère un mouvement de stock dans la table dédiée."""
     if quantity_change == 0:
@@ -479,6 +485,78 @@ def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, 
         (item_id, quantity_change, movement_type, source, operator, note, timestamp)
     )
 
+
+if PharmacyInventoryManager is not None:
+    pharmacy_inventory_manager = PharmacyInventoryManager(
+        db_path_getter=lambda: DB_PATH,
+        lock=db_lock,
+        log_stock_movement=log_stock_movement,
+        parse_user_date=parse_user_date,
+    )
+else:  # pragma: no cover - résidu si l'import échoue
+    pharmacy_inventory_manager = None
+
+
+
+def ensure_pharmacy_inventory_schema(db_path: Optional[str] = None) -> None:
+    """Garantit la présence des structures dédiées à la pharmacie."""
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    pharmacy_inventory_manager.ensure_schema(db_path=db_path)
+
+
+def register_pharmacy_batch(*, name: str, lot_number: str, quantity: int, expiration_date: Optional[str] = None, barcode: Optional[str] = None, category: Optional[str] = None, dosage: Optional[str] = None, form: Optional[str] = None, storage_condition: Optional[str] = None, prescription_required: bool = False, note: Optional[str] = None, operator: Optional[str] = None, source: str = 'pharmacy_module', db_path: Optional[str] = None) -> dict:
+    """Enregistre ou met à jour un lot pharmaceutique."""
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.register_batch(
+        name=name,
+        lot_number=lot_number,
+        quantity=quantity,
+        expiration_date=expiration_date,
+        barcode=barcode,
+        category=category,
+        dosage=dosage,
+        form=form,
+        storage_condition=storage_condition,
+        prescription_required=prescription_required,
+        note=note,
+        operator=operator,
+        source=source,
+        db_path=db_path,
+    )
+
+
+def adjust_pharmacy_batch_quantity(batch_id: int, delta: int, *, operator: Optional[str] = None, source: str = 'pharmacy_module', note: Optional[str] = None, db_path: Optional[str] = None) -> Optional[dict]:
+    """Modifie la quantité d'un lot pharmaceutique et synchronise l'article."""
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.adjust_batch_quantity(
+        batch_id,
+        delta,
+        operator=operator,
+        source=source,
+        note=note,
+        db_path=db_path,
+    )
+
+
+def list_expiring_pharmacy_batches(*, within_days: int = 30, include_empty: bool = False, db_path: Optional[str] = None):
+    """Retourne les lots pharmaceutiques approchant de la péremption."""
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.list_expiring_batches(
+        within_days=within_days,
+        include_empty=include_empty,
+        db_path=db_path,
+    )
+
+
+def summarize_pharmacy_stock(*, db_path: Optional[str] = None) -> dict:
+    """Fournit un résumé agrégé du stock pharmaceutique."""
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.summarize_stock(db_path=db_path)
 
 def adjust_item_quantity(item_id, delta, operator='system', source='manual', note=None):
     """Modifie la quantité d'un article et journalise le mouvement."""
@@ -792,6 +870,9 @@ def init_stock_db(db_path=DB_PATH):
             cursor.execute("ALTER TABLE items ADD COLUMN reorder_point INTEGER")
         if 'preferred_supplier_id' not in item_columns:
             cursor.execute("ALTER TABLE items ADD COLUMN preferred_supplier_id INTEGER")
+
+        if pharmacy_inventory_manager is not None:
+            pharmacy_inventory_manager.ensure_schema(cursor=cursor)
 
         conn.commit()
         startup_listener.record("Base stock prête.", level=logging.DEBUG)
