@@ -41,6 +41,7 @@ DEFAULT_INVENTORY_COLUMNS = (
     'Catégorie',
     'Fournisseur',
     'Taille',
+    'Note',
     'Quantité',
     'Dernière MAJ',
 )
@@ -571,7 +572,22 @@ def init_stock_db(db_path=DB_PATH):
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL
+                name TEXT UNIQUE NOT NULL,
+                note TEXT
+            )
+        ''')
+        cursor.execute("PRAGMA table_info(categories)")
+        category_columns = [info[1] for info in cursor.fetchall()]
+        if 'note' not in category_columns:
+            cursor.execute("ALTER TABLE categories ADD COLUMN note TEXT")
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS category_sizes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL,
+                size_label TEXT NOT NULL,
+                UNIQUE(category_id, size_label),
+                FOREIGN KEY(category_id) REFERENCES categories(id)
             )
         ''')
 
@@ -3077,7 +3093,7 @@ class StockApp(tk.Tk):
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
                 base_query = (
-                    "SELECT items.id, items.name, items.barcode, categories.name, suppliers.name, items.size, items.quantity, items.last_updated, items.reorder_point, items.unit_cost "
+                    "SELECT items.id, items.name, items.barcode, categories.name, suppliers.name, items.size, categories.note, items.quantity, items.last_updated, items.reorder_point, items.unit_cost "
                     "FROM items LEFT JOIN categories ON items.category_id = categories.id "
                     "LEFT JOIN suppliers ON suppliers.id = items.preferred_supplier_id"
                 )
@@ -3103,19 +3119,22 @@ class StockApp(tk.Tk):
                 category,
                 supplier_name,
                 size,
+                category_note,
                 quantity,
                 last_updated,
                 reorder_point,
                 unit_cost,
             ) = item
             tag = self._get_stock_tag(quantity, reorder_point)
+            category_display = category or 'Sans catégorie'
             display_values = (
                 item_id,
                 name,
                 barcode,
-                category,
+                category_display,
                 supplier_name or '',
                 size,
+                category_note or '',
                 quantity,
                 last_updated,
             )
@@ -3856,7 +3875,7 @@ class StockApp(tk.Tk):
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT items.name, items.barcode, categories.name, suppliers.name, items.size, items.quantity, items.last_updated "
+                    "SELECT items.name, items.barcode, categories.name, suppliers.name, items.size, categories.note, items.quantity, items.last_updated "
                     "FROM items LEFT JOIN categories ON items.category_id = categories.id "
                     "LEFT JOIN suppliers ON suppliers.id = items.preferred_supplier_id"
                 )
@@ -3869,7 +3888,7 @@ class StockApp(tk.Tk):
         try:
             export_rows_to_csv(
                 file_path,
-                ('Nom', 'Code-Barres', 'Catégorie', 'Fournisseur', 'Taille', 'Quantité', 'Dernière MAJ'),
+                ('Nom', 'Code-Barres', 'Catégorie', 'Fournisseur', 'Taille', 'Note', 'Quantité', 'Dernière MAJ'),
                 rows,
             )
             messagebox.showinfo("Export CSV", f"Données exportées vers {file_path}")
@@ -3892,7 +3911,7 @@ class StockApp(tk.Tk):
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
                 cursor.execute(
-                    "SELECT items.name, items.barcode, categories.name, items.size, items.quantity "
+                    "SELECT items.name, items.barcode, categories.name, items.size, categories.note, items.quantity "
                     "FROM items LEFT JOIN categories ON items.category_id = categories.id "
                     "WHERE items.quantity <= ?",
                     (threshold,)
@@ -3905,7 +3924,10 @@ class StockApp(tk.Tk):
             if conn:
                 conn.close()
         report = '\n'.join(
-            [f"{r[0]} (Barcode: {r[1]}, Catégorie: {r[2]}, Taille: {r[3]}, Quantité: {r[4]})" for r in results]
+            [
+                f"{r[0]} (Barcode: {r[1]}, Catégorie: {r[2]}, Taille: {r[3]}, Note: {r[4] or ''}, Quantité: {r[5]})"
+                for r in results
+            ]
         ) or "Aucun article en dessous du seuil."
         messagebox.showinfo("Rapport Stock Faible", report)
 
@@ -5849,6 +5871,7 @@ class ConfigDialog(tk.Toplevel):
 # ----------------------
 # BOÎTE DE DIALOGUE GESTION CATÉGORIES
 # ----------------------
+
 class CategoryDialog(tk.Toplevel):
     def __init__(self, parent):
         super().__init__(parent)
@@ -5856,34 +5879,81 @@ class CategoryDialog(tk.Toplevel):
         self.resizable(False, False)
         self.result = None
 
+        self.categories: list[tuple[int, str]] = []
+        self.current_category_id: Optional[int] = None
+
         self.category_list = tk.Listbox(self, height=8, width=30)
-        self.category_list.grid(row=0, column=0, columnspan=2, padx=10, pady=5)
-        self.load_categories()
+        self.category_list.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky=tk.N)
+        self.category_list.bind('<<ListboxSelect>>', self.on_category_select)
 
         ttk.Label(self, text="Nouvelle catégorie :").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
         self.new_category_var = tk.StringVar()
         entry_new = ttk.Entry(self, textvariable=self.new_category_var, width=20)
         entry_new.grid(row=1, column=1, padx=10, pady=5, sticky=tk.W)
 
+        ttk.Label(self, text="Note :").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        self.new_category_note_var = tk.StringVar()
+        ttk.Entry(self, textvariable=self.new_category_note_var, width=20).grid(
+            row=2, column=1, padx=10, pady=5, sticky=tk.W
+        )
+
+        ttk.Label(self, text="Tailles (séparées par une virgule) :").grid(
+            row=3, column=0, padx=10, pady=5, sticky=tk.W
+        )
+        self.new_category_sizes_var = tk.StringVar()
+        ttk.Entry(self, textvariable=self.new_category_sizes_var, width=20).grid(
+            row=3, column=1, padx=10, pady=5, sticky=tk.W
+        )
+
         btn_add = ttk.Button(self, text="Ajouter", command=self.add_category)
-        btn_add.grid(row=2, column=0, padx=10, pady=5, sticky=tk.W)
+        btn_add.grid(row=4, column=0, padx=10, pady=5, sticky=tk.W)
         btn_delete = ttk.Button(self, text="Supprimer", command=self.delete_category)
-        btn_delete.grid(row=2, column=1, padx=10, pady=5, sticky=tk.W)
+        btn_delete.grid(row=4, column=1, padx=10, pady=5, sticky=tk.W)
 
         btn_close = ttk.Button(self, text="Fermer", command=self.on_close)
-        btn_close.grid(row=3, column=0, columnspan=2, pady=10)
+        btn_close.grid(row=5, column=0, columnspan=2, pady=10)
+
+        details_frame = ttk.LabelFrame(self, text="Détails catégorie")
+        details_frame.grid(row=0, column=2, rowspan=6, padx=10, pady=5, sticky=tk.N)
+
+        ttk.Label(details_frame, text="Note :").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        self.note_var = tk.StringVar()
+        self.note_entry = ttk.Entry(details_frame, textvariable=self.note_var, width=28)
+        self.note_entry.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        self.btn_save_note = ttk.Button(details_frame, text="Enregistrer", command=self.save_note)
+        self.btn_save_note.grid(row=0, column=2, padx=5, pady=5)
+
+        ttk.Label(details_frame, text="Tailles disponibles :").grid(
+            row=1, column=0, columnspan=3, padx=5, pady=(10, 2), sticky=tk.W
+        )
+        self.size_list = tk.Listbox(details_frame, height=6, width=28)
+        self.size_list.grid(row=2, column=0, columnspan=3, padx=5, sticky=tk.W)
+
+        size_controls = ttk.Frame(details_frame)
+        size_controls.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
+        self.new_size_var = tk.StringVar()
+        self.size_entry = ttk.Entry(size_controls, textvariable=self.new_size_var, width=18)
+        self.size_entry.grid(row=0, column=0, padx=5)
+        self.btn_add_size = ttk.Button(size_controls, text="Ajouter", command=self.add_size)
+        self.btn_add_size.grid(row=0, column=1, padx=5)
+        self.btn_delete_size = ttk.Button(size_controls, text="Supprimer", command=self.delete_size)
+        self.btn_delete_size.grid(row=0, column=2, padx=5)
+
+        self.load_categories()
+        self._set_details_state(False)
 
         self.grab_set()
         self.wait_window(self)
 
     def load_categories(self):
         self.category_list.delete(0, tk.END)
+        self.categories = []
         conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
-                cursor.execute("SELECT name FROM categories ORDER BY name")
+                cursor.execute("SELECT id, name FROM categories ORDER BY name")
                 rows = cursor.fetchall()
         except sqlite3.Error as e:
             messagebox.showerror("Erreur BD", f"Impossible de charger catégories : {e}")
@@ -5891,20 +5961,34 @@ class CategoryDialog(tk.Toplevel):
         finally:
             if conn:
                 conn.close()
-        for r in rows:
-            self.category_list.insert(tk.END, r[0])
+        for row in rows:
+            self.categories.append((row[0], row[1]))
+            self.category_list.insert(tk.END, row[1])
+        self._set_details_state(False)
 
     def add_category(self):
         name = self.new_category_var.get().strip()
         if not name:
             messagebox.showerror("Erreur", "Nom de catégorie vide.")
             return
+        note = self.new_category_note_var.get().strip()
+        sizes_raw = self.new_category_sizes_var.get().strip()
+        sizes = [s.strip() for s in sizes_raw.split(',') if s.strip()]
         conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+                cursor.execute(
+                    "INSERT INTO categories (name, note) VALUES (?, ?)",
+                    (name, note if note else None),
+                )
+                category_id = cursor.lastrowid
+                if sizes:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO category_sizes (category_id, size_label) VALUES (?, ?)",
+                        [(category_id, size) for size in sizes],
+                    )
                 conn.commit()
         except sqlite3.IntegrityError:
             messagebox.showerror("Erreur", "Catégorie existe déjà.")
@@ -5914,7 +5998,15 @@ class CategoryDialog(tk.Toplevel):
             if conn:
                 conn.close()
         self.new_category_var.set("")
+        self.new_category_note_var.set("")
+        self.new_category_sizes_var.set("")
         self.load_categories()
+        for idx, (_, cat_name) in enumerate(self.categories):
+            if cat_name == name:
+                self.category_list.selection_clear(0, tk.END)
+                self.category_list.selection_set(idx)
+                self.category_list.event_generate('<<ListboxSelect>>')
+                break
         self.result = True
 
     def delete_category(self):
@@ -5922,18 +6014,19 @@ class CategoryDialog(tk.Toplevel):
         if not selection:
             messagebox.showwarning("Attention", "Aucune catégorie sélectionnée.")
             return
-        name = self.category_list.get(selection[0])
+        category_id, name = self.categories[selection[0]]
         conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
-                cursor.execute("SELECT COUNT(*) FROM items WHERE category_id = (SELECT id FROM categories WHERE name = ?)", (name,))
+                cursor.execute("SELECT COUNT(*) FROM items WHERE category_id = ?", (category_id,))
                 count = cursor.fetchone()[0]
                 if count > 0:
                     messagebox.showerror("Erreur", "Articles utilisent cette catégorie.")
                     return
-                cursor.execute("DELETE FROM categories WHERE name = ?", (name,))
+                cursor.execute("DELETE FROM category_sizes WHERE category_id = ?", (category_id,))
+                cursor.execute("DELETE FROM categories WHERE id = ?", (category_id,))
                 conn.commit()
         except sqlite3.Error as e:
             messagebox.showerror("Erreur BD", f"Impossible de supprimer catégorie : {e}")
@@ -5942,6 +6035,129 @@ class CategoryDialog(tk.Toplevel):
                 conn.close()
         self.load_categories()
         self.result = True
+
+    def on_category_select(self, _event=None):
+        selection = self.category_list.curselection()
+        if not selection:
+            self.current_category_id = None
+            self._set_details_state(False)
+            return
+        idx = selection[0]
+        self.current_category_id = self.categories[idx][0]
+        self._set_details_state(True)
+        self._populate_category_details(self.current_category_id)
+
+    def _populate_category_details(self, category_id: int) -> None:
+        note = ''
+        sizes: list[str] = []
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute("SELECT note FROM categories WHERE id = ?", (category_id,))
+                row = cursor.fetchone()
+                if row and row[0]:
+                    note = row[0]
+                cursor.execute(
+                    "SELECT size_label FROM category_sizes WHERE category_id = ? ORDER BY size_label COLLATE NOCASE",
+                    (category_id,),
+                )
+                sizes = [r[0] for r in cursor.fetchall()]
+        except sqlite3.Error as e:
+            messagebox.showerror("Erreur BD", f"Impossible de charger la catégorie : {e}")
+        finally:
+            if conn:
+                conn.close()
+        self.note_var.set(note)
+        self.size_list.delete(0, tk.END)
+        for size in sizes:
+            self.size_list.insert(tk.END, size)
+
+    def _set_details_state(self, enabled: bool) -> None:
+        state = 'normal' if enabled else 'disabled'
+        self.note_entry.configure(state=state)
+        self.btn_save_note.configure(state=state)
+        self.size_entry.configure(state=state)
+        self.btn_add_size.configure(state=state)
+        self.btn_delete_size.configure(state=state)
+        if enabled:
+            self.size_list.configure(state='normal')
+        else:
+            self.note_var.set('')
+            self.new_size_var.set('')
+            self.size_list.configure(state='disabled')
+            self.size_list.delete(0, tk.END)
+
+    def save_note(self):
+        if self.current_category_id is None:
+            return
+        note = self.note_var.get().strip()
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "UPDATE categories SET note = ? WHERE id = ?",
+                    (note if note else None, self.current_category_id),
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            messagebox.showerror("Erreur BD", f"Impossible d'enregistrer la note : {e}")
+        finally:
+            if conn:
+                conn.close()
+
+    def add_size(self):
+        if self.current_category_id is None:
+            return
+        size_label = self.new_size_var.get().strip()
+        if not size_label:
+            messagebox.showerror("Erreur", "Veuillez saisir une taille.")
+            return
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT OR IGNORE INTO category_sizes (category_id, size_label) VALUES (?, ?)",
+                    (self.current_category_id, size_label),
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            messagebox.showerror("Erreur BD", f"Impossible d'ajouter la taille : {e}")
+        finally:
+            if conn:
+                conn.close()
+        self.new_size_var.set('')
+        self._populate_category_details(self.current_category_id)
+
+    def delete_size(self):
+        if self.current_category_id is None:
+            return
+        selection = self.size_list.curselection()
+        if not selection:
+            messagebox.showwarning("Attention", "Aucune taille sélectionnée.")
+            return
+        size_label = self.size_list.get(selection[0])
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "DELETE FROM category_sizes WHERE category_id = ? AND size_label = ?",
+                    (self.current_category_id, size_label),
+                )
+                conn.commit()
+        except sqlite3.Error as e:
+            messagebox.showerror("Erreur BD", f"Impossible de supprimer la taille : {e}")
+        finally:
+            if conn:
+                conn.close()
+        self._populate_category_details(self.current_category_id)
 
     def on_close(self):
         self.destroy()
@@ -6122,25 +6338,68 @@ class ItemDialog(tk.Toplevel):
         if idx < 0:
             self.size_combobox['values'] = []
             self.var_size.set('')
+            self.size_combobox.configure(state='normal')
             return
-        selected_cat = self.category_names[idx].lower()
-        if "chaussure" in selected_cat:
-            self.size_combobox['values'] = StockApp.SHOE_SIZES
+        category_id = self.category_ids[idx]
+        sizes = self._fetch_category_sizes(category_id)
+        if sizes:
+            self.size_combobox.configure(state='readonly')
+            self.size_combobox['values'] = sizes
         else:
-            self.size_combobox['values'] = StockApp.CLOTHING_SIZES
+            selected_cat = self.category_names[idx].lower()
+            fallback = StockApp.SHOE_SIZES if "chaussure" in selected_cat else StockApp.CLOTHING_SIZES
+            self.size_combobox.configure(state='normal')
+            self.size_combobox['values'] = fallback
         if self.var_size.get() not in self.size_combobox['values']:
             self.var_size.set('')
+
+    def _fetch_category_sizes(self, category_id: int) -> list[str]:
+        conn = None
+        sizes: list[str] = []
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT size_label FROM category_sizes WHERE category_id = ? ORDER BY size_label COLLATE NOCASE",
+                    (category_id,),
+                )
+                sizes = [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error as exc:
+            print(f"[DB Error] _fetch_category_sizes: {exc}")
+        finally:
+            if conn:
+                conn.close()
+        return sizes
 
     def add_category_inline(self):
         name = simpledialog.askstring("Nouvelle Catégorie", "Entrez le nom de la nouvelle catégorie :", parent=self)
         if not name:
             return
+        note = simpledialog.askstring("Note de catégorie", "Entrez une note (optionnel) :", parent=self)
+        sizes_input = simpledialog.askstring(
+            "Tailles de la catégorie",
+            "Indiquez les tailles séparées par une virgule (optionnel) :",
+            parent=self,
+        )
+        sizes = []
+        if sizes_input:
+            sizes = [s.strip() for s in sizes_input.split(',') if s.strip()]
         conn = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
-                cursor.execute("INSERT INTO categories (name) VALUES (?)", (name,))
+                cursor.execute(
+                    "INSERT INTO categories (name, note) VALUES (?, ?)",
+                    (name, note.strip() if note and note.strip() else None),
+                )
+                category_id = cursor.lastrowid
+                if sizes:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO category_sizes (category_id, size_label) VALUES (?, ?)",
+                        [(category_id, size) for size in sizes],
+                    )
                 conn.commit()
         except sqlite3.IntegrityError:
             messagebox.showerror("Erreur", "Catégorie existe déjà.")
