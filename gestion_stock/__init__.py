@@ -3226,8 +3226,84 @@ class StockApp(tk.Tk):
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             config.write(f)
 
+    def _create_item(
+        self,
+        name,
+        barcode_value,
+        category_id,
+        size,
+        qty,
+        unit_cost,
+        reorder_point,
+        preferred_supplier_id,
+        *,
+        source="manual_creation",
+        log_note="Création article via formulaire",
+    ):
+        """Insère un article en base et retourne son identifiant ou ``None`` en cas d'erreur."""
+
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                timestamp = datetime.now().isoformat()
+                cursor.execute(
+                    """
+                    INSERT INTO items (
+                        name,
+                        barcode,
+                        category_id,
+                        size,
+                        quantity,
+                        last_updated,
+                        unit_cost,
+                        reorder_point,
+                        preferred_supplier_id
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        name,
+                        barcode_value,
+                        category_id,
+                        size,
+                        qty,
+                        timestamp,
+                        unit_cost,
+                        reorder_point,
+                        preferred_supplier_id,
+                    ),
+                )
+                item_id = cursor.lastrowid
+                if qty:
+                    log_stock_movement(
+                        cursor,
+                        item_id,
+                        qty,
+                        'IN',
+                        source,
+                        self.current_user,
+                        note=log_note,
+                        timestamp=timestamp,
+                    )
+                conn.commit()
+        except sqlite3.IntegrityError as e:
+            messagebox.showerror("Erreur", f"Impossible d'ajouter l'article : {e}")
+            return None
+        except sqlite3.Error as e:
+            messagebox.showerror("Erreur BD", f"Erreur lors de l'ajout : {e}")
+            return None
+        finally:
+            if conn:
+                conn.close()
+
+        if ENABLE_BARCODE_GENERATION and barcode_value:
+            save_barcode_image(barcode_value, article_name=name)
+        return item_id
+
     def open_add_dialog(self):
         dialog = ItemDialog(self, "Ajouter Article")
+        item_id = None
         if dialog.result:
             (
                 name,
@@ -3239,51 +3315,22 @@ class StockApp(tk.Tk):
                 reorder_point,
                 preferred_supplier_id,
             ) = dialog.result
-            conn = None
-            try:
-                with db_lock:
-                    conn = sqlite3.connect(DB_PATH, timeout=30)
-                    cursor = conn.cursor()
-                    timestamp = datetime.now().isoformat()
-                    cursor.execute(
-                        "INSERT INTO items (name, barcode, category_id, size, quantity, last_updated, unit_cost, reorder_point, preferred_supplier_id) "
-                        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-                        (
-                            name,
-                            barcode_value,
-                            category_id,
-                            size,
-                            qty,
-                            timestamp,
-                            unit_cost,
-                            reorder_point,
-                            preferred_supplier_id,
-                        )
-                    )
-                    item_id = cursor.lastrowid
-                    if qty:
-                        log_stock_movement(
-                            cursor,
-                            item_id,
-                            qty,
-                            'IN',
-                            'manual_creation',
-                            self.current_user,
-                            note="Création article via formulaire",
-                            timestamp=timestamp,
-                        )
-                    conn.commit()
-                    self.status.set(f"Article '{name}' ajouté.")
-                    if ENABLE_BARCODE_GENERATION and barcode_value:
-                        save_barcode_image(barcode_value, article_name=name)
-            except sqlite3.IntegrityError as e:
-                messagebox.showerror("Erreur", f"Impossible d'ajouter l'article : {e}")
-            except sqlite3.Error as e:
-                messagebox.showerror("Erreur BD", f"Erreur lors de l'ajout : {e}")
-            finally:
-                if conn:
-                    conn.close()
+            item_id = self._create_item(
+                name,
+                barcode_value,
+                category_id,
+                size,
+                qty,
+                unit_cost,
+                reorder_point,
+                preferred_supplier_id,
+                source='manual_creation',
+                log_note="Création article via formulaire",
+            )
+        if item_id:
+            self.status.set(f"Article '{name}' ajouté.")
             self.load_inventory()
+            self.select_item_in_tree(item_id)
 
     def open_edit_selected(self):
         selected = self.tree.selection()
@@ -3567,6 +3614,7 @@ class StockApp(tk.Tk):
         finally:
             if conn:
                 conn.close()
+        new_item_id = None
         if result:
             id_, name, category_id, size_value, qty = result
             self.select_item_in_tree(id_)
@@ -3666,73 +3714,44 @@ class StockApp(tk.Tk):
             self.load_inventory()
             self.select_item_in_tree(id_)
         else:
-            name = simpledialog.askstring("Nouvel Article", f"Code-barres inconnu : {code}\nEntrez le nom :")
-            if not name:
-                return
-            dlg = CategorySelectionDialog(self, "Sélectionner catégorie")
-            category_id = dlg.result
-            if category_id is None:
-                return
-            conn = None
-            try:
-                with db_lock:
-                    conn = sqlite3.connect(DB_PATH, timeout=30)
-                    cursor = conn.cursor()
-                    cursor.execute("SELECT name FROM categories WHERE id = ?", (category_id,))
-                    cat_name_db = cursor.fetchone()[0]
-            except sqlite3.Error:
-                cat_name_db = ""
-            finally:
-                if conn:
-                    conn.close()
-
-            if "chaussure" in cat_name_db.lower():
-                size = simpledialog.askstring("Taille Chaussure", f"Taille (30–60) pour {name} :")
-            else:
-                size = simpledialog.askstring("Taille Vêtement", f"Taille (XXS–XXL) pour {name} :")
-            if not size:
-                return
-            qty = simpledialog.askinteger("Quantité", f"Quantité initiale pour {name} (Taille {size}) :")
-            if qty is None:
-                return
-            new_item_id = None
-            conn = None
-            try:
-                with db_lock:
-                    conn = sqlite3.connect(DB_PATH, timeout=30)
-                    cursor = conn.cursor()
-                    timestamp = datetime.now().isoformat()
-                    cursor.execute(
-                        "INSERT OR IGNORE INTO items (name, barcode, category_id, size, quantity, last_updated) VALUES (?, ?, ?, ?, ?, ?)",
-                        (name, code, category_id, size, qty, timestamp)
+            dialog = ItemDialog(
+                self,
+                "Créer Article (scan)",
+                barcode=code,
+            )
+            if dialog.result:
+                (
+                    name,
+                    barcode_value,
+                    category_id,
+                    size,
+                    qty,
+                    unit_cost,
+                    reorder_point,
+                    preferred_supplier_id,
+                ) = dialog.result
+                barcode_to_use = barcode_value or code
+                new_item_id = self._create_item(
+                    name,
+                    barcode_to_use,
+                    category_id,
+                    size,
+                    qty,
+                    unit_cost,
+                    reorder_point,
+                    preferred_supplier_id,
+                    source=f'scan_{source}',
+                    log_note="Création via scan",
+                )
+                if new_item_id:
+                    speak(
+                        f"Nouvel article {name}, taille {size or 'N/A'}, stock initial {qty}."
                     )
-                    if cursor.rowcount:
-                        new_item_id = cursor.lastrowid
-                        log_stock_movement(
-                            cursor,
-                            new_item_id,
-                            qty,
-                            'IN',
-                            f'scan_{source}',
-                            self.current_user,
-                            note="Création via scan",
-                            timestamp=timestamp,
-                        )
-                    conn.commit()
-                speak(f"Nouvel article {name}, taille {size}, ajouté.")
-                if ENABLE_BARCODE_GENERATION:
-                    save_barcode_image(code, article_name=name)
-            except sqlite3.IntegrityError:
-                messagebox.showerror("Erreur", "Impossible : code-barres déjà existant.")
-            except sqlite3.Error as e:
-                messagebox.showerror("Erreur BD", f"Erreur lors de l'ajout : {e}")
-            finally:
-                if conn:
-                    conn.close()
+                    self.status.set(f"Article '{name}' créé via scan.")
         self.load_inventory()
         if result:
             self.select_item_in_tree(id_)
-        elif 'new_item_id' in locals() and new_item_id:
+        elif new_item_id:
             self.select_item_in_tree(new_item_id)
 
     def scan_camera(self):
