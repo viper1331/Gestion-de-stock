@@ -58,6 +58,100 @@ FONTS = {
     "mono": ("Cascadia Mono", 10),
 }
 
+FALLBACK_ICONS: dict[str, tuple[str, ...]] = {
+    "barcode.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAM0lEQVR4nGNgGAWjgFLA",
+        "iC7gHZr8nxIDt66ei2ImEyWGEQNGLRi1YNSCUQtGhAWjgCAAAP9WBB4a98xrAAAAAElF",
+        "TkSuQmCC",
+    ),
+    "camera.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAi0lEQVR4nGNgGAUDDRgJ",
+        "KfAOTf5PSM3W1XNxmsNEqotIBUPfAoywIybMCQHkOKG5D1iIVbg7sRBDzHV+P2UWwLzK",
+        "tu0K1mDbnVjI8MtLh5GBAXfQEgwiXIYTK4/XAkKaiVE39PPBMLcAlgQJAXzq8FrgHZr8",
+        "n1Bmcp3fj7d4ISqIcFlCcU4m1bDhCQCPqS0XyuSGMAAAAABJRU5ErkJggg==",
+    ),
+    "download.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAdklEQVR4nGNgGAXDHjAS",
+        "q1A1+fV/dLHbc0UJ6mci1UWkglELRoAFOJMZtmRJCGBLtjh9QEwaJ0Y93iAi1hJ86gjG",
+        "ASFLCMkPXCSzbbuCEsnya8Ux1DwMfonC/+WlQ3wkEzIMnY8LkBREMEOJNZxkC0g1fBQQ",
+        "BQCEZyMDwUq24gAAAABJRU5ErkJggg==",
+    ),
+    "edit.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAaUlEQVR4nGNgGAWjYBSM",
+        "giEG2LZd+U+qHiZSDSfVEkZSDEcHv7x0COon6AN8LibGN1hd4B2ajFXj7sRCrIbg8wnR",
+        "cYAP4PMJVSyAWYLNIqpZgGwRMp+FWgbjigeykykxSZQkQE4upgsAAETxKBlU8iPzAAAA",
+        "AElFTkSuQmCC",
+    ),
+    "file-csv.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAABBElEQVR4nO3VoUqEQRQF",
+        "4M/VsIhdxSBOEXyFAdEHsBi0/c9gUDAYFYNg8gn+DYoYzCYNA1aLcarNZFzU4IZl3cVZ",
+        "2EWFPWWGO4dz5p6ZYZjgtzE1aCGk6mNYsRzrb3qNYUWGxd826BfJSA1K8P8NZkpIJVkP",
+        "wtg7KH1ot4ho4gmbOdbtkKoz7HfxtnCEZSzlWL+XdrCGDaziEdMhVes94jCLSyxgncIz",
+        "wHGO9XNnfgAhVXO9pBzr65CqRZxjB/elHeQ+tTtcdxdCqmKO9QsesB1S1Sw1WOmz23aO",
+        "9W5P+bQzXmEeJ6URtUKqWgW8t854gwvsjfqaHkKO9auvCBtj/w8m+BGf0uA/v6dIrcoA",
+        "AAAASUVORK5CYII=",
+    ),
+    "file-pdf.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAyklEQVR4nO2VPQrCQBBG",
+        "nyJiuycQexvvMGfRLoJtbFOKop1nmdrSxgMIglgueIFYmGJRo7OQoEJeOfvtfMzM/kDD",
+        "t2mVLXiRPDaZU33K145NEstvG7xqSaUGFv7foGMRWXpdRu0VxFy0HDgDC6e68iJD4PCg",
+        "SZzqJlyzVpABPWAPLL3IoES39iLjcF9Mi7q8qbjgAiRhwGqQAldgBMyc6rFEdwLC6lLT",
+        "KQIypzo36PpAaJ5V+poWTIAd9yFHzcDC1Kluw0Dt/0HDR24ecjMPjbzBTgAAAABJRU5E",
+        "rkJggg==",
+    ),
+    "plus.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAQUlEQVR4nGNgGAUDDRhJ",
+        "Uaya/Po/jH17rihReplIdRGpYNSCEWABRlJDTorkAuQkPAyDCB8YzcmjFgyMBaOAIAAA",
+        "dg4MIBd8OTUAAAAASUVORK5CYII=",
+    ),
+    "save.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAQklEQVR4nGNgGAXDHjBi",
+        "E1RNfv2fXANvzxVFMZOJXIOIBaMWjFowBCxgIVYhegZiYCAuQ46gICK3fBr6QTQKBh4A",
+        "AA7ECpR8nNOCAAAAAElFTkSuQmCC",
+    ),
+    "search.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAhElEQVR4nGNgGAUDDRgJ",
+        "KWDbduU/utgvLx2C+mCAiVTD8YmTZAEhQ4i1BKtX0TUjBwk+OWwAwweEDEDnE/IJ3jjA",
+        "5TqqRTI1wMBaQJNkSigSSU1FOCVJcSU+S3AGESkpBZ9jqJZMcVlCtCuxAWIKQoqSKTE+",
+        "oTgfECpKqAZISXWjAAUAAMhFSTtdMuCZAAAAAElFTkSuQmCC",
+    ),
+    "settings.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAh0lEQVR4nGNgGAXUBt6h",
+        "yf+9Q5P/E6ueiZaOoYsFjMQqxBYsW1fPJaifKB/gCnNi4oKgBYQMISSP14vompGDBJ8c",
+        "URZgMwBZDJ2PyxKi4gCbYd6hyf+JiWQWfK4mFaD7kIFhIPMBteJg4FIRLoOwAXyRTTAO",
+        "CKUUQvJEJ1NyDCcLjLz6YOgDAF/cVimDQh80AAAAAElFTkSuQmCC",
+    ),
+    "trash.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAU0lEQVR4nGNgGAUDDRjx",
+        "Sb53cflPrEGCe/ZgNYuJVBeRCoaxBaSEPz71wziI0IHgnj2MyEkRnU+xBeSCUQtGLaAc",
+        "4EzHpBYVDAzYi+yhH0RDHwAA/HUTN2NLgq8AAAAASUVORK5CYII=",
+    ),
+    "upload.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAbklEQVR4nGNgGAVDDnyd",
+        "x/2fFPVM5BhOiiVEW4BuKLGWEGUBLsOIsYSkICIHELSAkCsJyeO1gNhwxqcOpwWkJkdc",
+        "6hkpMYA76StB/TSP5FFAEOCMJLZtV0hKRQwMDAy/vHQwzBv4nDzoLRgFBAEAEpYqEtlF",
+        "51AAAAAASUVORK5CYII=",
+    ),
+    "voice-off.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAp0lEQVR4nO2UsRGDMAxF",
+        "H2zgCbKMO2o6OuZKly51Oi/DBB4BKjgOLFsyKf0r7ji9hyQbaGnRJHq/Su+6UvEwzmIx",
+        "wCcux7ML4cbrSwItHNKdVAuucPhjB1p4lcACNwtS8Mm9sjU3s3RqLPDf931wVR3UfLla",
+        "8AReFDyFQ+Ympy6NC6Hbd3Secy7JDiS4BqgSXGG1cCj87KL3q3bm0siyS7Yu1CxoAdgA",
+        "+CdBF6v+7IIAAAAASUVORK5CYII=",
+    ),
+    "voice.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAUklEQVR4nGNgGAWjgFLA",
+        "SEgB27Yr/wmp+eWlg9McJlJdRCoYtWDgLcCIfWJSDSGAnKqGfhDR3AKSAdu2K/9Jiaeh",
+        "H0R4CztSggJXgTf0g2joAwDU0BE6VJXxhQAAAABJRU5ErkJggg==",
+    ),
+    "warning.png": (
+        "iVBORw0KGgoAAAANSUhEUgAAABgAAAAYCAYAAADgdz34AAAAdUlEQVR4nGNgGAVDDnyd",
+        "x/2fFPVMtHIIWRbAXE+KLwaPD9BdTawvaO4DRmIUwVzLlfgFLvZtPg8DAwMDA3fSV7xm",
+        "DHwcEAprQvID6wNiUwo+dQPnA1LLHFzqB8YHpLoen77BkZNh4P///3AXMjIykqR3FOAE",
+        "AG/vLRiAEb9bAAAAAElFTkSuQmCC",
+    ),
+}
+
 
 @lru_cache(maxsize=32)
 def _pct(color: str, factor: float = 1.06) -> str:
@@ -134,27 +228,32 @@ def _configure_fields(style: ttk.Style, palette: dict[str, str]) -> None:
 def _configure_treeview(style: ttk.Style, palette: dict[str, str]) -> None:
     style.configure(
         "Treeview",
-        background=palette["bg"],
-        fieldbackground=palette["bg"],
+        background=palette["surface"],
+        fieldbackground=palette["surface"],
         foreground=palette["fg"],
         bordercolor=palette["border"],
+        lightcolor=palette["border"],
+        darkcolor=palette["border"],
         rowheight=26,
+        relief="flat",
+        borderwidth=0,
     )
     style.map(
         "Treeview",
         background=[
             ("selected", palette["selection"]),
-            ("!selected", palette["bg"]),
+            ("!selected", palette["surface"]),
         ],
         foreground=[("selected", palette["fg"])],
     )
     style.configure(
         "Treeview.Heading",
-        background=palette["surface"],
+        background=palette["surface2"],
         foreground=palette["fg"],
         padding=(10, 6),
         relief="flat",
         font=(FONTS["base"][0], FONTS["base"][1], "semibold"),
+        bordercolor=palette["border"],
     )
     style.map("Treeview.Heading", background=[("active", _pct(palette["surface"], 1.05))])
 
@@ -166,6 +265,33 @@ def _configure_misc(style: ttk.Style, palette: dict[str, str]) -> None:
 
     style.configure("TLabel", background=palette["bg"], foreground=palette["fg"])
     style.configure("Status.TLabel", background=palette["surface"], foreground=palette["muted"], padding=(12, 4))
+    style.configure(
+        "TLabelframe",
+        background=palette["surface"],
+        foreground=palette["fg"],
+        bordercolor=palette["border"],
+        relief="flat",
+        borderwidth=1,
+    )
+    style.configure(
+        "TLabelframe.Label",
+        background=palette["surface"],
+        foreground=palette["fg"],
+        padding=(4, 0),
+    )
+
+    style.configure(
+        "TScrollbar",
+        troughcolor=palette["surface2"],
+        background=palette["surface"],
+        bordercolor=palette["border"],
+        lightcolor=palette["border"],
+        darkcolor=palette["border"],
+    )
+    style.map(
+        "TScrollbar",
+        background=[("active", _pct(palette["surface"], 1.08))],
+    )
 
     style.configure("TNotebook", background=palette["bg"], borderwidth=0)
     style.configure(
@@ -194,6 +320,20 @@ def apply_theme(root: Tk, mode: str = "dark", *, font_size: Optional[int] = None
     root.option_add("*Font", base_font)
     root.option_add("*TCombobox*Listbox.font", base_font)
     root.configure(background=palette["bg"])
+    try:
+        root.tk_setPalette(
+            background=palette["bg"],
+            foreground=palette["fg"],
+            activeBackground=palette["surface"],
+            activeForeground=palette["fg"],
+            highlightColor=palette["selection"],
+            highlightBackground=palette["selection"],
+            insertBackground=palette["fg"],
+            selectBackground=palette["selection"],
+            selectForeground=palette["fg"],
+        )
+    except Exception:
+        pass
 
     if ttkb is not None:
         try:  # pragma: no cover - optional path
@@ -223,11 +363,21 @@ def make_icon(rel_path: str, size: int = 20) -> Optional[PhotoImage]:
 
     base_dir = os.path.join(os.path.dirname(__file__), "..", "assets")
     path = os.path.normpath(os.path.join(base_dir, rel_path))
-    if not os.path.exists(path):
-        return None
-    try:
-        image = PhotoImage(file=path)
-    except Exception:
+    image: Optional[PhotoImage] = None
+    if os.path.exists(path):
+        try:
+            image = PhotoImage(file=path)
+        except Exception:
+            image = None
+    if image is None:
+        name = os.path.basename(rel_path)
+        data_parts = FALLBACK_ICONS.get(name)
+        if data_parts:
+            try:
+                image = PhotoImage(data="".join(data_parts))
+            except Exception:
+                image = None
+    if image is None:
         return None
     if image.width() > size:
         scale = max(1, image.width() // size)
