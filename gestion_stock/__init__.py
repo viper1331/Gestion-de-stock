@@ -4990,17 +4990,22 @@ class StockApp(tk.Tk):
         for col in (1, 3, 5):
             filter_frame.grid_columnconfigure(col, weight=1)
 
+        self.dashboard_figure = None
+        self.dashboard_canvas = None
+        self.dashboard_placeholder_label = None
+
         if MATPLOTLIB_AVAILABLE and FigureCanvasTkAgg is not None:
             self.dashboard_figure = Figure(figsize=(10, 4), dpi=100)
             self.dashboard_canvas = FigureCanvasTkAgg(self.dashboard_figure, master=self.dashboard_frame)
             self.dashboard_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True, padx=10, pady=10)
         else:
             self.dashboard_figure = None
-        self.dashboard_canvas = None
-        ttk.Label(
-            self.dashboard_frame,
-            text="Matplotlib n'est pas disponible : visualisation désactivée.",
-        ).pack(fill=tk.X, padx=10, pady=10)
+            self.dashboard_canvas = None
+            self.dashboard_placeholder_label = ttk.Label(
+                self.dashboard_frame,
+                text="Matplotlib n'est pas disponible : visualisation désactivée.",
+            )
+            self.dashboard_placeholder_label.pack(fill=tk.X, padx=10, pady=10)
 
         self.dashboard_job = None
         self._pending_dashboard_refresh: Optional[str] = None
