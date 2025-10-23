@@ -229,6 +229,7 @@ else:
     )
 
 logger = logging.getLogger(__name__)
+audit_logger = logging.getLogger(f"{__name__}.audit")
 if file_handler_added:
     logger.info("Journalisation des événements dans le fichier : %s", LOG_FILE)
 
@@ -1056,8 +1057,10 @@ def verify_user(username: str, password: str):
             cursor.execute("SELECT password_hash, role FROM users WHERE username = ?", (username,))
             row = cursor.fetchone()
         if row and row[0] == pwd_hash:
+            audit_logger.info("Authentification réussie pour l'utilisateur '%s'.", username)
             return True, row[1]
         else:
+            audit_logger.warning("Échec d'authentification pour l'utilisateur '%s'.", username)
             return False, None
     except sqlite3.Error as e:
         print(f"[DB Error] verify_user: {e}")
@@ -3111,6 +3114,7 @@ class StockApp(tk.Tk):
         self.current_user = current_user
         self.current_role = current_role
         self.current_user_id = current_user_id
+        self.audit_logger = audit_logger
 
         self.title(f"Gestion Stock Pro - Connecté : {self.current_user} ({self.current_role})")
         self.geometry("950x600")
@@ -3181,6 +3185,22 @@ class StockApp(tk.Tk):
         global voice_active
         voice_active = False
         self.destroy()
+
+    def log_user_action(self, message: str, *, level: int = logging.INFO) -> None:
+        """Enregistre un événement utilisateur dans le journal d'audit."""
+
+        if not message:
+            return
+        try:
+            self.audit_logger.log(
+                level,
+                "[utilisateur=%s|role=%s] %s",
+                self.current_user,
+                self.current_role,
+                message,
+            )
+        except Exception:  # pragma: no cover - journalisation défensive
+            logger.debug("Impossible d'enregistrer l'action utilisateur : %s", message, exc_info=True)
 
 
     def create_menu(self):
@@ -4787,6 +4807,7 @@ class StockApp(tk.Tk):
         """Insère un article en base et retourne son identifiant ou ``None`` en cas d'erreur."""
 
         conn = None
+        item_id: Optional[int] = None
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
@@ -4840,6 +4861,16 @@ class StockApp(tk.Tk):
         finally:
             if conn:
                 conn.close()
+
+        if item_id is not None:
+            self.log_user_action(
+                "Création de l'article '%s' (ID %s, quantité initiale %s, catégorie %s)." % (
+                    name,
+                    item_id,
+                    qty,
+                    category_id if category_id is not None else "sans catégorie",
+                )
+            )
 
         if ENABLE_BARCODE_GENERATION and barcode_value:
             save_barcode_image(barcode_value, article_name=name)
@@ -4977,6 +5008,24 @@ class StockApp(tk.Tk):
                             timestamp=timestamp,
                         )
                     conn.commit()
+                    if change:
+                        self.log_user_action(
+                            "Modification de l'article '%s' (ID %s) : stock %s → %s (%s%s)." % (
+                                new_name,
+                                id_,
+                                old_qty,
+                                new_qty_int,
+                                "+" if change > 0 else "",
+                                change,
+                            )
+                        )
+                    else:
+                        self.log_user_action(
+                            "Modification de l'article '%s' (ID %s) sans changement de stock." % (
+                                new_name,
+                                id_,
+                            )
+                        )
                     self.status.set(f"Article '{new_name}' mis à jour.")
                     if ENABLE_BARCODE_GENERATION and new_barcode:
                         save_barcode_image(new_barcode, article_name=new_name)
@@ -5039,6 +5088,13 @@ class StockApp(tk.Tk):
                     filepath = os.path.join(BARCODE_DIR, f"{safe_name}.png")
                     if os.path.exists(filepath):
                         os.remove(filepath)
+                self.log_user_action(
+                    "Suppression de l'article '%s' (ID %s, quantité retirée %s)." % (
+                        name,
+                        id_,
+                        current_qty,
+                    )
+                )
                 self.status.set(f"Article '{name}' supprimé.")
             except sqlite3.Error as e:
                 messagebox.showerror("Erreur BD", f"Erreur lors de la suppression : {e}")
@@ -5129,6 +5185,26 @@ class StockApp(tk.Tk):
             )
             self.status.set(
                 f"{abs(change)} unités {'ajoutées' if change > 0 else 'retirées'} pour '{name}'"
+            )
+        if change:
+            self.log_user_action(
+                "Mouvement de stock %s pour l'article '%s' (ID %s) : %s → %s (%s%s) via %s." % (
+                    'entrant' if change > 0 else 'sortant',
+                    name,
+                    id_,
+                    old_qty,
+                    new_qty,
+                    "+" if change > 0 else "",
+                    change,
+                    source,
+                )
+            )
+        else:
+            self.log_user_action(
+                "Tentative d'ajustement sans effet pour l'article '%s' (ID %s)." % (
+                    name,
+                    id_,
+                )
             )
         if change < 0:
             reorder_point = self._get_item_reorder_point(id_)
@@ -5355,6 +5431,10 @@ class StockApp(tk.Tk):
                 )
                 rows = cursor.fetchall()
         except sqlite3.Error as e:
+            self.log_user_action(
+                "Échec d'export CSV (lecture BD) vers %s : %s" % (file_path, e),
+                level=logging.ERROR,
+            )
             messagebox.showerror("Erreur BD", f"Impossible d'exporter en CSV : {e}")
         finally:
             if conn:
@@ -5367,7 +5447,14 @@ class StockApp(tk.Tk):
             )
             messagebox.showinfo("Export CSV", f"Données exportées vers {file_path}")
             self.status.set(f"Exporté vers {os.path.basename(file_path)}")
+            self.log_user_action(
+                "Export CSV réalisé vers %s (%s ligne(s))." % (file_path, len(rows))
+            )
         except Exception as e:
+            self.log_user_action(
+                "Échec d'export CSV (écriture fichier) vers %s : %s" % (file_path, e),
+                level=logging.ERROR,
+            )
             messagebox.showerror("Erreur Fichier", f"Impossible d'écrire le CSV : {e}")
 
     def report_low_stock(self):
@@ -5464,6 +5551,10 @@ class StockApp(tk.Tk):
                 )
                 recent_movements = cursor.fetchall()
         except sqlite3.Error as e:
+            self.log_user_action(
+                "Échec génération rapport PDF (lecture BD) vers %s : %s" % (file_path, e),
+                level=logging.ERROR,
+            )
             messagebox.showerror("Rapport PDF", f"Impossible de récupérer les données : {e}")
             return
         finally:
@@ -5560,11 +5651,16 @@ class StockApp(tk.Tk):
                     pdf.savefig(fig, bbox_inches='tight')
                     plt.close(fig)
         except Exception as e:
+            self.log_user_action(
+                "Échec génération rapport PDF vers %s : %s" % (file_path, e),
+                level=logging.ERROR,
+            )
             messagebox.showerror("Rapport PDF", f"Erreur lors de la génération du PDF : {e}")
             return
 
         messagebox.showinfo("Rapport PDF", f"Rapport généré : {file_path}")
         self.status.set(f"Rapport PDF exporté : {os.path.basename(file_path)}")
+        self.log_user_action("Rapport PDF généré vers %s." % file_path)
 
     def show_about(self):
         messagebox.showinfo("À propos", "Gestion Stock Pro v1.0\n© 2025 Sebastien Cangemi")
@@ -5664,16 +5760,22 @@ class StockApp(tk.Tk):
                 else:
                     raise FileNotFoundError(f"Base utilisateurs introuvable : {USER_DB_PATH}")
         except Exception as e:
+            self.log_user_action(
+                "Échec de sauvegarde des bases vers %s : %s" % (file_path, e),
+                level=logging.ERROR,
+            )
             messagebox.showerror("Erreur Backup", f"Impossible de sauvegarder les bases : {e}")
             return
         messagebox.showinfo("Backup réussi", f"Bases sauvegardées vers : {file_path}")
         self.status.set(f"Backup : {os.path.basename(file_path)}")
+        self.log_user_action("Sauvegarde des bases effectuée vers %s." % file_path)
 
     def logout(self):
         """
         Déconnecte l'utilisateur sans quitter l'application : ferme la fenêtre
         et relance le dialogue de connexion.
         """
+        self.log_user_action("Déconnexion de l'application demandée.")
         self.save_column_widths()
         global voice_active
         voice_active = False
