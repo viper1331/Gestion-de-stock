@@ -188,6 +188,8 @@ default_config = {
     'last_user': '',
     'enable_pharmacy_module': 'true',
     'enable_clothing_module': 'true',
+    'theme': 'dark',
+    'font_size': '10',
 }
 if not os.path.exists(CONFIG_FILE):
     config['Settings'] = default_config
@@ -518,10 +520,19 @@ else:
 
 try:
     import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox, simpledialog
+    from tkinter import ttk, filedialog, messagebox, simpledialog, PhotoImage
     TK_AVAILABLE = True
 except ImportError:
     TK_AVAILABLE = False
+
+if TK_AVAILABLE:
+    from gestion_stock.ui.theme import (
+        PALETTE,
+        apply_theme,
+        button as themed_button,
+        toolbar as themed_toolbar,
+        make_icon,
+    )
 
 try:
     import matplotlib
@@ -3783,6 +3794,12 @@ class StockApp(tk.Tk):
             level=logging.DEBUG,
         )
         super().__init__()
+        self._theme_mode = config.get('Settings', 'theme', fallback='dark')
+        try:
+            self._font_size = config.getint('Settings', 'font_size')
+        except Exception:
+            self._font_size = 10
+        self.current_palette = apply_theme(self, self._theme_mode, font_size=self._font_size)
         self.current_user = current_user
         self.current_role = current_role
         self.current_user_id = current_user_id
@@ -3953,36 +3970,57 @@ class StockApp(tk.Tk):
         self.config(menu=menubar)
 
     def create_toolbar(self):
-        toolbar = ttk.Frame(self, padding=5)
-
+        bar = themed_toolbar(self)
         button_specs = [
-            ("add", "Ajouter"),
-            ("edit", "Modifier"),
-            ("delete", "Supprimer"),
-            ("stock_in", "Entrée"),
-            ("stock_out", "Sortie"),
-            ("scan", "Scan Caméra"),
-            ("listen", "Écoute Micro"),
-            ("stop_listen", "Arrêter Micro"),
-            ("barcode", "Générer Code-Barres"),
-            ("export", "Exporter CSV"),
-            ("columns", "Colonnes"),
+            ("add", "Nouveau", "Primary.TButton", "plus.png", "Créer un nouvel article"),
+            ("edit", "Modifier", "Info.TButton", "edit.png", "Modifier l'article sélectionné"),
+            ("delete", "Supprimer", "Danger.TButton", "trash.png", "Supprimer l'article sélectionné"),
+            ("stock_in", "Entrée", "Success.TButton", "download.png", "Enregistrer une entrée de stock"),
+            ("stock_out", "Sortie", "Warning.TButton", "upload.png", "Enregistrer une sortie de stock"),
+        ]
+        scan_buttons = [
+            ("scan", "Scan Caméra", "Secondary.TButton", "camera.png", "Scanner via la caméra"),
+            ("barcode", "Scan Douchette", "Secondary.TButton", "barcode.png", "Scanner via une douchette"),
+        ]
+        report_buttons = [
+            ("report_pdf", "Rapport PDF", "Primary.TButton", "file-pdf.png", "Générer un rapport PDF"),
+            ("export", "Export CSV", "Info.TButton", "file-csv.png", "Exporter les données en CSV"),
+            ("columns", "Colonnes", "Secondary.TButton", "settings.png", "Configurer les colonnes"),
+        ]
+        voice_buttons = [
+            ("listen", "Écoute", "Secondary.TButton", "voice.png", "Activer la reconnaissance vocale"),
+            ("stop_listen", "Stop", "Secondary.TButton", "voice-off.png", "Arrêter la reconnaissance vocale"),
         ]
 
         self.toolbar_buttons: dict[str, ttk.Button] = {}
+        self.toolbar_icons: dict[str, PhotoImage] = {}
 
-        for action, label in button_specs:
-            button = ttk.Button(
-                toolbar,
-                text=label,
-                command=lambda action_name=action: self._invoke_toolbar_action(action_name),
-                state=tk.DISABLED,
-            )
-            button.pack(side=tk.LEFT, padx=2)
-            self.toolbar_buttons[action] = button
+        def _add_buttons(button_list):
+            for action, label, style_name, icon_name, tooltip in button_list:
+                icon = make_icon(icon_name)
+                if icon is not None:
+                    self.toolbar_icons[action] = icon
+                btn = themed_button(
+                    bar,
+                    text=label,
+                    style=style_name,
+                    command=lambda action_name=action: self._invoke_toolbar_action(action_name),
+                    icon=self.toolbar_icons.get(action),
+                )
+                btn.configure(state=tk.DISABLED)
+                btn.pack(side=tk.LEFT, padx=4, pady=2)
+                self.toolbar_buttons[action] = btn
+                self._add_tooltip(btn, tooltip)
 
-        toolbar.pack(fill=tk.X)
-        self.toolbar = toolbar
+        _add_buttons(button_specs)
+        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        _add_buttons(scan_buttons)
+        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        _add_buttons(report_buttons)
+        ttk.Separator(bar, orient=tk.VERTICAL).pack(side=tk.LEFT, fill=tk.Y, padx=6)
+        _add_buttons(voice_buttons)
+
+        self.toolbar = bar
         self._current_toolbar_handlers: dict[str, Callable[[], None]] = {}
 
     def _invoke_toolbar_action(self, action: str) -> None:
@@ -3990,6 +4028,55 @@ class StockApp(tk.Tk):
         if handler is None:
             return
         handler()
+
+    def _add_tooltip(self, widget: tk.Widget, text: str) -> None:
+        if not text:
+            return
+
+        state: dict[str, Optional[str | tk.Toplevel]] = {"job": None, "tip": None}
+
+        def _cancel(_event=None) -> None:
+            job = state.get("job")
+            if job is not None:
+                try:
+                    self.after_cancel(job)
+                except Exception:
+                    pass
+                state["job"] = None
+            tip = state.get("tip")
+            if isinstance(tip, tk.Toplevel) and tip.winfo_exists():
+                tip.destroy()
+            state["tip"] = None
+
+        def _show_tooltip() -> None:
+            _cancel()
+            try:
+                x = widget.winfo_rootx() + widget.winfo_width() // 2
+                y = widget.winfo_rooty() + widget.winfo_height() + 10
+            except Exception:
+                return
+            palette = getattr(self, "current_palette", PALETTE)
+            tip = tk.Toplevel(widget)
+            tip.wm_overrideredirect(True)
+            tip.wm_geometry(f"+{x}+{y}")
+            tip.configure(background=palette.get("surface", "#111827"))
+            label = ttk.Label(
+                tip,
+                text=text,
+                padding=(10, 4),
+                background=palette.get("surface", "#111827"),
+                foreground=palette.get("fg", "#ffffff"),
+            )
+            label.pack()
+            state["tip"] = tip
+
+        def _schedule(_event=None) -> None:
+            _cancel()
+            state["job"] = self.after(400, _show_tooltip)
+
+        widget.bind("<Enter>", _schedule, add=True)
+        widget.bind("<Leave>", _cancel, add=True)
+        widget.bind("<ButtonPress>", _cancel, add=True)
 
     def _on_notebook_tab_changed(self, _event=None) -> None:
         self.update_toolbar_state()
@@ -4029,6 +4116,7 @@ class StockApp(tk.Tk):
                 "barcode": self.generate_barcode_dialog,
                 "export": self.export_clothing_inventory,
                 "columns": self.open_clothing_column_manager,
+                "report_pdf": self.generate_pdf_report,
             }
             if ENABLE_VOICE and SR_LIB_AVAILABLE:
                 handlers["listen"] = start_voice_listening
@@ -4043,15 +4131,16 @@ class StockApp(tk.Tk):
                 "scan": self.scan_camera,
                 "barcode": self.generate_barcode_dialog,
                 "columns": self.open_pharmacy_column_manager,
+                "report_pdf": self.generate_pdf_report,
             }
             if ENABLE_VOICE and SR_LIB_AVAILABLE:
                 handlers["listen"] = start_voice_listening
                 handlers["stop_listen"] = stop_voice_listening
-        elif mode == "other" and (ENABLE_VOICE and SR_LIB_AVAILABLE):
-            handlers = {
-                "listen": start_voice_listening,
-                "stop_listen": stop_voice_listening,
-            }
+        else:
+            handlers = {"report_pdf": self.generate_pdf_report}
+            if ENABLE_VOICE and SR_LIB_AVAILABLE:
+                handlers["listen"] = start_voice_listening
+                handlers["stop_listen"] = stop_voice_listening
 
         available_handlers: dict[str, Callable[[], None]] = {}
         for action, button in self.toolbar_buttons.items():
@@ -4072,7 +4161,7 @@ class StockApp(tk.Tk):
     def create_statusbar(self):
         self.status = tk.StringVar()
         self.status.set("Prêt")
-        status_bar = ttk.Label(self, textvariable=self.status, relief=tk.SUNKEN, anchor=tk.W)
+        status_bar = ttk.Label(self, textvariable=self.status, style="Status.TLabel", anchor=tk.W)
         status_bar.pack(side=tk.BOTTOM, fill=tk.X)
 
     def create_main_frames(self):
@@ -6855,6 +6944,8 @@ class StockApp(tk.Tk):
             config['Settings']['tts_type'] = dialog.result['tts_type']
             config['Settings']['enable_barcode_generation'] = str(dialog.result['enable_barcode_generation']).lower()
             config['Settings']['low_stock_threshold'] = str(dialog.result['low_stock_threshold'])
+            config['Settings']['theme'] = dialog.result['theme']
+            config['Settings']['font_size'] = str(dialog.result['font_size'])
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 config.write(f)
             CAMERA_INDEX = dialog.result['camera_index']
@@ -6865,6 +6956,12 @@ class StockApp(tk.Tk):
                 self.low_stock_threshold = int(dialog.result['low_stock_threshold'])
             except (TypeError, ValueError):
                 self.low_stock_threshold = DEFAULT_LOW_STOCK_THRESHOLD
+            self._theme_mode = dialog.result['theme']
+            try:
+                self._font_size = int(dialog.result['font_size'])
+            except (TypeError, ValueError):
+                self._font_size = 10
+            self.current_palette = apply_theme(self, self._theme_mode, font_size=self._font_size)
             self.load_inventory()
             messagebox.showinfo("Paramètres", "Configuration enregistrée. Redémarrez pour certaines options.")
 
@@ -8535,6 +8632,8 @@ class ConfigDialog(tk.Toplevel):
         var_enable_tts = tk.BooleanVar(value=ENABLE_TTS)
         var_enable_barcode = tk.BooleanVar(value=ENABLE_BARCODE_GENERATION)
         var_low_stock = tk.IntVar(value=DEFAULT_LOW_STOCK_THRESHOLD)
+        var_theme = tk.StringVar(value=config.get('Settings', 'theme', fallback='dark'))
+        var_font_size = tk.StringVar(value=str(config.getint('Settings', 'font_size', fallback=10)))
         tts_choices = {value: DEFAULT_TTS_TYPE_LABELS.get(value, value) for value in AVAILABLE_TTS_TYPES}
         if TTS_TYPE not in tts_choices:
             tts_choices[TTS_TYPE] = DEFAULT_TTS_TYPE_LABELS.get(TTS_TYPE, f"Personnalisé ({TTS_TYPE})")
@@ -8566,12 +8665,32 @@ class ConfigDialog(tk.Toplevel):
         entry_microphone = ttk.Entry(self, textvariable=var_microphone, width=5)
         entry_microphone.grid(row=4, column=1, sticky=tk.W, padx=10, pady=5)
 
-        chk_voice = ttk.Checkbutton(self, text="Activer reconnaissance vocale", variable=var_enable_voice)
-        chk_voice.grid(row=5, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
-        chk_tts = ttk.Checkbutton(self, text="Activer synthèse vocale", variable=var_enable_tts)
-        chk_tts.grid(row=6, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        ttk.Label(self, text="Thème :").grid(row=5, column=0, sticky=tk.W, padx=10, pady=5)
+        combo_theme = ttk.Combobox(
+            self,
+            textvariable=var_theme,
+            values=("dark", "light"),
+            state='readonly',
+            width=15,
+        )
+        combo_theme.grid(row=5, column=1, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Type synthèse vocale :").grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Taille police :").grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
+        combo_font = ttk.Combobox(
+            self,
+            textvariable=var_font_size,
+            values=("10", "11", "12", "14"),
+            state='readonly',
+            width=15,
+        )
+        combo_font.grid(row=6, column=1, padx=10, pady=5, sticky=tk.W)
+
+        chk_voice = ttk.Checkbutton(self, text="Activer reconnaissance vocale", variable=var_enable_voice)
+        chk_voice.grid(row=7, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_tts = ttk.Checkbutton(self, text="Activer synthèse vocale", variable=var_enable_tts)
+        chk_tts.grid(row=8, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+
+        ttk.Label(self, text="Type synthèse vocale :").grid(row=9, column=0, sticky=tk.W, padx=10, pady=5)
         combo_tts = ttk.Combobox(
             self,
             textvariable=var_tts_type,
@@ -8579,14 +8698,14 @@ class ConfigDialog(tk.Toplevel):
             state='readonly',
             width=40,
         )
-        combo_tts.grid(row=7, column=1, padx=10, pady=5, sticky=tk.W)
+        combo_tts.grid(row=9, column=1, padx=10, pady=5, sticky=tk.W)
 
         chk_barcode = ttk.Checkbutton(self, text="Activer génération de codes-barres", variable=var_enable_barcode)
-        chk_barcode.grid(row=8, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_barcode.grid(row=10, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Seuil stock faible :").grid(row=9, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Seuil stock faible :").grid(row=11, column=0, sticky=tk.W, padx=10, pady=5)
         entry_threshold = ttk.Entry(self, textvariable=var_low_stock, width=5)
-        entry_threshold.grid(row=9, column=1, sticky=tk.W, padx=10, pady=5)
+        entry_threshold.grid(row=11, column=1, sticky=tk.W, padx=10, pady=5)
 
         def _update_tts_state(*_args):
             state = 'readonly' if var_enable_tts.get() else 'disabled'
@@ -8596,17 +8715,32 @@ class ConfigDialog(tk.Toplevel):
         _update_tts_state()
 
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=10, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=12, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="OK", command=lambda: self.on_ok(
             var_db, var_user_db, var_barcode, var_camera, var_microphone,
-            var_enable_voice, var_enable_tts, var_tts_type, var_enable_barcode, var_low_stock
+            var_enable_voice, var_enable_tts, var_tts_type, var_enable_barcode, var_low_stock,
+            var_theme, var_font_size,
         )).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
 
         self.grab_set()
         self.wait_window(self)
 
-    def on_ok(self, var_db, var_user_db, var_barcode, var_camera, var_microphone, var_enable_voice, var_enable_tts, var_tts_type, var_enable_barcode, var_low_stock):
+    def on_ok(
+        self,
+        var_db,
+        var_user_db,
+        var_barcode,
+        var_camera,
+        var_microphone,
+        var_enable_voice,
+        var_enable_tts,
+        var_tts_type,
+        var_enable_barcode,
+        var_low_stock,
+        var_theme,
+        var_font_size,
+    ):
         camera_raw = var_camera.get().strip()
         microphone_raw = var_microphone.get().strip()
         try:
@@ -8627,6 +8761,16 @@ class ConfigDialog(tk.Toplevel):
         if not tts_type_value:
             messagebox.showerror("Configuration", "Type de synthèse vocale invalide.")
             return
+        theme_value = var_theme.get().strip().lower()
+        if theme_value not in {"dark", "light"}:
+            messagebox.showerror("Configuration", "Thème invalide.")
+            return
+
+        font_value = var_font_size.get().strip()
+        if font_value not in {"10", "11", "12", "14"}:
+            messagebox.showerror("Configuration", "Taille de police invalide.")
+            return
+
         self.result = {
             'db_path': var_db.get().strip(),
             'user_db_path': var_user_db.get().strip(),
@@ -8637,7 +8781,9 @@ class ConfigDialog(tk.Toplevel):
             'enable_tts': var_enable_tts.get(),
             'tts_type': tts_type_value,
             'enable_barcode_generation': var_enable_barcode.get(),
-            'low_stock_threshold': var_low_stock.get()
+            'low_stock_threshold': var_low_stock.get(),
+            'theme': theme_value,
+            'font_size': font_value,
         }
         if not self._is_admin:
             for key, value in self._initial_paths.items():
@@ -9391,6 +9537,12 @@ def main(argv=None):
         startup_listener.flush_to_logger(level=logging.ERROR)
         return 1
     startup_listener.record("Création du conteneur Tkinter racine.", level=logging.DEBUG)
+    theme_mode = config.get('Settings', 'theme', fallback='dark')
+    try:
+        font_pref = config.getint('Settings', 'font_size')
+    except Exception:
+        font_pref = 10
+    apply_theme(root, theme_mode, font_size=font_pref)
     root.withdraw()
     login = LoginDialog(root)
     startup_listener.record("Boîte de dialogue de connexion affichée.", level=logging.DEBUG)
