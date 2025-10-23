@@ -3627,23 +3627,6 @@ class StockApp(tk.Tk):
 
     def create_toolbar(self):
         toolbar = ttk.Frame(self, padding=5)
-        inventory_state = tk.NORMAL if self.inventory_allowed else tk.DISABLED
-        btn_add = ttk.Button(toolbar, text="Ajouter", command=self.open_add_dialog, state=inventory_state)
-        btn_edit = ttk.Button(toolbar, text="Modifier", command=self.open_edit_selected, state=inventory_state)
-        btn_delete = ttk.Button(toolbar, text="Supprimer", command=self.delete_selected, state=inventory_state)
-        btn_stock_in = ttk.Button(
-            toolbar,
-            text="Entrée",
-            command=lambda: self.open_stock_adjustment(True),
-            state=inventory_state,
-        )
-        btn_stock_out = ttk.Button(
-            toolbar,
-            text="Sortie",
-            command=lambda: self.open_stock_adjustment(False),
-            state=inventory_state,
-        )
-        btn_scan_cam = ttk.Button(toolbar, text="Scan Caméra", command=self.scan_camera, state=inventory_state)
 
         button_specs = [
             ("add", "Ajouter"),
@@ -3659,25 +3642,17 @@ class StockApp(tk.Tk):
             ("columns", "Colonnes"),
         ]
 
-        btn_barcode_gen = ttk.Button(
-            toolbar,
-            text="Générer Code-Barres",
-            command=lambda: self.generate_barcode_dialog()
-        )
-        btn_export = ttk.Button(toolbar, text="Exporter CSV", command=self.export_csv, state=inventory_state)
-        btn_columns = ttk.Button(toolbar, text="Colonnes", command=self.open_column_manager, state=inventory_state)
+        self.toolbar_buttons: dict[str, ttk.Button] = {}
 
-        btn_add.pack(side=tk.LEFT, padx=2)
-        btn_edit.pack(side=tk.LEFT, padx=2)
-        btn_delete.pack(side=tk.LEFT, padx=2)
-        btn_stock_in.pack(side=tk.LEFT, padx=2)
-        btn_stock_out.pack(side=tk.LEFT, padx=2)
-        btn_scan_cam.pack(side=tk.LEFT, padx=2)
-        btn_listen.pack(side=tk.LEFT, padx=2)
-        btn_stop_listen.pack(side=tk.LEFT, padx=2)
-        btn_barcode_gen.pack(side=tk.LEFT, padx=2)
-        btn_export.pack(side=tk.LEFT, padx=2)
-        btn_columns.pack(side=tk.LEFT, padx=2)
+        for action, label in button_specs:
+            button = ttk.Button(
+                toolbar,
+                text=label,
+                command=lambda action_name=action: self._invoke_toolbar_action(action_name),
+                state=tk.DISABLED,
+            )
+            button.pack(side=tk.LEFT, padx=2)
+            self.toolbar_buttons[action] = button
 
         toolbar.pack(fill=tk.X)
         self.toolbar = toolbar
@@ -3717,7 +3692,22 @@ class StockApp(tk.Tk):
                 mode = "pharmacy"
 
         handlers: dict[str, Callable[[], None]] = {}
-        if mode == "clothing":
+        if mode == "inventory":
+            handlers = {
+                "add": self.open_add_dialog,
+                "edit": self.open_edit_selected,
+                "delete": self.delete_selected,
+                "stock_in": lambda: self.open_stock_adjustment(True),
+                "stock_out": lambda: self.open_stock_adjustment(False),
+                "scan": self.scan_camera,
+                "barcode": self.generate_barcode_dialog,
+                "export": self.export_csv,
+                "columns": self.open_column_manager,
+            }
+            if ENABLE_VOICE and SR_LIB_AVAILABLE:
+                handlers["listen"] = start_voice_listening
+                handlers["stop_listen"] = stop_voice_listening
+        elif mode == "clothing":
             handlers = {
                 "add": self.open_clothing_register_dialog,
                 "stock_in": self.adjust_selected_clothing_item,
