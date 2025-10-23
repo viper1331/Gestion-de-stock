@@ -136,6 +136,7 @@ default_config = {
     'low_stock_threshold': '5',
     'last_user': '',
     'enable_pharmacy_module': 'true',
+    'enable_clothing_module': 'true',
 }
 if not os.path.exists(CONFIG_FILE):
     config['Settings'] = default_config
@@ -188,6 +189,7 @@ ENABLE_BARCODE_GENERATION = config['Settings'].getboolean('enable_barcode_genera
 DEFAULT_LOW_STOCK_THRESHOLD = config['Settings'].getint('low_stock_threshold', fallback=5)
 LAST_USER = config['Settings'].get('last_user', '')
 ENABLE_PHARMACY_MODULE = config['Settings'].getboolean('enable_pharmacy_module', fallback=True)
+ENABLE_CLOTHING_MODULE = config['Settings'].getboolean('enable_clothing_module', fallback=True)
 
 KNOWN_TTS_DRIVERS = ("sapi5", "nsss", "espeak")
 DEFAULT_TTS_TYPE_LABELS = {
@@ -472,6 +474,12 @@ except Exception:  # pragma: no cover - import errors reported during initializa
     PharmacyInventoryManager = None  # type: ignore[assignment]
     PharmacyBatch = None  # type: ignore[assignment]
 
+try:
+    from .clothing_inventory import ClothingInventoryManager, ClothingItem
+except Exception:  # pragma: no cover - import errors reported during initialization
+    ClothingInventoryManager = None  # type: ignore[assignment]
+    ClothingItem = None  # type: ignore[assignment]
+
 
 def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, operator=None, note=None, timestamp=None):
     """Insère un mouvement de stock dans la table dédiée."""
@@ -498,6 +506,15 @@ if PharmacyInventoryManager is not None:
     )
 else:  # pragma: no cover - résidu si l'import échoue
     pharmacy_inventory_manager = None
+
+
+if ClothingInventoryManager is not None:
+    clothing_inventory_manager = ClothingInventoryManager(
+        db_path_getter=lambda: DB_PATH,
+        lock=db_lock,
+    )
+else:  # pragma: no cover - résidu si l'import échoue
+    clothing_inventory_manager = None
 
 
 
@@ -577,6 +594,89 @@ def list_pharmacy_batches(
         include_zero=include_zero,
         db_path=db_path,
     )
+
+
+def ensure_clothing_inventory_schema(
+    *, db_path: Optional[str] = None, cursor: Optional[sqlite3.Cursor] = None
+) -> None:
+    """Garantit la présence des structures dédiées à l'habillement."""
+
+    if clothing_inventory_manager is None:
+        raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
+    clothing_inventory_manager.ensure_schema(db_path=db_path, cursor=cursor)
+
+
+def register_clothing_item(
+    *,
+    name: str,
+    size: Optional[str] = None,
+    category: Optional[str] = None,
+    quantity: int = 0,
+    location: Optional[str] = None,
+    note: Optional[str] = None,
+    operator: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> ClothingItem:
+    """Crée ou met à jour un article d'habillement."""
+
+    if clothing_inventory_manager is None:
+        raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
+    return clothing_inventory_manager.register_item(
+        name=name,
+        size=size,
+        category=category,
+        quantity=quantity,
+        location=location,
+        note=note,
+        operator=operator,
+        db_path=db_path,
+    )
+
+
+def adjust_clothing_item_quantity(
+    clothing_id: int,
+    delta: int,
+    *,
+    operator: Optional[str] = None,
+    note: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Optional[ClothingItem]:
+    """Ajuste la quantité d'un article d'habillement."""
+
+    if clothing_inventory_manager is None:
+        raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
+    return clothing_inventory_manager.adjust_quantity(
+        clothing_id,
+        delta,
+        operator=operator,
+        note=note,
+        db_path=db_path,
+    )
+
+
+def list_clothing_items(
+    *,
+    search: str = "",
+    include_zero: bool = True,
+    db_path: Optional[str] = None,
+) -> list[ClothingItem]:
+    """Retourne les articles d'habillement pour l'interface graphique."""
+
+    if clothing_inventory_manager is None:
+        raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
+    return clothing_inventory_manager.list_items(
+        search=search,
+        include_zero=include_zero,
+        db_path=db_path,
+    )
+
+
+def summarize_clothing_stock(*, db_path: Optional[str] = None) -> dict:
+    """Fournit un résumé agrégé du stock d'habillement."""
+
+    if clothing_inventory_manager is None:
+        raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
+    return clothing_inventory_manager.summarize_stock(db_path=db_path)
 
 def adjust_item_quantity(item_id, delta, operator='system', source='manual', note=None):
     """Modifie la quantité d'un article et journalise le mouvement."""
@@ -893,6 +993,8 @@ def init_stock_db(db_path=DB_PATH):
 
         if pharmacy_inventory_manager is not None:
             pharmacy_inventory_manager.ensure_schema(cursor=cursor)
+        if clothing_inventory_manager is not None:
+            clothing_inventory_manager.ensure_schema(cursor=cursor)
 
         conn.commit()
         startup_listener.record("Base stock prête.", level=logging.DEBUG)
@@ -2545,6 +2647,122 @@ class AddUserDialog(tk.Toplevel):
         self.destroy()
 
 
+class ClothingItemDialog(tk.Toplevel):
+    """Boîte de dialogue pour créer ou modifier un article d'habillement."""
+
+    def __init__(
+        self,
+        parent: tk.Misc,
+        title: str,
+        *,
+        sizes: Optional[list[str]] = None,
+        initial: Optional[dict] = None,
+    ) -> None:
+        super().__init__(parent)
+        self.title(title)
+        self.resizable(False, False)
+        self.transient(parent)
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+        self.result: Optional[dict] = None
+
+        initial = initial or {}
+        self.var_name = tk.StringVar(value=initial.get('name', ''))
+        self.var_category = tk.StringVar(value=initial.get('category', ''))
+        self.var_size = tk.StringVar(value=initial.get('size', ''))
+        self.var_quantity = tk.StringVar(value=str(initial.get('quantity', 0)))
+        self.var_location = tk.StringVar(value=initial.get('location', ''))
+
+        content = ttk.Frame(self, padding=10)
+        content.grid(row=0, column=0, sticky="nsew")
+        self.columnconfigure(0, weight=1)
+        self.rowconfigure(0, weight=1)
+
+        ttk.Label(content, text="Nom de l'article :").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.entry_name = ttk.Entry(content, textvariable=self.var_name, width=40)
+        self.entry_name.grid(row=0, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Catégorie :").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.entry_category = ttk.Entry(content, textvariable=self.var_category, width=40)
+        self.entry_category.grid(row=1, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Taille :").grid(row=2, column=0, sticky=tk.W, pady=2)
+        if sizes:
+            self.entry_size = ttk.Combobox(
+                content,
+                textvariable=self.var_size,
+                values=sizes,
+                width=10,
+                state="readonly",
+            )
+            self.entry_size.grid(row=2, column=1, sticky=tk.W, pady=2)
+        else:
+            self.entry_size = ttk.Entry(content, textvariable=self.var_size, width=15)
+            self.entry_size.grid(row=2, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Quantité :").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.entry_quantity = ttk.Entry(content, textvariable=self.var_quantity, width=10)
+        self.entry_quantity.grid(row=3, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Emplacement :").grid(row=4, column=0, sticky=tk.W, pady=2)
+        self.entry_location = ttk.Entry(content, textvariable=self.var_location, width=40)
+        self.entry_location.grid(row=4, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Note :").grid(row=5, column=0, sticky=tk.NW, pady=2)
+        self.note_text = tk.Text(content, width=40, height=4)
+        self.note_text.grid(row=5, column=1, sticky=tk.W, pady=2)
+        note_value = initial.get('note')
+        if note_value:
+            self.note_text.insert('1.0', str(note_value))
+
+        button_frame = ttk.Frame(content)
+        button_frame.grid(row=6, column=0, columnspan=2, pady=(10, 0))
+        ttk.Button(button_frame, text="Valider", command=self.on_ok).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
+
+        self.bind('<Return>', lambda _event: self.on_ok())
+        self.bind('<Escape>', lambda _event: self.on_cancel())
+        self.entry_name.focus_set()
+
+        self.grab_set()
+        self.wait_window(self)
+
+    def on_ok(self):
+        name = self.var_name.get().strip()
+        category = self.var_category.get().strip() or None
+        size = self.var_size.get().strip() or None
+        quantity_raw = self.var_quantity.get().strip()
+        location = self.var_location.get().strip() or None
+        note_text = self.note_text.get('1.0', tk.END).strip()
+        note = note_text or None
+
+        if not name:
+            messagebox.showerror("Erreur", "Le nom de l'article est requis.", parent=self)
+            return
+        try:
+            quantity = int(quantity_raw)
+        except (TypeError, ValueError):
+            messagebox.showerror("Erreur", "La quantité doit être un entier.", parent=self)
+            return
+        if quantity < 0:
+            messagebox.showerror("Erreur", "La quantité doit être positive ou nulle.", parent=self)
+            return
+
+        self.result = {
+            'name': name,
+            'category': category,
+            'size': size,
+            'quantity': quantity,
+            'location': location,
+            'note': note,
+        }
+        self.destroy()
+
+    def on_cancel(self):
+        self.result = None
+        self.destroy()
+
+
 class PharmacyBatchDialog(tk.Toplevel):
     """Boîte de dialogue pour créer un lot pharmaceutique."""
 
@@ -2905,6 +3123,7 @@ class StockApp(tk.Tk):
         )
 
         self.pharmacy_enabled = ENABLE_PHARMACY_MODULE
+        self.clothing_enabled = ENABLE_CLOTHING_MODULE
 
         self.create_menu()
         self.create_toolbar()
@@ -3021,6 +3240,12 @@ class StockApp(tk.Tk):
             variable=self.pharmacy_module_var,
             command=self.on_toggle_pharmacy_module,
         )
+        self.clothing_module_var = tk.BooleanVar(value=self.clothing_enabled)
+        module_menu.add_checkbutton(
+            label="Gestion Habillement",
+            variable=self.clothing_module_var,
+            command=self.on_toggle_clothing_module,
+        )
         menubar.add_cascade(label="Modules", menu=module_menu)
 
         help_menu = tk.Menu(menubar, tearoff=0)
@@ -3086,6 +3311,10 @@ class StockApp(tk.Tk):
         self.dashboard_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.dashboard_frame, text="Tableau de bord")
 
+        self.clothing_frame: Optional[ttk.Frame] = None
+        if self.clothing_enabled:
+            self.add_clothing_tab()
+
         self.pharmacy_frame: Optional[ttk.Frame] = None
         if self.pharmacy_enabled:
             self.add_pharmacy_tab()
@@ -3139,6 +3368,397 @@ class StockApp(tk.Tk):
 
         self.create_dashboard_tab()
 
+    def add_clothing_tab(self) -> None:
+        if getattr(self, "clothing_frame", None) is not None:
+            return
+        self.clothing_frame = ttk.Frame(self.notebook)
+        self.notebook.add(self.clothing_frame, text="Habillement")
+        self.create_clothing_tab()
+
+    def remove_clothing_tab(self) -> None:
+        frame = getattr(self, "clothing_frame", None)
+        if frame is None:
+            return
+        job = getattr(self, "_clothing_search_job", None)
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        try:
+            self.notebook.forget(frame)
+        except tk.TclError:
+            pass
+        frame.destroy()
+        self.clothing_frame = None
+        for attr in (
+            "clothing_summary_vars",
+            "clothing_tree",
+            "clothing_item_cache",
+            "clothing_search_var",
+            "clothing_include_zero_var",
+        ):
+            if hasattr(self, attr):
+                delattr(self, attr)
+        self._clothing_search_job = None
+
+    def create_clothing_tab(self) -> None:
+        frame = getattr(self, "clothing_frame", None)
+        if frame is None:
+            return
+        for child in frame.winfo_children():
+            child.destroy()
+        if clothing_inventory_manager is None:
+            ttk.Label(
+                frame,
+                text="Module habillement indisponible : vérifiez l'installation.",
+            ).pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+            return
+        try:
+            ensure_clothing_inventory_schema()
+        except Exception as exc:
+            ttk.Label(
+                frame,
+                text=f"Impossible d'initialiser l'habillement : {exc}",
+            ).pack(fill=tk.BOTH, expand=True, padx=20, pady=20)
+            return
+
+        self.clothing_summary_vars = {
+            'total_items': tk.StringVar(value='0'),
+            'total_quantity': tk.StringVar(value='0'),
+            'depleted': tk.StringVar(value='0'),
+        }
+
+        summary_frame = ttk.LabelFrame(frame, text="Résumé", padding=10)
+        summary_frame.pack(fill=tk.X, padx=10, pady=5)
+        summary_labels = [
+            ("Articles référencés", 'total_items'),
+            ("Quantité totale", 'total_quantity'),
+            ("Articles épuisés", 'depleted'),
+        ]
+        for col, (label, key) in enumerate(summary_labels):
+            ttk.Label(summary_frame, text=f"{label} :").grid(row=0, column=col * 2, sticky=tk.W, padx=5)
+            ttk.Label(summary_frame, textvariable=self.clothing_summary_vars[key]).grid(
+                row=0,
+                column=col * 2 + 1,
+                sticky=tk.W,
+                padx=2,
+            )
+
+        control_frame = ttk.Frame(frame)
+        control_frame.pack(fill=tk.X, padx=10, pady=(0, 5))
+        ttk.Label(control_frame, text="Rechercher :").grid(row=0, column=0, padx=5, pady=2, sticky=tk.W)
+        self.clothing_search_var = tk.StringVar()
+        search_entry = ttk.Entry(control_frame, textvariable=self.clothing_search_var, width=30)
+        search_entry.grid(row=0, column=1, padx=5, pady=2, sticky=tk.W)
+        search_entry.bind("<Return>", lambda _event: self.refresh_clothing_items())
+
+        self.clothing_include_zero_var = tk.BooleanVar(value=True)
+        ttk.Checkbutton(
+            control_frame,
+            text="Inclure quantités nulles",
+            variable=self.clothing_include_zero_var,
+            command=self.refresh_clothing_items,
+        ).grid(row=0, column=2, padx=10, pady=2, sticky=tk.W)
+
+        ttk.Button(
+            control_frame,
+            text="Ajouter article",
+            command=self.open_clothing_register_dialog,
+        ).grid(row=0, column=3, padx=5, pady=2, sticky=tk.W)
+        ttk.Button(
+            control_frame,
+            text="Ajuster quantité",
+            command=self.adjust_selected_clothing_item,
+        ).grid(row=0, column=4, padx=5, pady=2, sticky=tk.W)
+        ttk.Button(
+            control_frame,
+            text="Exporter CSV",
+            command=self.export_clothing_inventory,
+        ).grid(row=0, column=5, padx=5, pady=2, sticky=tk.W)
+
+        control_frame.columnconfigure(6, weight=1)
+
+        tree_container = ttk.Frame(frame)
+        tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+        columns = ("name", "size", "category", "quantity", "location", "updated_at")
+        self.clothing_tree = ttk.Treeview(
+            tree_container,
+            columns=columns,
+            show='headings',
+            selectmode='browse',
+        )
+        headings = {
+            'name': ("Article", tk.W, 200),
+            'size': ("Taille", tk.CENTER, 80),
+            'category': ("Catégorie", tk.W, 140),
+            'quantity': ("Quantité", tk.CENTER, 90),
+            'location': ("Emplacement", tk.W, 160),
+            'updated_at': ("Dernière MAJ", tk.CENTER, 140),
+        }
+        for key in columns:
+            text, anchor, width = headings[key]
+            self.clothing_tree.heading(key, text=text)
+            self.clothing_tree.column(key, anchor=anchor, width=width)
+        vsb = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.clothing_tree.yview)
+        hsb = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.clothing_tree.xview)
+        self.clothing_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.clothing_tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+        tree_container.columnconfigure(0, weight=1)
+        tree_container.rowconfigure(0, weight=1)
+
+        self.clothing_tree.tag_configure('clothing_empty', background='#f8d7da', foreground='#721c24')
+        self.clothing_tree.tag_configure('clothing_low', background='#fff3cd', foreground='#856404')
+        self.clothing_tree.bind("<Double-1>", self.on_clothing_item_double_click)
+
+        self.clothing_item_cache: dict[str, ClothingItem] = {}
+        self._clothing_search_job: Optional[str] = None
+        self.clothing_search_var.trace_add('write', self._on_clothing_search_change)
+
+        self.refresh_clothing_summary()
+        self.refresh_clothing_items()
+
+    def _on_clothing_search_change(self, *_args) -> None:
+        job = getattr(self, "_clothing_search_job", None)
+        if job:
+            try:
+                self.after_cancel(job)
+            except Exception:
+                pass
+        self._clothing_search_job = self.after(300, self.refresh_clothing_items)
+
+    def refresh_clothing_items(self) -> None:
+        if not hasattr(self, 'clothing_tree'):
+            return
+        if clothing_inventory_manager is None:
+            return
+        try:
+            items = list_clothing_items(
+                search=self.clothing_search_var.get(),
+                include_zero=self.clothing_include_zero_var.get(),
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible de charger l'habillement : {exc}",
+                parent=self,
+            )
+            return
+        self.clothing_tree.delete(*self.clothing_tree.get_children())
+        self.clothing_item_cache.clear()
+        for item in items:
+            updated = format_display_datetime(item.updated_at)
+            values = (
+                item.name,
+                item.size or '—',
+                item.category or '—',
+                item.quantity,
+                item.location or '—',
+                updated,
+            )
+            tags = []
+            if item.quantity <= 0:
+                tags.append('clothing_empty')
+            elif item.quantity <= self.low_stock_threshold:
+                tags.append('clothing_low')
+            self.clothing_tree.insert('', 'end', iid=str(item.id), values=values, tags=tags or None)
+            self.clothing_item_cache[str(item.id)] = item
+        if items:
+            self.clothing_tree.yview_moveto(0)
+
+    def refresh_clothing_summary(self) -> None:
+        if not hasattr(self, 'clothing_summary_vars'):
+            return
+        if clothing_inventory_manager is None:
+            for var in self.clothing_summary_vars.values():
+                var.set('—')
+            return
+        try:
+            summary = summarize_clothing_stock()
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible de récupérer le résumé habillement : {exc}",
+                parent=self,
+            )
+            for var in self.clothing_summary_vars.values():
+                var.set('—')
+            return
+        self.clothing_summary_vars['total_items'].set(str(summary.get('total_items', 0)))
+        self.clothing_summary_vars['total_quantity'].set(str(summary.get('total_quantity', 0)))
+        self.clothing_summary_vars['depleted'].set(str(summary.get('depleted', 0)))
+
+    def open_clothing_register_dialog(self) -> None:
+        if clothing_inventory_manager is None:
+            messagebox.showerror(
+                "Module indisponible",
+                "La gestion habillement n'est pas disponible sur cette installation.",
+                parent=self,
+            )
+            return
+        dialog = ClothingItemDialog(
+            self,
+            "Nouvel article habillement",
+            sizes=self.CLOTHING_SIZES,
+        )
+        if not dialog.result:
+            return
+        try:
+            register_clothing_item(operator=self.current_user, **dialog.result)
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible d'enregistrer l'article : {exc}",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Succès",
+            "L'article d'habillement a été enregistré avec succès.",
+            parent=self,
+        )
+        self.refresh_clothing_summary()
+        self.refresh_clothing_items()
+
+    def adjust_selected_clothing_item(self) -> None:
+        if clothing_inventory_manager is None or not hasattr(self, 'clothing_tree'):
+            return
+        selection = self.clothing_tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "Sélection requise",
+                "Sélectionnez un article à ajuster.",
+                parent=self,
+            )
+            return
+        item = self.clothing_item_cache.get(selection[0])
+        if item is None:
+            return
+        delta_str = simpledialog.askstring(
+            "Ajuster quantité",
+            "Entrez la variation de quantité (ex: 5 ou -3) :",
+            parent=self,
+        )
+        if delta_str is None:
+            return
+        try:
+            delta = int(delta_str.strip())
+        except (TypeError, ValueError):
+            messagebox.showerror("Erreur", "Veuillez saisir un entier valide.", parent=self)
+            return
+        note = simpledialog.askstring(
+            "Commentaire",
+            "Ajouter un commentaire (optionnel) :",
+            parent=self,
+        )
+        try:
+            result = adjust_clothing_item_quantity(
+                item.id,
+                delta,
+                operator=self.current_user,
+                note=note or None,
+            )
+        except ValueError as exc:
+            messagebox.showerror("Quantité invalide", str(exc), parent=self)
+            return
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible d'ajuster l'article : {exc}",
+                parent=self,
+            )
+            return
+        if not result:
+            messagebox.showerror(
+                "Introuvable",
+                "L'article sélectionné est introuvable.",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Quantité mise à jour",
+            f"Nouvelle quantité : {result.quantity}",
+            parent=self,
+        )
+        self.refresh_clothing_summary()
+        self.refresh_clothing_items()
+
+    def export_clothing_inventory(self) -> None:
+        if not hasattr(self, 'clothing_item_cache'):
+            return
+        file_path = filedialog.asksaveasfilename(
+            title="Exporter l'habillement",
+            defaultextension=".csv",
+            filetypes=[("CSV", "*.csv"), ("Tous les fichiers", "*.*")],
+        )
+        if not file_path:
+            return
+        rows = []
+        for item in self.clothing_item_cache.values():
+            rows.append(
+                (
+                    item.name,
+                    item.size or '',
+                    item.category or '',
+                    item.quantity,
+                    item.location or '',
+                    item.note or '',
+                    format_display_datetime(item.updated_at),
+                    item.operator or '',
+                )
+            )
+        headers = (
+            "Article",
+            "Taille",
+            "Catégorie",
+            "Quantité",
+            "Emplacement",
+            "Note",
+            "Dernière mise à jour",
+            "Dernier opérateur",
+        )
+        try:
+            export_rows_to_csv(file_path, headers, rows)
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible d'exporter les données : {exc}",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Export terminé",
+            f"Export réalisé avec succès : {file_path}",
+            parent=self,
+        )
+
+    def on_clothing_item_double_click(self, _event=None) -> None:
+        if not hasattr(self, 'clothing_tree'):
+            return
+        selection = self.clothing_tree.selection()
+        if not selection:
+            return
+        item = self.clothing_item_cache.get(selection[0])
+        if item is None:
+            return
+        details = [
+            f"Article : {item.name}",
+            f"Catégorie : {item.category or '—'}",
+            f"Taille : {item.size or '—'}",
+            f"Quantité : {item.quantity}",
+            f"Emplacement : {item.location or '—'}",
+            f"Note : {item.note or '—'}",
+            f"Dernière mise à jour : {format_display_datetime(item.updated_at)}",
+            f"Dernier opérateur : {item.operator or '—'}",
+        ]
+        messagebox.showinfo(
+            "Détails habillement",
+            "\n".join(details),
+            parent=self,
+        )
+
     def add_pharmacy_tab(self) -> None:
         if getattr(self, "pharmacy_frame", None) is not None:
             return
@@ -3183,6 +3803,19 @@ class StockApp(tk.Tk):
         else:
             self.remove_pharmacy_tab()
         config['Settings']['enable_pharmacy_module'] = 'true' if enabled else 'false'
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            config.write(f)
+
+    def on_toggle_clothing_module(self) -> None:
+        enabled = bool(self.clothing_module_var.get())
+        if enabled == self.clothing_enabled:
+            return
+        self.clothing_enabled = enabled
+        if enabled:
+            self.add_clothing_tab()
+        else:
+            self.remove_clothing_tab()
+        config['Settings']['enable_clothing_module'] = 'true' if enabled else 'false'
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             config.write(f)
 
