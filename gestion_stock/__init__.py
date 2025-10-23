@@ -556,6 +556,74 @@ def register_pharmacy_batch(*, name: str, lot_number: str, quantity: int, expira
     )
 
 
+def get_pharmacy_batch(
+    batch_id: int,
+    *,
+    db_path: Optional[str] = None,
+) -> Optional[dict]:
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.get_batch(batch_id, db_path=db_path)
+
+
+def update_pharmacy_batch(
+    batch_id: int,
+    *,
+    name: str,
+    lot_number: str,
+    quantity: int,
+    expiration_date: Optional[str] = None,
+    barcode: Optional[str] = None,
+    category: Optional[str] = None,
+    dosage: Optional[str] = None,
+    form: Optional[str] = None,
+    storage_condition: Optional[str] = None,
+    prescription_required: bool = False,
+    note: Optional[str] = None,
+    operator: Optional[str] = None,
+    source: str = 'pharmacy_module',
+    db_path: Optional[str] = None,
+) -> Optional[dict]:
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.update_batch(
+        batch_id,
+        name=name,
+        lot_number=lot_number,
+        quantity=quantity,
+        expiration_date=expiration_date,
+        barcode=barcode,
+        category=category,
+        dosage=dosage,
+        form=form,
+        storage_condition=storage_condition,
+        prescription_required=prescription_required,
+        note=note,
+        operator=operator,
+        source=source,
+        db_path=db_path,
+    )
+
+
+def delete_pharmacy_batch(
+    batch_id: int,
+    *,
+    operator: Optional[str] = None,
+    source: str = 'pharmacy_module',
+    note: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> bool:
+    if pharmacy_inventory_manager is None:
+        raise RuntimeError("Le module pharmacy_inventory n'est pas disponible.")
+    return pharmacy_inventory_manager.delete_batch(
+        batch_id,
+        operator=operator,
+        source=source,
+        note=note,
+        db_path=db_path,
+    )
+
+
 def adjust_pharmacy_batch_quantity(batch_id: int, delta: int, *, operator: Optional[str] = None, source: str = 'pharmacy_module', note: Optional[str] = None, db_path: Optional[str] = None) -> Optional[dict]:
     """Modifie la quantité d'un lot pharmaceutique et synchronise l'article."""
     if pharmacy_inventory_manager is None:
@@ -618,9 +686,13 @@ def ensure_clothing_inventory_schema(
 def register_clothing_item(
     *,
     name: str,
+    barcode: Optional[str] = None,
     size: Optional[str] = None,
     category: Optional[str] = None,
     quantity: int = 0,
+    unit_cost: Optional[float] = None,
+    reorder_point: Optional[int] = None,
+    preferred_supplier_id: Optional[int] = None,
     location: Optional[str] = None,
     note: Optional[str] = None,
     operator: Optional[str] = None,
@@ -632,14 +704,61 @@ def register_clothing_item(
         raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
     return clothing_inventory_manager.register_item(
         name=name,
+        barcode=barcode,
         size=size,
         category=category,
         quantity=quantity,
+        unit_cost=unit_cost,
+        reorder_point=reorder_point,
+        preferred_supplier_id=preferred_supplier_id,
         location=location,
         note=note,
         operator=operator,
         db_path=db_path,
     )
+
+
+def update_clothing_item(
+    clothing_id: int,
+    *,
+    name: str,
+    barcode: Optional[str] = None,
+    size: Optional[str] = None,
+    category: Optional[str] = None,
+    quantity: int = 0,
+    unit_cost: Optional[float] = None,
+    reorder_point: Optional[int] = None,
+    preferred_supplier_id: Optional[int] = None,
+    note: Optional[str] = None,
+    operator: Optional[str] = None,
+    db_path: Optional[str] = None,
+) -> Optional[ClothingItem]:
+    if clothing_inventory_manager is None:
+        raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
+    return clothing_inventory_manager.update_item(
+        clothing_id,
+        name=name,
+        barcode=barcode,
+        size=size,
+        category=category,
+        quantity=quantity,
+        unit_cost=unit_cost,
+        reorder_point=reorder_point,
+        preferred_supplier_id=preferred_supplier_id,
+        note=note,
+        operator=operator,
+        db_path=db_path,
+    )
+
+
+def delete_clothing_item(
+    clothing_id: int,
+    *,
+    db_path: Optional[str] = None,
+) -> bool:
+    if clothing_inventory_manager is None:
+        raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
+    return clothing_inventory_manager.delete_item(clothing_id, db_path=db_path)
 
 
 def adjust_clothing_item_quantity(
@@ -2963,60 +3082,83 @@ class ClothingItemDialog(tk.Toplevel):
         self.protocol("WM_DELETE_WINDOW", self.on_cancel)
 
         self.result: Optional[dict] = None
-
+        self.default_sizes = sizes or []
         initial = initial or {}
+
         self.var_name = tk.StringVar(value=initial.get('name', ''))
-        self.var_category = tk.StringVar(value=initial.get('category', ''))
-        self.var_size = tk.StringVar(value=initial.get('size', ''))
+        self.var_barcode = tk.StringVar(value=initial.get('barcode', ''))
         self.var_quantity = tk.StringVar(value=str(initial.get('quantity', 0)))
-        self.var_location = tk.StringVar(value=initial.get('location', ''))
+        initial_unit_cost = initial.get('unit_cost')
+        self.var_unit_cost = tk.StringVar(
+            value="0.0" if initial_unit_cost is None else f"{float(initial_unit_cost):.2f}"
+        )
+        reorder = initial.get('reorder_point')
+        self.var_reorder_point = tk.StringVar(value="" if reorder in (None, "") else str(reorder))
+        self.var_size = tk.StringVar(value=initial.get('size', ''))
+        self.var_category = tk.StringVar(value=initial.get('category', ''))
+        self.var_supplier_id = tk.IntVar(value=initial.get('preferred_supplier_id') or -1)
 
         content = ttk.Frame(self, padding=10)
         content.grid(row=0, column=0, sticky="nsew")
         self.columnconfigure(0, weight=1)
         self.rowconfigure(0, weight=1)
 
-        ttk.Label(content, text="Nom de l'article :").grid(row=0, column=0, sticky=tk.W, pady=2)
-        self.entry_name = ttk.Entry(content, textvariable=self.var_name, width=40)
+        ttk.Label(content, text="Nom :").grid(row=0, column=0, sticky=tk.W, pady=2)
+        self.entry_name = ttk.Entry(content, textvariable=self.var_name, width=32)
         self.entry_name.grid(row=0, column=1, sticky=tk.W, pady=2)
 
-        ttk.Label(content, text="Catégorie :").grid(row=1, column=0, sticky=tk.W, pady=2)
-        self.entry_category = ttk.Entry(content, textvariable=self.var_category, width=40)
-        self.entry_category.grid(row=1, column=1, sticky=tk.W, pady=2)
+        ttk.Label(content, text="Code-Barres :").grid(row=1, column=0, sticky=tk.W, pady=2)
+        self.entry_barcode = ttk.Entry(content, textvariable=self.var_barcode, width=32)
+        self.entry_barcode.grid(row=1, column=1, sticky=tk.W, pady=2)
 
-        ttk.Label(content, text="Taille :").grid(row=2, column=0, sticky=tk.W, pady=2)
-        if sizes:
-            self.entry_size = ttk.Combobox(
-                content,
-                textvariable=self.var_size,
-                values=sizes,
-                width=10,
-                state="readonly",
-            )
-            self.entry_size.grid(row=2, column=1, sticky=tk.W, pady=2)
-        else:
-            self.entry_size = ttk.Entry(content, textvariable=self.var_size, width=15)
-            self.entry_size.grid(row=2, column=1, sticky=tk.W, pady=2)
+        ttk.Label(content, text="Catégorie :").grid(row=2, column=0, sticky=tk.W, pady=2)
+        self.category_combobox = ttk.Combobox(
+            content,
+            state='readonly',
+            width=30,
+            textvariable=self.var_category,
+        )
+        self.category_combobox.grid(row=2, column=1, sticky=tk.W, pady=2)
+        ttk.Button(content, text="Nouvelle Cat.", command=self.add_category_inline).grid(
+            row=2, column=2, padx=5, pady=2
+        )
 
-        ttk.Label(content, text="Quantité :").grid(row=3, column=0, sticky=tk.W, pady=2)
+        ttk.Label(content, text="Taille :").grid(row=3, column=0, sticky=tk.W, pady=2)
+        self.size_combobox = ttk.Combobox(content, textvariable=self.var_size, width=18, state='normal')
+        self.size_combobox.grid(row=3, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Quantité :").grid(row=4, column=0, sticky=tk.W, pady=2)
         self.entry_quantity = ttk.Entry(content, textvariable=self.var_quantity, width=10)
-        self.entry_quantity.grid(row=3, column=1, sticky=tk.W, pady=2)
+        self.entry_quantity.grid(row=4, column=1, sticky=tk.W, pady=2)
 
-        ttk.Label(content, text="Emplacement :").grid(row=4, column=0, sticky=tk.W, pady=2)
-        self.entry_location = ttk.Entry(content, textvariable=self.var_location, width=40)
-        self.entry_location.grid(row=4, column=1, sticky=tk.W, pady=2)
+        ttk.Label(content, text="Coût unitaire (€) :").grid(row=5, column=0, sticky=tk.W, pady=2)
+        self.entry_unit_cost = ttk.Entry(content, textvariable=self.var_unit_cost, width=10)
+        self.entry_unit_cost.grid(row=5, column=1, sticky=tk.W, pady=2)
 
-        ttk.Label(content, text="Note :").grid(row=5, column=0, sticky=tk.NW, pady=2)
-        self.note_text = tk.Text(content, width=40, height=4)
-        self.note_text.grid(row=5, column=1, sticky=tk.W, pady=2)
-        note_value = initial.get('note')
-        if note_value:
-            self.note_text.insert('1.0', str(note_value))
+        ttk.Label(content, text="Seuil de réassort :").grid(row=6, column=0, sticky=tk.W, pady=2)
+        self.entry_reorder = ttk.Entry(content, textvariable=self.var_reorder_point, width=10)
+        self.entry_reorder.grid(row=6, column=1, sticky=tk.W, pady=2)
+
+        ttk.Label(content, text="Fournisseur préféré :").grid(row=7, column=0, sticky=tk.W, pady=2)
+        self.supplier_combobox = ttk.Combobox(content, state='readonly', width=30)
+        self.supplier_combobox.grid(row=7, column=1, sticky=tk.W, pady=2)
+        ttk.Button(content, text="Rafraîchir", command=self.load_suppliers).grid(
+            row=7, column=2, padx=5, pady=2
+        )
 
         button_frame = ttk.Frame(content)
-        button_frame.grid(row=6, column=0, columnspan=2, pady=(10, 0))
+        button_frame.grid(row=8, column=0, columnspan=3, pady=(10, 0))
         ttk.Button(button_frame, text="Valider", command=self.on_ok).pack(side=tk.LEFT, padx=5)
         ttk.Button(button_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
+
+        self.category_ids: list[int] = []
+        self.category_names: list[str] = []
+        self.supplier_ids: list[int] = []
+
+        self.load_categories()
+        self.load_suppliers()
+        self.category_combobox.bind("<<ComboboxSelected>>", lambda _evt: self.update_size_options())
+        self.update_size_options()
 
         self.bind('<Return>', lambda _event: self.on_ok())
         self.bind('<Escape>', lambda _event: self.on_cancel())
@@ -3025,14 +3167,126 @@ class ClothingItemDialog(tk.Toplevel):
         self.grab_set()
         self.wait_window(self)
 
-    def on_ok(self):
+    def load_categories(self) -> None:
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute("SELECT id, name FROM categories ORDER BY name")
+                rows = cursor.fetchall()
+        except sqlite3.Error:
+            rows = []
+        finally:
+            if conn:
+                conn.close()
+        self.category_ids = [r[0] for r in rows]
+        self.category_names = [r[1] for r in rows]
+        self.category_combobox['values'] = self.category_names
+        if self.var_category.get() and self.var_category.get() in self.category_names:
+            index = self.category_names.index(self.var_category.get())
+            self.category_combobox.current(index)
+        elif self.category_names:
+            self.category_combobox.set('')
+
+    def load_suppliers(self) -> None:
+        suppliers = fetch_suppliers()
+        self.supplier_ids = [s[0] for s in suppliers]
+        supplier_names = [s[1] for s in suppliers]
+        self.supplier_combobox['values'] = supplier_names
+        initial_id = self.var_supplier_id.get()
+        if initial_id != -1 and initial_id in self.supplier_ids:
+            self.supplier_combobox.current(self.supplier_ids.index(initial_id))
+        elif supplier_names:
+            self.supplier_combobox.set('')
+
+    def add_category_inline(self) -> None:
+        name = simpledialog.askstring("Nouvelle Catégorie", "Entrez le nom de la nouvelle catégorie :", parent=self)
+        if not name:
+            return
+        note = simpledialog.askstring("Note de catégorie", "Entrez une note (optionnel) :", parent=self)
+        sizes_input = simpledialog.askstring(
+            "Tailles de la catégorie",
+            "Indiquez les tailles séparées par une virgule (optionnel) :",
+            parent=self,
+        )
+        sizes = []
+        if sizes_input:
+            sizes = [s.strip() for s in sizes_input.split(',') if s.strip()]
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "INSERT INTO categories (name, note) VALUES (?, ?)",
+                    (name, note.strip() if note and note.strip() else None),
+                )
+                category_id = cursor.lastrowid
+                if sizes:
+                    cursor.executemany(
+                        "INSERT OR IGNORE INTO category_sizes (category_id, size_label) VALUES (?, ?)",
+                        [(category_id, size) for size in sizes],
+                    )
+                conn.commit()
+        except sqlite3.IntegrityError:
+            messagebox.showerror("Erreur", "Catégorie existe déjà.", parent=self)
+        except sqlite3.Error as exc:
+            messagebox.showerror("Erreur BD", f"Impossible d'ajouter catégorie : {exc}", parent=self)
+        finally:
+            if conn:
+                conn.close()
+        self.var_category.set(name)
+        self.load_categories()
+        self.update_size_options()
+
+    def update_size_options(self) -> None:
+        idx = self.category_combobox.current()
+        if idx is None or idx < 0:
+            self.size_combobox.configure(state='normal')
+            self.size_combobox['values'] = self.default_sizes
+            return
+        category_id = self.category_ids[idx]
+        sizes = self._fetch_category_sizes(category_id)
+        if sizes:
+            self.size_combobox.configure(state='readonly')
+            self.size_combobox['values'] = sizes
+        else:
+            self.size_combobox.configure(state='normal')
+            self.size_combobox['values'] = self.default_sizes
+        if self.var_size.get() not in self.size_combobox['values']:
+            self.var_size.set('')
+
+    def _fetch_category_sizes(self, category_id: int) -> list[str]:
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    "SELECT size_label FROM category_sizes WHERE category_id = ? ORDER BY size_label COLLATE NOCASE",
+                    (category_id,),
+                )
+                return [row[0] for row in cursor.fetchall()]
+        except sqlite3.Error:
+            return []
+        finally:
+            if conn:
+                conn.close()
+
+    def on_ok(self) -> None:
         name = self.var_name.get().strip()
-        category = self.var_category.get().strip() or None
-        size = self.var_size.get().strip() or None
+        barcode_value = self.var_barcode.get().strip()
         quantity_raw = self.var_quantity.get().strip()
-        location = self.var_location.get().strip() or None
-        note_text = self.note_text.get('1.0', tk.END).strip()
-        note = note_text or None
+        size_value = self.var_size.get().strip() or None
+        cat_idx = self.category_combobox.current()
+        category_value = None
+        if cat_idx is not None and cat_idx >= 0 and cat_idx < len(self.category_names):
+            category_value = self.category_names[cat_idx]
+        elif self.var_category.get().strip():
+            category_value = self.var_category.get().strip()
+        supplier_idx = self.supplier_combobox.current()
+        supplier_id = self.supplier_ids[supplier_idx] if supplier_idx >= 0 else None
 
         if not name:
             messagebox.showerror("Erreur", "Le nom de l'article est requis.", parent=self)
@@ -3045,18 +3299,49 @@ class ClothingItemDialog(tk.Toplevel):
         if quantity < 0:
             messagebox.showerror("Erreur", "La quantité doit être positive ou nulle.", parent=self)
             return
+        if barcode_value and not barcode_value.isalnum():
+            messagebox.showerror("Erreur", "Le code-barres doit être alphanumérique.", parent=self)
+            return
+        unit_cost_value: Optional[float]
+        unit_cost_raw = self.var_unit_cost.get().strip()
+        if unit_cost_raw:
+            try:
+                unit_cost_value = float(unit_cost_raw)
+            except (TypeError, ValueError):
+                messagebox.showerror("Erreur", "Le coût unitaire est invalide.", parent=self)
+                return
+        else:
+            unit_cost_value = None
+        reorder_raw = self.var_reorder_point.get().strip()
+        reorder_value: Optional[int]
+        if reorder_raw:
+            try:
+                reorder_value = int(reorder_raw)
+                if reorder_value < 0:
+                    raise ValueError
+            except ValueError:
+                messagebox.showerror(
+                    "Erreur",
+                    "Le seuil de réassort doit être un entier positif.",
+                    parent=self,
+                )
+                return
+        else:
+            reorder_value = None
 
         self.result = {
             'name': name,
-            'category': category,
-            'size': size,
+            'barcode': barcode_value or None,
+            'category': category_value,
+            'size': size_value,
             'quantity': quantity,
-            'location': location,
-            'note': note,
+            'unit_cost': unit_cost_value,
+            'reorder_point': reorder_value,
+            'preferred_supplier_id': supplier_id,
         }
         self.destroy()
 
-    def on_cancel(self):
+    def on_cancel(self) -> None:
         self.result = None
         self.destroy()
 
@@ -3064,7 +3349,13 @@ class ClothingItemDialog(tk.Toplevel):
 class PharmacyBatchDialog(tk.Toplevel):
     """Boîte de dialogue pour créer un lot pharmaceutique."""
 
-    def __init__(self, parent: tk.Misc, title: str) -> None:
+    def __init__(
+        self,
+        parent: tk.Misc,
+        title: str,
+        *,
+        initial: Optional[dict] = None,
+    ) -> None:
         super().__init__(parent)
         self.title(title)
         self.resizable(False, False)
@@ -3073,16 +3364,21 @@ class PharmacyBatchDialog(tk.Toplevel):
 
         self.result: Optional[dict] = None
 
-        self.var_name = tk.StringVar()
-        self.var_lot = tk.StringVar()
-        self.var_quantity = tk.StringVar(value="0")
-        self.var_expiration = tk.StringVar()
-        self.var_barcode = tk.StringVar()
-        self.var_category = tk.StringVar()
-        self.var_dosage = tk.StringVar()
-        self.var_form = tk.StringVar()
-        self.var_storage = tk.StringVar()
-        self.var_prescription = tk.BooleanVar(value=False)
+        initial = initial or {}
+
+        self.var_name = tk.StringVar(value=initial.get('name', ''))
+        self.var_lot = tk.StringVar(value=initial.get('lot_number', ''))
+        self.var_quantity = tk.StringVar(value=str(initial.get('quantity', 0)))
+        expiration_initial = initial.get('expiration_date')
+        self.var_expiration = tk.StringVar(
+            value=format_display_date(expiration_initial) if expiration_initial else ''
+        )
+        self.var_barcode = tk.StringVar(value=initial.get('barcode', ''))
+        self.var_category = tk.StringVar(value=initial.get('category', ''))
+        self.var_dosage = tk.StringVar(value=initial.get('dosage', ''))
+        self.var_form = tk.StringVar(value=initial.get('form', ''))
+        self.var_storage = tk.StringVar(value=initial.get('storage_condition', ''))
+        self.var_prescription = tk.BooleanVar(value=bool(initial.get('prescription_required', False)))
 
         content = ttk.Frame(self, padding=10)
         content.grid(row=0, column=0, sticky="nsew")
@@ -3134,6 +3430,8 @@ class PharmacyBatchDialog(tk.Toplevel):
         ttk.Label(content, text="Note :").grid(row=10, column=0, sticky=tk.NW, pady=2)
         self.note_text = tk.Text(content, width=40, height=4)
         self.note_text.grid(row=10, column=1, sticky=tk.W, pady=2)
+        if initial.get('note'):
+            self.note_text.insert('1.0', str(initial['note']))
 
         button_frame = ttk.Frame(content)
         button_frame.grid(row=11, column=0, columnspan=2, pady=(10, 0))
@@ -3710,6 +4008,8 @@ class StockApp(tk.Tk):
         elif mode == "clothing":
             handlers = {
                 "add": self.open_clothing_register_dialog,
+                "edit": self.open_clothing_edit_dialog,
+                "delete": self.delete_selected_clothing_item,
                 "stock_in": self.adjust_selected_clothing_item,
                 "stock_out": self.adjust_selected_clothing_item,
                 "export": self.export_clothing_inventory,
@@ -3720,6 +4020,8 @@ class StockApp(tk.Tk):
         elif mode == "pharmacy":
             handlers = {
                 "add": self.open_pharmacy_register_dialog,
+                "edit": self.open_pharmacy_edit_dialog,
+                "delete": self.delete_selected_pharmacy_batch,
                 "stock_in": self.adjust_selected_pharmacy_batch,
                 "stock_out": self.adjust_selected_pharmacy_batch,
             }
@@ -3963,20 +4265,40 @@ class StockApp(tk.Tk):
         ).grid(row=0, column=3, padx=5, pady=2, sticky=tk.W)
         ttk.Button(
             control_frame,
+            text="Modifier",
+            command=self.open_clothing_edit_dialog,
+        ).grid(row=0, column=4, padx=5, pady=2, sticky=tk.W)
+        ttk.Button(
+            control_frame,
+            text="Supprimer",
+            command=self.delete_selected_clothing_item,
+        ).grid(row=0, column=5, padx=5, pady=2, sticky=tk.W)
+        ttk.Button(
+            control_frame,
             text="Ajuster quantité",
             command=self.adjust_selected_clothing_item,
-        ).grid(row=0, column=4, padx=5, pady=2, sticky=tk.W)
+        ).grid(row=0, column=6, padx=5, pady=2, sticky=tk.W)
         ttk.Button(
             control_frame,
             text="Exporter CSV",
             command=self.export_clothing_inventory,
-        ).grid(row=0, column=5, padx=5, pady=2, sticky=tk.W)
+        ).grid(row=0, column=7, padx=5, pady=2, sticky=tk.W)
 
-        control_frame.columnconfigure(6, weight=1)
+        control_frame.columnconfigure(8, weight=1)
 
         tree_container = ttk.Frame(frame)
         tree_container.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
-        columns = ("name", "size", "category", "quantity", "location", "updated_at")
+        columns = (
+            "name",
+            "barcode",
+            "size",
+            "category",
+            "quantity",
+            "reorder_point",
+            "unit_cost",
+            "supplier",
+            "updated_at",
+        )
         self.clothing_tree = ttk.Treeview(
             tree_container,
             columns=columns,
@@ -3984,11 +4306,14 @@ class StockApp(tk.Tk):
             selectmode='browse',
         )
         headings = {
-            'name': ("Article", tk.W, 200),
+            'name': ("Article", tk.W, 180),
+            'barcode': ("Code-Barres", tk.W, 140),
             'size': ("Taille", tk.CENTER, 80),
             'category': ("Catégorie", tk.W, 140),
             'quantity': ("Quantité", tk.CENTER, 90),
-            'location': ("Emplacement", tk.W, 160),
+            'reorder_point': ("Seuil", tk.CENTER, 90),
+            'unit_cost': ("Coût (€)", tk.CENTER, 90),
+            'supplier': ("Fournisseur", tk.W, 160),
             'updated_at': ("Dernière MAJ", tk.CENTER, 140),
         }
         for key in columns:
@@ -4048,16 +4373,24 @@ class StockApp(tk.Tk):
             updated = format_display_datetime(item.updated_at)
             values = (
                 item.name,
+                item.barcode or '—',
                 item.size or '—',
                 item.category or '—',
                 item.quantity,
-                item.location or '—',
+                item.reorder_point if item.reorder_point is not None else '—',
+                f"{item.unit_cost:.2f}" if item.unit_cost is not None else '—',
+                item.preferred_supplier_name or '—',
                 updated,
             )
             tags = []
+            threshold = item.reorder_point if item.reorder_point is not None else self.low_stock_threshold
+            try:
+                threshold_val = int(threshold)
+            except (TypeError, ValueError):
+                threshold_val = self.low_stock_threshold
             if item.quantity <= 0:
                 tags.append('clothing_empty')
-            elif item.quantity <= self.low_stock_threshold:
+            elif item.quantity <= threshold_val:
                 tags.append('clothing_low')
 
             insert_kwargs: dict[str, Any] = {
@@ -4124,6 +4457,109 @@ class StockApp(tk.Tk):
         messagebox.showinfo(
             "Succès",
             "L'article d'habillement a été enregistré avec succès.",
+            parent=self,
+        )
+        self.refresh_clothing_summary()
+        self.refresh_clothing_items()
+
+    def open_clothing_edit_dialog(self) -> None:
+        if clothing_inventory_manager is None or not hasattr(self, 'clothing_tree'):
+            return
+        selection = self.clothing_tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "Sélection requise",
+                "Sélectionnez un article à modifier.",
+                parent=self,
+            )
+            return
+        item = self.clothing_item_cache.get(selection[0])
+        if item is None:
+            return
+        dialog = ClothingItemDialog(
+            self,
+            "Modifier article habillement",
+            sizes=self.CLOTHING_SIZES,
+            initial={
+                'name': item.name,
+                'barcode': item.barcode,
+                'category': item.category,
+                'size': item.size,
+                'quantity': item.quantity,
+                'unit_cost': item.unit_cost,
+                'reorder_point': item.reorder_point,
+                'preferred_supplier_id': item.preferred_supplier_id,
+            },
+        )
+        if not dialog.result:
+            return
+        try:
+            updated = update_clothing_item(
+                item.id,
+                operator=self.current_user,
+                **dialog.result,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible de modifier l'article : {exc}",
+                parent=self,
+            )
+            return
+        if updated is None:
+            messagebox.showerror(
+                "Introuvable",
+                "L'article sélectionné est introuvable.",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Succès",
+            "L'article a été mis à jour avec succès.",
+            parent=self,
+        )
+        self.refresh_clothing_summary()
+        self.refresh_clothing_items()
+
+    def delete_selected_clothing_item(self) -> None:
+        if clothing_inventory_manager is None or not hasattr(self, 'clothing_tree'):
+            return
+        selection = self.clothing_tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "Sélection requise",
+                "Sélectionnez un article à supprimer.",
+                parent=self,
+            )
+            return
+        item = self.clothing_item_cache.get(selection[0])
+        if item is None:
+            return
+        if not messagebox.askyesno(
+            "Confirmation",
+            f"Supprimer l'article '{item.name}' ?",
+            parent=self,
+        ):
+            return
+        try:
+            success = delete_clothing_item(item.id)
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur",
+                f"Impossible de supprimer l'article : {exc}",
+                parent=self,
+            )
+            return
+        if not success:
+            messagebox.showerror(
+                "Introuvable",
+                "L'article sélectionné est introuvable.",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Article supprimé",
+            "L'article a été supprimé.",
             parent=self,
         )
         self.refresh_clothing_summary()
@@ -4207,22 +4643,26 @@ class StockApp(tk.Tk):
             rows.append(
                 (
                     item.name,
+                    item.barcode or '',
                     item.size or '',
                     item.category or '',
                     item.quantity,
-                    item.location or '',
-                    item.note or '',
+                    item.reorder_point if item.reorder_point is not None else '',
+                    f"{item.unit_cost:.2f}" if item.unit_cost is not None else '',
+                    item.preferred_supplier_name or '',
                     format_display_datetime(item.updated_at),
                     item.operator or '',
                 )
             )
         headers = (
             "Article",
+            "Code-Barres",
             "Taille",
             "Catégorie",
             "Quantité",
-            "Emplacement",
-            "Note",
+            "Seuil",
+            "Coût unitaire",
+            "Fournisseur",
             "Dernière mise à jour",
             "Dernier opérateur",
         )
@@ -4252,11 +4692,13 @@ class StockApp(tk.Tk):
             return
         details = [
             f"Article : {item.name}",
+            f"Code-Barres : {item.barcode or '—'}",
             f"Catégorie : {item.category or '—'}",
             f"Taille : {item.size or '—'}",
             f"Quantité : {item.quantity}",
-            f"Emplacement : {item.location or '—'}",
-            f"Note : {item.note or '—'}",
+            f"Seuil : {item.reorder_point if item.reorder_point is not None else '—'}",
+            f"Coût unitaire : {item.unit_cost:.2f} €" if item.unit_cost is not None else "Coût unitaire : —",
+            f"Fournisseur : {item.preferred_supplier_name or '—'}",
             f"Dernière mise à jour : {format_display_datetime(item.updated_at)}",
             f"Dernier opérateur : {item.operator or '—'}",
         ]
@@ -4824,6 +5266,69 @@ class StockApp(tk.Tk):
         self.refresh_pharmacy_summary()
         self.refresh_pharmacy_batches()
 
+    def open_pharmacy_edit_dialog(self):
+        if pharmacy_inventory_manager is None or not hasattr(self, 'pharmacy_tree'):
+            return
+        selection = self.pharmacy_tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "Sélection requise",
+                "Sélectionnez un lot à modifier.",
+                parent=self,
+            )
+            return
+        batch_id = selection[0]
+        try:
+            batch_details = get_pharmacy_batch(int(batch_id))
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur Pharmacie",
+                f"Impossible de récupérer le lot : {exc}",
+                parent=self,
+            )
+            return
+        if not batch_details:
+            messagebox.showerror(
+                "Introuvable",
+                "Le lot sélectionné est introuvable.",
+                parent=self,
+            )
+            return
+        dialog = PharmacyBatchDialog(
+            self,
+            "Modifier lot pharmacie",
+            initial=batch_details,
+        )
+        if not dialog.result:
+            return
+        try:
+            result = update_pharmacy_batch(
+                int(batch_id),
+                operator=self.current_user,
+                **dialog.result,
+            )
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur Pharmacie",
+                f"Impossible de modifier le lot : {exc}",
+                parent=self,
+            )
+            return
+        if not result:
+            messagebox.showerror(
+                "Introuvable",
+                "Le lot sélectionné est introuvable.",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Succès",
+            "Le lot a été mis à jour avec succès.",
+            parent=self,
+        )
+        self.refresh_pharmacy_summary()
+        self.refresh_pharmacy_batches()
+
     def adjust_selected_pharmacy_batch(self):
         if pharmacy_inventory_manager is None or not hasattr(self, 'pharmacy_tree'):
             return
@@ -4887,6 +5392,50 @@ class StockApp(tk.Tk):
         messagebox.showinfo(
             "Quantité mise à jour",
             f"Nouvelle quantité du lot : {result['quantity']}",
+            parent=self,
+        )
+        self.refresh_pharmacy_summary()
+        self.refresh_pharmacy_batches()
+
+    def delete_selected_pharmacy_batch(self):
+        if pharmacy_inventory_manager is None or not hasattr(self, 'pharmacy_tree'):
+            return
+        selection = self.pharmacy_tree.selection()
+        if not selection:
+            messagebox.showinfo(
+                "Sélection requise",
+                "Sélectionnez un lot à supprimer.",
+                parent=self,
+            )
+            return
+        batch_id = selection[0]
+        batch = self.pharmacy_batch_cache.get(batch_id)
+        lot_label = batch.lot_number if batch else batch_id
+        if not messagebox.askyesno(
+            "Confirmation",
+            f"Supprimer le lot {lot_label} ?",
+            parent=self,
+        ):
+            return
+        try:
+            success = delete_pharmacy_batch(int(batch_id), operator=self.current_user)
+        except Exception as exc:
+            messagebox.showerror(
+                "Erreur Pharmacie",
+                f"Impossible de supprimer le lot : {exc}",
+                parent=self,
+            )
+            return
+        if not success:
+            messagebox.showerror(
+                "Introuvable",
+                "Le lot sélectionné est introuvable.",
+                parent=self,
+            )
+            return
+        messagebox.showinfo(
+            "Lot supprimé",
+            "Le lot pharmaceutique a été supprimé.",
             parent=self,
         )
         self.refresh_pharmacy_summary()
