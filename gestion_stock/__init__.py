@@ -3900,6 +3900,73 @@ class StockApp(tk.Tk):
     CLOTHING_SIZES = ["XXS", "XS", "S", "M", "L", "XL", "XXL"]
     SHOE_SIZES = [str(i) for i in range(30, 61)]
 
+    @staticmethod
+    def _parse_color(color: str) -> tuple[int, int, int]:
+        color = color.lstrip("#")
+        if len(color) != 6:
+            raise ValueError(color)
+        return tuple(int(color[i : i + 2], 16) for i in (0, 2, 4))
+
+    @staticmethod
+    def _compose_color(r: float, g: float, b: float) -> str:
+        return "#%02x%02x%02x" % (
+            max(0, min(255, int(round(r)))),
+            max(0, min(255, int(round(g)))),
+            max(0, min(255, int(round(b)))),
+        )
+
+    def _blend_colors(self, base: str, overlay: str, weight: float) -> str:
+        try:
+            r1, g1, b1 = self._parse_color(base)
+            r2, g2, b2 = self._parse_color(overlay)
+        except Exception:
+            return overlay if overlay.startswith("#") else base
+        w = max(0.0, min(1.0, weight))
+        return self._compose_color(
+            r1 * (1 - w) + r2 * w,
+            g1 * (1 - w) + g2 * w,
+            b1 * (1 - w) + b2 * w,
+        )
+
+    def _status_colors(self, key: str) -> tuple[str, str]:
+        palette = getattr(self, "current_palette", PALETTE)
+        base = palette.get(key, key if key.startswith("#") else "#2563eb")
+        if not base.startswith("#"):
+            base = "#2563eb"
+        is_dark = getattr(self, "_theme_mode", "dark") == "dark"
+        if is_dark:
+            bg_base = palette.get("bg", "#0b1220")
+            background = self._blend_colors(bg_base, base, 0.45)
+            foreground = self._blend_colors("#ffffff", base, 0.25)
+        else:
+            background = self._blend_colors("#ffffff", base, 0.18)
+            foreground = self._blend_colors("#000000", base, 0.35)
+        return background, foreground
+
+    def _apply_tree_tag_palette(self) -> None:
+        if hasattr(self, "clothing_tree"):
+            empty_bg, empty_fg = self._status_colors("danger")
+            low_bg, low_fg = self._status_colors("warning")
+            self.clothing_tree.tag_configure("clothing_empty", background=empty_bg, foreground=empty_fg)
+            self.clothing_tree.tag_configure("clothing_low", background=low_bg, foreground=low_fg)
+        if hasattr(self, "pharmacy_tree"):
+            expired_bg, expired_fg = self._status_colors("danger")
+            expiring_bg, expiring_fg = self._status_colors("warning")
+            empty_bg, empty_fg = self._status_colors("muted")
+            self.pharmacy_tree.tag_configure("pharmacy_expired", background=expired_bg, foreground=expired_fg)
+            self.pharmacy_tree.tag_configure("pharmacy_expiring", background=expiring_bg, foreground=expiring_fg)
+            self.pharmacy_tree.tag_configure("pharmacy_empty", background=empty_bg, foreground=empty_fg)
+        inventory_tree = getattr(self, "tree", None)
+        if isinstance(inventory_tree, ttk.Treeview):
+            zero_bg, zero_fg = self._status_colors("danger")
+            low_bg, low_fg = self._status_colors("warning")
+            ok_bg, ok_fg = self._status_colors("success")
+            unknown_bg, unknown_fg = self._status_colors("muted")
+            inventory_tree.tag_configure("stock_zero", background=zero_bg, foreground=zero_fg)
+            inventory_tree.tag_configure("stock_low", background=low_bg, foreground=low_fg)
+            inventory_tree.tag_configure("stock_ok", background=ok_bg, foreground=ok_fg)
+            inventory_tree.tag_configure("stock_unknown", background=unknown_bg, foreground=unknown_fg)
+
     def __init__(
         self,
         current_user,
@@ -3949,6 +4016,7 @@ class StockApp(tk.Tk):
         self.create_toolbar()
         self.create_statusbar()
         self.create_main_frames()
+        self._apply_tree_tag_palette()
         startup_listener.record(
             "Menus et composants principaux créés.",
             level=logging.DEBUG,
@@ -4471,8 +4539,7 @@ class StockApp(tk.Tk):
         tree_container.columnconfigure(0, weight=1)
         tree_container.rowconfigure(0, weight=1)
 
-        self.clothing_tree.tag_configure('clothing_empty', background='#f8d7da', foreground='#721c24')
-        self.clothing_tree.tag_configure('clothing_low', background='#fff3cd', foreground='#856404')
+        self._apply_tree_tag_palette()
         self.clothing_tree.bind("<Double-1>", self.on_clothing_item_double_click)
 
         self.clothing_item_cache: dict[str, ClothingItem] = {}
@@ -5413,9 +5480,7 @@ class StockApp(tk.Tk):
         hsb = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.pharmacy_tree.xview)
         self.pharmacy_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
 
-        self.pharmacy_tree.tag_configure('pharmacy_expired', background='#f8d7da', foreground='#721c24')
-        self.pharmacy_tree.tag_configure('pharmacy_expiring', background='#fff3cd', foreground='#856404')
-        self.pharmacy_tree.tag_configure('pharmacy_empty', background='#f0f0f0', foreground='#555555')
+        self._apply_tree_tag_palette()
 
         self.pharmacy_tree.bind("<Double-1>", self.on_pharmacy_batch_double_click)
 
@@ -7180,6 +7245,7 @@ class StockApp(tk.Tk):
             except (TypeError, ValueError):
                 self._font_size = 10
             self.current_palette = apply_theme(self, self._theme_mode, font_size=self._font_size)
+            self._apply_tree_tag_palette()
             self.load_inventory()
             messagebox.showinfo("Paramètres", "Configuration enregistrée. Redémarrez pour certaines options.")
 
@@ -8353,6 +8419,20 @@ class CollaboratorGearDialog(tk.Toplevel):
         gear_vsb = ttk.Scrollbar(gear_panel, orient=tk.VERTICAL, command=self.gear_tree.yview)
         self.gear_tree.configure(yscrollcommand=gear_vsb.set)
         self.gear_tree.grid(row=0, column=0, sticky='nsew')
+        if hasattr(self.parent, "_status_colors"):
+            returned_bg, returned_fg = self.parent._status_colors("info")
+            lost_bg, lost_fg = self.parent._status_colors("danger")
+            damaged_bg, damaged_fg = self.parent._status_colors("warning")
+            overdue_bg, overdue_fg = self.parent._status_colors("accent")
+            self.gear_tree.tag_configure('gear_returned', background=returned_bg, foreground=returned_fg)
+            self.gear_tree.tag_configure('gear_lost', background=lost_bg, foreground=lost_fg)
+            self.gear_tree.tag_configure('gear_damaged', background=damaged_bg, foreground=damaged_fg)
+            self.gear_tree.tag_configure('gear_overdue', background=overdue_bg, foreground=overdue_fg)
+        else:
+            self.gear_tree.tag_configure('gear_returned', background='#e0f7fa')
+            self.gear_tree.tag_configure('gear_lost', background='#ffebee')
+            self.gear_tree.tag_configure('gear_damaged', background='#fff3e0')
+            self.gear_tree.tag_configure('gear_overdue', background='#fff8e1')
         gear_vsb.grid(row=0, column=1, sticky='ns')
         gear_panel.columnconfigure(0, weight=1)
         gear_panel.rowconfigure(0, weight=1)
@@ -8361,10 +8441,6 @@ class CollaboratorGearDialog(tk.Toplevel):
             self.gear_tree.heading(col, text=col)
             self.gear_tree.column(col, width=width, anchor=tk.W)
         self.gear_tree.bind('<<TreeviewSelect>>', lambda *_: self.show_selected_gear_details())
-        self.gear_tree.tag_configure('gear_returned', background='#e0f7fa')
-        self.gear_tree.tag_configure('gear_lost', background='#ffebee')
-        self.gear_tree.tag_configure('gear_damaged', background='#fff3e0')
-        self.gear_tree.tag_configure('gear_overdue', background='#fff8e1')
 
         gear_detail = ttk.LabelFrame(gear_panel, text="Dotation")
         gear_detail.grid(row=1, column=0, columnspan=2, sticky='ew', pady=8)
