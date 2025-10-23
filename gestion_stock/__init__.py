@@ -4285,7 +4285,13 @@ class StockApp(tk.Tk):
                 elif batch.days_left <= 30:
                     tags.append('pharmacy_expiring')
 
-            self.pharmacy_tree.insert('', 'end', iid=str(batch.id), values=values, tags=tags or None)
+            insert_kwargs = {
+                'iid': str(batch.id),
+                'values': values,
+            }
+            if tags:
+                insert_kwargs['tags'] = tuple(tags)
+            self.pharmacy_tree.insert('', 'end', **insert_kwargs)
             self.pharmacy_batch_cache[str(batch.id)] = batch
 
         if batches:
