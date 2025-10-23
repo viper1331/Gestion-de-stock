@@ -192,6 +192,13 @@ LAST_USER = config['Settings'].get('last_user', '')
 ENABLE_PHARMACY_MODULE = config['Settings'].getboolean('enable_pharmacy_module', fallback=True)
 ENABLE_CLOTHING_MODULE = config['Settings'].getboolean('enable_clothing_module', fallback=True)
 
+AVAILABLE_MODULES: tuple[str, ...] = ("inventory", "pharmacy", "clothing")
+MODULE_LABELS: dict[str, str] = {
+    "inventory": "Inventaire",
+    "pharmacy": "Pharmacie",
+    "clothing": "Habillement",
+}
+
 KNOWN_TTS_DRIVERS = ("sapi5", "nsss", "espeak")
 DEFAULT_TTS_TYPE_LABELS = {
     'auto': "Automatique (détection par défaut)",
@@ -727,6 +734,30 @@ def adjust_item_quantity(item_id, delta, operator='system', source='manual', not
 # ------------------------
 # INITIATION / MIGRATION BASE UTILISATEURS
 # ------------------------
+
+
+def default_module_permissions_for_role(role: Optional[str]) -> dict[str, bool]:
+    """Retourne les permissions modules par défaut pour un rôle donné."""
+
+    base_permissions = {
+        "inventory": True,
+        "pharmacy": config['Settings'].getboolean(
+            'enable_pharmacy_module',
+            fallback=ENABLE_PHARMACY_MODULE,
+        ),
+        "clothing": config['Settings'].getboolean(
+            'enable_clothing_module',
+            fallback=ENABLE_CLOTHING_MODULE,
+        ),
+    }
+    if role == 'admin':
+        return {module: True for module in AVAILABLE_MODULES}
+    return {
+        module: bool(base_permissions.get(module, False))
+        for module in AVAILABLE_MODULES
+    }
+
+
 def init_user_db(user_db_path=USER_DB_PATH):
     """
     Initialise la base de données des utilisateurs, distincte de la base de stock.
@@ -764,6 +795,31 @@ def init_user_db(user_db_path=USER_DB_PATH):
         if 'role' in columns:
             cursor.execute("UPDATE users SET role = 'user' WHERE role NOT IN ('admin','user')")
             conn.commit()
+
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS user_modules (
+                user_id INTEGER NOT NULL,
+                module TEXT NOT NULL,
+                allowed INTEGER NOT NULL DEFAULT 1,
+                PRIMARY KEY (user_id, module),
+                FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+        ''')
+        conn.commit()
+
+        cursor.execute("SELECT id, role FROM users")
+        existing_users = cursor.fetchall()
+        for user_id, role in existing_users:
+            defaults = default_module_permissions_for_role(role)
+            for module, allowed in defaults.items():
+                cursor.execute(
+                    """
+                    INSERT OR IGNORE INTO user_modules (user_id, module, allowed)
+                    VALUES (?, ?, ?)
+                    """,
+                    (user_id, module, 1 if allowed else 0),
+                )
+        conn.commit()
 
         conn.commit()
         startup_listener.record("Base utilisateurs prête.", level=logging.DEBUG)
@@ -1033,6 +1089,16 @@ def create_user(username: str, password: str, role: str = 'user') -> bool:
                 "INSERT INTO users (username, password_hash, role) VALUES (?, ?, ?)",
                 (username, pwd_hash, role)
             )
+            user_id = cursor.lastrowid
+            defaults = default_module_permissions_for_role(role)
+            for module, allowed in defaults.items():
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO user_modules (user_id, module, allowed)
+                    VALUES (?, ?, ?)
+                    """,
+                    (user_id, module, 1 if allowed else 0),
+                )
             conn.commit()
         return True
     except sqlite3.IntegrityError:
@@ -1103,6 +1169,93 @@ def fetch_all_users():
     except sqlite3.Error as e:
         print(f"[DB Error] fetch_all_users: {e}")
         return []
+    finally:
+        if conn:
+            conn.close()
+
+
+def count_admin_users(exclude_user_id: Optional[int] = None) -> int:
+    """Retourne le nombre d'utilisateurs disposant du rôle administrateur."""
+
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(USER_DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            query = "SELECT COUNT(*) FROM users WHERE role = 'admin'"
+            params: list[Any] = []
+            if exclude_user_id is not None:
+                query += " AND id != ?"
+                params.append(exclude_user_id)
+            cursor.execute(query, params)
+            row = cursor.fetchone()
+        return row[0] if row else 0
+    except sqlite3.Error as e:
+        print(f"[DB Error] count_admin_users: {e}")
+        return 0
+    finally:
+        if conn:
+            conn.close()
+
+
+def get_user_module_permissions(user_id: Optional[int], *, role: Optional[str] = None) -> dict[str, bool]:
+    """Obtient les permissions de modules pour un utilisateur donné."""
+
+    if user_id is None:
+        return default_module_permissions_for_role(role)
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(USER_DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT module, allowed FROM user_modules WHERE user_id = ?",
+                (user_id,),
+            )
+            rows = cursor.fetchall()
+        permissions = {
+            module: bool(allowed)
+            for module, allowed in rows
+            if module in AVAILABLE_MODULES
+        }
+        if len(permissions) < len(AVAILABLE_MODULES):
+            defaults = default_module_permissions_for_role(role)
+            for module in AVAILABLE_MODULES:
+                permissions.setdefault(module, bool(defaults.get(module, False)))
+        return permissions
+    except sqlite3.Error as e:
+        print(f"[DB Error] get_user_module_permissions: {e}")
+        return default_module_permissions_for_role(role)
+    finally:
+        if conn:
+            conn.close()
+
+
+def set_user_module_permissions(user_id: int, permissions: dict[str, bool]) -> bool:
+    """Met à jour les permissions de modules pour un utilisateur donné."""
+
+    conn = None
+    try:
+        filtered = {
+            module: bool(permissions.get(module, False))
+            for module in AVAILABLE_MODULES
+        }
+        with db_lock:
+            conn = sqlite3.connect(USER_DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            for module, allowed in filtered.items():
+                cursor.execute(
+                    """
+                    INSERT OR REPLACE INTO user_modules (user_id, module, allowed)
+                    VALUES (?, ?, ?)
+                    """,
+                    (user_id, module, 1 if allowed else 0),
+                )
+            conn.commit()
+        return True
+    except sqlite3.Error as e:
+        print(f"[DB Error] set_user_module_permissions: {e}")
+        return False
     finally:
         if conn:
             conn.close()
@@ -1923,6 +2076,20 @@ def delete_user_by_id(user_id: int) -> bool:
         with db_lock:
             conn = sqlite3.connect(USER_DB_PATH, timeout=30)
             cursor = conn.cursor()
+            cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            role = row[0]
+            if role == 'admin':
+                cursor.execute(
+                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND id != ?",
+                    (user_id,),
+                )
+                remaining = cursor.fetchone()[0]
+                if remaining <= 0:
+                    return False
+            cursor.execute("DELETE FROM user_modules WHERE user_id = ?", (user_id,))
             cursor.execute("DELETE FROM users WHERE id = ?", (user_id,))
             deleted = cursor.rowcount
             conn.commit()
@@ -1945,8 +2112,33 @@ def update_user_role(user_id: int, new_role: str) -> bool:
         with db_lock:
             conn = sqlite3.connect(USER_DB_PATH, timeout=30)
             cursor = conn.cursor()
+            cursor.execute("SELECT role FROM users WHERE id = ?", (user_id,))
+            row = cursor.fetchone()
+            if not row:
+                return False
+            current_role = row[0]
+            if current_role == new_role:
+                return True
+            if current_role == 'admin' and new_role != 'admin':
+                cursor.execute(
+                    "SELECT COUNT(*) FROM users WHERE role = 'admin' AND id != ?",
+                    (user_id,),
+                )
+                remaining = cursor.fetchone()[0]
+                if remaining <= 0:
+                    return False
             cursor.execute("UPDATE users SET role = ? WHERE id = ?", (new_role, user_id))
             updated = cursor.rowcount
+            if updated:
+                defaults = default_module_permissions_for_role(new_role)
+                for module, allowed in defaults.items():
+                    cursor.execute(
+                        """
+                        INSERT OR REPLACE INTO user_modules (user_id, module, allowed)
+                        VALUES (?, ?, ?)
+                        """,
+                        (user_id, module, 1 if allowed else 0),
+                    )
             conn.commit()
         return updated > 0
     except sqlite3.Error as e:
@@ -2523,17 +2715,20 @@ class UserManagementDialog(tk.Toplevel):
         self.current_user_id = current_user_id
         self.result = None
 
-        self.user_list = ttk.Treeview(self, columns=('ID','Username','Role'), show='headings', height=8)
+        columns = ('ID', 'Username', 'Role', 'Modules')
+        self.user_list = ttk.Treeview(self, columns=columns, show='headings', height=8)
         self.user_list.heading('ID', text='ID'); self.user_list.column('ID', width=40, anchor=tk.CENTER)
         self.user_list.heading('Username', text='Nom d\'utilisateur'); self.user_list.column('Username', width=150)
         self.user_list.heading('Role', text='Rôle'); self.user_list.column('Role', width=80, anchor=tk.CENTER)
-        self.user_list.grid(row=0, column=0, columnspan=3, padx=10, pady=5)
+        self.user_list.heading('Modules', text='Modules autorisés'); self.user_list.column('Modules', width=220)
+        self.user_list.grid(row=0, column=0, columnspan=4, padx=10, pady=5)
         self.load_users()
 
         ttk.Button(self, text="Ajouter", command=self.add_user).grid(row=1, column=0, padx=10, pady=5)
         ttk.Button(self, text="Supprimer", command=self.delete_user).grid(row=1, column=1, padx=10, pady=5)
         ttk.Button(self, text="Modifier Rôle", command=self.change_role).grid(row=1, column=2, padx=10, pady=5)
-        ttk.Button(self, text="Fermer", command=self.on_close).grid(row=2, column=0, columnspan=3, pady=10)
+        ttk.Button(self, text="Modules", command=self.manage_modules).grid(row=1, column=3, padx=10, pady=5)
+        ttk.Button(self, text="Fermer", command=self.on_close).grid(row=2, column=0, columnspan=4, pady=10)
 
         self.grab_set()
         self.wait_window(self)
@@ -2542,8 +2737,15 @@ class UserManagementDialog(tk.Toplevel):
         for row in self.user_list.get_children():
             self.user_list.delete(row)
         rows = fetch_all_users()
-        for r in rows:
-            self.user_list.insert('', tk.END, values=r)
+        for user_id, username, role in rows:
+            permissions = get_user_module_permissions(user_id, role=role)
+            allowed_labels = [
+                MODULE_LABELS.get(module, module.title())
+                for module, allowed in permissions.items()
+                if allowed
+            ]
+            modules_text = ', '.join(allowed_labels) if allowed_labels else 'Aucun'
+            self.user_list.insert('', tk.END, values=(user_id, username, role, modules_text))
 
     def add_user(self):
         dlg = AddUserDialog(self)
@@ -2565,12 +2767,21 @@ class UserManagementDialog(tk.Toplevel):
         if user_id == self.current_user_id:
             messagebox.showerror("Erreur", "Vous ne pouvez pas supprimer votre propre compte.")
             return
+        if role == 'admin' and count_admin_users(exclude_user_id=user_id) == 0:
+            messagebox.showerror(
+                "Erreur",
+                "Impossible de supprimer le dernier administrateur actif.",
+            )
+            return
         if messagebox.askyesno("Confirmer", f"Supprimer l'utilisateur '{username}' ?"):
             if delete_user_by_id(user_id):
                 self.load_users()
                 messagebox.showinfo("Succès", f"Utilisateur '{username}' supprimé.")
             else:
-                messagebox.showerror("Erreur", "Impossible de supprimer l'utilisateur.")
+                messagebox.showerror(
+                    "Erreur",
+                    "Impossible de supprimer l'utilisateur (vérifiez les permissions).",
+                )
 
     def change_role(self):
         sel = self.user_list.selection()
@@ -2584,13 +2795,50 @@ class UserManagementDialog(tk.Toplevel):
             return
         new_role = simpledialog.askstring("Modifier rôle", f"Rôle pour '{username}' (admin / user) :", initialvalue=role, parent=self)
         if new_role and new_role in ('admin','user'):
+            if role == 'admin' and new_role != 'admin' and count_admin_users(exclude_user_id=user_id) == 0:
+                messagebox.showerror(
+                    "Erreur",
+                    "Impossible de retirer le dernier administrateur restant.",
+                )
+                return
             if update_user_role(user_id, new_role):
                 self.load_users()
                 messagebox.showinfo("Succès", f"Rôle de '{username}' changé en '{new_role}'.")
             else:
-                messagebox.showerror("Erreur", "Impossible de modifier le rôle.")
+                messagebox.showerror(
+                    "Erreur",
+                    "Impossible de modifier le rôle (vérifiez les permissions).",
+                )
         else:
             messagebox.showerror("Erreur", "Rôle invalide. Choisir 'admin' ou 'user'.")
+
+    def manage_modules(self):
+        sel = self.user_list.selection()
+        if not sel:
+            messagebox.showwarning("Attention", "Aucun utilisateur sélectionné.")
+            return
+        user_id, username, role, _modules = self.user_list.item(sel[0])['values']
+        if role == 'admin':
+            messagebox.showinfo(
+                "Modules",
+                "Les administrateurs disposent automatiquement de tous les modules.",
+            )
+            return
+        permissions = get_user_module_permissions(user_id, role=role)
+        dialog = ModulePermissionsDialog(self, username, permissions)
+        if dialog.result is None:
+            return
+        if set_user_module_permissions(user_id, dialog.result):
+            self.load_users()
+            messagebox.showinfo(
+                "Succès",
+                f"Modules autorisés mis à jour pour '{username}'.",
+            )
+        else:
+            messagebox.showerror(
+                "Erreur",
+                "Impossible de mettre à jour les permissions de modules.",
+            )
 
     def on_close(self):
         self.destroy()
@@ -2644,6 +2892,52 @@ class AddUserDialog(tk.Toplevel):
             messagebox.showerror("Erreur", "Les mots de passe ne correspondent pas.")
             return
         self.result = (username, pwd1, role)
+        self.destroy()
+
+    def on_cancel(self):
+        self.result = None
+        self.destroy()
+
+
+class ModulePermissionsDialog(tk.Toplevel):
+    """Dialogue permettant de définir les modules autorisés pour un utilisateur."""
+
+    def __init__(self, parent: tk.Misc, username: str, permissions: dict[str, bool]):
+        super().__init__(parent)
+        self.title(f"Modules - {username}")
+        self.resizable(False, False)
+        self.result: Optional[dict[str, bool]] = None
+        self.protocol("WM_DELETE_WINDOW", self.on_cancel)
+
+        ttk.Label(
+            self,
+            text=f"Autoriser l'accès aux modules pour {username} :",
+        ).grid(row=0, column=0, columnspan=2, padx=10, pady=(10, 5), sticky=tk.W)
+
+        self.vars: dict[str, tk.BooleanVar] = {}
+        for index, module in enumerate(AVAILABLE_MODULES, start=1):
+            label = MODULE_LABELS.get(module, module.title())
+            var = tk.BooleanVar(value=bool(permissions.get(module, False)))
+            self.vars[module] = var
+            ttk.Checkbutton(self, text=label, variable=var).grid(
+                row=index,
+                column=0,
+                columnspan=2,
+                padx=15,
+                pady=2,
+                sticky=tk.W,
+            )
+
+        btn_frame = ttk.Frame(self)
+        btn_frame.grid(row=len(AVAILABLE_MODULES) + 1, column=0, columnspan=2, pady=10)
+        ttk.Button(btn_frame, text="Enregistrer", command=self.on_confirm).pack(side=tk.LEFT, padx=5)
+        ttk.Button(btn_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
+
+        self.grab_set()
+        self.wait_window(self)
+
+    def on_confirm(self):
+        self.result = {module: var.get() for module, var in self.vars.items()}
         self.destroy()
 
     def on_cancel(self):
@@ -3105,7 +3399,13 @@ class StockApp(tk.Tk):
     CLOTHING_SIZES = ["XXS", "XS", "S", "M", "L", "XL", "XXL"]
     SHOE_SIZES = [str(i) for i in range(30, 61)]
 
-    def __init__(self, current_user, current_role, current_user_id):
+    def __init__(
+        self,
+        current_user,
+        current_role,
+        current_user_id,
+        allowed_modules: Optional[dict[str, bool]] = None,
+    ):
         startup_listener.record(
             "Construction de l'interface principale StockApp.",
             level=logging.DEBUG,
@@ -3114,6 +3414,11 @@ class StockApp(tk.Tk):
         self.current_user = current_user
         self.current_role = current_role
         self.current_user_id = current_user_id
+        self.allowed_modules = allowed_modules or {}
+        if self.current_role == 'admin':
+            self.allowed_modules = {module: True for module in AVAILABLE_MODULES}
+        elif not self.allowed_modules:
+            self.allowed_modules = default_module_permissions_for_role(self.current_role)
         self.audit_logger = audit_logger
 
         self.title(f"Gestion Stock Pro - Connecté : {self.current_user} ({self.current_role})")
@@ -3127,12 +3432,16 @@ class StockApp(tk.Tk):
             fallback=DEFAULT_LOW_STOCK_THRESHOLD
         )
 
-        self.inventory_visible = config['Settings'].getboolean(
+        self.inventory_allowed = bool(self.allowed_modules.get('inventory', True))
+        self.pharmacy_allowed = bool(self.allowed_modules.get('pharmacy', False))
+        self.clothing_allowed = bool(self.allowed_modules.get('clothing', False))
+
+        self.inventory_visible = self.inventory_allowed and config['Settings'].getboolean(
             'show_inventory_tab',
             fallback=True,
         )
-        self.pharmacy_enabled = ENABLE_PHARMACY_MODULE
-        self.clothing_enabled = ENABLE_CLOTHING_MODULE
+        self.pharmacy_enabled = self.pharmacy_allowed and ENABLE_PHARMACY_MODULE
+        self.clothing_enabled = self.clothing_allowed and ENABLE_CLOTHING_MODULE
 
         self.create_menu()
         self.create_toolbar()
@@ -3161,8 +3470,9 @@ class StockApp(tk.Tk):
         # Appliquer largeurs sauvegardées
         self.apply_saved_column_widths()
         startup_listener.record("Largeurs de colonnes restaurées.", level=logging.DEBUG)
-        self.load_inventory()
-        startup_listener.record("Inventaire initial chargé.", level=logging.DEBUG)
+        if self.inventory_allowed:
+            self.load_inventory()
+            startup_listener.record("Inventaire initial chargé.", level=logging.DEBUG)
 
         self.alert_manager = AlertManager(self, threshold=self.low_stock_threshold)
         startup_listener.record("Gestionnaire d'alertes initialisé.", level=logging.DEBUG)
@@ -3226,7 +3536,11 @@ class StockApp(tk.Tk):
         settings_menu = tk.Menu(menubar, tearoff=0)
         settings_menu.add_command(label="Configuration générale", command=self.open_config_dialog)
         settings_menu.add_command(label="Gérer Catégories", command=self.open_category_dialog)
-        settings_menu.add_command(label="Personnaliser colonnes", command=self.open_column_manager)
+        settings_menu.add_command(
+            label="Personnaliser colonnes",
+            command=self.open_column_manager,
+            state=tk.NORMAL if self.inventory_allowed else tk.DISABLED,
+        )
         if self.current_role == 'admin':
             settings_menu.add_command(label="Gérer Utilisateurs", command=self.open_user_management)
         if ENABLE_VOICE and SR_LIB_AVAILABLE:
@@ -3239,25 +3553,39 @@ class StockApp(tk.Tk):
             settings_menu.add_command(label="Aide Vocale", state='disabled')
         menubar.add_cascade(label="Paramètres", menu=settings_menu)
 
-        stock_menu = tk.Menu(menubar, tearoff=0)
-        stock_menu.add_command(label="Ajouter Article", command=self.open_add_dialog)
-        stock_menu.add_command(label="Modifier Article", command=self.open_edit_selected)
-        stock_menu.add_command(label="Supprimer Article", command=self.delete_selected)
-        stock_menu.add_separator()
-        stock_menu.add_command(label="Entrée Stock", command=lambda: self.open_stock_adjustment(True))
-        stock_menu.add_command(label="Sortie Stock", command=lambda: self.open_stock_adjustment(False))
-        stock_menu.add_separator()
-        stock_menu.add_command(label="Actualiser", command=self.load_inventory)
-        menubar.add_cascade(label="Stock", menu=stock_menu)
+        if self.inventory_allowed:
+            stock_menu = tk.Menu(menubar, tearoff=0)
+            stock_menu.add_command(label="Ajouter Article", command=self.open_add_dialog)
+            stock_menu.add_command(label="Modifier Article", command=self.open_edit_selected)
+            stock_menu.add_command(label="Supprimer Article", command=self.delete_selected)
+            stock_menu.add_separator()
+            stock_menu.add_command(label="Entrée Stock", command=lambda: self.open_stock_adjustment(True))
+            stock_menu.add_command(label="Sortie Stock", command=lambda: self.open_stock_adjustment(False))
+            stock_menu.add_separator()
+            stock_menu.add_command(label="Actualiser", command=self.load_inventory)
+            menubar.add_cascade(label="Stock", menu=stock_menu)
 
         scan_menu = tk.Menu(menubar, tearoff=0)
-        scan_menu.add_command(label="Scan Caméra", command=self.scan_camera)
-        scan_menu.add_command(label="Scan Douchette", command=lambda: self.entry_scan.focus())
+        scan_state = tk.NORMAL if self.inventory_allowed else tk.DISABLED
+        scan_menu.add_command(label="Scan Caméra", command=self.scan_camera, state=scan_state)
+        scan_menu.add_command(
+            label="Scan Douchette",
+            command=lambda: self.entry_scan.focus(),
+            state=scan_state,
+        )
         menubar.add_cascade(label="Scan", menu=scan_menu)
 
         report_menu = tk.Menu(menubar, tearoff=0)
-        report_menu.add_command(label="Rapport Stock Faible", command=self.report_low_stock)
-        report_menu.add_command(label="Exporter Rapport PDF", command=self.generate_pdf_report)
+        report_menu.add_command(
+            label="Rapport Stock Faible",
+            command=self.report_low_stock,
+            state=scan_state,
+        )
+        report_menu.add_command(
+            label="Exporter Rapport PDF",
+            command=self.generate_pdf_report,
+            state=scan_state,
+        )
         menubar.add_cascade(label="Rapports", menu=report_menu)
 
         module_menu = tk.Menu(menubar, tearoff=0)
@@ -3266,23 +3594,28 @@ class StockApp(tk.Tk):
         module_menu.add_command(label="Dotations collaborateurs", command=self.open_collaborator_gear)
         if self.current_role == 'admin':
             module_menu.add_command(label="Approvals en attente", command=self.open_approval_queue)
-        self.inventory_module_var = tk.BooleanVar(value=self.inventory_visible)
+        self.inventory_module_var = tk.BooleanVar(
+            value=self.inventory_visible if self.inventory_allowed else False
+        )
         module_menu.add_checkbutton(
             label="Fenêtre Inventaire",
             variable=self.inventory_module_var,
             command=self.on_toggle_inventory_module,
+            state=tk.NORMAL if self.inventory_allowed else tk.DISABLED,
         )
-        self.pharmacy_module_var = tk.BooleanVar(value=self.pharmacy_enabled)
+        self.pharmacy_module_var = tk.BooleanVar(value=self.pharmacy_enabled if self.pharmacy_allowed else False)
         module_menu.add_checkbutton(
             label="Gestion Pharmacie",
             variable=self.pharmacy_module_var,
             command=self.on_toggle_pharmacy_module,
+            state=tk.NORMAL if self.pharmacy_allowed else tk.DISABLED,
         )
-        self.clothing_module_var = tk.BooleanVar(value=self.clothing_enabled)
+        self.clothing_module_var = tk.BooleanVar(value=self.clothing_enabled if self.clothing_allowed else False)
         module_menu.add_checkbutton(
             label="Gestion Habillement",
             variable=self.clothing_module_var,
             command=self.on_toggle_clothing_module,
+            state=tk.NORMAL if self.clothing_allowed else tk.DISABLED,
         )
         menubar.add_cascade(label="Modules", menu=module_menu)
 
@@ -3294,6 +3627,23 @@ class StockApp(tk.Tk):
 
     def create_toolbar(self):
         toolbar = ttk.Frame(self, padding=5)
+        inventory_state = tk.NORMAL if self.inventory_allowed else tk.DISABLED
+        btn_add = ttk.Button(toolbar, text="Ajouter", command=self.open_add_dialog, state=inventory_state)
+        btn_edit = ttk.Button(toolbar, text="Modifier", command=self.open_edit_selected, state=inventory_state)
+        btn_delete = ttk.Button(toolbar, text="Supprimer", command=self.delete_selected, state=inventory_state)
+        btn_stock_in = ttk.Button(
+            toolbar,
+            text="Entrée",
+            command=lambda: self.open_stock_adjustment(True),
+            state=inventory_state,
+        )
+        btn_stock_out = ttk.Button(
+            toolbar,
+            text="Sortie",
+            command=lambda: self.open_stock_adjustment(False),
+            state=inventory_state,
+        )
+        btn_scan_cam = ttk.Button(toolbar, text="Scan Caméra", command=self.scan_camera, state=inventory_state)
 
         button_specs = [
             ("add", "Ajouter"),
@@ -3309,19 +3659,25 @@ class StockApp(tk.Tk):
             ("columns", "Colonnes"),
         ]
 
-        self.toolbar_buttons: dict[str, ttk.Button] = {}
-        for action, label in button_specs:
-            button = ttk.Button(
-                toolbar,
-                text=label,
-                command=lambda act=action: self._invoke_toolbar_action(act),
-            )
-            button.pack(side=tk.LEFT, padx=2)
-            self.toolbar_buttons[action] = button
+        btn_barcode_gen = ttk.Button(
+            toolbar,
+            text="Générer Code-Barres",
+            command=lambda: self.generate_barcode_dialog()
+        )
+        btn_export = ttk.Button(toolbar, text="Exporter CSV", command=self.export_csv, state=inventory_state)
+        btn_columns = ttk.Button(toolbar, text="Colonnes", command=self.open_column_manager, state=inventory_state)
 
-        if not (ENABLE_VOICE and SR_LIB_AVAILABLE):
-            for key in ("listen", "stop_listen"):
-                self.toolbar_buttons[key].config(state=tk.DISABLED)
+        btn_add.pack(side=tk.LEFT, padx=2)
+        btn_edit.pack(side=tk.LEFT, padx=2)
+        btn_delete.pack(side=tk.LEFT, padx=2)
+        btn_stock_in.pack(side=tk.LEFT, padx=2)
+        btn_stock_out.pack(side=tk.LEFT, padx=2)
+        btn_scan_cam.pack(side=tk.LEFT, padx=2)
+        btn_listen.pack(side=tk.LEFT, padx=2)
+        btn_stop_listen.pack(side=tk.LEFT, padx=2)
+        btn_barcode_gen.pack(side=tk.LEFT, padx=2)
+        btn_export.pack(side=tk.LEFT, padx=2)
+        btn_columns.pack(side=tk.LEFT, padx=2)
 
         toolbar.pack(fill=tk.X)
         self.toolbar = toolbar
@@ -3957,6 +4313,13 @@ class StockApp(tk.Tk):
         self.update_toolbar_state()
 
     def on_toggle_inventory_module(self) -> None:
+        if not self.inventory_allowed:
+            self.inventory_module_var.set(False)
+            messagebox.showerror(
+                "Accès refusé",
+                "Votre profil n'autorise pas l'accès à ce module.",
+            )
+            return
         enabled = bool(self.inventory_module_var.get())
         if enabled == self.inventory_visible:
             return
@@ -3970,6 +4333,13 @@ class StockApp(tk.Tk):
             config.write(f)
 
     def on_toggle_pharmacy_module(self) -> None:
+        if not self.pharmacy_allowed:
+            self.pharmacy_module_var.set(False)
+            messagebox.showerror(
+                "Accès refusé",
+                "Votre profil n'autorise pas l'accès à ce module.",
+            )
+            return
         enabled = bool(self.pharmacy_module_var.get())
         if enabled == self.pharmacy_enabled:
             return
@@ -3983,6 +4353,13 @@ class StockApp(tk.Tk):
             config.write(f)
 
     def on_toggle_clothing_module(self) -> None:
+        if not self.clothing_allowed:
+            self.clothing_module_var.set(False)
+            messagebox.showerror(
+                "Accès refusé",
+                "Votre profil n'autorise pas l'accès à ce module.",
+            )
+            return
         enabled = bool(self.clothing_module_var.get())
         if enabled == self.clothing_enabled:
             return
@@ -5927,7 +6304,8 @@ class StockApp(tk.Tk):
             if conn:
                 conn.close()
         root.destroy()
-        app = StockApp(new_user, new_role, uid)
+        allowed_modules = get_user_module_permissions(uid, role=new_role)
+        app = StockApp(new_user, new_role, uid, allowed_modules=allowed_modules)
         app.mainloop()
 
 
@@ -8393,7 +8771,8 @@ def main(argv=None):
 
     startup_listener.record("Fermeture de la fenêtre de connexion.", level=logging.DEBUG)
     root.destroy()
-    app = StockApp(current_user, current_role, current_user_id)
+    allowed_modules = get_user_module_permissions(current_user_id, role=current_role)
+    app = StockApp(current_user, current_role, current_user_id, allowed_modules=allowed_modules)
     logger.info("Lancement de l'interface graphique principale.")
     startup_listener.record("Fenêtre principale initialisée.", level=logging.INFO)
     startup_listener.record(
