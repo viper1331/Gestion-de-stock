@@ -3892,7 +3892,8 @@ class StockApp(tk.Tk):
 
         settings_menu = tk.Menu(menubar, tearoff=0)
         settings_menu.add_command(label="Configuration générale", command=self.open_config_dialog)
-        settings_menu.add_command(label="Gérer Catégories", command=self.open_category_dialog)
+        if self.current_role == 'admin' or self.clothing_allowed:
+            settings_menu.add_command(label="Gérer Catégories", command=self.open_category_dialog)
         if self.clothing_allowed:
             settings_menu.add_command(
                 label="Colonnes Habillement",
@@ -3923,9 +3924,10 @@ class StockApp(tk.Tk):
         menubar.add_cascade(label="Scan", menu=scan_menu)
 
         module_menu = tk.Menu(menubar, tearoff=0)
-        module_menu.add_command(label="Fournisseurs", command=self.open_supplier_management)
-        module_menu.add_command(label="Bons de commande", command=self.open_purchase_orders)
-        module_menu.add_command(label="Dotations collaborateurs", command=self.open_collaborator_gear)
+        if self.current_role == 'admin' or self.clothing_allowed:
+            module_menu.add_command(label="Fournisseurs", command=self.open_supplier_management)
+            module_menu.add_command(label="Bons de commande", command=self.open_purchase_orders)
+            module_menu.add_command(label="Dotations collaborateurs", command=self.open_collaborator_gear)
         if self.current_role == 'admin':
             module_menu.add_command(label="Approvals en attente", command=self.open_approval_queue)
         self.pharmacy_module_var = tk.BooleanVar(value=self.pharmacy_enabled if self.pharmacy_allowed else False)
@@ -8517,6 +8519,12 @@ class ConfigDialog(tk.Toplevel):
         self.title("Configuration générale")
         self.resizable(False, False)
         self.result = None
+        self._is_admin = getattr(parent, 'current_role', '') == 'admin'
+        self._initial_paths = {
+            'db_path': DB_PATH,
+            'user_db_path': USER_DB_PATH,
+            'barcode_dir': BARCODE_DIR,
+        }
 
         var_db = tk.StringVar(value=DB_PATH)
         var_user_db = tk.StringVar(value=USER_DB_PATH)
@@ -8545,6 +8553,10 @@ class ConfigDialog(tk.Toplevel):
         ttk.Label(self, text="Répertoire codes-barres :").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
         entry_barcode = ttk.Entry(self, textvariable=var_barcode, width=40)
         entry_barcode.grid(row=2, column=1, padx=10, pady=5)
+
+        if not self._is_admin:
+            for entry in (entry_db, entry_user_db, entry_barcode):
+                entry.configure(state='readonly')
 
         ttk.Label(self, text="Index caméra :").grid(row=3, column=0, sticky=tk.W, padx=10, pady=5)
         entry_camera = ttk.Entry(self, textvariable=var_camera, width=5)
@@ -8627,6 +8639,9 @@ class ConfigDialog(tk.Toplevel):
             'enable_barcode_generation': var_enable_barcode.get(),
             'low_stock_threshold': var_low_stock.get()
         }
+        if not self._is_admin:
+            for key, value in self._initial_paths.items():
+                self.result[key] = value
         self.destroy()
 
     def on_cancel(self):
