@@ -96,6 +96,32 @@ class PharmacyInventoryManager:
             )
             """
         )
+
+        cursor.execute("PRAGMA table_info(pharmacy_inventory)")
+        inventory_columns = {row[1] for row in cursor.fetchall()}
+        if "storage_condition" not in inventory_columns:
+            cursor.execute("ALTER TABLE pharmacy_inventory ADD COLUMN storage_condition TEXT")
+        if "prescription_required" not in inventory_columns:
+            cursor.execute(
+                "ALTER TABLE pharmacy_inventory ADD COLUMN prescription_required INTEGER NOT NULL DEFAULT 0"
+            )
+        if "note" not in inventory_columns:
+            cursor.execute("ALTER TABLE pharmacy_inventory ADD COLUMN note TEXT")
+        if "created_at" not in inventory_columns:
+            cursor.execute(
+                "ALTER TABLE pharmacy_inventory ADD COLUMN created_at TEXT DEFAULT ''"
+            )
+            cursor.execute(
+                "UPDATE pharmacy_inventory SET created_at = COALESCE(created_at, datetime('now'))"
+            )
+        if "updated_at" not in inventory_columns:
+            cursor.execute(
+                "ALTER TABLE pharmacy_inventory ADD COLUMN updated_at TEXT DEFAULT ''"
+            )
+            cursor.execute(
+                "UPDATE pharmacy_inventory SET updated_at = COALESCE(updated_at, datetime('now'))"
+            )
+
         cursor.execute(
             """
             CREATE INDEX IF NOT EXISTS idx_pharmacy_expiration
