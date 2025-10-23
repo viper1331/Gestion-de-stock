@@ -3294,41 +3294,113 @@ class StockApp(tk.Tk):
 
     def create_toolbar(self):
         toolbar = ttk.Frame(self, padding=5)
-        btn_add = ttk.Button(toolbar, text="Ajouter", command=self.open_add_dialog)
-        btn_edit = ttk.Button(toolbar, text="Modifier", command=self.open_edit_selected)
-        btn_delete = ttk.Button(toolbar, text="Supprimer", command=self.delete_selected)
-        btn_stock_in = ttk.Button(toolbar, text="Entrée", command=lambda: self.open_stock_adjustment(True))
-        btn_stock_out = ttk.Button(toolbar, text="Sortie", command=lambda: self.open_stock_adjustment(False))
-        btn_scan_cam = ttk.Button(toolbar, text="Scan Caméra", command=self.scan_camera)
 
-        if ENABLE_VOICE and SR_LIB_AVAILABLE:
-            btn_listen = ttk.Button(toolbar, text="Écoute Micro", command=start_voice_listening)
-            btn_stop_listen = ttk.Button(toolbar, text="Arrêter Micro", command=stop_voice_listening)
-        else:
-            btn_listen = ttk.Button(toolbar, text="Écoute Micro", state='disabled')
-            btn_stop_listen = ttk.Button(toolbar, text="Arrêter Micro", state='disabled')
+        button_specs = [
+            ("add", "Ajouter"),
+            ("edit", "Modifier"),
+            ("delete", "Supprimer"),
+            ("stock_in", "Entrée"),
+            ("stock_out", "Sortie"),
+            ("scan", "Scan Caméra"),
+            ("listen", "Écoute Micro"),
+            ("stop_listen", "Arrêter Micro"),
+            ("barcode", "Générer Code-Barres"),
+            ("export", "Exporter CSV"),
+            ("columns", "Colonnes"),
+        ]
 
-        btn_barcode_gen = ttk.Button(
-            toolbar,
-            text="Générer Code-Barres",
-            command=lambda: self.generate_barcode_dialog()
-        )
-        btn_export = ttk.Button(toolbar, text="Exporter CSV", command=self.export_csv)
-        btn_columns = ttk.Button(toolbar, text="Colonnes", command=self.open_column_manager)
+        self.toolbar_buttons: dict[str, ttk.Button] = {}
+        for action, label in button_specs:
+            button = ttk.Button(
+                toolbar,
+                text=label,
+                command=lambda act=action: self._invoke_toolbar_action(act),
+            )
+            button.pack(side=tk.LEFT, padx=2)
+            self.toolbar_buttons[action] = button
 
-        btn_add.pack(side=tk.LEFT, padx=2)
-        btn_edit.pack(side=tk.LEFT, padx=2)
-        btn_delete.pack(side=tk.LEFT, padx=2)
-        btn_stock_in.pack(side=tk.LEFT, padx=2)
-        btn_stock_out.pack(side=tk.LEFT, padx=2)
-        btn_scan_cam.pack(side=tk.LEFT, padx=2)
-        btn_listen.pack(side=tk.LEFT, padx=2)
-        btn_stop_listen.pack(side=tk.LEFT, padx=2)
-        btn_barcode_gen.pack(side=tk.LEFT, padx=2)
-        btn_export.pack(side=tk.LEFT, padx=2)
-        btn_columns.pack(side=tk.LEFT, padx=2)
+        if not (ENABLE_VOICE and SR_LIB_AVAILABLE):
+            for key in ("listen", "stop_listen"):
+                self.toolbar_buttons[key].config(state=tk.DISABLED)
 
         toolbar.pack(fill=tk.X)
+        self.toolbar = toolbar
+        self._current_toolbar_handlers: dict[str, Callable[[], None]] = {}
+
+    def _invoke_toolbar_action(self, action: str) -> None:
+        handler = self._current_toolbar_handlers.get(action)
+        if handler is None:
+            return
+        handler()
+
+    def _on_notebook_tab_changed(self, _event=None) -> None:
+        self.update_toolbar_state()
+
+    def update_toolbar_state(self) -> None:
+        if not hasattr(self, "toolbar_buttons"):
+            return
+        if not hasattr(self, "notebook"):
+            return
+
+        try:
+            current_tab = self.notebook.select()
+        except tk.TclError:
+            current_tab = ""
+
+        mode = "other"
+        inventory_frame = getattr(self, "inventory_frame", None)
+        clothing_frame = getattr(self, "clothing_frame", None)
+        pharmacy_frame = getattr(self, "pharmacy_frame", None)
+
+        if current_tab:
+            if inventory_frame is not None and str(inventory_frame) == current_tab:
+                mode = "inventory"
+            elif clothing_frame is not None and str(clothing_frame) == current_tab:
+                mode = "clothing"
+            elif pharmacy_frame is not None and str(pharmacy_frame) == current_tab:
+                mode = "pharmacy"
+
+        handlers: dict[str, Callable[[], None]] = {}
+        if mode == "clothing":
+            handlers = {
+                "add": self.open_clothing_register_dialog,
+                "stock_in": self.adjust_selected_clothing_item,
+                "stock_out": self.adjust_selected_clothing_item,
+                "export": self.export_clothing_inventory,
+            }
+            if ENABLE_VOICE and SR_LIB_AVAILABLE:
+                handlers["listen"] = start_voice_listening
+                handlers["stop_listen"] = stop_voice_listening
+        elif mode == "pharmacy":
+            handlers = {
+                "add": self.open_pharmacy_register_dialog,
+                "stock_in": self.adjust_selected_pharmacy_batch,
+                "stock_out": self.adjust_selected_pharmacy_batch,
+            }
+            if ENABLE_VOICE and SR_LIB_AVAILABLE:
+                handlers["listen"] = start_voice_listening
+                handlers["stop_listen"] = stop_voice_listening
+        elif mode == "other" and (ENABLE_VOICE and SR_LIB_AVAILABLE):
+            handlers = {
+                "listen": start_voice_listening,
+                "stop_listen": stop_voice_listening,
+            }
+
+        available_handlers: dict[str, Callable[[], None]] = {}
+        for action, button in self.toolbar_buttons.items():
+            handler = handlers.get(action)
+            state = tk.DISABLED
+            if handler is not None:
+                if action in {"listen", "stop_listen"} and not (ENABLE_VOICE and SR_LIB_AVAILABLE):
+                    handler = None
+                else:
+                    state = tk.NORMAL
+            if handler is not None:
+                available_handlers[action] = handler
+            button.config(state=state)
+
+        self._current_toolbar_handlers = available_handlers
+
 
     def create_statusbar(self):
         self.status = tk.StringVar()
@@ -3359,6 +3431,9 @@ class StockApp(tk.Tk):
         self.pharmacy_frame: Optional[ttk.Frame] = None
         if self.pharmacy_enabled:
             self.add_pharmacy_tab()
+
+        self.notebook.bind("<<NotebookTabChanged>>", self._on_notebook_tab_changed)
+        self.update_toolbar_state()
 
         self.create_dashboard_tab()
 
@@ -3428,6 +3503,7 @@ class StockApp(tk.Tk):
         except tk.TclError:
             self.notebook.add(self.inventory_frame, text="Inventaire")
         self._inventory_tab_added = True
+        self.update_toolbar_state()
 
     def remove_inventory_tab(self) -> None:
         if not getattr(self, "_inventory_tab_added", False):
@@ -3437,6 +3513,7 @@ class StockApp(tk.Tk):
         except tk.TclError:
             pass
         self._inventory_tab_added = False
+        self.update_toolbar_state()
 
     def add_clothing_tab(self) -> None:
         if getattr(self, "clothing_frame", None) is not None:
@@ -3444,6 +3521,7 @@ class StockApp(tk.Tk):
         self.clothing_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.clothing_frame, text="Habillement")
         self.create_clothing_tab()
+        self.update_toolbar_state()
 
     def remove_clothing_tab(self) -> None:
         frame = getattr(self, "clothing_frame", None)
@@ -3471,6 +3549,7 @@ class StockApp(tk.Tk):
             if hasattr(self, attr):
                 delattr(self, attr)
         self._clothing_search_job = None
+        self.update_toolbar_state()
 
     def create_clothing_tab(self) -> None:
         frame = getattr(self, "clothing_frame", None)
@@ -3589,6 +3668,7 @@ class StockApp(tk.Tk):
 
         self.refresh_clothing_summary()
         self.refresh_clothing_items()
+        self.update_toolbar_state()
 
     def _on_clothing_search_change(self, *_args) -> None:
         job = getattr(self, "_clothing_search_job", None)
@@ -3846,6 +3926,7 @@ class StockApp(tk.Tk):
         self.pharmacy_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.pharmacy_frame, text="Pharmacie")
         self.create_pharmacy_tab()
+        self.update_toolbar_state()
 
     def remove_pharmacy_tab(self) -> None:
         frame = getattr(self, "pharmacy_frame", None)
@@ -3873,6 +3954,7 @@ class StockApp(tk.Tk):
             if hasattr(self, attr):
                 delattr(self, attr)
         self._pharmacy_search_job = None
+        self.update_toolbar_state()
 
     def on_toggle_inventory_module(self) -> None:
         enabled = bool(self.inventory_module_var.get())
@@ -4247,6 +4329,7 @@ class StockApp(tk.Tk):
 
         self.refresh_pharmacy_summary()
         self.refresh_pharmacy_batches()
+        self.update_toolbar_state()
 
     def _on_pharmacy_search_change(self, *_args):
         if getattr(self, '_pharmacy_search_job', None):
