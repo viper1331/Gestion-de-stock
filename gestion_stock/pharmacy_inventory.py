@@ -579,7 +579,208 @@ class PharmacyInventoryManager:
                     summary["by_prescription_requirement"][key] = qty or 0
             finally:
                 conn.close()
-        return summary
+                return summary
+
+    def get_batch(
+        self,
+        batch_id: int,
+        *,
+        db_path: Optional[str] = None,
+    ) -> Optional[dict]:
+        with self._lock:
+            conn = self._open_connection(db_path)
+            try:
+                cursor = conn.cursor()
+                self._ensure_schema(cursor)
+                cursor.execute(
+                    """
+                    SELECT
+                        b.id,
+                        b.item_id,
+                        i.name,
+                        b.lot_number,
+                        b.expiration_date,
+                        b.quantity,
+                        i.barcode,
+                        c.name,
+                        i.dosage,
+                        i.medication_form,
+                        COALESCE(b.storage_condition, i.storage_condition),
+                        b.prescription_required,
+                        b.note
+                    FROM pharmacy_inventory AS b
+                    JOIN items AS i ON i.id = b.item_id
+                    LEFT JOIN categories AS c ON c.id = i.category_id
+                    WHERE b.id = ?
+                    """,
+                    (batch_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                return {
+                    "batch_id": row[0],
+                    "item_id": row[1],
+                    "name": row[2],
+                    "lot_number": row[3],
+                    "expiration_date": row[4],
+                    "quantity": row[5],
+                    "barcode": row[6],
+                    "category": row[7],
+                    "dosage": row[8],
+                    "form": row[9],
+                    "storage_condition": row[10],
+                    "prescription_required": bool(row[11]),
+                    "note": row[12],
+                }
+            finally:
+                conn.close()
+
+    def update_batch(
+        self,
+        batch_id: int,
+        *,
+        name: str,
+        lot_number: str,
+        quantity: int,
+        expiration_date: Optional[str | date | datetime] = None,
+        barcode: Optional[str] = None,
+        category: Optional[str] = None,
+        dosage: Optional[str] = None,
+        form: Optional[str] = None,
+        storage_condition: Optional[str] = None,
+        prescription_required: bool = False,
+        note: Optional[str] = None,
+        operator: Optional[str] = None,
+        source: str = "pharmacy_module",
+        db_path: Optional[str] = None,
+    ) -> Optional[dict]:
+        if quantity < 0:
+            raise ValueError("La quantité doit être positive ou nulle.")
+        normalized_expiration = self._normalize_expiration(expiration_date)
+        with self._lock:
+            conn = self._open_connection(db_path)
+            try:
+                cursor = conn.cursor()
+                self._ensure_schema(cursor)
+                cursor.execute(
+                    "SELECT item_id, quantity FROM pharmacy_inventory WHERE id = ?",
+                    (batch_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return None
+                item_id, previous_qty = row
+                category_id = self._ensure_category(cursor, category)
+                now = datetime.now().isoformat()
+                cursor.execute(
+                    """
+                    UPDATE items
+                       SET name = ?,
+                           barcode = ?,
+                           category_id = ?,
+                           dosage = ?,
+                           medication_form = ?,
+                           storage_condition = ?,
+                           last_updated = ?,
+                           is_medicine = 1
+                     WHERE id = ?
+                    """,
+                    (
+                        name,
+                        barcode,
+                        category_id,
+                        dosage,
+                        form,
+                        storage_condition,
+                        now,
+                        item_id,
+                    ),
+                )
+                cursor.execute(
+                    """
+                    UPDATE pharmacy_inventory
+                       SET lot_number = ?,
+                           expiration_date = ?,
+                           quantity = ?,
+                           storage_condition = ?,
+                           prescription_required = ?,
+                           note = ?,
+                           updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        lot_number,
+                        normalized_expiration,
+                        quantity,
+                        storage_condition,
+                        int(prescription_required),
+                        note,
+                        now,
+                        batch_id,
+                    ),
+                )
+                delta = quantity - previous_qty
+                item_state = self._apply_item_quantity_change(
+                    cursor,
+                    item_id,
+                    delta,
+                    operator,
+                    source,
+                    note,
+                )
+                conn.commit()
+                return {
+                    "batch_id": batch_id,
+                    "item_id": item_id,
+                    "lot_number": lot_number,
+                    "quantity": quantity,
+                    "expiration_date": normalized_expiration,
+                    "item_quantity": item_state[0],
+                    "change": item_state[1],
+                }
+            finally:
+                conn.close()
+
+    def delete_batch(
+        self,
+        batch_id: int,
+        *,
+        operator: Optional[str] = None,
+        source: str = "pharmacy_module",
+        note: Optional[str] = None,
+        db_path: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            conn = self._open_connection(db_path)
+            try:
+                cursor = conn.cursor()
+                self._ensure_schema(cursor)
+                cursor.execute(
+                    "SELECT item_id, quantity FROM pharmacy_inventory WHERE id = ?",
+                    (batch_id,),
+                )
+                row = cursor.fetchone()
+                if row is None:
+                    return False
+                item_id, quantity = row
+                cursor.execute(
+                    "DELETE FROM pharmacy_inventory WHERE id = ?",
+                    (batch_id,),
+                )
+                if quantity:
+                    self._apply_item_quantity_change(
+                        cursor,
+                        item_id,
+                        -int(quantity),
+                        operator,
+                        source,
+                        note,
+                    )
+                conn.commit()
+                return True
+            finally:
+                conn.close()
 
     def list_batches(
         self,

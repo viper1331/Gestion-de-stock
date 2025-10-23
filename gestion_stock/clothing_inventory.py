@@ -19,10 +19,14 @@ class ClothingItem:
 
     id: int
     name: str
+    barcode: Optional[str]
     size: Optional[str]
     category: Optional[str]
     quantity: int
-    location: Optional[str]
+    unit_cost: Optional[float]
+    reorder_point: Optional[int]
+    preferred_supplier_id: Optional[int]
+    preferred_supplier_name: Optional[str]
     note: Optional[str]
     operator: Optional[str]
     updated_at: Optional[str]
@@ -52,9 +56,13 @@ class ClothingInventoryManager:
             CREATE TABLE IF NOT EXISTS clothing_inventory (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
+                barcode TEXT,
                 size TEXT,
                 category TEXT,
                 quantity INTEGER NOT NULL DEFAULT 0,
+                unit_cost REAL,
+                reorder_point INTEGER,
+                preferred_supplier_id INTEGER,
                 location TEXT,
                 note TEXT,
                 operator TEXT,
@@ -62,6 +70,16 @@ class ClothingInventoryManager:
             )
             """
         )
+        cursor.execute("PRAGMA table_info(clothing_inventory)")
+        existing_columns = {row[1] for row in cursor.fetchall()}
+        if "barcode" not in existing_columns:
+            cursor.execute("ALTER TABLE clothing_inventory ADD COLUMN barcode TEXT")
+        if "unit_cost" not in existing_columns:
+            cursor.execute("ALTER TABLE clothing_inventory ADD COLUMN unit_cost REAL")
+        if "reorder_point" not in existing_columns:
+            cursor.execute("ALTER TABLE clothing_inventory ADD COLUMN reorder_point INTEGER")
+        if "preferred_supplier_id" not in existing_columns:
+            cursor.execute("ALTER TABLE clothing_inventory ADD COLUMN preferred_supplier_id INTEGER")
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS clothing_movements (
@@ -143,9 +161,23 @@ class ClothingInventoryManager:
     def _fetch_item(self, cursor: sqlite3.Cursor, clothing_id: int) -> Optional[ClothingItem]:
         cursor.execute(
             """
-            SELECT id, name, size, category, quantity, location, note, operator, updated_at
-            FROM clothing_inventory
-            WHERE id = ?
+            SELECT
+                ci.id,
+                ci.name,
+                ci.barcode,
+                ci.size,
+                ci.category,
+                ci.quantity,
+                ci.unit_cost,
+                ci.reorder_point,
+                ci.preferred_supplier_id,
+                s.name,
+                ci.note,
+                ci.operator,
+                ci.updated_at
+            FROM clothing_inventory AS ci
+            LEFT JOIN suppliers AS s ON s.id = ci.preferred_supplier_id
+            WHERE ci.id = ?
             """,
             (clothing_id,),
         )
@@ -161,9 +193,13 @@ class ClothingInventoryManager:
         self,
         *,
         name: str,
+        barcode: Optional[str],
         size: Optional[str],
         category: Optional[str],
         quantity: int,
+        unit_cost: Optional[float],
+        reorder_point: Optional[int],
+        preferred_supplier_id: Optional[int],
         location: Optional[str],
         note: Optional[str],
         operator: Optional[str],
@@ -171,6 +207,8 @@ class ClothingInventoryManager:
     ) -> ClothingItem:
         if quantity < 0:
             raise ValueError("La quantité doit être positive ou nulle.")
+        if barcode:
+            barcode = barcode.strip() or None
         with self._lock:
             conn = self._open_connection(db_path)
             try:
@@ -191,10 +229,34 @@ class ClothingInventoryManager:
                     cur.execute(
                         """
                         INSERT INTO clothing_inventory (
-                            name, size, category, quantity, location, note, operator, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            name,
+                            barcode,
+                            size,
+                            category,
+                            quantity,
+                            unit_cost,
+                            reorder_point,
+                            preferred_supplier_id,
+                            location,
+                            note,
+                            operator,
+                            updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                         """,
-                        (name, size, category, quantity, location, note, operator, now),
+                        (
+                            name,
+                            barcode,
+                            size,
+                            category,
+                            quantity,
+                            unit_cost,
+                            reorder_point,
+                            preferred_supplier_id,
+                            location,
+                            note,
+                            operator,
+                            now,
+                        ),
                     )
                     clothing_id = cur.lastrowid
                     self._record_movement(
@@ -211,10 +273,33 @@ class ClothingInventoryManager:
                     cur.execute(
                         """
                         UPDATE clothing_inventory
-                        SET quantity = ?, location = ?, note = ?, operator = ?, updated_at = ?
+                        SET quantity = ?,
+                            barcode = ?,
+                            size = ?,
+                            category = ?,
+                            unit_cost = ?,
+                            reorder_point = ?,
+                            preferred_supplier_id = ?,
+                            location = ?,
+                            note = ?,
+                            operator = ?,
+                            updated_at = ?
                         WHERE id = ?
                         """,
-                        (quantity, location, note, operator, now, clothing_id),
+                        (
+                            quantity,
+                            barcode,
+                            size,
+                            category,
+                            unit_cost,
+                            reorder_point,
+                            preferred_supplier_id,
+                            location,
+                            note,
+                            operator,
+                            now,
+                            clothing_id,
+                        ),
                     )
                     self._record_movement(
                         cur,
@@ -279,6 +364,111 @@ class ClothingInventoryManager:
             finally:
                 conn.close()
 
+    def update_item(
+        self,
+        clothing_id: int,
+        *,
+        name: str,
+        barcode: Optional[str],
+        size: Optional[str],
+        category: Optional[str],
+        quantity: int,
+        unit_cost: Optional[float],
+        reorder_point: Optional[int],
+        preferred_supplier_id: Optional[int],
+        note: Optional[str],
+        operator: Optional[str],
+        db_path: Optional[str] = None,
+    ) -> Optional[ClothingItem]:
+        if quantity < 0:
+            raise ValueError("La quantité doit être positive ou nulle.")
+        with self._lock:
+            conn = self._open_connection(db_path)
+            try:
+                cur = conn.cursor()
+                self._ensure_schema(cur)
+                current = self._fetch_item(cur, clothing_id)
+                if current is None:
+                    return None
+                now = datetime.now().isoformat()
+                delta = quantity - current.quantity
+                cur.execute(
+                    """
+                    UPDATE clothing_inventory
+                       SET name = ?,
+                           barcode = ?,
+                           size = ?,
+                           category = ?,
+                           quantity = ?,
+                           unit_cost = ?,
+                           reorder_point = ?,
+                           preferred_supplier_id = ?,
+                           note = ?,
+                           operator = ?,
+                           updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        name,
+                        barcode.strip() if barcode else None,
+                        size,
+                        category,
+                        quantity,
+                        unit_cost,
+                        reorder_point,
+                        preferred_supplier_id,
+                        note,
+                        operator,
+                        now,
+                        clothing_id,
+                    ),
+                )
+                if delta != 0:
+                    movement_type = "ajustement" if delta > 0 else "correction"
+                    self._record_movement(
+                        cur,
+                        clothing_id,
+                        delta,
+                        movement_type,
+                        operator,
+                        note,
+                    )
+                conn.commit()
+                return self._fetch_item(cur, clothing_id)
+            finally:
+                conn.close()
+
+    def delete_item(
+        self,
+        clothing_id: int,
+        *,
+        db_path: Optional[str] = None,
+    ) -> bool:
+        with self._lock:
+            conn = self._open_connection(db_path)
+            try:
+                cur = conn.cursor()
+                self._ensure_schema(cur)
+                cur.execute(
+                    "SELECT quantity FROM clothing_inventory WHERE id = ?",
+                    (clothing_id,),
+                )
+                row = cur.fetchone()
+                if row is None:
+                    return False
+                cur.execute(
+                    "DELETE FROM clothing_movements WHERE clothing_id = ?",
+                    (clothing_id,),
+                )
+                cur.execute(
+                    "DELETE FROM clothing_inventory WHERE id = ?",
+                    (clothing_id,),
+                )
+                conn.commit()
+                return True
+            finally:
+                conn.close()
+
     def list_items(
         self,
         *,
@@ -292,22 +482,41 @@ class ClothingInventoryManager:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
                 query = (
-                    "SELECT id, name, size, category, quantity, location, note, operator, updated_at "
-                    "FROM clothing_inventory"
+                    "SELECT "
+                    "    ci.id,"
+                    "    ci.name,"
+                    "    ci.barcode,"
+                    "    ci.size,"
+                    "    ci.category,"
+                    "    ci.quantity,"
+                    "    ci.unit_cost,"
+                    "    ci.reorder_point,"
+                    "    ci.preferred_supplier_id,"
+                    "    s.name,"
+                    "    ci.note,"
+                    "    ci.operator,"
+                    "    ci.updated_at "
+                    "FROM clothing_inventory AS ci "
+                    "LEFT JOIN suppliers AS s ON s.id = ci.preferred_supplier_id"
                 )
                 params: list[object] = []
                 conditions: list[str] = []
                 if search:
                     pattern = f"%{search.strip()}%"
                     conditions.append(
-                        "(name LIKE ? OR category LIKE ? OR size LIKE ? OR location LIKE ? OR note LIKE ?)"
+                        "(ci.name LIKE ?"
+                        " OR ci.category LIKE ?"
+                        " OR ci.size LIKE ?"
+                        " OR ci.barcode LIKE ?"
+                        " OR COALESCE(s.name, '') LIKE ?"
+                        " OR ci.note LIKE ?)"
                     )
-                    params.extend([pattern] * 5)
+                    params.extend([pattern] * 6)
                 if not include_zero:
-                    conditions.append("quantity > 0")
+                    conditions.append("ci.quantity > 0")
                 if conditions:
                     query += " WHERE " + " AND ".join(conditions)
-                query += " ORDER BY name COLLATE NOCASE, size COLLATE NOCASE"
+                query += " ORDER BY ci.name COLLATE NOCASE, ci.size COLLATE NOCASE"
                 cur.execute(query, params)
                 rows = cur.fetchall()
                 return [ClothingItem(*row) for row in rows]
