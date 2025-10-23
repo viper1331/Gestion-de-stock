@@ -137,6 +137,7 @@ default_config = {
     'last_user': '',
     'enable_pharmacy_module': 'true',
     'enable_clothing_module': 'true',
+    'show_inventory_tab': 'true',
 }
 if not os.path.exists(CONFIG_FILE):
     config['Settings'] = default_config
@@ -3122,6 +3123,10 @@ class StockApp(tk.Tk):
             fallback=DEFAULT_LOW_STOCK_THRESHOLD
         )
 
+        self.inventory_visible = config['Settings'].getboolean(
+            'show_inventory_tab',
+            fallback=True,
+        )
         self.pharmacy_enabled = ENABLE_PHARMACY_MODULE
         self.clothing_enabled = ENABLE_CLOTHING_MODULE
 
@@ -3234,6 +3239,12 @@ class StockApp(tk.Tk):
         module_menu.add_command(label="Dotations collaborateurs", command=self.open_collaborator_gear)
         if self.current_role == 'admin':
             module_menu.add_command(label="Approvals en attente", command=self.open_approval_queue)
+        self.inventory_module_var = tk.BooleanVar(value=self.inventory_visible)
+        module_menu.add_checkbutton(
+            label="Fenêtre Inventaire",
+            variable=self.inventory_module_var,
+            command=self.on_toggle_inventory_module,
+        )
         self.pharmacy_module_var = tk.BooleanVar(value=self.pharmacy_enabled)
         module_menu.add_checkbutton(
             label="Gestion Pharmacie",
@@ -3305,8 +3316,11 @@ class StockApp(tk.Tk):
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        inventory_frame = ttk.Frame(self.notebook)
-        self.notebook.add(inventory_frame, text="Inventaire")
+        self.inventory_frame = ttk.Frame(self.notebook)
+        self._inventory_tab_added = False
+        self._build_inventory_tab_widgets()
+        if self.inventory_visible:
+            self.add_inventory_tab()
 
         self.dashboard_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.dashboard_frame, text="Tableau de bord")
@@ -3319,14 +3333,23 @@ class StockApp(tk.Tk):
         if self.pharmacy_enabled:
             self.add_pharmacy_tab()
 
-        search_frame = ttk.Frame(inventory_frame)
+        self.create_dashboard_tab()
+
+    def _build_inventory_tab_widgets(self) -> None:
+        frame = getattr(self, "inventory_frame", None)
+        if frame is None:
+            return
+        for child in frame.winfo_children():
+            child.destroy()
+
+        search_frame = ttk.Frame(frame)
         ttk.Label(search_frame, text="Rechercher :").pack(side=tk.LEFT, padx=5)
         self.entry_search = ttk.Entry(search_frame)
         self.entry_search.pack(side=tk.LEFT, padx=5)
         self.entry_search.bind('<KeyRelease>', lambda e: self.load_inventory())
         search_frame.pack(fill=tk.X, pady=5)
 
-        scan_frame = ttk.Frame(inventory_frame)
+        scan_frame = ttk.Frame(frame)
         ttk.Label(scan_frame, text="Scanner (douchette) :").pack(side=tk.LEFT, padx=5)
         self.scan_var = tk.StringVar()
         self.entry_scan = ttk.Entry(scan_frame, textvariable=self.scan_var)
@@ -3335,25 +3358,27 @@ class StockApp(tk.Tk):
         global scan_timer_id
         scan_timer_id = None
 
-        def scan_var_callback(*args):
+        def scan_var_callback(*_args):
             global scan_timer_id
             if scan_timer_id:
                 try:
                     self.after_cancel(scan_timer_id)
-                except:
+                except Exception:
                     pass
+
             def process_after_delay():
                 code = self.scan_var.get().strip()
                 if code:
                     self.process_barcode(code, source='douchette')
                 self.scan_var.set("")
+
             scan_timer_id = self.after(300, process_after_delay)
 
         self.scan_var.trace_add('write', scan_var_callback)
         scan_frame.pack(fill=tk.X, pady=5)
 
         cols = DEFAULT_INVENTORY_COLUMNS
-        self.tree = ttk.Treeview(inventory_frame, columns=cols, show='headings', selectmode='browse')
+        self.tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
         for col in cols:
             self.tree.heading(col, text=col)
             self.tree.column(col, anchor=tk.CENTER)
@@ -3366,7 +3391,25 @@ class StockApp(tk.Tk):
         self.tree.tag_configure('stock_ok', background='#e8f5e9', foreground='#1b5e20')
         self.tree.tag_configure('stock_unknown', background='#f0f0f0', foreground='#333333')
 
-        self.create_dashboard_tab()
+    def add_inventory_tab(self) -> None:
+        if getattr(self, "inventory_frame", None) is None:
+            return
+        if getattr(self, "_inventory_tab_added", False):
+            return
+        try:
+            self.notebook.insert(0, self.inventory_frame, text="Inventaire")
+        except tk.TclError:
+            self.notebook.add(self.inventory_frame, text="Inventaire")
+        self._inventory_tab_added = True
+
+    def remove_inventory_tab(self) -> None:
+        if not getattr(self, "_inventory_tab_added", False):
+            return
+        try:
+            self.notebook.forget(self.inventory_frame)
+        except tk.TclError:
+            pass
+        self._inventory_tab_added = False
 
     def add_clothing_tab(self) -> None:
         if getattr(self, "clothing_frame", None) is not None:
@@ -3792,6 +3835,19 @@ class StockApp(tk.Tk):
             if hasattr(self, attr):
                 delattr(self, attr)
         self._pharmacy_search_job = None
+
+    def on_toggle_inventory_module(self) -> None:
+        enabled = bool(self.inventory_module_var.get())
+        if enabled == self.inventory_visible:
+            return
+        self.inventory_visible = enabled
+        if enabled:
+            self.add_inventory_tab()
+        else:
+            self.remove_inventory_tab()
+        config['Settings']['show_inventory_tab'] = 'true' if enabled else 'false'
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            config.write(f)
 
     def on_toggle_pharmacy_module(self) -> None:
         enabled = bool(self.pharmacy_module_var.get())
