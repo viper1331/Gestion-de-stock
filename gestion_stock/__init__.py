@@ -5852,6 +5852,8 @@ class StockApp(tk.Tk):
         """
         Sauvegarde les largeurs actuelles des colonnes dans config.ini, section 'ColumnWidths'.
         """
+        if not hasattr(self, "tree"):
+            return
         if 'ColumnWidths' not in config:
             config['ColumnWidths'] = {}
         section = config['ColumnWidths']
