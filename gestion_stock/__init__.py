@@ -2179,20 +2179,130 @@ def has_recent_alert(item_id, within_hours=24):
             conn.close()
 
 
-def fetch_dashboard_metrics(low_stock_threshold, category_id=None, sales_days=30, movement_days=14):
+def _fetch_clothing_dashboard_metrics(
+    low_stock_threshold: int,
+    *,
+    sales_days: int = 30,
+    movement_days: int = 14,
+) -> dict:
+    summary = {
+        "total_items": 0,
+        "total_quantity": 0,
+        "stock_value": 0.0,
+        "low_stock_count": 0,
+        "top_sales": [],
+        "movement_history": [],
+    }
+    if clothing_inventory_manager is None:
+        return summary
+
     conn = None
     try:
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
+            clothing_inventory_manager.ensure_schema(cursor=cursor)
+
+            cursor.execute(
+                "SELECT COUNT(*), COALESCE(SUM(quantity), 0), "
+                "COALESCE(SUM(quantity * COALESCE(unit_cost, 0)), 0) "
+                "FROM clothing_inventory"
+            )
+            total_items, total_quantity, stock_value = cursor.fetchone()
+
+            cursor.execute(
+                """
+                SELECT COUNT(*)
+                  FROM clothing_inventory
+                 WHERE quantity <= COALESCE(reorder_point, ?)
+                """,
+                (low_stock_threshold,),
+            )
+            low_stock = cursor.fetchone()[0]
+
+            sales_since = (datetime.now() - timedelta(days=sales_days)).isoformat()
+            cursor.execute(
+                """
+                SELECT ci.name,
+                       ABS(SUM(CASE WHEN cm.quantity_change < 0 THEN cm.quantity_change ELSE 0 END))
+                  FROM clothing_movements AS cm
+                  JOIN clothing_inventory AS ci ON ci.id = cm.clothing_id
+                 WHERE cm.created_at >= ?
+              GROUP BY ci.name
+              ORDER BY 2 DESC
+                 LIMIT 5
+                """,
+                (sales_since,),
+            )
+            top_sales = cursor.fetchall()
+
+            movement_since = (datetime.now() - timedelta(days=movement_days)).isoformat()
+            cursor.execute(
+                """
+                SELECT DATE(substr(cm.created_at, 1, 10)) AS jour,
+                       SUM(CASE WHEN cm.quantity_change > 0 THEN cm.quantity_change ELSE 0 END) AS entrees,
+                       SUM(CASE WHEN cm.quantity_change < 0 THEN ABS(cm.quantity_change) ELSE 0 END) AS sorties
+                  FROM clothing_movements AS cm
+                 WHERE cm.created_at >= ?
+              GROUP BY jour
+              ORDER BY jour
+                """,
+                (movement_since,),
+            )
+            movement_history = cursor.fetchall()
+
+        summary.update(
+            {
+                "total_items": total_items or 0,
+                "total_quantity": total_quantity or 0,
+                "stock_value": float(stock_value or 0.0),
+                "low_stock_count": low_stock or 0,
+                "top_sales": top_sales,
+                "movement_history": movement_history,
+            }
+        )
+    except sqlite3.Error as exc:
+        print(f"[DB Error] _fetch_clothing_dashboard_metrics: {exc}")
+    finally:
+        if conn:
+            conn.close()
+    return summary
+
+
+def fetch_dashboard_metrics(
+    low_stock_threshold,
+    category_id=None,
+    sales_days=30,
+    movement_days=14,
+    module_scope: str = "general",
+):
+    if module_scope == "clothing":
+        return _fetch_clothing_dashboard_metrics(
+            int(low_stock_threshold),
+            sales_days=int(sales_days),
+            movement_days=int(movement_days),
+        )
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            filter_is_medicine = module_scope == "pharmacy"
+
+            item_conditions: list[str] = []
+            item_params: list[Any] = []
+            if filter_is_medicine:
+                item_conditions.append("items.is_medicine = 1")
+            if category_id is not None:
+                item_conditions.append("items.category_id = ?")
+                item_params.append(category_id)
+
             item_query = (
                 "SELECT COUNT(*), COALESCE(SUM(quantity),0), "
                 "COALESCE(SUM(quantity * COALESCE(unit_cost,0)),0) FROM items"
             )
-            item_params = []
-            if category_id is not None:
-                item_query += " WHERE category_id = ?"
-                item_params.append(category_id)
+            if item_conditions:
+                item_query += " WHERE " + " AND ".join(item_conditions)
             cursor.execute(item_query, item_params)
             total_items, total_quantity, stock_value = cursor.fetchone()
 
@@ -2200,7 +2310,9 @@ def fetch_dashboard_metrics(low_stock_threshold, category_id=None, sales_days=30
                 "SELECT COUNT(*) FROM items "
                 "WHERE quantity <= COALESCE(reorder_point, ?)"
             )
-            low_stock_params = [low_stock_threshold]
+            low_stock_params: list[Any] = [low_stock_threshold]
+            if filter_is_medicine:
+                low_stock_query += " AND is_medicine = 1"
             if category_id is not None:
                 low_stock_query += " AND category_id = ?"
                 low_stock_params.append(category_id)
@@ -2208,18 +2320,24 @@ def fetch_dashboard_metrics(low_stock_threshold, category_id=None, sales_days=30
             low_stock_count = cursor.fetchone()[0]
 
             sales_since = (datetime.now() - timedelta(days=sales_days)).isoformat()
+            scope_filter = ""
+            if filter_is_medicine:
+                scope_filter += " AND items.is_medicine = 1"
+            if category_id is not None:
+                scope_filter += " AND items.category_id = ?"
+
             top_sales_query = (
                 """
                 SELECT items.name, ABS(SUM(stock_movements.quantity_change)) AS total_movement
                 FROM stock_movements
                 JOIN items ON items.id = stock_movements.item_id
                 WHERE stock_movements.movement_type = 'OUT' AND stock_movements.created_at >= ?
-                {category_filter}
+                {scope_filter}
                 GROUP BY items.name
                 ORDER BY total_movement DESC
                 LIMIT 5
                 """
-            ).format(category_filter="AND items.category_id = ?" if category_id is not None else "")
+            ).format(scope_filter=scope_filter)
             top_sales_params = [sales_since]
             if category_id is not None:
                 top_sales_params.append(category_id)
@@ -2235,11 +2353,11 @@ def fetch_dashboard_metrics(low_stock_threshold, category_id=None, sales_days=30
                 FROM stock_movements
                 JOIN items ON items.id = stock_movements.item_id
                 WHERE stock_movements.created_at >= ?
-                {category_filter}
+                {scope_filter}
                 GROUP BY jour
                 ORDER BY jour
                 """
-            ).format(category_filter="AND items.category_id = ?" if category_id is not None else "")
+            ).format(scope_filter=scope_filter)
             movement_params = [movement_since]
             if category_id is not None:
                 movement_params.append(category_id)
@@ -5000,6 +5118,27 @@ class StockApp(tk.Tk):
             'low_stock_count': tk.StringVar(value='0'),
         }
 
+        scope_options: list[str] = []
+        if self.pharmacy_allowed and pharmacy_inventory_manager is not None:
+            scope_options.append("pharmacy")
+        if self.clothing_allowed and clothing_inventory_manager is not None:
+            scope_options.append("clothing")
+        if not scope_options:
+            scope_options.append("general")
+
+        scope_labels = {
+            "general": "Inventaire général",
+            "pharmacy": MODULE_LABELS.get("pharmacy", "Pharmacie"),
+            "clothing": MODULE_LABELS.get("clothing", "Habillement"),
+        }
+        self._dashboard_scope_label_to_value = {
+            scope_labels[value]: value for value in scope_options
+        }
+        initial_scope_label = scope_labels[scope_options[0]]
+        self.dashboard_scope_var = tk.StringVar(value=initial_scope_label)
+        self.dashboard_scope_combobox: Optional[ttk.Combobox]
+        self._dashboard_scope_values = scope_options
+
         summary_frame = ttk.Frame(self.dashboard_frame, padding=10)
         summary_frame.pack(fill=tk.X, anchor=tk.N)
 
@@ -5021,7 +5160,30 @@ class StockApp(tk.Tk):
         filter_frame = ttk.LabelFrame(self.dashboard_frame, text="Filtres", padding=10)
         filter_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
 
-        ttk.Label(filter_frame, text="Catégorie :").grid(row=0, column=0, padx=5, pady=5, sticky=tk.W)
+        column_index = 0
+        if len(scope_options) > 1:
+            ttk.Label(filter_frame, text="Module :").grid(row=0, column=column_index, padx=5, pady=5, sticky=tk.W)
+            column_index += 1
+            self.dashboard_scope_combobox = ttk.Combobox(
+                filter_frame,
+                state='readonly',
+                textvariable=self.dashboard_scope_var,
+                values=list(self._dashboard_scope_label_to_value.keys()),
+                width=20,
+            )
+            self.dashboard_scope_combobox.grid(row=0, column=column_index, padx=5, pady=5, sticky=tk.W)
+            self.dashboard_scope_combobox.set(initial_scope_label)
+            self.dashboard_scope_combobox.bind("<<ComboboxSelected>>", self.on_dashboard_scope_change)
+            column_index += 1
+        else:
+            ttk.Label(
+                filter_frame,
+                text=f"Module : {initial_scope_label}",
+            ).grid(row=0, column=column_index, columnspan=2, padx=5, pady=5, sticky=tk.W)
+            self.dashboard_scope_combobox = None
+            column_index += 2
+
+        ttk.Label(filter_frame, text="Catégorie :").grid(row=0, column=column_index, padx=5, pady=5, sticky=tk.W)
         self.dashboard_category_var = tk.StringVar()
         self.dashboard_category_combobox = ttk.Combobox(
             filter_frame,
@@ -5029,13 +5191,13 @@ class StockApp(tk.Tk):
             textvariable=self.dashboard_category_var,
             width=30,
         )
-        self.dashboard_category_combobox.grid(row=0, column=1, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_category_combobox.grid(row=0, column=column_index + 1, padx=5, pady=5, sticky=tk.W)
         self.dashboard_category_combobox.bind("<<ComboboxSelected>>", self.on_dashboard_filter_change)
 
         self.dashboard_category_ids = []
-        self.load_dashboard_categories()
+        self.load_dashboard_categories(scope_options[0])
 
-        ttk.Label(filter_frame, text="Période ventes :").grid(row=0, column=2, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(filter_frame, text="Période ventes :").grid(row=0, column=column_index + 2, padx=5, pady=5, sticky=tk.W)
         self.dashboard_sales_period_map = {
             "7 jours": 7,
             "14 jours": 14,
@@ -5051,11 +5213,11 @@ class StockApp(tk.Tk):
             values=list(self.dashboard_sales_period_map.keys()),
             width=12,
         )
-        self.dashboard_sales_period_combobox.grid(row=0, column=3, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_sales_period_combobox.grid(row=0, column=column_index + 3, padx=5, pady=5, sticky=tk.W)
         self.dashboard_sales_period_combobox.set(self.dashboard_sales_period_default_label)
         self.dashboard_sales_period_combobox.bind("<<ComboboxSelected>>", self.on_dashboard_filter_change)
 
-        ttk.Label(filter_frame, text="Historique mouvements :").grid(row=0, column=4, padx=5, pady=5, sticky=tk.W)
+        ttk.Label(filter_frame, text="Historique mouvements :").grid(row=0, column=column_index + 4, padx=5, pady=5, sticky=tk.W)
         self.dashboard_movement_period_map = {
             "7 jours": 7,
             "14 jours": 14,
@@ -5071,14 +5233,24 @@ class StockApp(tk.Tk):
             values=list(self.dashboard_movement_period_map.keys()),
             width=12,
         )
-        self.dashboard_movement_period_combobox.grid(row=0, column=5, padx=5, pady=5, sticky=tk.W)
+        self.dashboard_movement_period_combobox.grid(row=0, column=column_index + 5, padx=5, pady=5, sticky=tk.W)
         self.dashboard_movement_period_combobox.set(self.dashboard_movement_period_default_label)
         self.dashboard_movement_period_combobox.bind("<<ComboboxSelected>>", self.on_dashboard_filter_change)
 
-        ttk.Button(filter_frame, text="Rafraîchir", command=self.refresh_dashboard).grid(row=0, column=6, padx=5, pady=5)
-        ttk.Button(filter_frame, text="Réinitialiser", command=self.reset_dashboard_filters).grid(row=0, column=7, padx=5, pady=5)
+        ttk.Button(filter_frame, text="Rafraîchir", command=self.refresh_dashboard).grid(
+            row=0,
+            column=column_index + 6,
+            padx=5,
+            pady=5,
+        )
+        ttk.Button(filter_frame, text="Réinitialiser", command=self.reset_dashboard_filters).grid(
+            row=0,
+            column=column_index + 7,
+            padx=5,
+            pady=5,
+        )
 
-        for col in (1, 3, 5):
+        for col in (column_index + 1, column_index + 3, column_index + 5):
             filter_frame.grid_columnconfigure(col, weight=1)
 
         self.dashboard_figure = None
@@ -5637,14 +5809,45 @@ class StockApp(tk.Tk):
             parent=self,
         )
 
-    def load_dashboard_categories(self):
+    def _get_dashboard_scope_value(self) -> str:
+        mapping = getattr(self, "_dashboard_scope_label_to_value", {})
+        if not mapping:
+            return "general"
+        label = self.dashboard_scope_var.get() if hasattr(self, "dashboard_scope_var") else ""
+        if label in mapping:
+            return mapping[label]
+        return next(iter(mapping.values()))
+
+    def load_dashboard_categories(self, scope: str = "general"):
+        if scope == "clothing":
+            self._dashboard_filter_update_blocked = True
+            try:
+                self.dashboard_category_ids = []
+                self.dashboard_category_combobox.config(state="disabled")
+                self.dashboard_category_combobox['values'] = ("Toutes",)
+                self.dashboard_category_combobox.current(0)
+                self.dashboard_category_var.set("Toutes")
+                self.dashboard_selected_category_id = None
+            finally:
+                self._dashboard_filter_update_blocked = False
+            return
+
         conn = None
         rows = []
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
-                cursor.execute("SELECT id, name FROM categories ORDER BY name")
+                if scope == "pharmacy":
+                    cursor.execute(
+                        "SELECT DISTINCT categories.id, categories.name "
+                        "FROM categories "
+                        "JOIN items ON items.category_id = categories.id "
+                        "WHERE items.is_medicine = 1 "
+                        "ORDER BY categories.name"
+                    )
+                else:
+                    cursor.execute("SELECT id, name FROM categories ORDER BY name")
                 rows = cursor.fetchall()
         except sqlite3.Error as exc:
             print(f"[DB Error] load_dashboard_categories: {exc}")
@@ -5660,6 +5863,7 @@ class StockApp(tk.Tk):
 
         self._dashboard_filter_update_blocked = True
         try:
+            self.dashboard_category_combobox.config(state="readonly")
             self.dashboard_category_ids = ids
             self.dashboard_category_combobox['values'] = labels
             if labels:
@@ -5673,6 +5877,9 @@ class StockApp(tk.Tk):
 
     def _update_dashboard_category_selection(self):
         if not hasattr(self, 'dashboard_category_combobox'):
+            return
+        if self._get_dashboard_scope_value() == "clothing":
+            self.dashboard_selected_category_id = None
             return
         try:
             idx = self.dashboard_category_combobox.current()
@@ -5694,6 +5901,8 @@ class StockApp(tk.Tk):
     def reset_dashboard_filters(self):
         self._dashboard_filter_update_blocked = True
         try:
+            current_scope = self._get_dashboard_scope_value()
+            self.load_dashboard_categories(current_scope)
             if getattr(self, 'dashboard_category_combobox', None) is not None:
                 if self.dashboard_category_combobox['values']:
                     self.dashboard_category_combobox.current(0)
@@ -5707,6 +5916,11 @@ class StockApp(tk.Tk):
                 self.dashboard_movement_period_combobox.set(self.dashboard_movement_period_default_label)
         finally:
             self._dashboard_filter_update_blocked = False
+        self.refresh_dashboard()
+
+    def on_dashboard_scope_change(self, _event=None):
+        scope = self._get_dashboard_scope_value()
+        self.load_dashboard_categories(scope)
         self.refresh_dashboard()
 
     def load_inventory(self):
@@ -5848,7 +6062,10 @@ class StockApp(tk.Tk):
         ):
             self._update_dashboard_category_selection()
 
+        scope = self._get_dashboard_scope_value()
         category_id = getattr(self, 'dashboard_selected_category_id', None)
+        if scope == "clothing":
+            category_id = None
         sales_label = getattr(self, 'dashboard_sales_period_var', None)
         sales_choice = sales_label.get() if sales_label is not None else '30 jours'
         sales_days = getattr(self, 'dashboard_sales_period_map', {}).get(sales_choice, 30)
@@ -5861,6 +6078,7 @@ class StockApp(tk.Tk):
             category_id=category_id,
             sales_days=sales_days,
             movement_days=movement_days,
+            module_scope=scope,
         )
         self.dashboard_vars['total_items'].set(str(metrics['total_items']))
         self.dashboard_vars['total_quantity'].set(str(metrics['total_quantity']))
