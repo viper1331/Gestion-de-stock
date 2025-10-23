@@ -21,7 +21,7 @@ import zipfile
 import hashlib
 import json
 import logging
-from typing import Callable, Dict, Optional
+from typing import Any, Callable, Dict, Optional
 import importlib.util
 import webbrowser
 from datetime import datetime, timedelta
@@ -3633,7 +3633,18 @@ class StockApp(tk.Tk):
                 tags.append('clothing_empty')
             elif item.quantity <= self.low_stock_threshold:
                 tags.append('clothing_low')
-            self.clothing_tree.insert('', 'end', iid=str(item.id), values=values, tags=tags or None)
+
+            insert_kwargs: dict[str, Any] = {
+                'parent': '',
+                'index': 'end',
+                'iid': str(item.id),
+                'values': values,
+            }
+
+            if tags:
+                insert_kwargs['tags'] = tuple(tags)
+
+            self.clothing_tree.insert(**insert_kwargs)
             self.clothing_item_cache[str(item.id)] = item
         if items:
             self.clothing_tree.yview_moveto(0)
