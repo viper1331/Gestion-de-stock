@@ -48,21 +48,72 @@ DEFAULT_INVENTORY_COLUMNS = (
     'Dernière MAJ',
 )
 
+CLOTHING_COLUMN_KEYS: tuple[str, ...] = (
+    'name',
+    'barcode',
+    'size',
+    'category',
+    'quantity',
+    'reorder_point',
+    'unit_cost',
+    'supplier',
+    'updated_at',
+)
 
-def _normalize_inventory_columns_section(section: configparser.SectionProxy) -> None:
-    """Assure la présence d'une configuration cohérente pour les colonnes d'inventaire."""
+CLOTHING_COLUMN_LABELS: dict[str, str] = {
+    'name': 'Article',
+    'barcode': 'Code-Barres',
+    'size': 'Taille',
+    'category': 'Catégorie',
+    'quantity': 'Quantité',
+    'reorder_point': 'Seuil',
+    'unit_cost': 'Coût (€)',
+    'supplier': 'Fournisseur',
+    'updated_at': 'Dernière MAJ',
+}
+
+PHARMACY_COLUMN_KEYS: tuple[str, ...] = (
+    'name',
+    'lot',
+    'expiration',
+    'days_left',
+    'quantity',
+    'dosage',
+    'form',
+    'storage',
+    'prescription',
+)
+
+PHARMACY_COLUMN_LABELS: dict[str, str] = {
+    'name': 'Nom',
+    'lot': 'Lot',
+    'expiration': 'Péremption',
+    'days_left': 'Jours restants',
+    'quantity': 'Quantité',
+    'dosage': 'Dosage',
+    'form': 'Forme',
+    'storage': 'Condition',
+    'prescription': 'Ordonnance',
+}
+
+
+def _normalize_columns_section(
+    section: configparser.SectionProxy,
+    default_columns: tuple[str, ...],
+) -> None:
+    """Assure la présence d'une configuration cohérente pour l'ordre et la visibilité des colonnes."""
 
     order_raw = section.get('order', '')
     order = [col.strip() for col in order_raw.split(',') if col.strip()]
-    order = [col for col in order if col in DEFAULT_INVENTORY_COLUMNS]
-    for col in DEFAULT_INVENTORY_COLUMNS:
+    order = [col for col in order if col in default_columns]
+    for col in default_columns:
         if col not in order:
             order.append(col)
     section['order'] = ','.join(order)
 
     hidden_raw = section.get('hidden', '')
     hidden = [col.strip() for col in hidden_raw.split(',') if col.strip()]
-    hidden = [col for col in hidden if col in DEFAULT_INVENTORY_COLUMNS]
+    hidden = [col for col in hidden if col in default_columns]
     section['hidden'] = ','.join(hidden)
 
 
@@ -137,13 +188,20 @@ default_config = {
     'last_user': '',
     'enable_pharmacy_module': 'true',
     'enable_clothing_module': 'true',
-    'show_inventory_tab': 'true',
 }
 if not os.path.exists(CONFIG_FILE):
     config['Settings'] = default_config
     config['ColumnWidths'] = {}
     config['InventoryColumns'] = {
         'order': ','.join(DEFAULT_INVENTORY_COLUMNS),
+        'hidden': '',
+    }
+    config['ClothingColumns'] = {
+        'order': ','.join(CLOTHING_COLUMN_KEYS),
+        'hidden': '',
+    }
+    config['PharmacyColumns'] = {
+        'order': ','.join(PHARMACY_COLUMN_KEYS),
         'hidden': '',
     }
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
@@ -166,7 +224,21 @@ else:
             'hidden': '',
         }
     else:
-        _normalize_inventory_columns_section(config['InventoryColumns'])
+        _normalize_columns_section(config['InventoryColumns'], DEFAULT_INVENTORY_COLUMNS)
+    if 'ClothingColumns' not in config:
+        config['ClothingColumns'] = {
+            'order': ','.join(CLOTHING_COLUMN_KEYS),
+            'hidden': '',
+        }
+    else:
+        _normalize_columns_section(config['ClothingColumns'], CLOTHING_COLUMN_KEYS)
+    if 'PharmacyColumns' not in config:
+        config['PharmacyColumns'] = {
+            'order': ','.join(PHARMACY_COLUMN_KEYS),
+            'hidden': '',
+        }
+    else:
+        _normalize_columns_section(config['PharmacyColumns'], PHARMACY_COLUMN_KEYS)
     with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
         config.write(f)
 
@@ -192,9 +264,8 @@ LAST_USER = config['Settings'].get('last_user', '')
 ENABLE_PHARMACY_MODULE = config['Settings'].getboolean('enable_pharmacy_module', fallback=True)
 ENABLE_CLOTHING_MODULE = config['Settings'].getboolean('enable_clothing_module', fallback=True)
 
-AVAILABLE_MODULES: tuple[str, ...] = ("inventory", "pharmacy", "clothing")
+AVAILABLE_MODULES: tuple[str, ...] = ("pharmacy", "clothing")
 MODULE_LABELS: dict[str, str] = {
-    "inventory": "Inventaire",
     "pharmacy": "Pharmacie",
     "clothing": "Habillement",
 }
@@ -859,7 +930,6 @@ def default_module_permissions_for_role(role: Optional[str]) -> dict[str, bool]:
     """Retourne les permissions modules par défaut pour un rôle donné."""
 
     base_permissions = {
-        "inventory": True,
         "pharmacy": config['Settings'].getboolean(
             'enable_pharmacy_module',
             fallback=ENABLE_PHARMACY_MODULE,
@@ -3517,6 +3587,7 @@ class ColumnManagerDialog(tk.Toplevel):
         columns: tuple[str, ...],
         order: list[str],
         hidden: set[str],
+        column_labels: Optional[dict[str, str]] = None,
     ) -> None:
         super().__init__(master)
         self.title("Personnalisation des colonnes")
@@ -3529,6 +3600,7 @@ class ColumnManagerDialog(tk.Toplevel):
         self.default_columns = list(columns)
         self.column_order = list(order)
         self.hidden_columns = set(hidden)
+        self.column_labels = column_labels or {}
 
         main_frame = ttk.Frame(self, padding=10)
         main_frame.grid(row=0, column=0, sticky="nsew")
@@ -3606,7 +3678,8 @@ class ColumnManagerDialog(tk.Toplevel):
         self.listbox.delete(0, tk.END)
         for col in self.column_order:
             marker = '✓' if col not in self.hidden_columns else '✗'
-            self.listbox.insert(tk.END, f"[{marker}] {col}")
+            label = self.column_labels.get(col, col)
+            self.listbox.insert(tk.END, f"[{marker}] {label}")
 
     def _current_index(self) -> Optional[int]:
         selection = self.listbox.curselection()
@@ -3669,10 +3742,11 @@ class ColumnManagerDialog(tk.Toplevel):
             self.toggle_button.config(text="Afficher/Masquer", state=tk.DISABLED)
             return
         column = self.column_order[idx]
+        label = self.column_labels.get(column, column)
         if column in self.hidden_columns:
-            self.toggle_button.config(text="Afficher", state=tk.NORMAL)
+            self.toggle_button.config(text=f"Afficher {label}", state=tk.NORMAL)
         else:
-            self.toggle_button.config(text="Masquer", state=tk.NORMAL)
+            self.toggle_button.config(text=f"Masquer {label}", state=tk.NORMAL)
 
     def _on_validate(self) -> None:
         visible_columns = [col for col in self.column_order if col not in self.hidden_columns]
@@ -3730,14 +3804,9 @@ class StockApp(tk.Tk):
             fallback=DEFAULT_LOW_STOCK_THRESHOLD
         )
 
-        self.inventory_allowed = bool(self.allowed_modules.get('inventory', True))
         self.pharmacy_allowed = bool(self.allowed_modules.get('pharmacy', False))
         self.clothing_allowed = bool(self.allowed_modules.get('clothing', False))
 
-        self.inventory_visible = self.inventory_allowed and config['Settings'].getboolean(
-            'show_inventory_tab',
-            fallback=True,
-        )
         self.pharmacy_enabled = self.pharmacy_allowed and ENABLE_PHARMACY_MODULE
         self.clothing_enabled = self.clothing_allowed and ENABLE_CLOTHING_MODULE
 
@@ -3765,13 +3834,6 @@ class StockApp(tk.Tk):
             self.destroy()
             return
 
-        # Appliquer largeurs sauvegardées
-        self.apply_saved_column_widths()
-        startup_listener.record("Largeurs de colonnes restaurées.", level=logging.DEBUG)
-        if self.inventory_allowed:
-            self.load_inventory()
-            startup_listener.record("Inventaire initial chargé.", level=logging.DEBUG)
-
         self.alert_manager = AlertManager(self, threshold=self.low_stock_threshold)
         startup_listener.record("Gestionnaire d'alertes initialisé.", level=logging.DEBUG)
 
@@ -3780,8 +3842,8 @@ class StockApp(tk.Tk):
                 init_recognizer()
 
     def on_closing(self):
-        self.save_inventory_column_preferences()
-        self.save_column_widths()
+        self.save_clothing_column_preferences()
+        self.save_pharmacy_column_preferences()
         if hasattr(self, 'dashboard_job') and self.dashboard_job:
             try:
                 self.after_cancel(self.dashboard_job)
@@ -3823,9 +3885,6 @@ class StockApp(tk.Tk):
 
         file_menu = tk.Menu(menubar, tearoff=0)
         file_menu.add_command(label="Déconnexion", command=self.logout)
-        file_menu.add_separator()
-        file_menu.add_command(label="Exporter CSV", command=self.export_csv)
-        file_menu.add_separator()
         file_menu.add_command(label="Sauvegarder base", command=self.backup_database)
         file_menu.add_separator()
         file_menu.add_command(label="Quitter", command=self.on_closing)
@@ -3834,11 +3893,18 @@ class StockApp(tk.Tk):
         settings_menu = tk.Menu(menubar, tearoff=0)
         settings_menu.add_command(label="Configuration générale", command=self.open_config_dialog)
         settings_menu.add_command(label="Gérer Catégories", command=self.open_category_dialog)
-        settings_menu.add_command(
-            label="Personnaliser colonnes",
-            command=self.open_column_manager,
-            state=tk.NORMAL if self.inventory_allowed else tk.DISABLED,
-        )
+        if self.clothing_allowed:
+            settings_menu.add_command(
+                label="Colonnes Habillement",
+                command=self.open_clothing_column_manager,
+                state=tk.NORMAL if self.clothing_enabled else tk.DISABLED,
+            )
+        if self.pharmacy_allowed:
+            settings_menu.add_command(
+                label="Colonnes Pharmacie",
+                command=self.open_pharmacy_column_manager,
+                state=tk.NORMAL if self.pharmacy_enabled else tk.DISABLED,
+            )
         if self.current_role == 'admin':
             settings_menu.add_command(label="Gérer Utilisateurs", command=self.open_user_management)
         if ENABLE_VOICE and SR_LIB_AVAILABLE:
@@ -3851,40 +3917,10 @@ class StockApp(tk.Tk):
             settings_menu.add_command(label="Aide Vocale", state='disabled')
         menubar.add_cascade(label="Paramètres", menu=settings_menu)
 
-        if self.inventory_allowed:
-            stock_menu = tk.Menu(menubar, tearoff=0)
-            stock_menu.add_command(label="Ajouter Article", command=self.open_add_dialog)
-            stock_menu.add_command(label="Modifier Article", command=self.open_edit_selected)
-            stock_menu.add_command(label="Supprimer Article", command=self.delete_selected)
-            stock_menu.add_separator()
-            stock_menu.add_command(label="Entrée Stock", command=lambda: self.open_stock_adjustment(True))
-            stock_menu.add_command(label="Sortie Stock", command=lambda: self.open_stock_adjustment(False))
-            stock_menu.add_separator()
-            stock_menu.add_command(label="Actualiser", command=self.load_inventory)
-            menubar.add_cascade(label="Stock", menu=stock_menu)
-
         scan_menu = tk.Menu(menubar, tearoff=0)
-        scan_state = tk.NORMAL if self.inventory_allowed else tk.DISABLED
+        scan_state = tk.NORMAL if (self.clothing_enabled or self.pharmacy_enabled) else tk.DISABLED
         scan_menu.add_command(label="Scan Caméra", command=self.scan_camera, state=scan_state)
-        scan_menu.add_command(
-            label="Scan Douchette",
-            command=lambda: self.entry_scan.focus(),
-            state=scan_state,
-        )
         menubar.add_cascade(label="Scan", menu=scan_menu)
-
-        report_menu = tk.Menu(menubar, tearoff=0)
-        report_menu.add_command(
-            label="Rapport Stock Faible",
-            command=self.report_low_stock,
-            state=scan_state,
-        )
-        report_menu.add_command(
-            label="Exporter Rapport PDF",
-            command=self.generate_pdf_report,
-            state=scan_state,
-        )
-        menubar.add_cascade(label="Rapports", menu=report_menu)
 
         module_menu = tk.Menu(menubar, tearoff=0)
         module_menu.add_command(label="Fournisseurs", command=self.open_supplier_management)
@@ -3892,15 +3928,6 @@ class StockApp(tk.Tk):
         module_menu.add_command(label="Dotations collaborateurs", command=self.open_collaborator_gear)
         if self.current_role == 'admin':
             module_menu.add_command(label="Approvals en attente", command=self.open_approval_queue)
-        self.inventory_module_var = tk.BooleanVar(
-            value=self.inventory_visible if self.inventory_allowed else False
-        )
-        module_menu.add_checkbutton(
-            label="Fenêtre Inventaire",
-            variable=self.inventory_module_var,
-            command=self.on_toggle_inventory_module,
-            state=tk.NORMAL if self.inventory_allowed else tk.DISABLED,
-        )
         self.pharmacy_module_var = tk.BooleanVar(value=self.pharmacy_enabled if self.pharmacy_allowed else False)
         module_menu.add_checkbutton(
             label="Gestion Pharmacie",
@@ -3965,54 +3992,41 @@ class StockApp(tk.Tk):
     def _on_notebook_tab_changed(self, _event=None) -> None:
         self.update_toolbar_state()
 
+    def _determine_active_mode(self) -> str:
+        if not hasattr(self, "notebook"):
+            return "other"
+        try:
+            current_tab = self.notebook.select()
+        except tk.TclError:
+            return "other"
+        clothing_frame = getattr(self, "clothing_frame", None)
+        pharmacy_frame = getattr(self, "pharmacy_frame", None)
+        if clothing_frame is not None and current_tab and str(clothing_frame) == current_tab:
+            return "clothing"
+        if pharmacy_frame is not None and current_tab and str(pharmacy_frame) == current_tab:
+            return "pharmacy"
+        return "other"
+
     def update_toolbar_state(self) -> None:
         if not hasattr(self, "toolbar_buttons"):
             return
         if not hasattr(self, "notebook"):
             return
 
-        try:
-            current_tab = self.notebook.select()
-        except tk.TclError:
-            current_tab = ""
-
-        mode = "other"
-        inventory_frame = getattr(self, "inventory_frame", None)
-        clothing_frame = getattr(self, "clothing_frame", None)
-        pharmacy_frame = getattr(self, "pharmacy_frame", None)
-
-        if current_tab:
-            if inventory_frame is not None and str(inventory_frame) == current_tab:
-                mode = "inventory"
-            elif clothing_frame is not None and str(clothing_frame) == current_tab:
-                mode = "clothing"
-            elif pharmacy_frame is not None and str(pharmacy_frame) == current_tab:
-                mode = "pharmacy"
+        mode = self._determine_active_mode()
 
         handlers: dict[str, Callable[[], None]] = {}
-        if mode == "inventory":
-            handlers = {
-                "add": self.open_add_dialog,
-                "edit": self.open_edit_selected,
-                "delete": self.delete_selected,
-                "stock_in": lambda: self.open_stock_adjustment(True),
-                "stock_out": lambda: self.open_stock_adjustment(False),
-                "scan": self.scan_camera,
-                "barcode": self.generate_barcode_dialog,
-                "export": self.export_csv,
-                "columns": self.open_column_manager,
-            }
-            if ENABLE_VOICE and SR_LIB_AVAILABLE:
-                handlers["listen"] = start_voice_listening
-                handlers["stop_listen"] = stop_voice_listening
-        elif mode == "clothing":
+        if mode == "clothing":
             handlers = {
                 "add": self.open_clothing_register_dialog,
                 "edit": self.open_clothing_edit_dialog,
                 "delete": self.delete_selected_clothing_item,
                 "stock_in": self.adjust_selected_clothing_item,
                 "stock_out": self.adjust_selected_clothing_item,
+                "scan": self.scan_camera,
+                "barcode": self.generate_barcode_dialog,
                 "export": self.export_clothing_inventory,
+                "columns": self.open_clothing_column_manager,
             }
             if ENABLE_VOICE and SR_LIB_AVAILABLE:
                 handlers["listen"] = start_voice_listening
@@ -4024,6 +4038,9 @@ class StockApp(tk.Tk):
                 "delete": self.delete_selected_pharmacy_batch,
                 "stock_in": self.adjust_selected_pharmacy_batch,
                 "stock_out": self.adjust_selected_pharmacy_batch,
+                "scan": self.scan_camera,
+                "barcode": self.generate_barcode_dialog,
+                "columns": self.open_pharmacy_column_manager,
             }
             if ENABLE_VOICE and SR_LIB_AVAILABLE:
                 handlers["listen"] = start_voice_listening
@@ -4063,12 +4080,6 @@ class StockApp(tk.Tk):
         self.notebook = ttk.Notebook(main_frame)
         self.notebook.pack(fill=tk.BOTH, expand=True)
 
-        self.inventory_frame = ttk.Frame(self.notebook)
-        self._inventory_tab_added = False
-        self._build_inventory_tab_widgets()
-        if self.inventory_visible:
-            self.add_inventory_tab()
-
         self.dashboard_frame = ttk.Frame(self.notebook)
         self.notebook.add(self.dashboard_frame, text="Tableau de bord")
 
@@ -4084,84 +4095,6 @@ class StockApp(tk.Tk):
         self.update_toolbar_state()
 
         self.create_dashboard_tab()
-
-    def _build_inventory_tab_widgets(self) -> None:
-        frame = getattr(self, "inventory_frame", None)
-        if frame is None:
-            return
-        for child in frame.winfo_children():
-            child.destroy()
-
-        search_frame = ttk.Frame(frame)
-        ttk.Label(search_frame, text="Rechercher :").pack(side=tk.LEFT, padx=5)
-        self.entry_search = ttk.Entry(search_frame)
-        self.entry_search.pack(side=tk.LEFT, padx=5)
-        self.entry_search.bind('<KeyRelease>', lambda e: self.load_inventory())
-        search_frame.pack(fill=tk.X, pady=5)
-
-        scan_frame = ttk.Frame(frame)
-        ttk.Label(scan_frame, text="Scanner (douchette) :").pack(side=tk.LEFT, padx=5)
-        self.scan_var = tk.StringVar()
-        self.entry_scan = ttk.Entry(scan_frame, textvariable=self.scan_var)
-        self.entry_scan.pack(side=tk.LEFT, padx=5)
-        self.entry_scan.focus()
-        global scan_timer_id
-        scan_timer_id = None
-
-        def scan_var_callback(*_args):
-            global scan_timer_id
-            if scan_timer_id:
-                try:
-                    self.after_cancel(scan_timer_id)
-                except Exception:
-                    pass
-
-            def process_after_delay():
-                code = self.scan_var.get().strip()
-                if code:
-                    self.process_barcode(code, source='douchette')
-                self.scan_var.set("")
-
-            scan_timer_id = self.after(300, process_after_delay)
-
-        self.scan_var.trace_add('write', scan_var_callback)
-        scan_frame.pack(fill=tk.X, pady=5)
-
-        cols = DEFAULT_INVENTORY_COLUMNS
-        self.tree = ttk.Treeview(frame, columns=cols, show='headings', selectmode='browse')
-        for col in cols:
-            self.tree.heading(col, text=col)
-            self.tree.column(col, anchor=tk.CENTER)
-        self.load_inventory_column_preferences()
-        self.tree.pack(fill=tk.BOTH, expand=True)
-
-        # Configuration des couleurs de lignes selon le niveau de stock
-        self.tree.tag_configure('stock_zero', background='#f8d7da', foreground='#721c24')
-        self.tree.tag_configure('stock_low', background='#fff3cd', foreground='#856404')
-        self.tree.tag_configure('stock_ok', background='#e8f5e9', foreground='#1b5e20')
-        self.tree.tag_configure('stock_unknown', background='#f0f0f0', foreground='#333333')
-
-    def add_inventory_tab(self) -> None:
-        if getattr(self, "inventory_frame", None) is None:
-            return
-        if getattr(self, "_inventory_tab_added", False):
-            return
-        try:
-            self.notebook.insert(0, self.inventory_frame, text="Inventaire")
-        except tk.TclError:
-            self.notebook.add(self.inventory_frame, text="Inventaire")
-        self._inventory_tab_added = True
-        self.update_toolbar_state()
-
-    def remove_inventory_tab(self) -> None:
-        if not getattr(self, "_inventory_tab_added", False):
-            return
-        try:
-            self.notebook.forget(self.inventory_frame)
-        except tk.TclError:
-            pass
-        self._inventory_tab_added = False
-        self.update_toolbar_state()
 
     def add_clothing_tab(self) -> None:
         if getattr(self, "clothing_frame", None) is not None:
@@ -4337,6 +4270,7 @@ class StockApp(tk.Tk):
         self._clothing_search_job: Optional[str] = None
         self.clothing_search_var.trace_add('write', self._on_clothing_search_change)
 
+        self.load_clothing_column_preferences()
         self.refresh_clothing_summary()
         self.refresh_clothing_items()
         self.update_toolbar_state()
@@ -4744,26 +4678,6 @@ class StockApp(tk.Tk):
         self._pharmacy_search_job = None
         self.update_toolbar_state()
 
-    def on_toggle_inventory_module(self) -> None:
-        if not self.inventory_allowed:
-            self.inventory_module_var.set(False)
-            messagebox.showerror(
-                "Accès refusé",
-                "Votre profil n'autorise pas l'accès à ce module.",
-            )
-            return
-        enabled = bool(self.inventory_module_var.get())
-        if enabled == self.inventory_visible:
-            return
-        self.inventory_visible = enabled
-        if enabled:
-            self.add_inventory_tab()
-        else:
-            self.remove_inventory_tab()
-        config['Settings']['show_inventory_tab'] = 'true' if enabled else 'false'
-        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
-            config.write(f)
-
     def on_toggle_pharmacy_module(self) -> None:
         if not self.pharmacy_allowed:
             self.pharmacy_module_var.set(False)
@@ -4804,79 +4718,188 @@ class StockApp(tk.Tk):
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             config.write(f)
 
-    def load_inventory_column_preferences(self) -> None:
-        """Charge l'ordre et la visibilité des colonnes de l'inventaire."""
-        if 'InventoryColumns' not in config:
-            config['InventoryColumns'] = {
-                'order': ','.join(DEFAULT_INVENTORY_COLUMNS),
+    def load_clothing_column_preferences(self) -> None:
+        if 'ClothingColumns' not in config:
+            config['ClothingColumns'] = {
+                'order': ','.join(CLOTHING_COLUMN_KEYS),
                 'hidden': '',
             }
-        _normalize_inventory_columns_section(config['InventoryColumns'])
-        section = config['InventoryColumns']
+        _normalize_columns_section(config['ClothingColumns'], CLOTHING_COLUMN_KEYS)
+        section = config['ClothingColumns']
         order_values = [col.strip() for col in section.get('order', '').split(',') if col.strip()]
-        self.inventory_column_order = [
-            col for col in order_values if col in DEFAULT_INVENTORY_COLUMNS
+        self.clothing_column_order = [
+            col for col in order_values if col in CLOTHING_COLUMN_KEYS
         ]
-        for col in DEFAULT_INVENTORY_COLUMNS:
-            if col not in self.inventory_column_order:
-                self.inventory_column_order.append(col)
+        for col in CLOTHING_COLUMN_KEYS:
+            if col not in self.clothing_column_order:
+                self.clothing_column_order.append(col)
         hidden_values = [
             col.strip() for col in section.get('hidden', '').split(',') if col.strip()
         ]
-        self.inventory_hidden_columns = {
-            col for col in hidden_values if col in DEFAULT_INVENTORY_COLUMNS
+        self.clothing_hidden_columns = {
+            col for col in hidden_values if col in CLOTHING_COLUMN_KEYS
         }
-        self._apply_inventory_column_preferences()
+        self._apply_clothing_column_preferences()
 
-    def _apply_inventory_column_preferences(self) -> None:
+    def _apply_clothing_column_preferences(self) -> None:
+        tree = getattr(self, 'clothing_tree', None)
+        if tree is None:
+            return
         display_columns = [
-            col for col in self.inventory_column_order if col not in self.inventory_hidden_columns
+            col for col in self.clothing_column_order if col not in self.clothing_hidden_columns
         ]
         if not display_columns:
-            self.inventory_hidden_columns.clear()
-            display_columns = list(self.inventory_column_order)
-        valid_display = [
-            col for col in display_columns if col in self.tree['columns']
-        ]
+            self.clothing_hidden_columns.clear()
+            display_columns = list(self.clothing_column_order)
+        valid_display = [col for col in display_columns if col in CLOTHING_COLUMN_KEYS]
         if not valid_display:
-            valid_display = list(DEFAULT_INVENTORY_COLUMNS)
-        self.tree.configure(displaycolumns=valid_display)
+            valid_display = list(CLOTHING_COLUMN_KEYS)
+        tree.configure(displaycolumns=valid_display)
 
-    def save_inventory_column_preferences(self) -> None:
-        if 'InventoryColumns' not in config:
-            config['InventoryColumns'] = {}
-        config['InventoryColumns']['order'] = ','.join(self.inventory_column_order)
+    def save_clothing_column_preferences(self) -> None:
+        if not hasattr(self, 'clothing_column_order'):
+            return
+        if 'ClothingColumns' not in config:
+            config['ClothingColumns'] = {}
+        config['ClothingColumns']['order'] = ','.join(self.clothing_column_order)
         hidden_order = [
-            col for col in self.inventory_column_order if col in self.inventory_hidden_columns
+            col for col in self.clothing_column_order if col in self.clothing_hidden_columns
         ]
-        for col in DEFAULT_INVENTORY_COLUMNS:
-            if col in self.inventory_hidden_columns and col not in hidden_order:
+        for col in CLOTHING_COLUMN_KEYS:
+            if col in self.clothing_hidden_columns and col not in hidden_order:
                 hidden_order.append(col)
-        config['InventoryColumns']['hidden'] = ','.join(hidden_order)
-        _normalize_inventory_columns_section(config['InventoryColumns'])
+        config['ClothingColumns']['hidden'] = ','.join(hidden_order)
+        _normalize_columns_section(config['ClothingColumns'], CLOTHING_COLUMN_KEYS)
         with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
             config.write(f)
 
-    def open_column_manager(self) -> None:
+    def open_clothing_column_manager(self) -> None:
+        tree = getattr(self, 'clothing_tree', None)
+        if tree is None:
+            messagebox.showinfo(
+                "Colonnes Habillement",
+                "Le tableau d'habillement n'est pas disponible pour le moment.",
+                parent=self,
+            )
+            return
         dialog = ColumnManagerDialog(
             self,
-            columns=DEFAULT_INVENTORY_COLUMNS,
-            order=list(self.inventory_column_order),
-            hidden=set(self.inventory_hidden_columns),
+            columns=CLOTHING_COLUMN_KEYS,
+            order=list(getattr(self, 'clothing_column_order', CLOTHING_COLUMN_KEYS)),
+            hidden=set(getattr(self, 'clothing_hidden_columns', set())),
+            column_labels=CLOTHING_COLUMN_LABELS,
         )
         self.wait_window(dialog)
         if dialog.result:
             order, hidden = dialog.result
-            normalized_order = [col for col in order if col in DEFAULT_INVENTORY_COLUMNS]
-            for col in DEFAULT_INVENTORY_COLUMNS:
+            normalized_order = [col for col in order if col in CLOTHING_COLUMN_KEYS]
+            for col in CLOTHING_COLUMN_KEYS:
                 if col not in normalized_order:
                     normalized_order.append(col)
-            self.inventory_column_order = normalized_order
-            self.inventory_hidden_columns = {
-                col for col in hidden if col in DEFAULT_INVENTORY_COLUMNS
+            self.clothing_column_order = normalized_order
+            self.clothing_hidden_columns = {
+                col for col in hidden if col in CLOTHING_COLUMN_KEYS
             }
-            self._apply_inventory_column_preferences()
-            self.save_inventory_column_preferences()
+            self._apply_clothing_column_preferences()
+            self.save_clothing_column_preferences()
+
+    def load_pharmacy_column_preferences(self) -> None:
+        if 'PharmacyColumns' not in config:
+            config['PharmacyColumns'] = {
+                'order': ','.join(PHARMACY_COLUMN_KEYS),
+                'hidden': '',
+            }
+        _normalize_columns_section(config['PharmacyColumns'], PHARMACY_COLUMN_KEYS)
+        section = config['PharmacyColumns']
+        order_values = [col.strip() for col in section.get('order', '').split(',') if col.strip()]
+        self.pharmacy_column_order = [
+            col for col in order_values if col in PHARMACY_COLUMN_KEYS
+        ]
+        for col in PHARMACY_COLUMN_KEYS:
+            if col not in self.pharmacy_column_order:
+                self.pharmacy_column_order.append(col)
+        hidden_values = [
+            col.strip() for col in section.get('hidden', '').split(',') if col.strip()
+        ]
+        self.pharmacy_hidden_columns = {
+            col for col in hidden_values if col in PHARMACY_COLUMN_KEYS
+        }
+        self._apply_pharmacy_column_preferences()
+
+    def _apply_pharmacy_column_preferences(self) -> None:
+        tree = getattr(self, 'pharmacy_tree', None)
+        if tree is None:
+            return
+        display_columns = [
+            col for col in self.pharmacy_column_order if col not in self.pharmacy_hidden_columns
+        ]
+        if not display_columns:
+            self.pharmacy_hidden_columns.clear()
+            display_columns = list(self.pharmacy_column_order)
+        valid_display = [col for col in display_columns if col in PHARMACY_COLUMN_KEYS]
+        if not valid_display:
+            valid_display = list(PHARMACY_COLUMN_KEYS)
+        tree.configure(displaycolumns=valid_display)
+
+    def save_pharmacy_column_preferences(self) -> None:
+        if not hasattr(self, 'pharmacy_column_order'):
+            return
+        if 'PharmacyColumns' not in config:
+            config['PharmacyColumns'] = {}
+        config['PharmacyColumns']['order'] = ','.join(self.pharmacy_column_order)
+        hidden_order = [
+            col for col in self.pharmacy_column_order if col in self.pharmacy_hidden_columns
+        ]
+        for col in PHARMACY_COLUMN_KEYS:
+            if col in self.pharmacy_hidden_columns and col not in hidden_order:
+                hidden_order.append(col)
+        config['PharmacyColumns']['hidden'] = ','.join(hidden_order)
+        _normalize_columns_section(config['PharmacyColumns'], PHARMACY_COLUMN_KEYS)
+        with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
+            config.write(f)
+
+    def open_pharmacy_column_manager(self) -> None:
+        tree = getattr(self, 'pharmacy_tree', None)
+        if tree is None:
+            messagebox.showinfo(
+                "Colonnes Pharmacie",
+                "Le tableau pharmacie n'est pas disponible pour le moment.",
+                parent=self,
+            )
+            return
+        dialog = ColumnManagerDialog(
+            self,
+            columns=PHARMACY_COLUMN_KEYS,
+            order=list(getattr(self, 'pharmacy_column_order', PHARMACY_COLUMN_KEYS)),
+            hidden=set(getattr(self, 'pharmacy_hidden_columns', set())),
+            column_labels=PHARMACY_COLUMN_LABELS,
+        )
+        self.wait_window(dialog)
+        if dialog.result:
+            order, hidden = dialog.result
+            normalized_order = [col for col in order if col in PHARMACY_COLUMN_KEYS]
+            for col in PHARMACY_COLUMN_KEYS:
+                if col not in normalized_order:
+                    normalized_order.append(col)
+            self.pharmacy_column_order = normalized_order
+            self.pharmacy_hidden_columns = {
+                col for col in hidden if col in PHARMACY_COLUMN_KEYS
+            }
+            self._apply_pharmacy_column_preferences()
+            self.save_pharmacy_column_preferences()
+
+    def open_column_manager(self) -> None:
+        mode = self._determine_active_mode()
+        if mode == "clothing":
+            self.open_clothing_column_manager()
+        elif mode == "pharmacy":
+            self.open_pharmacy_column_manager()
+        else:
+            messagebox.showinfo(
+                "Colonnes",
+                "Sélectionnez l'onglet Habillement ou Pharmacie pour personnaliser les colonnes.",
+                parent=self,
+            )
 
     def create_dashboard_tab(self):
         self.dashboard_vars = {
@@ -5136,6 +5159,7 @@ class StockApp(tk.Tk):
         self._pharmacy_search_job: Optional[str] = None
         self.pharmacy_search_var.trace_add('write', self._on_pharmacy_search_change)
 
+        self.load_pharmacy_column_preferences()
         self.refresh_pharmacy_summary()
         self.refresh_pharmacy_batches()
         self.update_toolbar_state()
@@ -5590,9 +5614,13 @@ class StockApp(tk.Tk):
         self.refresh_dashboard()
 
     def load_inventory(self):
-        search_text = self.entry_search.get().lower().strip()
-        for row in self.tree.get_children():
-            self.tree.delete(row)
+        tree = getattr(self, 'tree', None)
+        if tree is None:
+            return
+        entry = getattr(self, 'entry_search', None)
+        search_text = entry.get().lower().strip() if entry is not None else ''
+        for row in tree.get_children():
+            tree.delete(row)
         conn = None
         conn = None
         try:
@@ -5645,8 +5673,8 @@ class StockApp(tk.Tk):
                 quantity,
                 last_updated,
             )
-            self.tree.insert('', tk.END, values=display_values, tags=(tag,))
-        count = len(self.tree.get_children())
+            tree.insert('', tk.END, values=display_values, tags=(tag,))
+        count = len(tree.get_children())
         self.status.set(f"Articles listés : {count}")
         self.request_dashboard_refresh()
 
@@ -6447,9 +6475,86 @@ class StockApp(tk.Tk):
         cv2.destroyAllWindows()
         self.attributes('-disabled', False)
         if found_code:
-            self.process_barcode(found_code, source='camera')
+            self._handle_scanned_code(found_code)
         else:
             speak("Aucun code-barres détecté.")
+
+    def _handle_scanned_code(self, code: str) -> None:
+        normalized = code.strip()
+        if not normalized:
+            return
+        mode = self._determine_active_mode()
+        if mode == "clothing":
+            self._handle_clothing_scan(normalized)
+        elif mode == "pharmacy":
+            self._handle_pharmacy_scan(normalized)
+        else:
+            messagebox.showinfo(
+                "Scan", "Sélectionnez l'onglet Habillement ou Pharmacie avant de scanner.", parent=self
+            )
+
+    def _handle_clothing_scan(self, code: str) -> None:
+        if not hasattr(self, 'clothing_search_var'):
+            messagebox.showinfo(
+                "Scan Habillement",
+                "Le module habillement n'est pas disponible.",
+                parent=self,
+            )
+            return
+        self.clothing_search_var.set(code)
+        self.refresh_clothing_items()
+        tree = getattr(self, 'clothing_tree', None)
+        if tree is None:
+            return
+        target: Optional[str] = None
+        for item_id in tree.get_children():
+            values = tree.item(item_id).get('values', [])
+            if len(values) > 1 and str(values[1]).strip() == code:
+                target = item_id
+                break
+        if target is None:
+            children = tree.get_children()
+            if not children:
+                messagebox.showinfo(
+                    "Scan Habillement",
+                    f"Aucun article trouvé pour le code {code}.",
+                    parent=self,
+                )
+                self.status.set(f"Aucun article habillement pour {code}")
+                return
+            target = children[0]
+        tree.selection_set(target)
+        tree.focus(target)
+        tree.see(target)
+        self.status.set(f"Article habillement sélectionné pour {code}")
+
+    def _handle_pharmacy_scan(self, code: str) -> None:
+        if not hasattr(self, 'pharmacy_search_var'):
+            messagebox.showinfo(
+                "Scan Pharmacie",
+                "Le module pharmacie n'est pas disponible.",
+                parent=self,
+            )
+            return
+        self.pharmacy_search_var.set(code)
+        self.refresh_pharmacy_batches()
+        tree = getattr(self, 'pharmacy_tree', None)
+        if tree is None:
+            return
+        children = tree.get_children()
+        if not children:
+            messagebox.showinfo(
+                "Scan Pharmacie",
+                f"Aucun lot trouvé pour le code {code}.",
+                parent=self,
+            )
+            self.status.set(f"Aucun lot pharmacie pour {code}")
+            return
+        target = children[0]
+        tree.selection_set(target)
+        tree.focus(target)
+        tree.see(target)
+        self.status.set(f"Lot pharmacie sélectionné pour {code}")
 
     def generate_barcode_dialog(self):
         article = simpledialog.askstring("Générer Code-Barres", "Entrez le nom de l'article :")
