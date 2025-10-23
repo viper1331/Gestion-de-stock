@@ -3180,6 +3180,13 @@ class StockApp(tk.Tk):
             except Exception:
                 pass
             self.dashboard_job = None
+        pending_refresh = getattr(self, '_pending_dashboard_refresh', None)
+        if pending_refresh:
+            try:
+                self.after_cancel(pending_refresh)
+            except Exception:
+                pass
+            self._pending_dashboard_refresh = None
         if hasattr(self, 'alert_manager') and self.alert_manager:
             self.alert_manager.stop()
         global voice_active
@@ -4071,6 +4078,7 @@ class StockApp(tk.Tk):
         ).pack(fill=tk.X, padx=10, pady=10)
 
         self.dashboard_job = None
+        self._pending_dashboard_refresh: Optional[str] = None
         self.refresh_dashboard()
 
     def create_pharmacy_tab(self):
@@ -4630,8 +4638,7 @@ class StockApp(tk.Tk):
             self.tree.insert('', tk.END, values=display_values, tags=(tag,))
         count = len(self.tree.get_children())
         self.status.set(f"Articles listés : {count}")
-        if self.dashboard_job is None:
-            self.refresh_dashboard()
+        self.request_dashboard_refresh()
 
     def _get_stock_tag(self, quantity, reorder_point=None):
         """Retourne le tag à appliquer selon la quantité disponible et le seuil défini."""
@@ -4695,6 +4702,13 @@ class StockApp(tk.Tk):
                 self.alert_manager.dispatch_low_stock_alert(item_id, item_name, new_qty, threshold)
 
     def refresh_dashboard(self):
+        pending_job = getattr(self, "_pending_dashboard_refresh", None)
+        if pending_job:
+            try:
+                self.after_cancel(pending_job)
+            except Exception:
+                pass
+            self._pending_dashboard_refresh = None
         if hasattr(self, '_dashboard_filter_update_blocked') and not getattr(
             self, '_dashboard_filter_update_blocked', False
         ):
@@ -4758,6 +4772,18 @@ class StockApp(tk.Tk):
             except Exception:
                 pass
         self.dashboard_job = self.after(60000, self.refresh_dashboard)
+
+    def request_dashboard_refresh(self) -> None:
+        if not hasattr(self, 'dashboard_frame'):
+            return
+        if getattr(self, '_pending_dashboard_refresh', None):
+            return
+
+        def _trigger_refresh() -> None:
+            self._pending_dashboard_refresh = None
+            self.refresh_dashboard()
+
+        self._pending_dashboard_refresh = self.after_idle(_trigger_refresh)
 
     def apply_saved_column_widths(self):
         """
