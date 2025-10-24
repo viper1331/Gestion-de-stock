@@ -21,7 +21,7 @@ import zipfile
 import hashlib
 import json
 import logging
-from typing import Any, Callable, Dict, Optional
+from typing import Any, Callable, Dict, Iterable, Optional
 import importlib.util
 import webbrowser
 from datetime import datetime, timedelta
@@ -4000,11 +4000,11 @@ class StockApp(tk.Tk):
         is_dark = getattr(self, "_theme_mode", "dark") == "dark"
         if is_dark:
             bg_base = palette.get("bg", "#0b1220")
-            background = self._blend_colors(bg_base, base, 0.45)
-            foreground = self._blend_colors("#ffffff", base, 0.25)
+            background = self._blend_colors(bg_base, base, 0.7)
+            foreground = "#ffffff"
         else:
-            background = self._blend_colors("#ffffff", base, 0.18)
-            foreground = self._blend_colors("#000000", base, 0.35)
+            background = self._blend_colors("#ffffff", base, 0.4)
+            foreground = palette.get("fg", "#111827")
         return background, foreground
 
     def _apply_tree_tag_palette(self) -> None:
@@ -4031,6 +4031,23 @@ class StockApp(tk.Tk):
             inventory_tree.tag_configure("stock_ok", background=ok_bg, foreground=ok_fg)
             inventory_tree.tag_configure("stock_unknown", background=unknown_bg, foreground=unknown_fg)
 
+    def _get_status_icon(self, tags: Iterable[str]) -> Optional[PhotoImage]:
+        warning_icon = self._status_icons.get("warning")
+        if warning_icon is None:
+            return None
+        alert_tags = {
+            "stock_low",
+            "stock_zero",
+            "clothing_low",
+            "clothing_empty",
+            "pharmacy_expiring",
+            "pharmacy_expired",
+            "pharmacy_empty",
+        }
+        if any(tag in alert_tags for tag in tags):
+            return warning_icon
+        return None
+
     def __init__(
         self,
         current_user,
@@ -4049,6 +4066,8 @@ class StockApp(tk.Tk):
         except Exception:
             self._font_size = 10
         self.current_palette = apply_theme(self, self._theme_mode, font_size=self._font_size)
+        warning_icon = make_icon("warning.png", size=18)
+        self._status_icons: dict[str, Optional[PhotoImage]] = {"warning": warning_icon}
         self.current_user = current_user
         self.current_role = current_role
         self.current_user_id = current_user_id
@@ -4576,7 +4595,7 @@ class StockApp(tk.Tk):
         self.clothing_tree = ttk.Treeview(
             tree_container,
             columns=columns,
-            show='headings',
+            show='tree headings',
             selectmode='browse',
         )
         headings = {
@@ -4594,6 +4613,8 @@ class StockApp(tk.Tk):
             text, anchor, width = headings[key]
             self.clothing_tree.heading(key, text=text)
             self.clothing_tree.column(key, anchor=anchor, width=width)
+        self.clothing_tree.heading('#0', text='', anchor=tk.CENTER)
+        self.clothing_tree.column('#0', width=32, stretch=False, anchor=tk.CENTER)
         vsb = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.clothing_tree.yview)
         hsb = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.clothing_tree.xview)
         self.clothing_tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
@@ -4672,10 +4693,14 @@ class StockApp(tk.Tk):
                 'index': 'end',
                 'iid': str(item.id),
                 'values': values,
+                'text': '',
             }
 
             if tags:
                 insert_kwargs['tags'] = tuple(tags)
+            icon = self._get_status_icon(tags)
+            if icon is not None:
+                insert_kwargs['image'] = icon
 
             self.clothing_tree.insert(**insert_kwargs)
             self.clothing_item_cache[str(item.id)] = item
@@ -5514,7 +5539,7 @@ class StockApp(tk.Tk):
         self.pharmacy_tree = ttk.Treeview(
             tree_container,
             columns=columns,
-            show="headings",
+            show="tree headings",
             selectmode="browse",
         )
         headings = {
@@ -5539,6 +5564,8 @@ class StockApp(tk.Tk):
         self.pharmacy_tree.column("form", width=110, anchor=tk.W)
         self.pharmacy_tree.column("storage", width=150, anchor=tk.W)
         self.pharmacy_tree.column("prescription", width=110, anchor=tk.CENTER)
+        self.pharmacy_tree.heading("#0", text="", anchor=tk.CENTER)
+        self.pharmacy_tree.column("#0", width=32, stretch=False, anchor=tk.CENTER)
 
         vsb = ttk.Scrollbar(tree_container, orient=tk.VERTICAL, command=self.pharmacy_tree.yview)
         hsb = ttk.Scrollbar(tree_container, orient=tk.HORIZONTAL, command=self.pharmacy_tree.xview)
@@ -5620,9 +5647,13 @@ class StockApp(tk.Tk):
             insert_kwargs = {
                 'iid': str(batch.id),
                 'values': values,
+                'text': '',
             }
             if tags:
                 insert_kwargs['tags'] = tuple(tags)
+            icon = self._get_status_icon(tags)
+            if icon is not None:
+                insert_kwargs['image'] = icon
             self.pharmacy_tree.insert('', 'end', **insert_kwargs)
             self.pharmacy_batch_cache[str(batch.id)] = batch
 
@@ -6112,7 +6143,17 @@ class StockApp(tk.Tk):
                 quantity,
                 last_updated,
             )
-            tree.insert('', tk.END, values=display_values, tags=(tag,))
+            insert_kwargs = {
+                'parent': '',
+                'index': tk.END,
+                'values': display_values,
+                'tags': (tag,),
+                'text': '',
+            }
+            icon = self._get_status_icon([tag])
+            if icon is not None:
+                insert_kwargs['image'] = icon
+            tree.insert(**insert_kwargs)
         count = len(tree.get_children())
         self.status.set(f"Articles listés : {count}")
         self.request_dashboard_refresh()

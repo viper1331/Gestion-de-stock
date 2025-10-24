@@ -30,7 +30,7 @@ PALETTE_DARK = {
     "surface": "#111827",
     "surface2": "#0f172a",
     "row_alt": "#0d1530",
-    "selection": "#1d4ed8",
+    "selection": "#1f64ff",
     "accent": "#8b5cf6",
 }
 
@@ -47,7 +47,7 @@ PALETTE_LIGHT = {
     "surface": "#ffffff",
     "surface2": "#e5e7eb",
     "row_alt": "#f9fafb",
-    "selection": "#2563eb",
+    "selection": "#2f6bff",
     "accent": "#7c3aed",
 }
 
@@ -244,7 +244,7 @@ def _configure_treeview(style: ttk.Style, palette: dict[str, str]) -> None:
             ("selected", palette["selection"]),
             ("!selected", palette["surface"]),
         ],
-        foreground=[("selected", palette["fg"])],
+        foreground=[("selected", "#ffffff")],
     )
     style.configure(
         "Treeview.Heading",
