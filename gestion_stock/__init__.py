@@ -21,6 +21,7 @@ import zipfile
 import hashlib
 import json
 import logging
+import unicodedata
 from typing import Any, Callable, Dict, Iterable, Optional
 import importlib.util
 import webbrowser
@@ -1623,6 +1624,13 @@ def fetch_items_lookup(*, only_clothing: bool = False):
     if not only_clothing:
         return [row[:4] for row in rows]
 
+    def _normalize_text(value: Optional[str]) -> str:
+        if not value:
+            return ''
+        normalized = unicodedata.normalize('NFKD', value)
+        stripped = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+        return stripped.casefold().strip()
+
     clothing_names: list[str] = []
     clothing_categories: list[str] = []
     clothing_barcodes: set[str] = set()
@@ -1634,9 +1642,13 @@ def fetch_items_lookup(*, only_clothing: bool = False):
         else:
             for clothing_item in clothing_items:
                 if clothing_item.name:
-                    clothing_names.append(clothing_item.name.strip().lower())
+                    normalized_name = _normalize_text(clothing_item.name)
+                    if normalized_name:
+                        clothing_names.append(normalized_name)
                 if clothing_item.category:
-                    clothing_categories.append(clothing_item.category.strip().lower())
+                    normalized_category = _normalize_text(clothing_item.category)
+                    if normalized_category:
+                        clothing_categories.append(normalized_category)
                 if clothing_item.barcode:
                     clothing_barcodes.add(clothing_item.barcode.strip().lower())
 
@@ -1667,19 +1679,21 @@ def fetch_items_lookup(*, only_clothing: bool = False):
 
     filtered: list[tuple[int, str, float, int]] = []
     for item_id, name, unit_cost, reorder_point, barcode, category_name, category_note in rows:
-        label = (name or "").strip().lower()
+        label = _normalize_text(name)
         barcode_value = (barcode or "").strip().lower()
-        cat_label = (category_name or "").strip().lower()
-        note_label = (category_note or "").strip().lower()
+        cat_label = _normalize_text(category_name)
+        note_label = _normalize_text(category_note)
 
         matches_clothing_inventory = (
             _matches_any(label, clothing_names)
             or (barcode_value and barcode_value in clothing_barcodes)
         )
-        matches_categories = _matches_any(cat_label, clothing_categories)
-        matches_keywords = any(keyword in cat_label for keyword in CATEGORY_KEYWORDS) or any(
-            keyword in note_label for keyword in CATEGORY_KEYWORDS
+        matches_categories = _matches_any(cat_label, clothing_categories) or _matches_any(
+            note_label, clothing_categories
         )
+        matches_keywords = any(keyword in label for keyword in CATEGORY_KEYWORDS) or any(
+            keyword in cat_label for keyword in CATEGORY_KEYWORDS
+        ) or any(keyword in note_label for keyword in CATEGORY_KEYWORDS)
 
         if matches_clothing_inventory or matches_categories or matches_keywords:
             filtered.append((item_id, name, unit_cost, reorder_point))
