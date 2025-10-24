@@ -1634,6 +1634,7 @@ def fetch_items_lookup(*, only_clothing: bool = False):
     clothing_names: list[str] = []
     clothing_categories: list[str] = []
     clothing_barcodes: set[str] = set()
+    clothing_items: list[ClothingItem] = []
     if clothing_inventory_manager is not None:
         try:
             clothing_items = clothing_inventory_manager.list_items(search="", include_zero=True)
@@ -1665,6 +1666,17 @@ def fetch_items_lookup(*, only_clothing: bool = False):
         "gilet",
         "blous",
         "tablier",
+        "polo",
+        "tshirt",
+        "tee",
+        "veste",
+        "parka",
+        "combina",
+        "gant",
+        "casque",
+        "ranger",
+        "bot",
+        "ceint",
     )
 
     def _matches_any(value: str, candidates: list[str]) -> bool:
@@ -1677,8 +1689,48 @@ def fetch_items_lookup(*, only_clothing: bool = False):
                 return True
         return False
 
+    matched_ids: set[int] = set()
     filtered: list[tuple[int, str, float, int]] = []
+
+    # Premier passage : si le module habillement est disponible, on tente de
+    # faire correspondre précisément les articles issus de ce module avec les
+    # enregistrements de la table principale ``items``.
+    if clothing_items:
+        rows_by_barcode: dict[str, tuple[int, str, float, int]] = {}
+        normalized_rows: list[tuple[str, tuple[int, str, float, int]]]
+        normalized_rows = []
+        for item_id, name, unit_cost, reorder_point, barcode, *_ in rows:
+            filtered_row = (item_id, name, unit_cost, reorder_point)
+            barcode_value = (barcode or "").strip().lower()
+            if barcode_value:
+                rows_by_barcode[barcode_value] = filtered_row
+            normalized_rows.append((_normalize_text(name), filtered_row))
+
+        for clothing_item in clothing_items:
+            matched_row = None
+            clothing_barcode = (clothing_item.barcode or "").strip().lower()
+            if clothing_barcode and clothing_barcode in rows_by_barcode:
+                matched_row = rows_by_barcode[clothing_barcode]
+            else:
+                clothing_label = _normalize_text(clothing_item.name or "")
+                if clothing_label:
+                    for normalized_name, candidate_row in normalized_rows:
+                        if not normalized_name:
+                            continue
+                        if (
+                            normalized_name == clothing_label
+                            or normalized_name in clothing_label
+                            or clothing_label in normalized_name
+                        ):
+                            matched_row = candidate_row
+                            break
+            if matched_row and matched_row[0] not in matched_ids:
+                filtered.append(matched_row)
+                matched_ids.add(matched_row[0])
+
     for item_id, name, unit_cost, reorder_point, barcode, category_name, category_note in rows:
+        if item_id in matched_ids:
+            continue
         label = _normalize_text(name)
         barcode_value = (barcode or "").strip().lower()
         cat_label = _normalize_text(category_name)
@@ -1697,14 +1749,9 @@ def fetch_items_lookup(*, only_clothing: bool = False):
 
         if matches_clothing_inventory or matches_categories or matches_keywords:
             filtered.append((item_id, name, unit_cost, reorder_point))
+            matched_ids.add(item_id)
 
-    if filtered:
-        return filtered
-
-    # Aucun article n'a été identifié comme équipement textile. Dans ce cas on
-    # retourne la liste complète plutôt qu'une liste vide afin d'éviter une
-    # boîte de dialogue sans choix possible.
-    return [row[:4] for row in rows]
+    return filtered
 
 
 def get_item_name(item_id):
