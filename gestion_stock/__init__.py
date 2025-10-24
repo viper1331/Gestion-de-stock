@@ -1268,7 +1268,8 @@ def init_stock_db(db_path=DB_PATH):
             CREATE TABLE IF NOT EXISTS collaborator_gear (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 collaborator_id INTEGER NOT NULL,
-                item_id INTEGER NOT NULL,
+                item_id INTEGER,
+                clothing_id INTEGER,
                 size TEXT,
                 quantity INTEGER NOT NULL,
                 issued_at TEXT NOT NULL,
@@ -1283,6 +1284,47 @@ def init_stock_db(db_path=DB_PATH):
         cursor.execute('''
             CREATE INDEX IF NOT EXISTS idx_collaborator_gear_status ON collaborator_gear(status)
         ''')
+        cursor.execute("PRAGMA table_info(collaborator_gear)")
+        gear_info = cursor.fetchall()
+        gear_columns = {row[1]: row for row in gear_info}
+        needs_migration = False
+        if 'clothing_id' not in gear_columns:
+            needs_migration = True
+        elif gear_columns.get('item_id', (None, None, None, 0))[3]:
+            # Ancien schéma avec contrainte NOT NULL sur item_id.
+            needs_migration = True
+        if needs_migration:
+            cursor.execute('''
+                CREATE TABLE IF NOT EXISTS collaborator_gear_tmp (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    collaborator_id INTEGER NOT NULL,
+                    item_id INTEGER,
+                    clothing_id INTEGER,
+                    size TEXT,
+                    quantity INTEGER NOT NULL,
+                    issued_at TEXT NOT NULL,
+                    due_date TEXT,
+                    status TEXT NOT NULL DEFAULT 'issued',
+                    returned_at TEXT,
+                    notes TEXT,
+                    FOREIGN KEY(collaborator_id) REFERENCES collaborators(id),
+                    FOREIGN KEY(item_id) REFERENCES items(id)
+                )
+            ''')
+            cursor.execute(
+                """
+                INSERT INTO collaborator_gear_tmp (
+                    id, collaborator_id, item_id, clothing_id, size, quantity, issued_at, due_date, status, returned_at, notes
+                )
+                SELECT id, collaborator_id, item_id, NULL, size, quantity, issued_at, due_date, status, returned_at, notes
+                FROM collaborator_gear
+                """
+            )
+            cursor.execute("DROP TABLE collaborator_gear")
+            cursor.execute("ALTER TABLE collaborator_gear_tmp RENAME TO collaborator_gear")
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_collaborator_gear_status ON collaborator_gear(status)
+            ''')
 
         # Historique des alertes de réapprovisionnement
         cursor.execute('''
@@ -2161,78 +2203,174 @@ def delete_collaborator(collaborator_id):
 
 def fetch_collaborator_gear(collaborator_id=None, status=None):
     conn = None
+    cursor = None
+    clothing_alias = None
     try:
-        query = (
-            "SELECT collaborator_gear.id, collaborators.full_name, items.name, collaborator_gear.size, collaborator_gear.quantity,"
-            " collaborator_gear.issued_at, collaborator_gear.due_date, collaborator_gear.status, collaborator_gear.returned_at,"
-            " collaborator_gear.notes, collaborator_gear.item_id, collaborator_gear.collaborator_id"
-            " FROM collaborator_gear"
-            " JOIN collaborators ON collaborators.id = collaborator_gear.collaborator_id"
-            " JOIN items ON items.id = collaborator_gear.item_id"
-        )
-        params = []
+        clothing_name_column = 'NULL'
+        clothing_join = ''
+        params: list = []
         conditions: list[str] = []
-        if collaborator_id:
-            conditions.append("collaborator_gear.collaborator_id = ?")
-            params.append(collaborator_id)
-        if status:
-            if isinstance(status, (list, tuple, set)):
-                placeholders = ','.join('?' for _ in status)
-                conditions.append(f"collaborator_gear.status IN ({placeholders})")
-                params.extend(status)
-            elif status == 'active':
-                conditions.append("collaborator_gear.status NOT IN ('returned', 'lost', 'damaged')")
-            else:
-                conditions.append("collaborator_gear.status = ?")
-                params.append(status)
-        if conditions:
-            query += " WHERE " + " AND ".join(conditions)
-        query += " ORDER BY collaborator_gear.issued_at DESC"
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
+            if ENABLE_CLOTHING_MODULE and os.path.exists(CLOTHING_DB_PATH):
+                clothing_alias = 'clothing_bridge'
+                escaped = CLOTHING_DB_PATH.replace("'", "''")
+                try:
+                    cursor.execute(f"ATTACH DATABASE '{escaped}' AS {clothing_alias}")
+                    clothing_name_column = f"{clothing_alias}.clothing_inventory.name"
+                    clothing_join = (
+                        f" LEFT JOIN {clothing_alias}.clothing_inventory"
+                        " ON {alias}.clothing_inventory.id = collaborator_gear.clothing_id"
+                    ).replace('{alias}', clothing_alias)
+                except sqlite3.Error as attach_error:
+                    print(f"[DB Error] fetch_collaborator_gear attach clothing: {attach_error}")
+                    clothing_alias = None
+                    clothing_name_column = 'NULL'
+                    clothing_join = ''
+
+            if collaborator_id:
+                conditions.append("collaborator_gear.collaborator_id = ?")
+                params.append(collaborator_id)
+            if status:
+                if isinstance(status, (list, tuple, set)):
+                    placeholders = ','.join('?' for _ in status)
+                    conditions.append(f"collaborator_gear.status IN ({placeholders})")
+                    params.extend(status)
+                elif status == 'active':
+                    conditions.append("collaborator_gear.status NOT IN ('returned', 'lost', 'damaged')")
+                else:
+                    conditions.append("collaborator_gear.status = ?")
+                    params.append(status)
+
+            query = (
+                "SELECT collaborator_gear.id, collaborators.full_name, "
+                f"COALESCE(items.name, {clothing_name_column}, 'Article inconnu') AS item_name, "
+                "collaborator_gear.size, collaborator_gear.quantity, "
+                "collaborator_gear.issued_at, collaborator_gear.due_date, collaborator_gear.status, "
+                "collaborator_gear.returned_at, collaborator_gear.notes, collaborator_gear.item_id, "
+                "collaborator_gear.collaborator_id, collaborator_gear.clothing_id "
+                "FROM collaborator_gear "
+                "JOIN collaborators ON collaborators.id = collaborator_gear.collaborator_id "
+                "LEFT JOIN items ON items.id = collaborator_gear.item_id"
+                f"{clothing_join}"
+            )
+            if conditions:
+                query += " WHERE " + " AND ".join(conditions)
+            query += " ORDER BY collaborator_gear.issued_at DESC"
             cursor.execute(query, params)
             return cursor.fetchall()
     except sqlite3.Error as e:
         print(f"[DB Error] fetch_collaborator_gear: {e}")
         return []
     finally:
+        if cursor and clothing_alias:
+            try:
+                cursor.execute(f"DETACH DATABASE {clothing_alias}")
+            except sqlite3.Error:
+                pass
         if conn:
             conn.close()
 
 
-def assign_collaborator_gear(collaborator_id, item_id, quantity, size, due_date, notes, operator):
+def assign_collaborator_gear(
+    collaborator_id,
+    item_id,
+    quantity,
+    size,
+    due_date,
+    notes,
+    operator,
+    *,
+    clothing_id: Optional[int] = None,
+):
     conn = None
     try:
         issued_at = datetime.now().isoformat()
         normalized_due = None
         if due_date:
             normalized_due = parse_user_date(due_date)
-        with db_lock:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
-            cursor = conn.cursor()
-            cursor.execute("SELECT quantity FROM items WHERE id = ?", (item_id,))
-            row = cursor.fetchone()
-            if not row:
-                raise ValueError("Article introuvable dans l'inventaire")
-            available = row[0] or 0
+        if item_id is None and clothing_id is None:
+            raise ValueError("Aucun article sélectionné")
+        if item_id is not None and clothing_id is not None:
+            raise ValueError("Sélection multiple invalide")
+
+        if clothing_id is not None:
+            if clothing_inventory_manager is None:
+                raise ValueError("Le module habillement n'est pas disponible")
+            clothing_item = clothing_inventory_manager.get_item(clothing_id)
+            if clothing_item is None:
+                raise ValueError("Article d'habillement introuvable")
+            available = clothing_item.quantity or 0
             if quantity > available:
-                raise ValueError(f"Stock insuffisant : {available} article(s) disponible(s)")
-            cursor.execute(
-                """
-                INSERT INTO collaborator_gear (collaborator_id, item_id, size, quantity, issued_at, due_date, notes)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-                """,
-                (collaborator_id, item_id, size, quantity, issued_at, normalized_due, notes),
+                raise ValueError(
+                    f"Stock habillement insuffisant : {available} article(s) disponible(s)"
+                )
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    INSERT INTO collaborator_gear (
+                        collaborator_id, item_id, clothing_id, size, quantity, issued_at, due_date, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        collaborator_id,
+                        None,
+                        clothing_id,
+                        size,
+                        quantity,
+                        issued_at,
+                        normalized_due,
+                        notes,
+                    ),
+                )
+                conn.commit()
+            adjust_clothing_item_quantity(
+                clothing_id,
+                -abs(quantity),
+                operator=operator,
+                note=f"Attribution collaborateur #{collaborator_id}",
             )
-            conn.commit()
-        adjust_item_quantity(
-            item_id,
-            -abs(quantity),
-            operator=operator,
-            source='collaborator_assignment',
-            note=f"Attribution collaborateur #{collaborator_id}",
-        )
+        else:
+            with db_lock:
+                conn = sqlite3.connect(DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute("SELECT quantity FROM items WHERE id = ?", (item_id,))
+                row = cursor.fetchone()
+                if not row:
+                    raise ValueError("Article introuvable dans l'inventaire")
+                available = row[0] or 0
+                if quantity > available:
+                    raise ValueError(
+                        f"Stock insuffisant : {available} article(s) disponible(s)"
+                    )
+                cursor.execute(
+                    """
+                    INSERT INTO collaborator_gear (
+                        collaborator_id, item_id, clothing_id, size, quantity, issued_at, due_date, notes
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        collaborator_id,
+                        item_id,
+                        None,
+                        size,
+                        quantity,
+                        issued_at,
+                        normalized_due,
+                        notes,
+                    ),
+                )
+                conn.commit()
+            adjust_item_quantity(
+                item_id,
+                -abs(quantity),
+                operator=operator,
+                source='collaborator_assignment',
+                note=f"Attribution collaborateur #{collaborator_id}",
+            )
         return True
     except ValueError:
         raise
@@ -2268,16 +2406,24 @@ def close_collaborator_gear(gear_id, quantity, operator, response_note='', statu
         if restock:
             item_info = get_item_from_gear(gear_id)
             if item_info:
-                item_id, stored_quantity = item_info
+                item_id, clothing_id, stored_quantity = item_info
                 quantity_to_add = abs(quantity if quantity is not None else stored_quantity or 0)
                 if quantity_to_add:
-                    adjust_item_quantity(
-                        item_id,
-                        quantity_to_add,
-                        operator=operator,
-                        source='collaborator_return',
-                        note=f"Retour dotation #{gear_id}",
-                    )
+                    if clothing_id is not None and clothing_inventory_manager is not None:
+                        adjust_clothing_item_quantity(
+                            clothing_id,
+                            quantity_to_add,
+                            operator=operator,
+                            note=f"Retour dotation #{gear_id}",
+                        )
+                    elif item_id is not None:
+                        adjust_item_quantity(
+                            item_id,
+                            quantity_to_add,
+                            operator=operator,
+                            source='collaborator_return',
+                            note=f"Retour dotation #{gear_id}",
+                        )
         return True
     except sqlite3.Error as e:
         print(f"[DB Error] close_collaborator_gear: {e}")
@@ -2325,12 +2471,12 @@ def get_item_from_gear(gear_id):
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT item_id, quantity FROM collaborator_gear WHERE id = ?",
+                "SELECT item_id, clothing_id, quantity FROM collaborator_gear WHERE id = ?",
                 (gear_id,),
             )
             result = cursor.fetchone()
             if result:
-                return result[0], result[1]
+                return result[0], result[1], result[2]
     except sqlite3.Error as e:
         print(f"[DB Error] get_item_from_gear: {e}")
     finally:
@@ -8525,12 +8671,45 @@ class AssignGearDialog(tk.Toplevel):
         self.title("Attribuer un équipement")
         self.result = None
 
-        items = fetch_items_lookup(only_clothing=True)
-        self.item_ids = [i[0] for i in items]
-        item_names = [i[1] for i in items]
-
         ttk.Label(self, text="Article :").grid(row=0, column=0, padx=10, pady=5, sticky=tk.W)
-        self.item_combobox = ttk.Combobox(self, values=item_names, state='readonly', width=35)
+        self.options: list[dict[str, Any]] = []
+        seen_keys: set[tuple[Optional[int], Optional[int]]] = set()
+
+        items = fetch_items_lookup(only_clothing=True)
+        for item in items:
+            item_id, name, *_ = item
+            key = (item_id, None)
+            if key in seen_keys:
+                continue
+            seen_keys.add(key)
+            self.options.append({'label': name, 'item_id': item_id, 'clothing_id': None})
+
+        if clothing_inventory_manager is not None:
+            try:
+                clothing_items = clothing_inventory_manager.list_items(search="", include_zero=True)
+            except Exception as exc:  # pragma: no cover - robustesse interface
+                print(f"[Clothing] AssignGearDialog listing failed: {exc}")
+            else:
+                for clothing_item in clothing_items:
+                    label = clothing_item.name or f"Article #{clothing_item.id}"
+                    if clothing_item.size:
+                        label = f"{label} ({clothing_item.size})"
+                    key = (None, clothing_item.id)
+                    if key in seen_keys:
+                        continue
+                    seen_keys.add(key)
+                    self.options.append(
+                        {
+                            'label': label,
+                            'item_id': None,
+                            'clothing_id': clothing_item.id,
+                        }
+                    )
+
+        self.options.sort(key=lambda opt: opt['label'].lower())
+        combo_values = [opt['label'] for opt in self.options]
+
+        self.item_combobox = ttk.Combobox(self, values=combo_values, state='readonly', width=35)
         self.item_combobox.grid(row=0, column=1, padx=10, pady=5)
 
         ttk.Label(self, text="Taille :").grid(row=1, column=0, padx=10, pady=5, sticky=tk.W)
@@ -8559,7 +8738,7 @@ class AssignGearDialog(tk.Toplevel):
 
     def on_ok(self):
         idx = self.item_combobox.current()
-        if idx < 0:
+        if idx < 0 or idx >= len(self.options):
             messagebox.showerror("Dotation", "Sélectionnez un article.", parent=self)
             return
         try:
@@ -8569,8 +8748,10 @@ class AssignGearDialog(tk.Toplevel):
         except ValueError:
             messagebox.showerror("Dotation", "Quantité invalide.", parent=self)
             return
+        selected = self.options[idx]
         self.result = {
-            'item_id': self.item_ids[idx],
+            'item_id': selected['item_id'],
+            'clothing_id': selected['clothing_id'],
             'size': self.entry_size.get().strip(),
             'quantity': qty,
             'due_date': self.entry_due.get().strip() or None,
@@ -8805,7 +8986,21 @@ class CollaboratorGearDialog(tk.Toplevel):
         status_filter = self.STATUS_FILTERS.get(status_label, None)
         self.current_gear_cache = fetch_collaborator_gear(collab_id, status=status_filter)
         for gear in self.current_gear_cache:
-            gear_id, collab_name, item_name, size, quantity, issued_at, due_date, status, returned_at, notes, item_id, collaborator_id = gear
+            (
+                gear_id,
+                collab_name,
+                item_name,
+                size,
+                quantity,
+                issued_at,
+                due_date,
+                status,
+                returned_at,
+                notes,
+                item_id,
+                collaborator_id,
+                clothing_id,
+            ) = gear
             tags = []
             if status == 'returned':
                 tags.append('gear_returned')
@@ -8855,7 +9050,21 @@ class CollaboratorGearDialog(tk.Toplevel):
         self.gear_notes_text.configure(state='disabled')
         if not gear:
             return
-        gear_id, collab_name, item_name, size, quantity, issued_at, due_date, status, returned_at, notes, item_id, collaborator_id = gear
+        (
+            gear_id,
+            collab_name,
+            item_name,
+            size,
+            quantity,
+            issued_at,
+            due_date,
+            status,
+            returned_at,
+            notes,
+            item_id,
+            collaborator_id,
+            clothing_id,
+        ) = gear
         display_item = item_name if not size else f"{item_name} ({size})"
         self.gear_detail_vars['item'].set(display_item)
         self.gear_detail_vars['status'].set(status.upper())
@@ -8933,6 +9142,7 @@ class CollaboratorGearDialog(tk.Toplevel):
                     data['due_date'],
                     data['notes'],
                     operator=self.parent.current_user,
+                    clothing_id=data.get('clothing_id'),
                 )
             except ValueError as exc:
                 messagebox.showerror("Dotations", str(exc), parent=self)
@@ -9012,7 +9222,21 @@ class CollaboratorGearDialog(tk.Toplevel):
             return
         rows = []
         for gear in self.current_gear_cache:
-            gear_id, collab_name, item_name, size, quantity, issued_at, due_date, status, returned_at, notes, item_id, collaborator_id = gear
+            (
+                gear_id,
+                collab_name,
+                item_name,
+                size,
+                quantity,
+                issued_at,
+                due_date,
+                status,
+                returned_at,
+                notes,
+                item_id,
+                collaborator_id,
+                clothing_id,
+            ) = gear
             display_item = item_name if not size else f"{item_name} ({size})"
             rows.append(
                 (
