@@ -1549,24 +1549,88 @@ def delete_supplier(supplier_id):
             conn.close()
 
 
-def fetch_items_lookup():
+def fetch_items_lookup(*, only_clothing: bool = False):
     conn = None
+    rows: list[tuple] = []
     try:
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT items.id, items.name, COALESCE(items.unit_cost, 0), COALESCE(items.reorder_point, ?) "
-                "FROM items ORDER BY items.name",
+                """
+                SELECT
+                    items.id,
+                    items.name,
+                    COALESCE(items.unit_cost, 0),
+                    COALESCE(items.reorder_point, ?),
+                    items.barcode,
+                    COALESCE(categories.name, ''),
+                    COALESCE(categories.note, '')
+                FROM items
+                LEFT JOIN categories ON categories.id = items.category_id
+                ORDER BY items.name
+                """,
                 (DEFAULT_LOW_STOCK_THRESHOLD,),
             )
-            return cursor.fetchall()
+            rows = cursor.fetchall()
     except sqlite3.Error as e:
         print(f"[DB Error] fetch_items_lookup: {e}")
         return []
     finally:
         if conn:
             conn.close()
+
+    if not only_clothing:
+        return [row[:4] for row in rows]
+
+    clothing_names: set[str] = set()
+    clothing_barcodes: set[str] = set()
+    if clothing_inventory_manager is not None:
+        try:
+            clothing_items = clothing_inventory_manager.list_items(search="", include_zero=True)
+        except Exception as exc:  # pragma: no cover - garde-fou
+            print(f"[Clothing] fetch_items_lookup fallback: {exc}")
+        else:
+            for clothing_item in clothing_items:
+                if clothing_item.name:
+                    clothing_names.add(clothing_item.name.strip().lower())
+                if clothing_item.barcode:
+                    clothing_barcodes.add(clothing_item.barcode.strip().lower())
+
+    CATEGORY_KEYWORDS = (
+        "habil",
+        "vêt",
+        "vet",
+        "tenue",
+        "uniform",
+        "epi",
+        "chaus",
+        "pantal",
+        "chemise",
+        "gilet",
+        "blous",
+        "tablier",
+    )
+
+    filtered: list[tuple[int, str, float, int]] = []
+    for item_id, name, unit_cost, reorder_point, barcode, category_name, category_note in rows:
+        label = (name or "").strip().lower()
+        barcode_value = (barcode or "").strip().lower()
+        cat_label = (category_name or "").strip().lower()
+        note_label = (category_note or "").strip().lower()
+
+        matches_clothing_inventory = (
+            (label and label in clothing_names)
+            or (barcode_value and barcode_value in clothing_barcodes)
+        )
+        matches_keywords = any(keyword in cat_label for keyword in CATEGORY_KEYWORDS) or any(
+            keyword in note_label for keyword in CATEGORY_KEYWORDS
+        )
+
+        if matches_clothing_inventory or matches_keywords:
+            filtered.append((item_id, name, unit_cost, reorder_point))
+
+    return filtered
 
 
 def get_item_name(item_id):
@@ -8264,7 +8328,7 @@ class AssignGearDialog(tk.Toplevel):
         self.title("Attribuer un équipement")
         self.result = None
 
-        items = fetch_items_lookup()
+        items = fetch_items_lookup(only_clothing=True)
         self.item_ids = [i[0] for i in items]
         item_names = [i[1] for i in items]
 
