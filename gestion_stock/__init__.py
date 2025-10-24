@@ -21,6 +21,7 @@ import zipfile
 import hashlib
 import json
 import logging
+import unicodedata
 from typing import Any, Callable, Dict, Iterable, Optional
 import importlib.util
 import webbrowser
@@ -1583,7 +1584,15 @@ def fetch_items_lookup(*, only_clothing: bool = False):
     if not only_clothing:
         return [row[:4] for row in rows]
 
-    clothing_names: set[str] = set()
+    def _normalize_text(value: Optional[str]) -> str:
+        if not value:
+            return ''
+        normalized = unicodedata.normalize('NFKD', value)
+        stripped = ''.join(ch for ch in normalized if not unicodedata.combining(ch))
+        return stripped.casefold().strip()
+
+    clothing_names: list[str] = []
+    clothing_categories: list[str] = []
     clothing_barcodes: set[str] = set()
     if clothing_inventory_manager is not None:
         try:
@@ -1593,7 +1602,13 @@ def fetch_items_lookup(*, only_clothing: bool = False):
         else:
             for clothing_item in clothing_items:
                 if clothing_item.name:
-                    clothing_names.add(clothing_item.name.strip().lower())
+                    normalized_name = _normalize_text(clothing_item.name)
+                    if normalized_name:
+                        clothing_names.append(normalized_name)
+                if clothing_item.category:
+                    normalized_category = _normalize_text(clothing_item.category)
+                    if normalized_category:
+                        clothing_categories.append(normalized_category)
                 if clothing_item.barcode:
                     clothing_barcodes.add(clothing_item.barcode.strip().lower())
 
@@ -1612,22 +1627,35 @@ def fetch_items_lookup(*, only_clothing: bool = False):
         "tablier",
     )
 
+    def _matches_any(value: str, candidates: list[str]) -> bool:
+        if not value:
+            return False
+        for candidate in candidates:
+            if not candidate:
+                continue
+            if value == candidate or value in candidate or candidate in value:
+                return True
+        return False
+
     filtered: list[tuple[int, str, float, int]] = []
     for item_id, name, unit_cost, reorder_point, barcode, category_name, category_note in rows:
-        label = (name or "").strip().lower()
+        label = _normalize_text(name)
         barcode_value = (barcode or "").strip().lower()
-        cat_label = (category_name or "").strip().lower()
-        note_label = (category_note or "").strip().lower()
+        cat_label = _normalize_text(category_name)
+        note_label = _normalize_text(category_note)
 
         matches_clothing_inventory = (
-            (label and label in clothing_names)
+            _matches_any(label, clothing_names)
             or (barcode_value and barcode_value in clothing_barcodes)
         )
-        matches_keywords = any(keyword in cat_label for keyword in CATEGORY_KEYWORDS) or any(
-            keyword in note_label for keyword in CATEGORY_KEYWORDS
+        matches_categories = _matches_any(cat_label, clothing_categories) or _matches_any(
+            note_label, clothing_categories
         )
+        matches_keywords = any(keyword in label for keyword in CATEGORY_KEYWORDS) or any(
+            keyword in cat_label for keyword in CATEGORY_KEYWORDS
+        ) or any(keyword in note_label for keyword in CATEGORY_KEYWORDS)
 
-        if matches_clothing_inventory or matches_keywords:
+        if matches_clothing_inventory or matches_categories or matches_keywords:
             filtered.append((item_id, name, unit_cost, reorder_point))
 
     return filtered
