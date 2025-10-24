@@ -312,10 +312,24 @@ def _configure_misc(style: ttk.Style, palette: dict[str, str]) -> None:
     style.configure("TSeparator", background=palette["border"])
 
 
-def apply_theme(root: Tk, mode: str = "dark", *, font_size: Optional[int] = None) -> dict[str, str]:
+def apply_theme(
+    root: Tk,
+    mode: str = "dark",
+    *,
+    font_size: Optional[int] = None,
+    custom_text_color: Optional[str] = None,
+) -> dict[str, str]:
     """Apply the modern theme to the root window and return the palette used."""
 
-    palette = _palette(mode)
+    palette = dict(_palette(mode))
+    text_color = (custom_text_color or "").strip()
+    if len(text_color) == 7 and text_color.startswith("#"):
+        try:
+            int(text_color[1:], 16)
+        except ValueError:
+            text_color = ""
+        else:
+            palette["fg"] = text_color.lower()
     base_font = (FONTS["base"][0], font_size or FONTS["base"][1])
     root.option_add("*Font", base_font)
     root.option_add("*TCombobox*Listbox.font", base_font)
