@@ -27,7 +27,13 @@ def verify_password(password: str, hashed: str) -> bool:
         password = password.encode("utf-8")
     if isinstance(hashed, str):
         hashed = hashed.encode("utf-8")
-    return bcrypt.checkpw(password, hashed)
+    try:
+        return bcrypt.checkpw(password, hashed)
+    except ValueError:
+        # Les anciennes bases pouvaient contenir des mots de passe non bcryptés.
+        # On renvoie False pour permettre au service d'initialisation de corriger
+        # automatiquement ces entrées sans lever d'erreur.
+        return False
 
 
 def _create_token(data: dict[str, Any], expires_delta: timedelta) -> str:

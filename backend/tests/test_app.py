@@ -10,7 +10,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from backend.app import app
-from backend.core import db, services
+from backend.core import db, security, services
 
 client = TestClient(app)
 
@@ -22,6 +22,39 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM items")
         conn.execute("DELETE FROM categories")
         conn.commit()
+
+
+def test_seed_admin_recreates_missing_user() -> None:
+    services.ensure_database_ready()
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM users WHERE username = 'admin'")
+        conn.execute(
+            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
+            ("demo", security.hash_password("demo1234"), "user"),
+        )
+        conn.commit()
+
+    services.seed_default_admin()
+    admin = services.authenticate("admin", "admin123")
+    assert admin is not None
+    assert admin.role == "admin"
+
+
+def test_seed_admin_repairs_invalid_state() -> None:
+    services.ensure_database_ready()
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM users WHERE username = 'admin'")
+        conn.execute(
+            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 0)",
+            ("admin", "notahash", "user"),
+        )
+        conn.commit()
+
+    services.seed_default_admin()
+    admin = services.authenticate("admin", "admin123")
+    assert admin is not None
+    assert admin.role == "admin"
+    assert admin.is_active is True
 
 
 def test_healthcheck() -> None:
