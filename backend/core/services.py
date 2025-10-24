@@ -19,13 +19,33 @@ def ensure_database_ready() -> None:
 
 
 def seed_default_admin() -> None:
+    default_username = "admin"
+    default_password = "admin123"
     with db.get_users_connection() as conn:
-        cur = conn.execute("SELECT COUNT(*) AS count FROM users")
-        if cur.fetchone()["count"] == 0:
-            password = security.hash_password("admin123")
+        cur = conn.execute(
+            "SELECT id, password, role, is_active FROM users WHERE username = ?",
+            (default_username,),
+        )
+        row = cur.fetchone()
+        hashed_password = security.hash_password(default_password)
+        if row is None:
             conn.execute(
-                "INSERT INTO users (username, password, role) VALUES (?, ?, ?)",
-                ("admin", password, "admin"),
+                "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
+                (default_username, hashed_password, "admin"),
+            )
+            conn.commit()
+            return
+
+        needs_update = False
+        if not security.verify_password(default_password, row["password"]):
+            needs_update = True
+        if row["role"] != "admin" or not bool(row["is_active"]):
+            needs_update = True
+
+        if needs_update:
+            conn.execute(
+                "UPDATE users SET password = ?, role = ?, is_active = 1 WHERE id = ?",
+                (hashed_password, "admin", row["id"]),
             )
             conn.commit()
 
