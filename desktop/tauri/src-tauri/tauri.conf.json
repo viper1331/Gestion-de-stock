@@ -1,0 +1,30 @@
+{
+  "$schema": "https://raw.githubusercontent.com/tauri-apps/tauri/v1/schema.json",
+  "build": {
+    "beforeDevCommand": "pnpm --dir ../../frontend dev",
+    "beforeBuildCommand": "pnpm --dir ../../frontend build",
+    "frontendDist": "../../frontend/dist",
+    "devPath": "http://localhost:5173"
+  },
+  "package": {
+    "productName": "Gestion Stock Pro",
+    "version": "0.1.0"
+  },
+  "tauri": {
+    "windows": [
+      {
+        "title": "Gestion Stock Pro",
+        "width": 1280,
+        "height": 800
+      }
+    ],
+    "allowlist": {
+      "shell": {
+        "all": true
+      }
+    },
+    "bundle": {
+      "identifier": "com.gestionstockpro.app"
+    }
+  }
+}
