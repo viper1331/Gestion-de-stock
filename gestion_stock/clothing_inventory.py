@@ -7,6 +7,7 @@ de l'application principale.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import datetime
@@ -39,16 +40,41 @@ class ClothingInventoryManager:
         self,
         db_path_getter: Callable[[], str],
         lock,
+        *,
+        suppliers_db_path_getter: Optional[Callable[[], str]] = None,
     ) -> None:
         self._db_path_getter = db_path_getter
         self._lock = lock
+        self._suppliers_db_path_getter = suppliers_db_path_getter or db_path_getter
 
     # ------------------------------------------------------------------
     #  Utilitaires internes
     # ------------------------------------------------------------------
-    def _open_connection(self, db_path: Optional[str] = None) -> sqlite3.Connection:
-        path = db_path or self._db_path_getter()
-        return sqlite3.connect(path, timeout=30)
+    def _open_connection(
+        self, db_path: Optional[str] = None
+    ) -> tuple[sqlite3.Connection, str]:
+        path = os.path.abspath(db_path or self._db_path_getter())
+        conn = sqlite3.connect(path, timeout=30)
+        conn.execute("PRAGMA foreign_keys = ON")
+        suppliers_path = os.path.abspath(self._suppliers_db_path_getter())
+        if suppliers_path == path:
+            return conn, "suppliers"
+
+        alias = "suppliers_bridge"
+        escaped = suppliers_path.replace("'", "''")
+        conn.execute(f"ATTACH DATABASE '{escaped}' AS {alias}")
+        cursor = conn.cursor()
+        try:
+            cursor.execute(
+                f"SELECT name FROM {alias}.sqlite_master WHERE type='table' AND name='suppliers'"
+            )
+            if cursor.fetchone() is None:
+                raise RuntimeError(
+                    "La base fournisseurs ne contient pas la table 'suppliers'."
+                )
+        finally:
+            cursor.close()
+        return conn, f"{alias}.suppliers"
 
     def _ensure_schema(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute(
@@ -123,7 +149,7 @@ class ClothingInventoryManager:
             self._ensure_schema(cursor)
             return
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, _ = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
@@ -158,9 +184,14 @@ class ClothingInventoryManager:
             ),
         )
 
-    def _fetch_item(self, cursor: sqlite3.Cursor, clothing_id: int) -> Optional[ClothingItem]:
+    def _fetch_item(
+        self,
+        cursor: sqlite3.Cursor,
+        clothing_id: int,
+        suppliers_table: str,
+    ) -> Optional[ClothingItem]:
         cursor.execute(
-            """
+            f"""
             SELECT
                 ci.id,
                 ci.name,
@@ -176,7 +207,7 @@ class ClothingInventoryManager:
                 ci.operator,
                 ci.updated_at
             FROM clothing_inventory AS ci
-            LEFT JOIN suppliers AS s ON s.id = ci.preferred_supplier_id
+            LEFT JOIN {suppliers_table} AS s ON s.id = ci.preferred_supplier_id
             WHERE ci.id = ?
             """,
             (clothing_id,),
@@ -210,7 +241,7 @@ class ClothingInventoryManager:
         if barcode:
             barcode = barcode.strip() or None
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, suppliers_table = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
@@ -310,7 +341,7 @@ class ClothingInventoryManager:
                         note,
                     )
                 conn.commit()
-                return self._fetch_item(cur, clothing_id)  # type: ignore[return-value]
+                return self._fetch_item(cur, clothing_id, suppliers_table)
             finally:
                 conn.close()
 
@@ -326,7 +357,7 @@ class ClothingInventoryManager:
         if delta == 0:
             return self.get_item(clothing_id, db_path=db_path)
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, suppliers_table = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
@@ -360,7 +391,7 @@ class ClothingInventoryManager:
                     note,
                 )
                 conn.commit()
-                return self._fetch_item(cur, clothing_id)
+                return self._fetch_item(cur, clothing_id, suppliers_table)
             finally:
                 conn.close()
 
@@ -383,11 +414,11 @@ class ClothingInventoryManager:
         if quantity < 0:
             raise ValueError("La quantité doit être positive ou nulle.")
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, suppliers_table = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
-                current = self._fetch_item(cur, clothing_id)
+                current = self._fetch_item(cur, clothing_id, suppliers_table)
                 if current is None:
                     return None
                 now = datetime.now().isoformat()
@@ -434,7 +465,7 @@ class ClothingInventoryManager:
                         note,
                     )
                 conn.commit()
-                return self._fetch_item(cur, clothing_id)
+                return self._fetch_item(cur, clothing_id, suppliers_table)
             finally:
                 conn.close()
 
@@ -445,7 +476,7 @@ class ClothingInventoryManager:
         db_path: Optional[str] = None,
     ) -> bool:
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, _ = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
@@ -477,7 +508,7 @@ class ClothingInventoryManager:
         db_path: Optional[str] = None,
     ) -> list[ClothingItem]:
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, suppliers_table = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
@@ -497,7 +528,7 @@ class ClothingInventoryManager:
                     "    ci.operator,"
                     "    ci.updated_at "
                     "FROM clothing_inventory AS ci "
-                    "LEFT JOIN suppliers AS s ON s.id = ci.preferred_supplier_id"
+                    f"LEFT JOIN {suppliers_table} AS s ON s.id = ci.preferred_supplier_id"
                 )
                 params: list[object] = []
                 conditions: list[str] = []
@@ -529,7 +560,7 @@ class ClothingInventoryManager:
         db_path: Optional[str] = None,
     ) -> dict:
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, _ = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
@@ -559,10 +590,10 @@ class ClothingInventoryManager:
         db_path: Optional[str] = None,
     ) -> Optional[ClothingItem]:
         with self._lock:
-            conn = self._open_connection(db_path)
+            conn, suppliers_table = self._open_connection(db_path)
             try:
                 cur = conn.cursor()
                 self._ensure_schema(cur)
-                return self._fetch_item(cur, clothing_id)
+                return self._fetch_item(cur, clothing_id, suppliers_table)
             finally:
                 conn.close()

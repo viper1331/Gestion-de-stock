@@ -128,5 +128,47 @@ class UserManagementTests(unittest.TestCase):
             gestion_stock.create_user("alice", "password", role="manager")
 
 
+class ClothingInventorySupplierTests(unittest.TestCase):
+    def setUp(self):
+        self.tempdir = tempfile.TemporaryDirectory()
+        self.stock_db_path = Path(self.tempdir.name) / "stock.db"
+        self.clothing_db_path = Path(self.tempdir.name) / "clothing.db"
+        self.original_stock_path = gestion_stock.DB_PATH
+        self.original_clothing_path = gestion_stock.CLOTHING_DB_PATH
+        gestion_stock.DB_PATH = str(self.stock_db_path)
+        gestion_stock.CLOTHING_DB_PATH = str(self.clothing_db_path)
+        gestion_stock.init_stock_db(gestion_stock.DB_PATH)
+        gestion_stock.ensure_clothing_inventory_schema(
+            db_path=gestion_stock.CLOTHING_DB_PATH
+        )
+        self.supplier_id = gestion_stock.save_supplier("Fournisseur Test")
+
+    def tearDown(self):
+        gestion_stock.DB_PATH = self.original_stock_path
+        gestion_stock.CLOTHING_DB_PATH = self.original_clothing_path
+        self.tempdir.cleanup()
+
+    def test_register_clothing_item_uses_shared_suppliers_table(self):
+        item = gestion_stock.register_clothing_item(
+            name="Veste de travail",
+            category="Uniforme",
+            size="M",
+            quantity=3,
+            preferred_supplier_id=self.supplier_id,
+            operator="tester",
+            note="essai",
+            db_path=gestion_stock.CLOTHING_DB_PATH,
+        )
+        self.assertIsNotNone(item)
+        self.assertEqual(item.preferred_supplier_id, self.supplier_id)
+        self.assertEqual(item.preferred_supplier_name, "Fournisseur Test")
+        with sqlite3.connect(gestion_stock.CLOTHING_DB_PATH) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name FROM sqlite_master WHERE type='table' AND name='suppliers'"
+            )
+            self.assertIsNone(cursor.fetchone())
+
+
 if __name__ == "__main__":
     unittest.main()

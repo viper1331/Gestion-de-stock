@@ -656,6 +656,7 @@ if ClothingInventoryManager is not None:
     clothing_inventory_manager = ClothingInventoryManager(
         db_path_getter=lambda: CLOTHING_DB_PATH,
         lock=db_lock,
+        suppliers_db_path_getter=lambda: DB_PATH,
     )
 else:  # pragma: no cover - résidu si l'import échoue
     clothing_inventory_manager = None
