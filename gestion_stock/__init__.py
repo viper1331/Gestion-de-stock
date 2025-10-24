@@ -189,6 +189,8 @@ default_config = {
     'last_user': '',
     'enable_pharmacy_module': 'true',
     'enable_clothing_module': 'true',
+    'pharmacy_db_path': 'pharmacy_stock.db',
+    'clothing_db_path': 'clothing_stock.db',
     'theme': 'dark',
     'font_size': '10',
 }
@@ -248,6 +250,15 @@ else:
 # Extraction des paramètres
 DB_PATH = config['Settings'].get('db_path', default_config['db_path'])
 USER_DB_PATH = config['Settings'].get('user_db_path', default_config['user_db_path'])
+PHARMACY_DB_PATH_RAW = config['Settings'].get('pharmacy_db_path', default_config['pharmacy_db_path'])
+CLOTHING_DB_PATH_RAW = config['Settings'].get('clothing_db_path', default_config['clothing_db_path'])
+PHARMACY_DB_PATH = PHARMACY_DB_PATH_RAW.strip() or DB_PATH
+CLOTHING_DB_PATH = CLOTHING_DB_PATH_RAW.strip() or DB_PATH
+
+for extra_db_path in (CLOTHING_DB_PATH, PHARMACY_DB_PATH):
+    extra_dir = os.path.dirname(os.path.abspath(extra_db_path)) or os.getcwd()
+    if not os.path.exists(extra_dir):
+        os.makedirs(extra_dir, exist_ok=True)
 BARCODE_DIR = config['Settings'].get('barcode_dir', default_config['barcode_dir'])
 try:
     CAMERA_INDEX = int(config['Settings'].get('camera_index', default_config['camera_index']))
@@ -631,7 +642,8 @@ def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, 
 
 if PharmacyInventoryManager is not None:
     pharmacy_inventory_manager = PharmacyInventoryManager(
-        db_path_getter=lambda: DB_PATH,
+        inventory_db_path_getter=lambda: PHARMACY_DB_PATH,
+        items_db_path_getter=lambda: DB_PATH,
         lock=db_lock,
         log_stock_movement=log_stock_movement,
         parse_user_date=parse_user_date,
@@ -642,7 +654,7 @@ else:  # pragma: no cover - résidu si l'import échoue
 
 if ClothingInventoryManager is not None:
     clothing_inventory_manager = ClothingInventoryManager(
-        db_path_getter=lambda: DB_PATH,
+        db_path_getter=lambda: CLOTHING_DB_PATH,
         lock=db_lock,
     )
 else:  # pragma: no cover - résidu si l'import échoue
@@ -929,12 +941,20 @@ def summarize_clothing_stock(*, db_path: Optional[str] = None) -> dict:
         raise RuntimeError("Le module clothing_inventory n'est pas disponible.")
     return clothing_inventory_manager.summarize_stock(db_path=db_path)
 
-def adjust_item_quantity(item_id, delta, operator='system', source='manual', note=None):
+def adjust_item_quantity(
+    item_id,
+    delta,
+    operator='system',
+    source='manual',
+    note=None,
+    *,
+    db_path: Optional[str] = None,
+):
     """Modifie la quantité d'un article et journalise le mouvement."""
     conn = None
     try:
         with db_lock:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = sqlite3.connect(db_path or DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute("SELECT quantity FROM items WHERE id = ?", (item_id,))
             result = cursor.fetchone()
@@ -1525,7 +1545,7 @@ def fetch_suppliers(search: Optional[str] = None):
             params.extend([like, like, like, like])
         query += " ORDER BY name"
         with db_lock:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = sqlite3.connect(CLOTHING_DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute(query, params)
             return cursor.fetchall()
@@ -2384,7 +2404,7 @@ def _fetch_clothing_dashboard_metrics(
     conn = None
     try:
         with db_lock:
-            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn = sqlite3.connect(CLOTHING_DB_PATH, timeout=30)
             cursor = conn.cursor()
             clothing_inventory_manager.ensure_schema(cursor=cursor)
 
@@ -7447,6 +7467,8 @@ class StockApp(tk.Tk):
         if dialog.result:
             global CAMERA_INDEX, MICROPHONE_INDEX, TTS_TYPE, ACTIVE_TTS_DRIVER
             config['Settings']['db_path'] = dialog.result['db_path']
+            config['Settings']['pharmacy_db_path'] = dialog.result['pharmacy_db_path']
+            config['Settings']['clothing_db_path'] = dialog.result['clothing_db_path']
             config['Settings']['user_db_path'] = dialog.result['user_db_path']
             config['Settings']['barcode_dir'] = dialog.result['barcode_dir']
             config['Settings']['camera_index'] = str(dialog.result['camera_index'])
@@ -7518,14 +7540,22 @@ class StockApp(tk.Tk):
             return
         try:
             with zipfile.ZipFile(file_path, 'w', compression=zipfile.ZIP_DEFLATED) as archive:
-                if os.path.exists(DB_PATH):
-                    archive.write(DB_PATH, arcname=os.path.basename(DB_PATH))
-                else:
-                    raise FileNotFoundError(f"Base stock introuvable : {DB_PATH}")
-                if os.path.exists(USER_DB_PATH):
-                    archive.write(USER_DB_PATH, arcname=os.path.basename(USER_DB_PATH))
-                else:
-                    raise FileNotFoundError(f"Base utilisateurs introuvable : {USER_DB_PATH}")
+                db_targets = [
+                    ("Base stock", DB_PATH),
+                    ("Base utilisateurs", USER_DB_PATH),
+                    ("Base pharmacie", PHARMACY_DB_PATH),
+                    ("Base habillement", CLOTHING_DB_PATH),
+                ]
+                seen_paths: set[str] = set()
+                for label, path in db_targets:
+                    abs_path = os.path.abspath(path)
+                    if abs_path in seen_paths:
+                        continue
+                    seen_paths.add(abs_path)
+                    if os.path.exists(path):
+                        archive.write(path, arcname=os.path.basename(path))
+                    else:
+                        raise FileNotFoundError(f"{label} introuvable : {path}")
         except Exception as e:
             self.log_user_action(
                 "Échec de sauvegarde des bases vers %s : %s" % (file_path, e),
@@ -9145,9 +9175,13 @@ class ConfigDialog(tk.Toplevel):
             'db_path': DB_PATH,
             'user_db_path': USER_DB_PATH,
             'barcode_dir': BARCODE_DIR,
+            'pharmacy_db_path': PHARMACY_DB_PATH,
+            'clothing_db_path': CLOTHING_DB_PATH,
         }
 
         var_db = tk.StringVar(value=DB_PATH)
+        var_pharmacy_db = tk.StringVar(value=PHARMACY_DB_PATH)
+        var_clothing_db = tk.StringVar(value=CLOTHING_DB_PATH)
         var_user_db = tk.StringVar(value=USER_DB_PATH)
         var_barcode = tk.StringVar(value=BARCODE_DIR)
         var_camera = tk.StringVar(value=str(CAMERA_INDEX))
@@ -9169,27 +9203,35 @@ class ConfigDialog(tk.Toplevel):
         entry_db = ttk.Entry(self, textvariable=var_db, width=40)
         entry_db.grid(row=0, column=1, padx=10, pady=5)
 
-        ttk.Label(self, text="Chemin base utilisateurs :").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
-        entry_user_db = ttk.Entry(self, textvariable=var_user_db, width=40)
-        entry_user_db.grid(row=1, column=1, padx=10, pady=5)
+        ttk.Label(self, text="Base pharmacie :").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
+        entry_pharmacy_db = ttk.Entry(self, textvariable=var_pharmacy_db, width=40)
+        entry_pharmacy_db.grid(row=1, column=1, padx=10, pady=5)
 
-        ttk.Label(self, text="Répertoire codes-barres :").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Base habillement :").grid(row=2, column=0, sticky=tk.W, padx=10, pady=5)
+        entry_clothing_db = ttk.Entry(self, textvariable=var_clothing_db, width=40)
+        entry_clothing_db.grid(row=2, column=1, padx=10, pady=5)
+
+        ttk.Label(self, text="Chemin base utilisateurs :").grid(row=3, column=0, sticky=tk.W, padx=10, pady=5)
+        entry_user_db = ttk.Entry(self, textvariable=var_user_db, width=40)
+        entry_user_db.grid(row=3, column=1, padx=10, pady=5)
+
+        ttk.Label(self, text="Répertoire codes-barres :").grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
         entry_barcode = ttk.Entry(self, textvariable=var_barcode, width=40)
-        entry_barcode.grid(row=2, column=1, padx=10, pady=5)
+        entry_barcode.grid(row=4, column=1, padx=10, pady=5)
 
         if not self._is_admin:
-            for entry in (entry_db, entry_user_db, entry_barcode):
+            for entry in (entry_db, entry_pharmacy_db, entry_clothing_db, entry_user_db, entry_barcode):
                 entry.configure(state='readonly')
 
-        ttk.Label(self, text="Index caméra :").grid(row=3, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Index caméra :").grid(row=5, column=0, sticky=tk.W, padx=10, pady=5)
         entry_camera = ttk.Entry(self, textvariable=var_camera, width=5)
-        entry_camera.grid(row=3, column=1, sticky=tk.W, padx=10, pady=5)
+        entry_camera.grid(row=5, column=1, sticky=tk.W, padx=10, pady=5)
 
-        ttk.Label(self, text="Index microphone (laisser vide pour défaut) :").grid(row=4, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Index microphone (laisser vide pour défaut) :").grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
         entry_microphone = ttk.Entry(self, textvariable=var_microphone, width=5)
-        entry_microphone.grid(row=4, column=1, sticky=tk.W, padx=10, pady=5)
+        entry_microphone.grid(row=6, column=1, sticky=tk.W, padx=10, pady=5)
 
-        ttk.Label(self, text="Thème :").grid(row=5, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Thème :").grid(row=7, column=0, sticky=tk.W, padx=10, pady=5)
         combo_theme = ttk.Combobox(
             self,
             textvariable=var_theme,
@@ -9197,9 +9239,9 @@ class ConfigDialog(tk.Toplevel):
             state='readonly',
             width=15,
         )
-        combo_theme.grid(row=5, column=1, padx=10, pady=5, sticky=tk.W)
+        combo_theme.grid(row=7, column=1, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Taille police :").grid(row=6, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Taille police :").grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
         combo_font = ttk.Combobox(
             self,
             textvariable=var_font_size,
@@ -9207,14 +9249,14 @@ class ConfigDialog(tk.Toplevel):
             state='readonly',
             width=15,
         )
-        combo_font.grid(row=6, column=1, padx=10, pady=5, sticky=tk.W)
+        combo_font.grid(row=8, column=1, padx=10, pady=5, sticky=tk.W)
 
         chk_voice = ttk.Checkbutton(self, text="Activer reconnaissance vocale", variable=var_enable_voice)
-        chk_voice.grid(row=7, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_voice.grid(row=9, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
         chk_tts = ttk.Checkbutton(self, text="Activer synthèse vocale", variable=var_enable_tts)
-        chk_tts.grid(row=8, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_tts.grid(row=10, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Type synthèse vocale :").grid(row=9, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Type synthèse vocale :").grid(row=11, column=0, sticky=tk.W, padx=10, pady=5)
         combo_tts = ttk.Combobox(
             self,
             textvariable=var_tts_type,
@@ -9222,14 +9264,14 @@ class ConfigDialog(tk.Toplevel):
             state='readonly',
             width=40,
         )
-        combo_tts.grid(row=9, column=1, padx=10, pady=5, sticky=tk.W)
+        combo_tts.grid(row=11, column=1, padx=10, pady=5, sticky=tk.W)
 
         chk_barcode = ttk.Checkbutton(self, text="Activer génération de codes-barres", variable=var_enable_barcode)
-        chk_barcode.grid(row=10, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_barcode.grid(row=12, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Seuil stock faible :").grid(row=11, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Seuil stock faible :").grid(row=13, column=0, sticky=tk.W, padx=10, pady=5)
         entry_threshold = ttk.Entry(self, textvariable=var_low_stock, width=5)
-        entry_threshold.grid(row=11, column=1, sticky=tk.W, padx=10, pady=5)
+        entry_threshold.grid(row=13, column=1, sticky=tk.W, padx=10, pady=5)
 
         def _update_tts_state(*_args):
             state = 'readonly' if var_enable_tts.get() else 'disabled'
@@ -9239,9 +9281,9 @@ class ConfigDialog(tk.Toplevel):
         _update_tts_state()
 
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=12, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=14, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="OK", command=lambda: self.on_ok(
-            var_db, var_user_db, var_barcode, var_camera, var_microphone,
+            var_db, var_pharmacy_db, var_clothing_db, var_user_db, var_barcode, var_camera, var_microphone,
             var_enable_voice, var_enable_tts, var_tts_type, var_enable_barcode, var_low_stock,
             var_theme, var_font_size,
         )).pack(side=tk.LEFT, padx=5)
@@ -9253,6 +9295,8 @@ class ConfigDialog(tk.Toplevel):
     def on_ok(
         self,
         var_db,
+        var_pharmacy_db,
+        var_clothing_db,
         var_user_db,
         var_barcode,
         var_camera,
@@ -9297,6 +9341,8 @@ class ConfigDialog(tk.Toplevel):
 
         self.result = {
             'db_path': var_db.get().strip(),
+            'pharmacy_db_path': var_pharmacy_db.get().strip(),
+            'clothing_db_path': var_clothing_db.get().strip(),
             'user_db_path': var_user_db.get().strip(),
             'barcode_dir': var_barcode.get().strip(),
             'camera_index': camera_index,
