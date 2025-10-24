@@ -535,6 +535,46 @@ if TK_AVAILABLE:
         make_icon,
     )
 
+    def _ideal_text_color(background: str, *, light: str = "#ffffff", dark: str = "#111827") -> str:
+        """Return a readable text color for the given hex background."""
+
+        color = background.lstrip("#")
+        if len(color) != 6:
+            return light
+        try:
+            r = int(color[0:2], 16) / 255.0
+            g = int(color[2:4], 16) / 255.0
+            b = int(color[4:6], 16) / 255.0
+        except ValueError:
+            return light
+        luminance = 0.2126 * r + 0.7152 * g + 0.0722 * b
+        return dark if luminance >= 0.55 else light
+
+
+    def _apply_listbox_palette(listbox: tk.Listbox, palette: dict[str, str], *, theme: str = "dark") -> None:
+        """Style a Tk listbox so its text stays readable with the active theme."""
+
+        background = palette.get("surface2", palette.get("surface", "#1f2937"))
+        foreground = palette.get("fg", "#e6e8eb" if theme == "dark" else "#111827")
+        selection_bg = palette.get("selection", "#2563eb")
+        selection_fg = _ideal_text_color(selection_bg)
+        border = palette.get("border", background)
+        listbox.configure(
+            background=background,
+            foreground=foreground,
+            selectbackground=selection_bg,
+            selectforeground=selection_fg,
+            highlightbackground=border,
+            highlightcolor=selection_bg,
+            insertbackground=foreground,
+            relief=tk.FLAT,
+            borderwidth=0,
+        )
+else:
+
+    def _apply_listbox_palette(*_args, **_kwargs):  # pragma: no cover - GUI fallback
+        return None
+
 try:
     import matplotlib
     if 'TK_AVAILABLE' in globals() and TK_AVAILABLE:
@@ -3848,6 +3888,10 @@ class ColumnManagerDialog(tk.Toplevel):
         self.listbox.grid(row=0, column=0, sticky="nsew")
         list_frame.columnconfigure(0, weight=1)
         list_frame.rowconfigure(0, weight=1)
+
+        palette = getattr(master, "current_palette", PALETTE)
+        theme_mode = getattr(master, "_theme_mode", "dark")
+        _apply_listbox_palette(self.listbox, palette, theme=theme_mode)
 
         scrollbar = ttk.Scrollbar(
             list_frame,
@@ -9237,6 +9281,9 @@ class CategoryDialog(tk.Toplevel):
         self.category_list = tk.Listbox(self, height=8, width=30)
         self.category_list.grid(row=0, column=0, columnspan=2, padx=10, pady=5, sticky=tk.N)
         self.category_list.bind('<<ListboxSelect>>', self.on_category_select)
+        palette = getattr(parent, "current_palette", PALETTE)
+        theme_mode = getattr(parent, "_theme_mode", "dark")
+        _apply_listbox_palette(self.category_list, palette, theme=theme_mode)
 
         ttk.Label(self, text="Nouvelle catégorie :").grid(row=1, column=0, sticky=tk.W, padx=10, pady=5)
         self.new_category_var = tk.StringVar()
@@ -9280,6 +9327,7 @@ class CategoryDialog(tk.Toplevel):
         )
         self.size_list = tk.Listbox(details_frame, height=6, width=28)
         self.size_list.grid(row=2, column=0, columnspan=3, padx=5, sticky=tk.W)
+        _apply_listbox_palette(self.size_list, palette, theme=theme_mode)
 
         size_controls = ttk.Frame(details_frame)
         size_controls.grid(row=3, column=0, columnspan=3, padx=5, pady=5, sticky=tk.W)
