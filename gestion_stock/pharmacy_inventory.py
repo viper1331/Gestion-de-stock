@@ -8,6 +8,7 @@ fonctionnalité dédiée à la pharmacie sans alourdir ``gestion_stock``.
 
 from __future__ import annotations
 
+import os
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -36,13 +37,25 @@ class PharmacyInventoryManager:
 
     def __init__(
         self,
-        db_path_getter: Callable[[], str],
-        lock,
+        inventory_db_path_getter: Optional[Callable[[], str]] = None,
+        items_db_path_getter: Optional[Callable[[], str]] = None,
         *,
+        db_path_getter: Optional[Callable[[], str]] = None,
+        lock,
         log_stock_movement: Callable,
         parse_user_date: Callable[[Optional[str]], Optional[str]],
     ) -> None:
-        self._db_path_getter = db_path_getter
+        if db_path_getter is not None:
+            if inventory_db_path_getter is None:
+                inventory_db_path_getter = db_path_getter
+            if items_db_path_getter is None:
+                items_db_path_getter = db_path_getter
+        if inventory_db_path_getter is None:
+            raise TypeError("inventory_db_path_getter ou db_path_getter doit être fourni")
+        if items_db_path_getter is None:
+            items_db_path_getter = inventory_db_path_getter
+        self._inventory_db_path_getter = inventory_db_path_getter
+        self._items_db_path_getter = items_db_path_getter
         self._lock = lock
         self._log_stock_movement = log_stock_movement
         self._parse_user_date = parse_user_date
@@ -62,11 +75,25 @@ class PharmacyInventoryManager:
             return parsed
         raise TypeError("expiration doit être une date, datetime, str ou None")
 
-    def _open_connection(self, db_path: Optional[str] = None) -> sqlite3.Connection:
-        path = db_path or self._db_path_getter()
+    def _open_inventory_connection(self, db_path: Optional[str] = None) -> sqlite3.Connection:
+        path = db_path or self._inventory_db_path_getter()
         return sqlite3.connect(path, timeout=30)
 
-    def _ensure_schema(self, cursor: sqlite3.Cursor) -> None:
+    def _open_items_connection(self) -> sqlite3.Connection:
+        return sqlite3.connect(self._items_db_path_getter(), timeout=30)
+
+    def _open_coupled_connections(
+        self, db_path: Optional[str] = None
+    ) -> tuple[sqlite3.Connection, sqlite3.Connection, bool]:
+        inventory_path = os.path.abspath(db_path or self._inventory_db_path_getter())
+        items_path = os.path.abspath(self._items_db_path_getter())
+        inv_conn = self._open_inventory_connection(db_path)
+        if inventory_path == items_path:
+            return inv_conn, inv_conn, True
+        items_conn = self._open_items_connection()
+        return inv_conn, items_conn, False
+
+    def _ensure_items_schema(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute("PRAGMA table_info(items)")
         existing_columns = {row[1] for row in cursor.fetchall()}
         if "is_medicine" not in existing_columns:
@@ -78,6 +105,7 @@ class PharmacyInventoryManager:
         if "storage_condition" not in existing_columns:
             cursor.execute("ALTER TABLE items ADD COLUMN storage_condition TEXT")
 
+    def _ensure_inventory_schema(self, cursor: sqlite3.Cursor) -> None:
         cursor.execute(
             """
             CREATE TABLE IF NOT EXISTS pharmacy_inventory (
@@ -91,8 +119,7 @@ class PharmacyInventoryManager:
                 note TEXT,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
-                UNIQUE(item_id, lot_number, expiration_date),
-                FOREIGN KEY(item_id) REFERENCES items(id)
+                UNIQUE(item_id, lot_number, expiration_date)
             )
             """
         )
@@ -142,16 +169,31 @@ class PharmacyInventoryManager:
         cursor: Optional[sqlite3.Cursor] = None,
     ) -> None:
         if cursor is not None:
-            self._ensure_schema(cursor)
+            self._ensure_items_schema(cursor)
+            with self._lock:
+                inv_conn = self._open_inventory_connection(db_path)
+                try:
+                    inv_cursor = inv_conn.cursor()
+                    self._ensure_inventory_schema(inv_cursor)
+                    inv_conn.commit()
+                finally:
+                    inv_conn.close()
             return
+
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cur = conn.cursor()
-                self._ensure_schema(cur)
-                conn.commit()
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_cursor if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_conn.commit()
+                if not shared:
+                    items_conn.commit()
             finally:
-                conn.close()
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
 
     def _ensure_category(self, cursor: sqlite3.Cursor, category: Optional[str]) -> Optional[int]:
         if not category:
@@ -244,13 +286,13 @@ class PharmacyInventoryManager:
         cursor.execute(
             """
             SELECT id, quantity
-            FROM pharmacy_inventory
-            WHERE item_id = ?
-              AND lot_number = ?
-              AND (
+              FROM pharmacy_inventory
+             WHERE item_id = ?
+               AND lot_number = ?
+               AND (
                     (expiration_date IS NULL AND ? IS NULL)
                  OR expiration_date = ?
-              )
+               )
             """,
             (item_id, lot_number, expiration, expiration),
         )
@@ -321,13 +363,15 @@ class PharmacyInventoryManager:
             raise ValueError("quantity doit être positif pour l'enregistrement d'un lot")
         normalized_expiration = self._normalize_expiration(expiration_date)
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                category_id = self._ensure_category(cursor, category)
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_cursor if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                category_id = self._ensure_category(items_cursor, category)
                 item_id = self._ensure_item(
-                    cursor,
+                    items_cursor,
                     name,
                     barcode,
                     category_id,
@@ -335,12 +379,12 @@ class PharmacyInventoryManager:
                     form,
                     storage_condition,
                 )
-                existing = self._match_batch(cursor, item_id, lot_number, normalized_expiration)
+                existing = self._match_batch(inv_cursor, item_id, lot_number, normalized_expiration)
                 now = datetime.now().isoformat()
                 if existing:
                     batch_id, previous_qty = existing
                     new_quantity = previous_qty + quantity
-                    cursor.execute(
+                    inv_cursor.execute(
                         """
                         UPDATE pharmacy_inventory
                            SET quantity = ?,
@@ -361,7 +405,7 @@ class PharmacyInventoryManager:
                     )
                     delta = new_quantity - previous_qty
                 else:
-                    cursor.execute(
+                    inv_cursor.execute(
                         """
                         INSERT INTO pharmacy_inventory (
                             item_id, lot_number, expiration_date, quantity,
@@ -381,20 +425,29 @@ class PharmacyInventoryManager:
                             now,
                         ),
                     )
-                    batch_id = cursor.lastrowid
+                    batch_id = inv_cursor.lastrowid
                     delta = quantity
                     new_quantity = quantity
                 item_state = self._apply_item_quantity_change(
-                    cursor,
+                    items_cursor,
                     item_id,
                     delta,
                     operator,
                     source,
                     note,
                 )
-                conn.commit()
+                inv_conn.commit()
+                if not shared:
+                    items_conn.commit()
+            except Exception:
+                inv_conn.rollback()
+                if not shared:
+                    items_conn.rollback()
+                raise
             finally:
-                conn.close()
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
         return {
             "batch_id": batch_id,
             "item_id": item_id,
@@ -416,11 +469,13 @@ class PharmacyInventoryManager:
         db_path: Optional[str] = None,
     ) -> Optional[dict]:
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                cursor.execute(
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_cursor if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_cursor.execute(
                     """
                     SELECT item_id, quantity, lot_number, expiration_date
                       FROM pharmacy_inventory
@@ -428,7 +483,7 @@ class PharmacyInventoryManager:
                     """,
                     (batch_id,),
                 )
-                row = cursor.fetchone()
+                row = inv_cursor.fetchone()
                 if not row:
                     return None
                 item_id, old_qty, lot_number, expiration = row
@@ -436,7 +491,7 @@ class PharmacyInventoryManager:
                 if new_qty < 0:
                     new_qty = 0
                 now = datetime.now().isoformat()
-                cursor.execute(
+                inv_cursor.execute(
                     """
                     UPDATE pharmacy_inventory
                        SET quantity = ?,
@@ -447,16 +502,25 @@ class PharmacyInventoryManager:
                     (new_qty, note, now, batch_id),
                 )
                 item_state = self._apply_item_quantity_change(
-                    cursor,
+                    items_cursor,
                     item_id,
                     new_qty - old_qty,
                     operator,
                     source,
                     note,
                 )
-                conn.commit()
+                inv_conn.commit()
+                if not shared:
+                    items_conn.commit()
+            except Exception:
+                inv_conn.rollback()
+                if not shared:
+                    items_conn.rollback()
+                raise
             finally:
-                conn.close()
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
         return {
             "batch_id": batch_id,
             "item_id": item_id,
@@ -477,30 +541,33 @@ class PharmacyInventoryManager:
         cutoff = datetime.now().date() + timedelta(days=max(within_days, 0))
         batches: list[PharmacyBatch] = []
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                cursor.execute(
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_conn.cursor() if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_cursor.execute(
                     """
-                    SELECT
-                        b.id,
-                        b.item_id,
-                        i.name,
-                        b.lot_number,
-                        b.expiration_date,
-                        b.quantity,
-                        i.dosage,
-                        i.medication_form,
-                        COALESCE(b.storage_condition, i.storage_condition),
-                        b.prescription_required
-                      FROM pharmacy_inventory AS b
-                      JOIN items AS i ON i.id = b.item_id
-                     WHERE b.expiration_date IS NOT NULL
-                    """,
+                    SELECT id, item_id, lot_number, expiration_date, quantity,
+                           storage_condition, prescription_required
+                      FROM pharmacy_inventory
+                     WHERE expiration_date IS NOT NULL
+                    """
                 )
-                for row in cursor.fetchall():
-                    expiration_str = row[4]
+                rows = inv_cursor.fetchall()
+                item_ids = {row[1] for row in rows}
+                items_data: dict[int, tuple[str, Optional[str], Optional[str], Optional[str]]] = {}
+                if item_ids:
+                    placeholders = ",".join("?" for _ in item_ids)
+                    items_cursor.execute(
+                        f"SELECT id, name, dosage, medication_form, storage_condition FROM items WHERE id IN ({placeholders})",
+                        tuple(item_ids),
+                    )
+                    for item_id, name, dosage, form, storage in items_cursor.fetchall():
+                        items_data[item_id] = (name, dosage, form, storage)
+                for row in rows:
+                    batch_id, item_id, lot_number, expiration_str, quantity, storage_condition, prescription_required = row
                     try:
                         expiration_date = (
                             datetime.fromisoformat(expiration_str).date()
@@ -508,31 +575,33 @@ class PharmacyInventoryManager:
                             else None
                         )
                     except ValueError:
-                        # Si la date est mal formée, elle est ignorée pour la comparaison
                         expiration_date = None
                     if expiration_date is None:
                         continue
                     if expiration_date <= cutoff:
-                        quantity = row[5] or 0
+                        quantity = quantity or 0
                         if not include_empty and quantity <= 0:
                             continue
+                        item_name, dosage, form, item_storage = items_data.get(item_id, ("Inconnu", None, None, None))
                         batches.append(
                             PharmacyBatch(
-                                id=row[0],
-                                item_id=row[1],
-                                name=row[2],
-                                lot_number=row[3],
-                                expiration_date=row[4],
+                                id=batch_id,
+                                item_id=item_id,
+                                name=item_name,
+                                lot_number=lot_number,
+                                expiration_date=expiration_str,
                                 quantity=quantity,
-                                dosage=row[6],
-                                form=row[7],
-                                storage_condition=row[8],
-                                prescription_required=bool(row[9]),
+                                dosage=dosage,
+                                form=form,
+                                storage_condition=storage_condition or item_storage,
+                                prescription_required=bool(prescription_required),
                                 days_left=(expiration_date - datetime.now().date()).days,
                             )
                         )
             finally:
-                conn.close()
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
         return batches
 
     def summarize_stock(self, *, db_path: Optional[str] = None) -> dict:
@@ -543,43 +612,45 @@ class PharmacyInventoryManager:
             "by_prescription_requirement": {"required": 0, "not_required": 0},
         }
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                cursor.execute(
-                    "SELECT COUNT(*), COALESCE(SUM(quantity), 0) FROM pharmacy_inventory"
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_conn.cursor() if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_cursor.execute(
+                    "SELECT id, item_id, quantity, prescription_required FROM pharmacy_inventory"
                 )
-                row = cursor.fetchone()
-                if row:
-                    summary["total_batches"] = row[0] or 0
-                    summary["total_quantity"] = row[1] or 0
-
-                cursor.execute(
-                    """
-                    SELECT COALESCE(items.medication_form, ''),
-                           COALESCE(SUM(pharmacy_inventory.quantity), 0)
-                      FROM pharmacy_inventory
-                      JOIN items ON items.id = pharmacy_inventory.item_id
-                  GROUP BY items.medication_form
-                    """
-                )
-                for form, qty in cursor.fetchall():
-                    summary["by_form"][form or "Autres"] = qty or 0
-
-                cursor.execute(
-                    """
-                    SELECT prescription_required, COALESCE(SUM(quantity), 0)
-                      FROM pharmacy_inventory
-                  GROUP BY prescription_required
-                    """
-                )
-                for required, qty in cursor.fetchall():
-                    key = "required" if required else "not_required"
-                    summary["by_prescription_requirement"][key] = qty or 0
+                rows = inv_cursor.fetchall()
+                summary["total_batches"] = len(rows)
+                total_quantity = 0
+                prescription_totals = {True: 0, False: 0}
+                item_ids = {row[1] for row in rows}
+                if item_ids:
+                    placeholders = ",".join("?" for _ in item_ids)
+                    items_cursor.execute(
+                        f"SELECT id, medication_form FROM items WHERE id IN ({placeholders})",
+                        tuple(item_ids),
+                    )
+                    form_map = {item_id: form for item_id, form in items_cursor.fetchall()}
+                else:
+                    form_map = {}
+                form_totals: dict[str, int] = {}
+                for _batch_id, item_id, qty, prescription_required in rows:
+                    quantity = int(qty or 0)
+                    total_quantity += quantity
+                    form_key = form_map.get(item_id) or "Autres"
+                    form_totals[form_key] = form_totals.get(form_key, 0) + quantity
+                    prescription_totals[bool(prescription_required)] += quantity
+                summary["total_quantity"] = total_quantity
+                summary["by_form"].update(form_totals)
+                summary["by_prescription_requirement"]["required"] = prescription_totals[True]
+                summary["by_prescription_requirement"]["not_required"] = prescription_totals[False]
             finally:
-                conn.close()
-                return summary
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
+        return summary
 
     def get_batch(
         self,
@@ -588,53 +659,67 @@ class PharmacyInventoryManager:
         db_path: Optional[str] = None,
     ) -> Optional[dict]:
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                cursor.execute(
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_conn.cursor() if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_cursor.execute(
                     """
-                    SELECT
-                        b.id,
-                        b.item_id,
-                        i.name,
-                        b.lot_number,
-                        b.expiration_date,
-                        b.quantity,
-                        i.barcode,
-                        c.name,
-                        i.dosage,
-                        i.medication_form,
-                        COALESCE(b.storage_condition, i.storage_condition),
-                        b.prescription_required,
-                        b.note
-                    FROM pharmacy_inventory AS b
-                    JOIN items AS i ON i.id = b.item_id
-                    LEFT JOIN categories AS c ON c.id = i.category_id
-                    WHERE b.id = ?
+                    SELECT id, item_id, lot_number, expiration_date, quantity,
+                           storage_condition, prescription_required, note
+                      FROM pharmacy_inventory
+                     WHERE id = ?
                     """,
                     (batch_id,),
                 )
-                row = cursor.fetchone()
+                row = inv_cursor.fetchone()
                 if row is None:
                     return None
+                batch_id, item_id, lot_number, expiration_date, quantity, storage_condition, prescription_required, note = row
+                items_cursor.execute(
+                    "SELECT name, barcode, category_id, dosage, medication_form, storage_condition FROM items WHERE id = ?",
+                    (item_id,),
+                )
+                item_row = items_cursor.fetchone()
+                if item_row is None:
+                    item_name = "Inconnu"
+                    barcode = None
+                    category_name = None
+                    dosage = None
+                    form = None
+                    item_storage = None
+                else:
+                    item_name, barcode, category_id, dosage, form, item_storage = item_row
+                    if category_id is not None:
+                        items_cursor.execute(
+                            "SELECT name FROM categories WHERE id = ?",
+                            (category_id,),
+                        )
+                        category_row = items_cursor.fetchone()
+                        category_name = category_row[0] if category_row else None
+                    else:
+                        category_name = None
                 return {
-                    "batch_id": row[0],
-                    "item_id": row[1],
-                    "name": row[2],
-                    "lot_number": row[3],
-                    "expiration_date": row[4],
-                    "quantity": row[5],
-                    "barcode": row[6],
-                    "category": row[7],
-                    "dosage": row[8],
-                    "form": row[9],
-                    "storage_condition": row[10],
-                    "prescription_required": bool(row[11]),
-                    "note": row[12],
+                    "batch_id": batch_id,
+                    "item_id": item_id,
+                    "name": item_name,
+                    "lot_number": lot_number,
+                    "expiration_date": expiration_date,
+                    "quantity": quantity,
+                    "barcode": barcode,
+                    "category": category_name,
+                    "dosage": dosage,
+                    "form": form,
+                    "storage_condition": storage_condition or item_storage,
+                    "prescription_required": bool(prescription_required),
+                    "note": note,
                 }
             finally:
-                conn.close()
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
 
     def update_batch(
         self,
@@ -659,21 +744,23 @@ class PharmacyInventoryManager:
             raise ValueError("La quantité doit être positive ou nulle.")
         normalized_expiration = self._normalize_expiration(expiration_date)
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                cursor.execute(
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_cursor if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_cursor.execute(
                     "SELECT item_id, quantity FROM pharmacy_inventory WHERE id = ?",
                     (batch_id,),
                 )
-                row = cursor.fetchone()
+                row = inv_cursor.fetchone()
                 if row is None:
                     return None
                 item_id, previous_qty = row
-                category_id = self._ensure_category(cursor, category)
+                category_id = self._ensure_category(items_cursor, category)
                 now = datetime.now().isoformat()
-                cursor.execute(
+                items_cursor.execute(
                     """
                     UPDATE items
                        SET name = ?,
@@ -697,7 +784,7 @@ class PharmacyInventoryManager:
                         item_id,
                     ),
                 )
-                cursor.execute(
+                inv_cursor.execute(
                     """
                     UPDATE pharmacy_inventory
                        SET lot_number = ?,
@@ -722,14 +809,16 @@ class PharmacyInventoryManager:
                 )
                 delta = quantity - previous_qty
                 item_state = self._apply_item_quantity_change(
-                    cursor,
+                    items_cursor,
                     item_id,
                     delta,
                     operator,
                     source,
                     note,
                 )
-                conn.commit()
+                inv_conn.commit()
+                if not shared:
+                    items_conn.commit()
                 return {
                     "batch_id": batch_id,
                     "item_id": item_id,
@@ -739,8 +828,15 @@ class PharmacyInventoryManager:
                     "item_quantity": item_state[0],
                     "change": item_state[1],
                 }
+            except Exception:
+                inv_conn.rollback()
+                if not shared:
+                    items_conn.rollback()
+                raise
             finally:
-                conn.close()
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
 
     def delete_batch(
         self,
@@ -752,35 +848,46 @@ class PharmacyInventoryManager:
         db_path: Optional[str] = None,
     ) -> bool:
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                cursor.execute(
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_cursor if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_cursor.execute(
                     "SELECT item_id, quantity FROM pharmacy_inventory WHERE id = ?",
                     (batch_id,),
                 )
-                row = cursor.fetchone()
+                row = inv_cursor.fetchone()
                 if row is None:
                     return False
                 item_id, quantity = row
-                cursor.execute(
+                inv_cursor.execute(
                     "DELETE FROM pharmacy_inventory WHERE id = ?",
                     (batch_id,),
                 )
                 if quantity:
                     self._apply_item_quantity_change(
-                        cursor,
+                        items_cursor,
                         item_id,
                         -int(quantity),
                         operator,
                         source,
                         note,
                     )
-                conn.commit()
+                inv_conn.commit()
+                if not shared:
+                    items_conn.commit()
                 return True
+            except Exception:
+                inv_conn.rollback()
+                if not shared:
+                    items_conn.rollback()
+                raise
             finally:
-                conn.close()
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
 
     def list_batches(
         self,
@@ -792,76 +899,104 @@ class PharmacyInventoryManager:
         """Retourne l'ensemble des lots en respectant le filtre fourni."""
 
         normalized_search = search.strip().lower() if search else None
-        wildcard = f"%{normalized_search}%" if normalized_search else None
-        query = [
-            "SELECT",
-            "    b.id,",
-            "    b.item_id,",
-            "    i.name,",
-            "    b.lot_number,",
-            "    b.expiration_date,",
-            "    b.quantity,",
-            "    i.dosage,",
-            "    i.medication_form,",
-            "    COALESCE(b.storage_condition, i.storage_condition),",
-            "    b.prescription_required",
-            "  FROM pharmacy_inventory AS b",
-            "  JOIN items AS i ON i.id = b.item_id",
-        ]
-        conditions: list[str] = []
-        params: list[object] = []
-        if normalized_search:
-            conditions.append(
-                "(LOWER(i.name) LIKE ? OR LOWER(b.lot_number) LIKE ? OR LOWER(COALESCE(i.barcode, '')) LIKE ?)"
-            )
-            params.extend([wildcard, wildcard, wildcard])
-        if not include_zero:
-            conditions.append("b.quantity > 0")
-        if conditions:
-            query.append(" WHERE ")
-            query.append(" AND ".join(conditions))
-        query.append(
-            " ORDER BY i.name COLLATE NOCASE, b.expiration_date IS NULL, b.expiration_date"
-        )
-        sql = "".join(query)
-
         batches: list[PharmacyBatch] = []
         with self._lock:
-            conn = self._open_connection(db_path)
+            inv_conn, items_conn, shared = self._open_coupled_connections(db_path)
             try:
-                cursor = conn.cursor()
-                self._ensure_schema(cursor)
-                cursor.execute(sql, tuple(params))
-                rows = cursor.fetchall()
-            finally:
-                conn.close()
-
-        for row in rows:
-            expiration_str = row[4]
-            days_left: Optional[int]
-            if expiration_str:
-                try:
-                    expiration_date = datetime.fromisoformat(expiration_str).date()
-                    days_left = (expiration_date - datetime.now().date()).days
-                except ValueError:
-                    days_left = None
-            else:
-                days_left = None
-            batches.append(
-                PharmacyBatch(
-                    id=row[0],
-                    item_id=row[1],
-                    name=row[2],
-                    lot_number=row[3],
-                    expiration_date=row[4],
-                    quantity=row[5] or 0,
-                    dosage=row[6],
-                    form=row[7],
-                    storage_condition=row[8],
-                    prescription_required=bool(row[9]),
-                    days_left=days_left,
+                inv_cursor = inv_conn.cursor()
+                items_cursor = inv_conn.cursor() if shared else items_conn.cursor()
+                self._ensure_inventory_schema(inv_cursor)
+                self._ensure_items_schema(items_cursor)
+                inv_cursor.execute(
+                    """
+                    SELECT id, item_id, lot_number, expiration_date, quantity,
+                           storage_condition, prescription_required
+                      FROM pharmacy_inventory
+                    """
                 )
-            )
+                rows = inv_cursor.fetchall()
+                item_ids = {row[1] for row in rows}
+                items_data: dict[int, tuple[str, Optional[str], Optional[str], Optional[str], Optional[str]]] = {}
+                if item_ids:
+                    placeholders = ",".join("?" for _ in item_ids)
+                    items_cursor.execute(
+                        f"SELECT id, name, dosage, medication_form, storage_condition, barcode FROM items WHERE id IN ({placeholders})",
+                        tuple(item_ids),
+                    )
+                    for item_id, name, dosage, form, storage, barcode_value in items_cursor.fetchall():
+                        items_data[item_id] = (name, dosage, form, storage, barcode_value)
+                filtered_rows = []
+                for batch_id, item_id, lot_number, expiration_str, quantity, storage_condition, prescription_required in rows:
+                    if not include_zero and int(quantity or 0) <= 0:
+                        continue
+                    item_info = items_data.get(item_id)
+                    if item_info is None:
+                        item_name = "Inconnu"
+                        dosage = None
+                        form = None
+                        item_storage = None
+                        barcode_value = None
+                    else:
+                        item_name, dosage, form, item_storage, barcode_value = item_info
+                    if normalized_search:
+                        target_values = [
+                            item_name.lower(),
+                            (lot_number or "").lower(),
+                            (barcode_value or "").lower(),
+                        ]
+                        if not any(normalized_search in value for value in target_values):
+                            continue
+                    filtered_rows.append(
+                        (
+                            batch_id,
+                            item_id,
+                            item_name,
+                            lot_number,
+                            expiration_str,
+                            int(quantity or 0),
+                            dosage,
+                            form,
+                            storage_condition or item_storage,
+                            bool(prescription_required),
+                        )
+                    )
+                filtered_rows.sort(
+                    key=lambda entry: (
+                        entry[2].lower(),
+                        entry[4] is None,
+                        entry[4] or "",
+                    )
+                )
+                for row in filtered_rows:
+                    expiration_str = row[4]
+                    days_left: Optional[int]
+                    if expiration_str:
+                        try:
+                            expiration_date = datetime.fromisoformat(expiration_str).date()
+                            days_left = (expiration_date - datetime.now().date()).days
+                        except ValueError:
+                            days_left = None
+                    else:
+                        days_left = None
+                    batches.append(
+                        PharmacyBatch(
+                            id=row[0],
+                            item_id=row[1],
+                            name=row[2],
+                            lot_number=row[3],
+                            expiration_date=row[4],
+                            quantity=row[5],
+                            dosage=row[6],
+                            form=row[7],
+                            storage_condition=row[8],
+                            prescription_required=row[9],
+                            days_left=days_left,
+                        )
+                        )
+            finally:
+                inv_conn.close()
+                if not shared:
+                    items_conn.close()
         return batches
 
 
