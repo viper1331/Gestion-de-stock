@@ -1698,7 +1698,13 @@ def fetch_items_lookup(*, only_clothing: bool = False):
         if matches_clothing_inventory or matches_categories or matches_keywords:
             filtered.append((item_id, name, unit_cost, reorder_point))
 
-    return filtered
+    if filtered:
+        return filtered
+
+    # Aucun article n'a été identifié comme équipement textile. Dans ce cas on
+    # retourne la liste complète plutôt qu'une liste vide afin d'éviter une
+    # boîte de dialogue sans choix possible.
+    return [row[:4] for row in rows]
 
 
 def get_item_name(item_id):
