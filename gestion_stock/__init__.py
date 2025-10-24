@@ -21,6 +21,7 @@ import zipfile
 import hashlib
 import json
 import logging
+import re
 import unicodedata
 from typing import Any, Callable, Dict, Iterable, Optional
 import importlib.util
@@ -193,6 +194,7 @@ default_config = {
     'clothing_db_path': 'clothing_stock.db',
     'theme': 'dark',
     'font_size': '10',
+    'text_color': '',
 }
 if not os.path.exists(CONFIG_FILE):
     config['Settings'] = default_config
@@ -277,6 +279,7 @@ DEFAULT_LOW_STOCK_THRESHOLD = config['Settings'].getint('low_stock_threshold', f
 LAST_USER = config['Settings'].get('last_user', '')
 ENABLE_PHARMACY_MODULE = config['Settings'].getboolean('enable_pharmacy_module', fallback=True)
 ENABLE_CLOTHING_MODULE = config['Settings'].getboolean('enable_clothing_module', fallback=True)
+TEXT_COLOR_PREF = config['Settings'].get('text_color', '').strip()
 
 AVAILABLE_MODULES: tuple[str, ...] = ("pharmacy", "clothing")
 MODULE_LABELS: dict[str, str] = {
@@ -532,7 +535,7 @@ else:
 
 try:
     import tkinter as tk
-    from tkinter import ttk, filedialog, messagebox, simpledialog, PhotoImage
+    from tkinter import ttk, filedialog, messagebox, simpledialog, PhotoImage, colorchooser
     TK_AVAILABLE = True
 except ImportError:
     TK_AVAILABLE = False
@@ -4357,7 +4360,13 @@ class StockApp(tk.Tk):
             self._font_size = config.getint('Settings', 'font_size')
         except Exception:
             self._font_size = 10
-        self.current_palette = apply_theme(self, self._theme_mode, font_size=self._font_size)
+        self._text_color = config.get('Settings', 'text_color', fallback='').strip()
+        self.current_palette = apply_theme(
+            self,
+            self._theme_mode,
+            font_size=self._font_size,
+            custom_text_color=self._text_color or None,
+        )
         warning_icon = make_icon("warning.png", size=18)
         self._status_icons: dict[str, Optional[PhotoImage]] = {"warning": warning_icon}
         self.current_user = current_user
@@ -7612,7 +7621,7 @@ class StockApp(tk.Tk):
     def open_config_dialog(self):
         dialog = ConfigDialog(self)
         if dialog.result:
-            global CAMERA_INDEX, MICROPHONE_INDEX, TTS_TYPE, ACTIVE_TTS_DRIVER
+            global CAMERA_INDEX, MICROPHONE_INDEX, TTS_TYPE, ACTIVE_TTS_DRIVER, TEXT_COLOR_PREF
             config['Settings']['db_path'] = dialog.result['db_path']
             config['Settings']['pharmacy_db_path'] = dialog.result['pharmacy_db_path']
             config['Settings']['clothing_db_path'] = dialog.result['clothing_db_path']
@@ -7628,6 +7637,7 @@ class StockApp(tk.Tk):
             config['Settings']['low_stock_threshold'] = str(dialog.result['low_stock_threshold'])
             config['Settings']['theme'] = dialog.result['theme']
             config['Settings']['font_size'] = str(dialog.result['font_size'])
+            config['Settings']['text_color'] = dialog.result['text_color']
             with open(CONFIG_FILE, 'w', encoding='utf-8') as f:
                 config.write(f)
             CAMERA_INDEX = dialog.result['camera_index']
@@ -7643,7 +7653,14 @@ class StockApp(tk.Tk):
                 self._font_size = int(dialog.result['font_size'])
             except (TypeError, ValueError):
                 self._font_size = 10
-            self.current_palette = apply_theme(self, self._theme_mode, font_size=self._font_size)
+            TEXT_COLOR_PREF = dialog.result['text_color']
+            self._text_color = dialog.result['text_color']
+            self.current_palette = apply_theme(
+                self,
+                self._theme_mode,
+                font_size=self._font_size,
+                custom_text_color=self._text_color or None,
+            )
             self._apply_tree_tag_palette()
             self.load_inventory()
             messagebox.showinfo("Paramètres", "Configuration enregistrée. Redémarrez pour certaines options.")
@@ -9417,6 +9434,7 @@ class ConfigDialog(tk.Toplevel):
         var_low_stock = tk.IntVar(value=DEFAULT_LOW_STOCK_THRESHOLD)
         var_theme = tk.StringVar(value=config.get('Settings', 'theme', fallback='dark'))
         var_font_size = tk.StringVar(value=str(config.getint('Settings', 'font_size', fallback=10)))
+        var_text_color = tk.StringVar(value=TEXT_COLOR_PREF)
         tts_choices = {value: DEFAULT_TTS_TYPE_LABELS.get(value, value) for value in AVAILABLE_TTS_TYPES}
         if TTS_TYPE not in tts_choices:
             tts_choices[TTS_TYPE] = DEFAULT_TTS_TYPE_LABELS.get(TTS_TYPE, f"Personnalisé ({TTS_TYPE})")
@@ -9466,7 +9484,26 @@ class ConfigDialog(tk.Toplevel):
         )
         combo_theme.grid(row=7, column=1, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Taille police :").grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Couleur du texte :").grid(row=8, column=0, sticky=tk.W, padx=10, pady=5)
+        color_frame = ttk.Frame(self)
+        color_frame.grid(row=8, column=1, padx=10, pady=5, sticky=tk.W)
+
+        entry_text_color = ttk.Entry(color_frame, textvariable=var_text_color, width=15)
+        entry_text_color.pack(side=tk.LEFT, padx=(0, 5))
+
+        def choose_text_color() -> None:
+            initial = var_text_color.get().strip()
+            if not initial:
+                palette = getattr(parent, "current_palette", {}) if parent else {}
+                initial = palette.get("fg", "#ffffff" if var_theme.get() == "dark" else "#111827")
+            color = colorchooser.askcolor(initialcolor=initial or None, parent=self)
+            if color and color[1]:
+                var_text_color.set(color[1].lower())
+
+        ttk.Button(color_frame, text="Choisir...", command=choose_text_color).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(color_frame, text="Réinitialiser", command=lambda: var_text_color.set('')).pack(side=tk.LEFT)
+
+        ttk.Label(self, text="Taille police :").grid(row=9, column=0, sticky=tk.W, padx=10, pady=5)
         combo_font = ttk.Combobox(
             self,
             textvariable=var_font_size,
@@ -9474,14 +9511,14 @@ class ConfigDialog(tk.Toplevel):
             state='readonly',
             width=15,
         )
-        combo_font.grid(row=8, column=1, padx=10, pady=5, sticky=tk.W)
+        combo_font.grid(row=9, column=1, padx=10, pady=5, sticky=tk.W)
 
         chk_voice = ttk.Checkbutton(self, text="Activer reconnaissance vocale", variable=var_enable_voice)
-        chk_voice.grid(row=9, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_voice.grid(row=10, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
         chk_tts = ttk.Checkbutton(self, text="Activer synthèse vocale", variable=var_enable_tts)
-        chk_tts.grid(row=10, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_tts.grid(row=11, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Type synthèse vocale :").grid(row=11, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Type synthèse vocale :").grid(row=12, column=0, sticky=tk.W, padx=10, pady=5)
         combo_tts = ttk.Combobox(
             self,
             textvariable=var_tts_type,
@@ -9489,14 +9526,14 @@ class ConfigDialog(tk.Toplevel):
             state='readonly',
             width=40,
         )
-        combo_tts.grid(row=11, column=1, padx=10, pady=5, sticky=tk.W)
+        combo_tts.grid(row=12, column=1, padx=10, pady=5, sticky=tk.W)
 
         chk_barcode = ttk.Checkbutton(self, text="Activer génération de codes-barres", variable=var_enable_barcode)
-        chk_barcode.grid(row=12, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
+        chk_barcode.grid(row=13, column=0, columnspan=2, padx=10, pady=5, sticky=tk.W)
 
-        ttk.Label(self, text="Seuil stock faible :").grid(row=13, column=0, sticky=tk.W, padx=10, pady=5)
+        ttk.Label(self, text="Seuil stock faible :").grid(row=14, column=0, sticky=tk.W, padx=10, pady=5)
         entry_threshold = ttk.Entry(self, textvariable=var_low_stock, width=5)
-        entry_threshold.grid(row=13, column=1, sticky=tk.W, padx=10, pady=5)
+        entry_threshold.grid(row=14, column=1, sticky=tk.W, padx=10, pady=5)
 
         def _update_tts_state(*_args):
             state = 'readonly' if var_enable_tts.get() else 'disabled'
@@ -9506,11 +9543,11 @@ class ConfigDialog(tk.Toplevel):
         _update_tts_state()
 
         btn_frame = ttk.Frame(self)
-        btn_frame.grid(row=14, column=0, columnspan=2, pady=10)
+        btn_frame.grid(row=15, column=0, columnspan=2, pady=10)
         ttk.Button(btn_frame, text="OK", command=lambda: self.on_ok(
             var_db, var_pharmacy_db, var_clothing_db, var_user_db, var_barcode, var_camera, var_microphone,
             var_enable_voice, var_enable_tts, var_tts_type, var_enable_barcode, var_low_stock,
-            var_theme, var_font_size,
+            var_theme, var_font_size, var_text_color,
         )).pack(side=tk.LEFT, padx=5)
         ttk.Button(btn_frame, text="Annuler", command=self.on_cancel).pack(side=tk.LEFT, padx=5)
 
@@ -9533,6 +9570,7 @@ class ConfigDialog(tk.Toplevel):
         var_low_stock,
         var_theme,
         var_font_size,
+        var_text_color,
     ):
         camera_raw = var_camera.get().strip()
         microphone_raw = var_microphone.get().strip()
@@ -9564,6 +9602,16 @@ class ConfigDialog(tk.Toplevel):
             messagebox.showerror("Configuration", "Taille de police invalide.")
             return
 
+        text_color_value = var_text_color.get().strip()
+        if text_color_value:
+            if not re.fullmatch(r"#[0-9a-fA-F]{6}", text_color_value):
+                messagebox.showerror(
+                    "Configuration",
+                    "Couleur de texte invalide. Utilisez un code hexadécimal comme #RRGGBB.",
+                )
+                return
+            text_color_value = text_color_value.lower()
+
         self.result = {
             'db_path': var_db.get().strip(),
             'pharmacy_db_path': var_pharmacy_db.get().strip(),
@@ -9579,6 +9627,7 @@ class ConfigDialog(tk.Toplevel):
             'low_stock_threshold': var_low_stock.get(),
             'theme': theme_value,
             'font_size': font_value,
+            'text_color': text_color_value,
         }
         if not self._is_admin:
             for key, value in self._initial_paths.items():
@@ -10341,7 +10390,13 @@ def main(argv=None):
         font_pref = config.getint('Settings', 'font_size')
     except Exception:
         font_pref = 10
-    apply_theme(root, theme_mode, font_size=font_pref)
+    text_color_pref = config.get('Settings', 'text_color', fallback='').strip()
+    apply_theme(
+        root,
+        theme_mode,
+        font_size=font_pref,
+        custom_text_color=text_color_pref or None,
+    )
     root.withdraw()
     login = LoginDialog(root)
     startup_listener.record("Boîte de dialogue de connexion affichée.", level=logging.DEBUG)
