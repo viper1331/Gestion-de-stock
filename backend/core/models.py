@@ -87,13 +87,13 @@ class ItemCreate(BaseModel):
 
 
 class ItemUpdate(BaseModel):
-    name: Optional[str]
-    sku: Optional[str]
-    category_id: Optional[int]
-    size: Optional[str]
-    quantity: Optional[int]
-    low_stock_threshold: Optional[int]
-    supplier_id: Optional[int]
+    name: Optional[str] = None
+    sku: Optional[str] = None
+    category_id: Optional[int] = None
+    size: Optional[str] = None
+    quantity: Optional[int] = None
+    low_stock_threshold: Optional[int] = None
+    supplier_id: Optional[int] = None
 
 
 class Movement(BaseModel):
