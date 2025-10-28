@@ -18,6 +18,8 @@ client = TestClient(app)
 def setup_module(_: object) -> None:
     services.ensure_database_ready()
     with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM purchase_order_items")
+        conn.execute("DELETE FROM purchase_orders")
         conn.execute("DELETE FROM dotations")
         conn.execute("DELETE FROM collaborators")
         conn.execute("DELETE FROM suppliers")
@@ -161,6 +163,135 @@ def test_record_movement_unknown_item_returns_404() -> None:
         headers=headers,
     )
     assert response.status_code == 404
+
+
+def test_low_stock_triggers_auto_purchase_order() -> None:
+    login = client.post(
+        "/auth/login",
+        json={"username": "admin", "password": "admin123", "remember_me": False},
+    )
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    supplier_resp = client.post(
+        "/suppliers/",
+        json={"name": f"Supplier-{uuid4().hex[:6]}"},
+        headers=headers,
+    )
+    assert supplier_resp.status_code == 201, supplier_resp.text
+    supplier_id = supplier_resp.json()["id"]
+
+    sku = f"SKU-{uuid4().hex[:8]}"
+    create_item_resp = client.post(
+        "/items/",
+        json={
+            "name": "Gants",
+            "sku": sku,
+            "quantity": 5,
+            "low_stock_threshold": 10,
+            "supplier_id": supplier_id,
+        },
+        headers=headers,
+    )
+    assert create_item_resp.status_code == 201, create_item_resp.text
+    item_id = create_item_resp.json()["id"]
+
+    movement = client.post(
+        f"/items/{item_id}/movements",
+        json={"delta": -4, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert movement.status_code == 204, movement.text
+
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT po.id, po.auto_created, po.status, poi.quantity_ordered
+            FROM purchase_orders AS po
+            JOIN purchase_order_items AS poi ON poi.purchase_order_id = po.id
+            WHERE poi.item_id = ?
+            """,
+            (item_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    auto_po = rows[0]
+    assert auto_po["auto_created"] == 1
+    assert auto_po["status"].upper() == "PENDING"
+    assert auto_po["quantity_ordered"] == 9
+
+    second_movement = client.post(
+        f"/items/{item_id}/movements",
+        json={"delta": -1, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert second_movement.status_code == 204, second_movement.text
+
+    with db.get_stock_connection() as conn:
+        rows_after = conn.execute(
+            """
+            SELECT po.id, poi.quantity_ordered
+            FROM purchase_orders AS po
+            JOIN purchase_order_items AS poi ON poi.purchase_order_id = po.id
+            WHERE poi.item_id = ?
+            """,
+            (item_id,),
+        ).fetchall()
+    assert len(rows_after) == 1
+    order_id = rows_after[0]["id"]
+    assert rows_after[0]["quantity_ordered"] == 10
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM purchase_order_items WHERE purchase_order_id = ?", (order_id,))
+        conn.execute("DELETE FROM purchase_orders WHERE id = ?", (order_id,))
+        conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        conn.commit()
+
+
+def test_no_auto_purchase_order_without_supplier() -> None:
+    login = client.post(
+        "/auth/login",
+        json={"username": "admin", "password": "admin123", "remember_me": False},
+    )
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    sku = f"SKU-{uuid4().hex[:8]}"
+    create_item_resp = client.post(
+        "/items/",
+        json={
+            "name": "Masques",
+            "sku": sku,
+            "quantity": 2,
+            "low_stock_threshold": 5,
+        },
+        headers=headers,
+    )
+    assert create_item_resp.status_code == 201, create_item_resp.text
+    item_id = create_item_resp.json()["id"]
+
+    movement = client.post(
+        f"/items/{item_id}/movements",
+        json={"delta": -4, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert movement.status_code == 204, movement.text
+
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM purchase_order_items AS poi
+            JOIN purchase_orders AS po ON po.id = poi.purchase_order_id
+            WHERE poi.item_id = ?
+        """,
+            (item_id,),
+        ).fetchone()
+    assert rows["cnt"] == 0
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        conn.commit()
 
 
 def test_module_permissions_control_supplier_access() -> None:

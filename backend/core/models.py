@@ -73,6 +73,7 @@ class Item(BaseModel):
     size: str | None = None
     quantity: int
     low_stock_threshold: int = 0
+    supplier_id: int | None = None
 
 
 class ItemCreate(BaseModel):
@@ -82,6 +83,7 @@ class ItemCreate(BaseModel):
     size: Optional[str] = None
     quantity: int = 0
     low_stock_threshold: int = 0
+    supplier_id: Optional[int] = None
 
 
 class ItemUpdate(BaseModel):
@@ -91,6 +93,7 @@ class ItemUpdate(BaseModel):
     size: Optional[str]
     quantity: Optional[int]
     low_stock_threshold: Optional[int]
+    supplier_id: Optional[int]
 
 
 class Movement(BaseModel):
@@ -139,6 +142,23 @@ class SupplierUpdate(BaseModel):
 
 class Supplier(SupplierBase):
     id: int
+
+
+class PurchaseOrder(BaseModel):
+    id: int
+    supplier_id: int | None = None
+    status: str
+    created_at: datetime
+    note: str | None = None
+    auto_created: bool = False
+
+
+class PurchaseOrderItem(BaseModel):
+    id: int
+    purchase_order_id: int
+    item_id: int
+    quantity_ordered: int
+    quantity_received: int
 
 
 class CollaboratorBase(BaseModel):

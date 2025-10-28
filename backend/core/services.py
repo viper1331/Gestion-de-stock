@@ -10,28 +10,135 @@ from backend.core import db, models, security
 # Initialisation des bases de données au chargement du module
 _db_initialized = False
 
+_AUTO_PO_CLOSED_STATUSES = ("CANCELLED", "RECEIVED")
+
 
 def ensure_database_ready() -> None:
     global _db_initialized
     if not _db_initialized:
         db.init_databases()
+        _apply_schema_migrations()
         seed_default_admin()
         _db_initialized = True
 
 
-def _normalize_sizes(values: Iterable[str]) -> list[str]:
-    seen: set[str] = set()
-    normalized: list[str] = []
-    for value in values:
-        candidate = value.strip()
-        if not candidate:
-            continue
-        key = candidate.casefold()
-        if key in seen:
-            continue
-        seen.add(key)
-        normalized.append(candidate)
-    return sorted(normalized, key=str.casefold)
+def _apply_schema_migrations() -> None:
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("PRAGMA table_info(items)")
+        columns = {row["name"] for row in cur.fetchall()}
+        if "supplier_id" not in columns:
+            conn.execute(
+                "ALTER TABLE items ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL"
+            )
+
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS purchase_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                note TEXT,
+                auto_created INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS purchase_order_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                quantity_ordered INTEGER NOT NULL,
+                quantity_received INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE INDEX IF NOT EXISTS idx_purchase_order_items_item ON purchase_order_items(item_id);
+            CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+        """
+        )
+
+        po_info = conn.execute("PRAGMA table_info(purchase_orders)").fetchall()
+        po_columns = {row["name"] for row in po_info}
+        if "auto_created" not in po_columns:
+            conn.execute("ALTER TABLE purchase_orders ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0")
+        if "note" not in po_columns:
+            conn.execute("ALTER TABLE purchase_orders ADD COLUMN note TEXT")
+        if "created_at" not in po_columns:
+            conn.execute(
+                "ALTER TABLE purchase_orders ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            )
+        if "status" not in po_columns:
+            conn.execute("ALTER TABLE purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")
+        if "supplier_id" not in po_columns:
+            conn.execute("ALTER TABLE purchase_orders ADD COLUMN supplier_id INTEGER")
+
+        poi_info = conn.execute("PRAGMA table_info(purchase_order_items)").fetchall()
+        poi_columns = {row["name"] for row in poi_info}
+        if "quantity_received" not in poi_columns:
+            conn.execute(
+                "ALTER TABLE purchase_order_items ADD COLUMN quantity_received INTEGER NOT NULL DEFAULT 0"
+            )
+
+        conn.commit()
+
+
+def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) -> None:
+    cur = conn.execute(
+        "SELECT id, name, quantity, low_stock_threshold, supplier_id FROM items WHERE id = ?",
+        (item_id,),
+    )
+    item = cur.fetchone()
+    if item is None:
+        return
+    supplier_id = item["supplier_id"]
+    if supplier_id is None:
+        return
+    threshold = item["low_stock_threshold"] or 0
+    if threshold <= 0:
+        return
+    quantity = item["quantity"] or 0
+    shortage = threshold - quantity
+    if shortage <= 0:
+        return
+
+    existing = conn.execute(
+        """
+        SELECT poi.id, poi.quantity_ordered, poi.quantity_received
+        FROM purchase_order_items AS poi
+        JOIN purchase_orders AS po ON po.id = poi.purchase_order_id
+        WHERE poi.item_id = ?
+          AND po.auto_created = 1
+          AND UPPER(po.status) NOT IN ({placeholders})
+        ORDER BY po.created_at DESC
+        LIMIT 1
+        """.format(
+            placeholders=", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)
+        ),
+        (item_id, *[status for status in _AUTO_PO_CLOSED_STATUSES]),
+    ).fetchone()
+
+    if existing:
+        outstanding = existing["quantity_ordered"] - existing["quantity_received"]
+        if outstanding < shortage:
+            new_total = existing["quantity_received"] + shortage
+            conn.execute(
+                "UPDATE purchase_order_items SET quantity_ordered = ? WHERE id = ?",
+                (new_total, existing["id"]),
+            )
+        return
+
+    note = f"Commande automatique - {item['name']}"
+    po_cur = conn.execute(
+        """
+        INSERT INTO purchase_orders (supplier_id, status, note, auto_created)
+        VALUES (?, 'PENDING', ?, 1)
+        """,
+        (supplier_id, note),
+    )
+    order_id = po_cur.lastrowid
+    conn.execute(
+        """
+        INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered)
+        VALUES (?, ?, ?)
+        """,
+        (order_id, item_id, shortage),
+    )
 
 
 def seed_default_admin() -> None:
@@ -220,6 +327,7 @@ def list_items(search: str | None = None) -> list[models.Item]:
                 size=row["size"],
                 quantity=row["quantity"],
                 low_stock_threshold=row["low_stock_threshold"],
+                supplier_id=row["supplier_id"],
             )
             for row in rows
         ]
@@ -230,8 +338,8 @@ def create_item(payload: models.ItemCreate) -> models.Item:
     with db.get_stock_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO items (name, sku, category_id, size, quantity, low_stock_threshold)
-            VALUES (?, ?, ?, ?, ?, ?)
+            INSERT INTO items (name, sku, category_id, size, quantity, low_stock_threshold, supplier_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.name,
@@ -240,10 +348,12 @@ def create_item(payload: models.ItemCreate) -> models.Item:
                 payload.size,
                 payload.quantity,
                 payload.low_stock_threshold,
+                payload.supplier_id,
             ),
         )
-        conn.commit()
         item_id = cur.lastrowid
+        _maybe_create_auto_purchase_order(conn, item_id)
+        conn.commit()
         return get_item(item_id)
 
 
@@ -256,11 +366,12 @@ def get_item(item_id: int) -> models.Item:
         return models.Item(
             id=row["id"],
             name=row["name"],
-            sku=row["sku"],
-            category_id=row["category_id"],
-            size=row["size"],
-            quantity=row["quantity"],
-            low_stock_threshold=row["low_stock_threshold"],
+                sku=row["sku"],
+                category_id=row["category_id"],
+                size=row["size"],
+                quantity=row["quantity"],
+                low_stock_threshold=row["low_stock_threshold"],
+                supplier_id=row["supplier_id"],
         )
 
 
@@ -272,8 +383,11 @@ def update_item(item_id: int, payload: models.ItemUpdate) -> models.Item:
     assignments = ", ".join(f"{col} = ?" for col in fields)
     values = list(fields.values())
     values.append(item_id)
+    should_check_low_stock = any(key in fields for key in {"quantity", "low_stock_threshold", "supplier_id"})
     with db.get_stock_connection() as conn:
         conn.execute(f"UPDATE items SET {assignments} WHERE id = ?", values)
+        if should_check_low_stock:
+            _maybe_create_auto_purchase_order(conn, item_id)
         conn.commit()
     return get_item(item_id)
 
@@ -308,6 +422,7 @@ def list_low_stock(threshold: int) -> list[models.LowStockReport]:
                     size=row["size"],
                     quantity=row["quantity"],
                     low_stock_threshold=row["low_stock_threshold"],
+                    supplier_id=row["supplier_id"],
                 ),
                 shortage=row["shortage"],
             )
@@ -438,6 +553,7 @@ def record_movement(item_id: int, payload: models.MovementCreate) -> None:
             "UPDATE items SET quantity = quantity + ? WHERE id = ?",
             (payload.delta, item_id),
         )
+        _maybe_create_auto_purchase_order(conn, item_id)
         conn.commit()
 
 
