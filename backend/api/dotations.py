@@ -80,6 +80,19 @@ async def create_dotation(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.put("/dotations/{dotation_id}", response_model=models.Dotation)
+async def update_dotation(
+    dotation_id: int,
+    payload: models.DotationUpdate,
+    user: models.User = Depends(get_current_user),
+) -> models.Dotation:
+    _require_permission(user, action="edit")
+    try:
+        return services.update_dotation(dotation_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @router.delete("/dotations/{dotation_id}", status_code=204)
 async def delete_dotation(
     dotation_id: int,
