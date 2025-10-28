@@ -20,6 +20,14 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
 )
 _AVAILABLE_MODULE_KEYS: set[str] = {key for key, _ in _AVAILABLE_MODULE_DEFINITIONS}
 
+_PURCHASE_ORDER_STATUSES: set[str] = {
+    "PENDING",
+    "ORDERED",
+    "PARTIALLY_RECEIVED",
+    "RECEIVED",
+    "CANCELLED",
+}
+
 
 def _parse_date(value: object) -> date | None:
     if value is None:
@@ -54,6 +62,22 @@ def _is_obsolete(perceived_at: date | None, *, reference: date | None = None) ->
         return False
     limit = (reference or date.today()) - timedelta(days=365)
     return perceived_at <= limit
+
+
+def _normalize_purchase_order_status(status: str | None) -> str:
+    candidate = (status or "PENDING").strip().upper()
+    if candidate not in _PURCHASE_ORDER_STATUSES:
+        raise ValueError("Statut de commande invalide")
+    return candidate
+
+
+def _aggregate_positive_quantities(entries: Iterable[tuple[int, int]]) -> dict[int, int]:
+    aggregated: dict[int, int] = {}
+    for item_id, quantity in entries:
+        if quantity <= 0:
+            continue
+        aggregated[item_id] = aggregated.get(item_id, 0) + quantity
+    return aggregated
 
 
 def ensure_database_ready() -> None:
@@ -134,6 +158,37 @@ def _apply_schema_migrations() -> None:
         pharmacy_columns = {row["name"] for row in pharmacy_info}
         if "packaging" not in pharmacy_columns:
             conn.execute("ALTER TABLE pharmacy_items ADD COLUMN packaging TEXT")
+
+        pharmacy_po_info = conn.execute("PRAGMA table_info(pharmacy_purchase_orders)").fetchall()
+        pharmacy_po_columns = {row["name"] for row in pharmacy_po_info}
+        if "supplier_id" not in pharmacy_po_columns:
+            conn.execute(
+                "ALTER TABLE pharmacy_purchase_orders ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL"
+            )
+        if "status" not in pharmacy_po_columns:
+            conn.execute(
+                "ALTER TABLE pharmacy_purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'"
+            )
+        if "created_at" not in pharmacy_po_columns:
+            conn.execute(
+                "ALTER TABLE pharmacy_purchase_orders ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            )
+        if "note" not in pharmacy_po_columns:
+            conn.execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN note TEXT")
+
+        pharmacy_poi_info = conn.execute("PRAGMA table_info(pharmacy_purchase_order_items)").fetchall()
+        pharmacy_poi_columns = {row["name"] for row in pharmacy_poi_info}
+        if "quantity_received" not in pharmacy_poi_columns:
+            conn.execute(
+                "ALTER TABLE pharmacy_purchase_order_items ADD COLUMN quantity_received INTEGER NOT NULL DEFAULT 0"
+            )
+
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pharmacy_purchase_orders_status ON pharmacy_purchase_orders(status)"
+        )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_pharmacy_purchase_order_items_item ON pharmacy_purchase_order_items(pharmacy_item_id)"
+        )
 
         conn.commit()
 
@@ -757,6 +812,228 @@ def delete_supplier(supplier_id: int) -> None:
         conn.commit()
 
 
+def _build_purchase_order_detail(
+    conn: sqlite3.Connection, order_row: sqlite3.Row
+) -> models.PurchaseOrderDetail:
+    items_cur = conn.execute(
+        """
+        SELECT poi.id,
+               poi.purchase_order_id,
+               poi.item_id,
+               poi.quantity_ordered,
+               poi.quantity_received,
+               i.name AS item_name
+        FROM purchase_order_items AS poi
+        JOIN items AS i ON i.id = poi.item_id
+        WHERE poi.purchase_order_id = ?
+        ORDER BY i.name COLLATE NOCASE
+        """,
+        (order_row["id"],),
+    )
+    items = [
+        models.PurchaseOrderItem(
+            id=item_row["id"],
+            purchase_order_id=item_row["purchase_order_id"],
+            item_id=item_row["item_id"],
+            quantity_ordered=item_row["quantity_ordered"],
+            quantity_received=item_row["quantity_received"],
+            item_name=item_row["item_name"],
+        )
+        for item_row in items_cur.fetchall()
+    ]
+    return models.PurchaseOrderDetail(
+        id=order_row["id"],
+        supplier_id=order_row["supplier_id"],
+        supplier_name=order_row["supplier_name"],
+        status=order_row["status"],
+        created_at=order_row["created_at"],
+        note=order_row["note"],
+        auto_created=bool(order_row["auto_created"]),
+        items=items,
+    )
+
+
+def list_purchase_orders() -> list[models.PurchaseOrderDetail]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name
+            FROM purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            ORDER BY po.created_at DESC, po.id DESC
+            """
+        )
+        rows = cur.fetchall()
+        return [_build_purchase_order_detail(conn, row) for row in rows]
+
+
+def get_purchase_order(order_id: int) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name
+            FROM purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            WHERE po.id = ?
+            """,
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        return _build_purchase_order_detail(conn, row)
+
+
+def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    status = _normalize_purchase_order_status(payload.status)
+    aggregated = _aggregate_positive_quantities(
+        (line.item_id, line.quantity_ordered) for line in payload.items
+    )
+    if not aggregated:
+        raise ValueError("Au moins un article est requis pour créer un bon de commande")
+    with db.get_stock_connection() as conn:
+        if payload.supplier_id is not None:
+            supplier_cur = conn.execute(
+                "SELECT 1 FROM suppliers WHERE id = ?", (payload.supplier_id,)
+            )
+            if supplier_cur.fetchone() is None:
+                raise ValueError("Fournisseur introuvable")
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO purchase_orders (supplier_id, status, note, auto_created)
+                VALUES (?, ?, ?, 0)
+                """,
+                (payload.supplier_id, status, payload.note),
+            )
+            order_id = cur.lastrowid
+            for item_id, quantity in aggregated.items():
+                item_cur = conn.execute(
+                    "SELECT 1 FROM items WHERE id = ?", (item_id,)
+                )
+                if item_cur.fetchone() is None:
+                    raise ValueError("Article introuvable")
+                conn.execute(
+                    """
+                    INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered, quantity_received)
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (order_id, item_id, quantity),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return get_purchase_order(order_id)
+
+
+def update_purchase_order(order_id: int, payload: models.PurchaseOrderUpdate) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    updates: dict[str, object] = {}
+    if payload.supplier_id is not None:
+        with db.get_stock_connection() as conn:
+            supplier_cur = conn.execute(
+                "SELECT 1 FROM suppliers WHERE id = ?", (payload.supplier_id,)
+            )
+            if supplier_cur.fetchone() is None:
+                raise ValueError("Fournisseur introuvable")
+        updates["supplier_id"] = payload.supplier_id
+    if payload.status is not None:
+        updates["status"] = _normalize_purchase_order_status(payload.status)
+    if payload.note is not None:
+        updates["note"] = payload.note
+    if not updates:
+        return get_purchase_order(order_id)
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    values = list(updates.values())
+    values.append(order_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT 1 FROM purchase_orders WHERE id = ?", (order_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Bon de commande introuvable")
+        conn.execute(f"UPDATE purchase_orders SET {assignments} WHERE id = ?", values)
+        conn.commit()
+    return get_purchase_order(order_id)
+
+
+def receive_purchase_order(
+    order_id: int, payload: models.PurchaseOrderReceivePayload
+) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    increments = _aggregate_positive_quantities(
+        (line.item_id, line.quantity) for line in payload.items
+    )
+    if not increments:
+        raise ValueError("Aucune ligne de réception valide")
+    with db.get_stock_connection() as conn:
+        order_row = conn.execute(
+            "SELECT status FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if order_row is None:
+            raise ValueError("Bon de commande introuvable")
+        try:
+            for item_id, increment in increments.items():
+                line = conn.execute(
+                    """
+                    SELECT id, quantity_ordered, quantity_received
+                    FROM purchase_order_items
+                    WHERE purchase_order_id = ? AND item_id = ?
+                    """,
+                    (order_id, item_id),
+                ).fetchone()
+                if line is None:
+                    raise ValueError("Article absent du bon de commande")
+                remaining = line["quantity_ordered"] - line["quantity_received"]
+                if remaining <= 0:
+                    continue
+                new_received = line["quantity_received"] + increment
+                if new_received > line["quantity_ordered"]:
+                    new_received = line["quantity_ordered"]
+                delta = new_received - line["quantity_received"]
+                if delta <= 0:
+                    continue
+                conn.execute(
+                    "UPDATE purchase_order_items SET quantity_received = ? WHERE id = ?",
+                    (new_received, line["id"]),
+                )
+                conn.execute(
+                    "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                    (delta, item_id),
+                )
+                conn.execute(
+                    "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                    (item_id, delta, f"Réception bon de commande #{order_id}"),
+                )
+                _maybe_create_auto_purchase_order(conn, item_id)
+            totals = conn.execute(
+                """
+                SELECT quantity_ordered, quantity_received
+                FROM purchase_order_items
+                WHERE purchase_order_id = ?
+                """,
+                (order_id,),
+            ).fetchall()
+            if all(row["quantity_received"] >= row["quantity_ordered"] for row in totals):
+                new_status = "RECEIVED"
+            elif any(row["quantity_received"] > 0 for row in totals):
+                new_status = "PARTIALLY_RECEIVED"
+            else:
+                new_status = order_row["status"]
+            if new_status != order_row["status"]:
+                conn.execute(
+                    "UPDATE purchase_orders SET status = ? WHERE id = ?",
+                    (new_status, order_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return get_purchase_order(order_id)
+
+
 def list_collaborators() -> list[models.Collaborator]:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
@@ -1196,6 +1473,236 @@ def delete_pharmacy_item(item_id: int) -> None:
         if cur.rowcount == 0:
             raise ValueError("Produit pharmaceutique introuvable")
         conn.commit()
+
+
+def _build_pharmacy_purchase_order_detail(
+    conn: sqlite3.Connection, order_row: sqlite3.Row
+) -> models.PharmacyPurchaseOrderDetail:
+    items_cur = conn.execute(
+        """
+        SELECT poi.id,
+               poi.purchase_order_id,
+               poi.pharmacy_item_id,
+               poi.quantity_ordered,
+               poi.quantity_received,
+               pi.name AS pharmacy_item_name
+        FROM pharmacy_purchase_order_items AS poi
+        JOIN pharmacy_items AS pi ON pi.id = poi.pharmacy_item_id
+        WHERE poi.purchase_order_id = ?
+        ORDER BY pi.name COLLATE NOCASE
+        """,
+        (order_row["id"],),
+    )
+    items = [
+        models.PharmacyPurchaseOrderItem(
+            id=item_row["id"],
+            purchase_order_id=item_row["purchase_order_id"],
+            pharmacy_item_id=item_row["pharmacy_item_id"],
+            quantity_ordered=item_row["quantity_ordered"],
+            quantity_received=item_row["quantity_received"],
+            pharmacy_item_name=item_row["pharmacy_item_name"],
+        )
+        for item_row in items_cur.fetchall()
+    ]
+    return models.PharmacyPurchaseOrderDetail(
+        id=order_row["id"],
+        supplier_id=order_row["supplier_id"],
+        supplier_name=order_row["supplier_name"],
+        status=order_row["status"],
+        created_at=order_row["created_at"],
+        note=order_row["note"],
+        items=items,
+    )
+
+
+def list_pharmacy_purchase_orders() -> list[models.PharmacyPurchaseOrderDetail]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name
+            FROM pharmacy_purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            ORDER BY po.created_at DESC, po.id DESC
+            """
+        )
+        rows = cur.fetchall()
+        return [_build_pharmacy_purchase_order_detail(conn, row) for row in rows]
+
+
+def get_pharmacy_purchase_order(order_id: int) -> models.PharmacyPurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name
+            FROM pharmacy_purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            WHERE po.id = ?
+            """,
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande pharmacie introuvable")
+        return _build_pharmacy_purchase_order_detail(conn, row)
+
+
+def create_pharmacy_purchase_order(
+    payload: models.PharmacyPurchaseOrderCreate,
+) -> models.PharmacyPurchaseOrderDetail:
+    ensure_database_ready()
+    status = _normalize_purchase_order_status(payload.status)
+    aggregated = _aggregate_positive_quantities(
+        (line.pharmacy_item_id, line.quantity_ordered) for line in payload.items
+    )
+    if not aggregated:
+        raise ValueError("Au moins un article pharmaceutique est requis")
+    with db.get_stock_connection() as conn:
+        if payload.supplier_id is not None:
+            supplier_cur = conn.execute(
+                "SELECT 1 FROM suppliers WHERE id = ?", (payload.supplier_id,)
+            )
+            if supplier_cur.fetchone() is None:
+                raise ValueError("Fournisseur introuvable")
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO pharmacy_purchase_orders (supplier_id, status, note)
+                VALUES (?, ?, ?)
+                """,
+                (payload.supplier_id, status, payload.note),
+            )
+            order_id = cur.lastrowid
+            for item_id, quantity in aggregated.items():
+                item_cur = conn.execute(
+                    "SELECT 1 FROM pharmacy_items WHERE id = ?", (item_id,)
+                )
+                if item_cur.fetchone() is None:
+                    raise ValueError("Article pharmaceutique introuvable")
+                conn.execute(
+                    """
+                    INSERT INTO pharmacy_purchase_order_items (
+                        purchase_order_id,
+                        pharmacy_item_id,
+                        quantity_ordered,
+                        quantity_received
+                    )
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (order_id, item_id, quantity),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return get_pharmacy_purchase_order(order_id)
+
+
+def update_pharmacy_purchase_order(
+    order_id: int, payload: models.PharmacyPurchaseOrderUpdate
+) -> models.PharmacyPurchaseOrderDetail:
+    ensure_database_ready()
+    updates: dict[str, object] = {}
+    if payload.supplier_id is not None:
+        with db.get_stock_connection() as conn:
+            supplier_cur = conn.execute(
+                "SELECT 1 FROM suppliers WHERE id = ?", (payload.supplier_id,)
+            )
+            if supplier_cur.fetchone() is None:
+                raise ValueError("Fournisseur introuvable")
+        updates["supplier_id"] = payload.supplier_id
+    if payload.status is not None:
+        updates["status"] = _normalize_purchase_order_status(payload.status)
+    if payload.note is not None:
+        updates["note"] = payload.note
+    if not updates:
+        return get_pharmacy_purchase_order(order_id)
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    values = list(updates.values())
+    values.append(order_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "SELECT 1 FROM pharmacy_purchase_orders WHERE id = ?", (order_id,)
+        )
+        if cur.fetchone() is None:
+            raise ValueError("Bon de commande pharmacie introuvable")
+        conn.execute(
+            f"UPDATE pharmacy_purchase_orders SET {assignments} WHERE id = ?",
+            values,
+        )
+        conn.commit()
+    return get_pharmacy_purchase_order(order_id)
+
+
+def receive_pharmacy_purchase_order(
+    order_id: int, payload: models.PharmacyPurchaseOrderReceivePayload
+) -> models.PharmacyPurchaseOrderDetail:
+    ensure_database_ready()
+    increments = _aggregate_positive_quantities(
+        (line.pharmacy_item_id, line.quantity) for line in payload.items
+    )
+    if not increments:
+        raise ValueError("Aucune ligne de réception valide")
+    with db.get_stock_connection() as conn:
+        order_row = conn.execute(
+            "SELECT status FROM pharmacy_purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if order_row is None:
+            raise ValueError("Bon de commande pharmacie introuvable")
+        try:
+            for item_id, increment in increments.items():
+                line = conn.execute(
+                    """
+                    SELECT id, quantity_ordered, quantity_received
+                    FROM pharmacy_purchase_order_items
+                    WHERE purchase_order_id = ? AND pharmacy_item_id = ?
+                    """,
+                    (order_id, item_id),
+                ).fetchone()
+                if line is None:
+                    raise ValueError("Article pharmaceutique absent du bon de commande")
+                remaining = line["quantity_ordered"] - line["quantity_received"]
+                if remaining <= 0:
+                    continue
+                new_received = line["quantity_received"] + increment
+                if new_received > line["quantity_ordered"]:
+                    new_received = line["quantity_ordered"]
+                delta = new_received - line["quantity_received"]
+                if delta <= 0:
+                    continue
+                conn.execute(
+                    "UPDATE pharmacy_purchase_order_items SET quantity_received = ? WHERE id = ?",
+                    (new_received, line["id"]),
+                )
+                conn.execute(
+                    "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
+                    (delta, item_id),
+                )
+            totals = conn.execute(
+                """
+                SELECT quantity_ordered, quantity_received
+                FROM pharmacy_purchase_order_items
+                WHERE purchase_order_id = ?
+                """,
+                (order_id,),
+            ).fetchall()
+            if all(row["quantity_received"] >= row["quantity_ordered"] for row in totals):
+                new_status = "RECEIVED"
+            elif any(row["quantity_received"] > 0 for row in totals):
+                new_status = "PARTIALLY_RECEIVED"
+            else:
+                new_status = order_row["status"]
+            if new_status != order_row["status"]:
+                conn.execute(
+                    "UPDATE pharmacy_purchase_orders SET status = ? WHERE id = ?",
+                    (new_status, order_id),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return get_pharmacy_purchase_order(order_id)
 
 
 def list_available_modules() -> list[models.ModuleDefinition]:

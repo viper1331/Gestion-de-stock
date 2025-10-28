@@ -7,6 +7,7 @@ import {
 
 import { api } from "../../lib/api";
 import { persistValue, readPersistedValue } from "../../lib/persist";
+import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
 
 interface Category {
   id: number;
@@ -561,6 +562,8 @@ export function Dashboard() {
           </aside>
         ) : null}
       </div>
+
+      <PurchaseOrdersPanel suppliers={suppliers} />
     </section>
   );
 }

@@ -18,6 +18,8 @@ client = TestClient(app)
 def setup_module(_: object) -> None:
     services.ensure_database_ready()
     with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM pharmacy_purchase_order_items")
+        conn.execute("DELETE FROM pharmacy_purchase_orders")
         conn.execute("DELETE FROM purchase_order_items")
         conn.execute("DELETE FROM purchase_orders")
         conn.execute("DELETE FROM dotations")
@@ -293,6 +295,139 @@ def test_no_auto_purchase_order_without_supplier() -> None:
         conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         conn.commit()
 
+
+def test_manual_purchase_order_flow() -> None:
+    headers = _login_headers("admin", "admin123")
+
+    supplier_resp = client.post(
+        "/suppliers/",
+        json={"name": f"Supplier-{uuid4().hex[:6]}"},
+        headers=headers,
+    )
+    assert supplier_resp.status_code == 201, supplier_resp.text
+    supplier_id = supplier_resp.json()["id"]
+
+    item_resp = client.post(
+        "/items/",
+        json={
+            "name": "Casque",
+            "sku": f"SKU-{uuid4().hex[:6]}",
+            "quantity": 2,
+            "low_stock_threshold": 1,
+            "supplier_id": supplier_id,
+        },
+        headers=headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    item_id = item_resp.json()["id"]
+
+    order_resp = client.post(
+        "/purchase-orders/",
+        json={
+            "supplier_id": supplier_id,
+            "status": "ORDERED",
+            "note": "Test commande",
+            "items": [{"item_id": item_id, "quantity_ordered": 5}],
+        },
+        headers=headers,
+    )
+    assert order_resp.status_code == 201, order_resp.text
+    order_data = order_resp.json()
+    order_id = order_data["id"]
+    assert order_data["items"][0]["quantity_ordered"] == 5
+    assert order_data["items"][0]["quantity_received"] == 0
+
+    receive_resp = client.post(
+        f"/purchase-orders/{order_id}/receive",
+        json={"items": [{"item_id": item_id, "quantity": 3}]},
+        headers=headers,
+    )
+    assert receive_resp.status_code == 200, receive_resp.text
+    receive_data = receive_resp.json()
+    assert receive_data["status"] == "PARTIALLY_RECEIVED"
+    assert receive_data["items"][0]["quantity_received"] == 3
+
+    final_resp = client.post(
+        f"/purchase-orders/{order_id}/receive",
+        json={"items": [{"item_id": item_id, "quantity": 5}]},
+        headers=headers,
+    )
+    assert final_resp.status_code == 200, final_resp.text
+    final_data = final_resp.json()
+    assert final_data["status"] == "RECEIVED"
+    assert final_data["items"][0]["quantity_received"] == 5
+
+    inventory_item = services.get_item(item_id)
+    assert inventory_item.quantity == 7
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM purchase_order_items WHERE purchase_order_id = ?", (order_id,))
+        conn.execute("DELETE FROM purchase_orders WHERE id = ?", (order_id,))
+        conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
+        conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        conn.commit()
+
+
+def test_pharmacy_purchase_order_flow() -> None:
+    headers = _login_headers("admin", "admin123")
+
+    item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Paracétamol",
+            "dosage": "500mg",
+            "packaging": "Boîte",
+            "quantity": 10,
+            "expiration_date": None,
+            "location": "Pharma",
+        },
+        headers=headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    pharmacy_item_id = item_resp.json()["id"]
+
+    order_resp = client.post(
+        "/pharmacy/orders/",
+        json={
+            "status": "ORDERED",
+            "note": "Réapprovisionnement",
+            "items": [
+                {"pharmacy_item_id": pharmacy_item_id, "quantity_ordered": 12}
+            ],
+        },
+        headers=headers,
+    )
+    assert order_resp.status_code == 201, order_resp.text
+    order_id = order_resp.json()["id"]
+
+    receive_resp = client.post(
+        f"/pharmacy/orders/{order_id}/receive",
+        json={
+            "items": [
+                {"pharmacy_item_id": pharmacy_item_id, "quantity": 12}
+            ]
+        },
+        headers=headers,
+    )
+    assert receive_resp.status_code == 200, receive_resp.text
+    data = receive_resp.json()
+    assert data["status"] == "RECEIVED"
+    assert data["items"][0]["quantity_received"] == 12
+
+    pharmacy_item = services.get_pharmacy_item(pharmacy_item_id)
+    assert pharmacy_item.quantity == 22
+
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            "DELETE FROM pharmacy_purchase_order_items WHERE purchase_order_id = ?",
+            (order_id,),
+        )
+        conn.execute(
+            "DELETE FROM pharmacy_purchase_orders WHERE id = ?",
+            (order_id,),
+        )
+        conn.execute("DELETE FROM pharmacy_items WHERE id = ?", (pharmacy_item_id,))
+        conn.commit()
 
 def test_module_permissions_control_supplier_access() -> None:
     services.ensure_database_ready()

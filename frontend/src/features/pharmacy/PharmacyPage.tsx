@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
 
 const PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -432,6 +433,8 @@ export function PharmacyPage() {
           </aside>
         ) : null}
       </div>
+
+      <PharmacyOrdersPanel canEdit={canEdit} />
     </section>
   );
 }

@@ -132,5 +132,19 @@ def init_databases() -> None:
                     expiration_date DATE,
                     location TEXT
                 );
+                CREATE TABLE IF NOT EXISTS pharmacy_purchase_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    note TEXT
+                );
+                CREATE TABLE IF NOT EXISTS pharmacy_purchase_order_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    purchase_order_id INTEGER NOT NULL REFERENCES pharmacy_purchase_orders(id) ON DELETE CASCADE,
+                    pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
+                    quantity_ordered INTEGER NOT NULL,
+                    quantity_received INTEGER NOT NULL DEFAULT 0
+                );
                 """
             )

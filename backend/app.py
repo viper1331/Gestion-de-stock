@@ -13,6 +13,8 @@ from backend.api import (
     suppliers,
     dotations,
     pharmacy,
+    pharmacy_orders,
+    purchase_orders,
     permissions,
     users,
 )
@@ -38,6 +40,8 @@ app.include_router(backup.router, prefix="/backup", tags=["backup"])
 app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
 app.include_router(dotations.router, prefix="/dotations", tags=["dotations"])
 app.include_router(pharmacy.router, prefix="/pharmacy", tags=["pharmacy"])
+app.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["purchase-orders"])
+app.include_router(pharmacy_orders.router, prefix="/pharmacy/orders", tags=["pharmacy-purchase-orders"])
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 
