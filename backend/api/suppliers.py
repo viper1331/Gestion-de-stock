@@ -1,7 +1,7 @@
 """Routes pour la gestion des fournisseurs."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -17,9 +17,12 @@ def _require_permission(user: models.User, *, action: str) -> None:
 
 
 @router.get("/", response_model=list[models.Supplier])
-async def list_suppliers(user: models.User = Depends(get_current_user)) -> list[models.Supplier]:
+async def list_suppliers(
+    module: str | None = Query(default=None),
+    user: models.User = Depends(get_current_user),
+) -> list[models.Supplier]:
     _require_permission(user, action="view")
-    return services.list_suppliers()
+    return services.list_suppliers(module=module)
 
 
 @router.post("/", response_model=models.Supplier, status_code=201)

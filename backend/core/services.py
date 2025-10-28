@@ -80,6 +80,51 @@ def _aggregate_positive_quantities(entries: Iterable[tuple[int, int]]) -> dict[i
     return aggregated
 
 
+def _normalize_supplier_modules(modules: Iterable[str] | None) -> list[str]:
+    normalized: list[str] = []
+    if modules:
+        for module in modules:
+            module_key = (module or "").strip().lower()
+            if not module_key:
+                continue
+            normalized.append(module_key)
+    unique = list(dict.fromkeys(normalized))
+    if not unique:
+        return ["suppliers"]
+    return unique
+
+
+def _replace_supplier_modules(
+    conn: sqlite3.Connection, supplier_id: int, modules: Iterable[str]
+) -> None:
+    conn.execute("DELETE FROM supplier_modules WHERE supplier_id = ?", (supplier_id,))
+    values = [(supplier_id, module) for module in modules]
+    if values:
+        conn.executemany(
+            "INSERT INTO supplier_modules (supplier_id, module) VALUES (?, ?)",
+            values,
+        )
+
+
+def _load_supplier_modules(
+    conn: sqlite3.Connection, supplier_ids: list[int]
+) -> dict[int, list[str]]:
+    modules_map: dict[int, list[str]] = {supplier_id: [] for supplier_id in supplier_ids}
+    if not supplier_ids:
+        return modules_map
+    placeholders = ", ".join("?" for _ in supplier_ids)
+    cur = conn.execute(
+        f"SELECT supplier_id, module FROM supplier_modules WHERE supplier_id IN ({placeholders})",
+        supplier_ids,
+    )
+    for row in cur.fetchall():
+        modules_map.setdefault(row["supplier_id"], []).append(row["module"])
+    for supplier_id, modules in modules_map.items():
+        if modules:
+            modules_map[supplier_id] = sorted(set(modules))
+    return modules_map
+
+
 def ensure_database_ready() -> None:
     global _db_initialized
     if not _db_initialized:
@@ -197,6 +242,16 @@ def _apply_schema_migrations() -> None:
         )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_pharmacy_purchase_order_items_item ON pharmacy_purchase_order_items(pharmacy_item_id)"
+        )
+
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS supplier_modules (
+                supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+                module TEXT NOT NULL,
+                PRIMARY KEY (supplier_id, module)
+            );
+            """
         )
 
         conn.commit()
@@ -756,21 +811,61 @@ def available_config_sections() -> Iterable[str]:
     return parser.sections()
 
 
-def list_suppliers() -> list[models.Supplier]:
+def list_suppliers(module: str | None = None) -> list[models.Supplier]:
     ensure_database_ready()
+    module_filter = (module or "").strip().lower()
     with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT * FROM suppliers ORDER BY name COLLATE NOCASE")
-        return [
-            models.Supplier(
-                id=row["id"],
-                name=row["name"],
-                contact_name=row["contact_name"],
-                phone=row["phone"],
-                email=row["email"],
-                address=row["address"],
+        if module_filter:
+            if module_filter == "suppliers":
+                cur = conn.execute(
+                    """
+                    SELECT s.*
+                    FROM suppliers AS s
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM supplier_modules AS sm
+                        WHERE sm.supplier_id = s.id AND sm.module = ?
+                    )
+                    OR NOT EXISTS (
+                        SELECT 1 FROM supplier_modules AS sm WHERE sm.supplier_id = s.id
+                    )
+                    ORDER BY s.name COLLATE NOCASE
+                    """,
+                    (module_filter,),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    SELECT s.*
+                    FROM suppliers AS s
+                    WHERE EXISTS (
+                        SELECT 1
+                        FROM supplier_modules AS sm
+                        WHERE sm.supplier_id = s.id AND sm.module = ?
+                    )
+                    ORDER BY s.name COLLATE NOCASE
+                    """,
+                    (module_filter,),
+                )
+        else:
+            cur = conn.execute("SELECT * FROM suppliers ORDER BY name COLLATE NOCASE")
+        rows = cur.fetchall()
+        modules_map = _load_supplier_modules(conn, [row["id"] for row in rows])
+        suppliers: list[models.Supplier] = []
+        for row in rows:
+            modules = modules_map.get(row["id"]) or ["suppliers"]
+            suppliers.append(
+                models.Supplier(
+                    id=row["id"],
+                    name=row["name"],
+                    contact_name=row["contact_name"],
+                    phone=row["phone"],
+                    email=row["email"],
+                    address=row["address"],
+                    modules=modules,
+                )
             )
-            for row in cur.fetchall()
-        ]
+        return suppliers
 
 
 def get_supplier(supplier_id: int) -> models.Supplier:
@@ -780,6 +875,8 @@ def get_supplier(supplier_id: int) -> models.Supplier:
         row = cur.fetchone()
         if row is None:
             raise ValueError("Fournisseur introuvable")
+        modules_map = _load_supplier_modules(conn, [row["id"]])
+        modules = modules_map.get(row["id"]) or ["suppliers"]
         return models.Supplier(
             id=row["id"],
             name=row["name"],
@@ -787,11 +884,13 @@ def get_supplier(supplier_id: int) -> models.Supplier:
             phone=row["phone"],
             email=row["email"],
             address=row["address"],
+            modules=modules,
         )
 
 
 def create_supplier(payload: models.SupplierCreate) -> models.Supplier:
     ensure_database_ready()
+    modules = _normalize_supplier_modules(payload.modules)
     with db.get_stock_connection() as conn:
         cur = conn.execute(
             """
@@ -800,23 +899,29 @@ def create_supplier(payload: models.SupplierCreate) -> models.Supplier:
             """,
             (payload.name, payload.contact_name, payload.phone, payload.email, payload.address),
         )
+        supplier_id = cur.lastrowid
+        _replace_supplier_modules(conn, supplier_id, modules)
         conn.commit()
-        return get_supplier(cur.lastrowid)
+        return get_supplier(supplier_id)
 
 
 def update_supplier(supplier_id: int, payload: models.SupplierUpdate) -> models.Supplier:
     ensure_database_ready()
-    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
-    if not fields:
-        return get_supplier(supplier_id)
-    assignments = ", ".join(f"{col} = ?" for col in fields)
-    values = list(fields.values())
-    values.append(supplier_id)
+    updates = payload.dict(exclude_unset=True)
+    modules_update = updates.pop("modules", None)
+    fields = {k: v for k, v in updates.items()}
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,))
         if cur.fetchone() is None:
             raise ValueError("Fournisseur introuvable")
-        conn.execute(f"UPDATE suppliers SET {assignments} WHERE id = ?", values)
+        if fields:
+            assignments = ", ".join(f"{col} = ?" for col in fields)
+            values = list(fields.values())
+            values.append(supplier_id)
+            conn.execute(f"UPDATE suppliers SET {assignments} WHERE id = ?", values)
+        if modules_update is not None:
+            modules = _normalize_supplier_modules(modules_update)
+            _replace_supplier_modules(conn, supplier_id, modules)
         conn.commit()
     return get_supplier(supplier_id)
 

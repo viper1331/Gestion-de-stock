@@ -72,9 +72,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   });
 
   const { data: suppliers = [] } = useQuery({
-    queryKey: ["pharmacy-suppliers"],
+    queryKey: ["suppliers", { module: "pharmacy" }],
     queryFn: async () => {
-      const response = await api.get<Supplier[]>("/suppliers/");
+      const response = await api.get<Supplier[]>("/suppliers/", {
+        params: { module: "pharmacy" }
+      });
       return response.data;
     },
     enabled: canEdit

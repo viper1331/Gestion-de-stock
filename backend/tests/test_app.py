@@ -482,6 +482,50 @@ def test_module_permissions_control_supplier_access() -> None:
     assert created.status_code == 201, created.text
     data = created.json()
     assert data["name"] == supplier_name
+    assert data["modules"] == ["suppliers"]
+
+
+def test_supplier_module_filtering() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    apparel_resp = client.post(
+        "/suppliers/",
+        json={"name": f"Apparel-{uuid4().hex[:6]}"},
+        headers=admin_headers,
+    )
+    assert apparel_resp.status_code == 201, apparel_resp.text
+    apparel_data = apparel_resp.json()
+
+    pharmacy_resp = client.post(
+        "/suppliers/",
+        json={"name": f"Pharma-{uuid4().hex[:6]}", "modules": ["pharmacy"]},
+        headers=admin_headers,
+    )
+    assert pharmacy_resp.status_code == 201, pharmacy_resp.text
+    pharmacy_data = pharmacy_resp.json()
+
+    listing = client.get("/suppliers/", headers=admin_headers)
+    assert listing.status_code == 200
+    names = {entry["name"] for entry in listing.json()}
+    assert apparel_data["name"] in names
+    assert pharmacy_data["name"] in names
+
+    apparel_only = client.get("/suppliers/?module=suppliers", headers=admin_headers)
+    assert apparel_only.status_code == 200
+    apparel_names = {entry["name"] for entry in apparel_only.json()}
+    assert apparel_data["name"] in apparel_names
+    assert pharmacy_data["name"] not in apparel_names
+
+    pharmacy_only = client.get("/suppliers/?module=pharmacy", headers=admin_headers)
+    assert pharmacy_only.status_code == 200
+    pharmacy_names = {entry["name"] for entry in pharmacy_only.json()}
+    assert pharmacy_data["name"] in pharmacy_names
+    assert apparel_data["name"] not in pharmacy_names
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM suppliers WHERE id IN (?, ?)", (apparel_data["id"], pharmacy_data["id"]))
+        conn.commit()
 
 
 def test_available_modules_listing_requires_admin() -> None:

@@ -90,6 +90,11 @@ def init_databases() -> None:
                     address TEXT,
                     UNIQUE(name)
                 );
+                CREATE TABLE IF NOT EXISTS supplier_modules (
+                    supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
+                    module TEXT NOT NULL,
+                    PRIMARY KEY (supplier_id, module)
+                );
                 CREATE TABLE IF NOT EXISTS purchase_orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,

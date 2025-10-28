@@ -5,6 +5,26 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 
+const DEFAULT_SUPPLIER_MODULE = "suppliers";
+
+const SUPPLIER_MODULE_LABELS: Record<string, string> = {
+  suppliers: "Habillement",
+  pharmacy: "Pharmacie"
+};
+
+const SUPPLIER_MODULE_OPTIONS: Array<{ key: string; label: string }> = Object.entries(
+  SUPPLIER_MODULE_LABELS
+).map(([key, label]) => ({ key, label }));
+
+function formatModuleLabel(module: string) {
+  if (module in SUPPLIER_MODULE_LABELS) {
+    return SUPPLIER_MODULE_LABELS[module];
+  }
+  return module
+    .replace(/_/g, " ")
+    .replace(/\b\w/g, (char) => char.toUpperCase());
+}
+
 interface Supplier {
   id: number;
   name: string;
@@ -12,6 +32,7 @@ interface Supplier {
   phone: string | null;
   email: string | null;
   address: string | null;
+  modules: string[];
 }
 
 interface SupplierPayload {
@@ -20,6 +41,7 @@ interface SupplierPayload {
   phone: string | null;
   email: string | null;
   address: string | null;
+  modules: string[];
 }
 
 export function SuppliersPage() {
@@ -35,13 +57,25 @@ export function SuppliersPage() {
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("suppliers", "edit");
 
   const { data: suppliers = [], isFetching } = useQuery({
-    queryKey: ["suppliers"],
+    queryKey: ["suppliers", "all"],
     queryFn: async () => {
       const response = await api.get<Supplier[]>("/suppliers/");
       return response.data;
     },
     enabled: canView
   });
+
+  const moduleOptions = useMemo(() => {
+    const labels = new Map<string, string>(SUPPLIER_MODULE_OPTIONS.map((option) => [option.key, option.label]));
+    suppliers.forEach((supplier) => {
+      supplier.modules.forEach((module) => {
+        if (!labels.has(module)) {
+          labels.set(module, formatModuleLabel(module));
+        }
+      });
+    });
+    return Array.from(labels.entries()).map(([key, label]) => ({ key, label }));
+  }, [suppliers]);
 
   const createSupplier = useMutation({
     mutationFn: async (payload: SupplierPayload) => {
@@ -90,10 +124,18 @@ export function SuppliersPage() {
         contact_name: selected.contact_name,
         phone: selected.phone,
         email: selected.email,
-        address: selected.address
+        address: selected.address,
+        modules: selected.modules.length > 0 ? selected.modules : [DEFAULT_SUPPLIER_MODULE]
       };
     }
-    return { name: "", contact_name: "", phone: "", email: "", address: "" };
+    return {
+      name: "",
+      contact_name: "",
+      phone: "",
+      email: "",
+      address: "",
+      modules: [DEFAULT_SUPPLIER_MODULE]
+    };
   }, [formMode, selected]);
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
@@ -128,10 +170,15 @@ export function SuppliersPage() {
       contact_name: ((formData.get("contact_name") as string) || "").trim() || null,
       phone: ((formData.get("phone") as string) || "").trim() || null,
       email: ((formData.get("email") as string) || "").trim() || null,
-      address: ((formData.get("address") as string) || "").trim() || null
+      address: ((formData.get("address") as string) || "").trim() || null,
+      modules: (formData.getAll("modules") as string[]).map((module) => module.trim()).filter(Boolean)
     };
     if (!payload.name) {
       setError("Le nom est obligatoire.");
+      return;
+    }
+    if (payload.modules.length === 0) {
+      setError("Sélectionnez au moins un module concerné.");
       return;
     }
     setMessage(null);
@@ -178,6 +225,7 @@ export function SuppliersPage() {
                   <th className="px-4 py-3 text-left">Contact</th>
                   <th className="px-4 py-3 text-left">Téléphone</th>
                   <th className="px-4 py-3 text-left">Email</th>
+                  <th className="px-4 py-3 text-left">Modules</th>
                   {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
                 </tr>
               </thead>
@@ -193,6 +241,18 @@ export function SuppliersPage() {
                     <td className="px-4 py-3 text-slate-300">{supplier.contact_name ?? "-"}</td>
                     <td className="px-4 py-3 text-slate-300">{supplier.phone ?? "-"}</td>
                     <td className="px-4 py-3 text-slate-300">{supplier.email ?? "-"}</td>
+                    <td className="px-4 py-3 text-slate-300">
+                      <div className="flex flex-wrap gap-1">
+                        {supplier.modules.map((module) => (
+                          <span
+                            key={`${supplier.id}-${module}`}
+                            className="rounded border border-slate-700 bg-slate-900 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-200"
+                          >
+                            {formatModuleLabel(module)}
+                          </span>
+                        ))}
+                      </div>
+                    </td>
                     {canEdit ? (
                       <td className="px-4 py-3 text-xs text-slate-200">
                         <div className="flex gap-2">
@@ -306,6 +366,26 @@ export function SuppliersPage() {
                   title="Adresse postale du fournisseur"
                 />
               </div>
+              <fieldset className="space-y-2">
+                <legend className="text-xs font-semibold text-slate-300">Modules concernés</legend>
+                <p className="text-[11px] text-slate-400">
+                  Contrôle les sections de l'application où ce fournisseur est disponible.
+                </p>
+                <div className="flex flex-wrap gap-3">
+                  {moduleOptions.map((option) => (
+                    <label key={option.key} className="flex items-center gap-2 text-xs text-slate-200">
+                      <input
+                        type="checkbox"
+                        name="modules"
+                        value={option.key}
+                        defaultChecked={formValues.modules.includes(option.key)}
+                        className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-500"
+                      />
+                      {option.label}
+                    </label>
+                  ))}
+                </div>
+              </fieldset>
               <div className="flex gap-2">
                 <button
                   type="submit"

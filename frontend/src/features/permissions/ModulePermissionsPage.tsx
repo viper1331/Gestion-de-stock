@@ -370,7 +370,7 @@ export function ModulePermissionsPage() {
                                   const nextCanView = event.target.checked;
                                   await upsertPermission.mutateAsync({
                                     user_id: entry.user_id,
-                                    module: entry.module,
+                                    modules: [entry.module],
                                     can_view: nextCanView,
                                     can_edit: nextCanView ? entry.can_edit : false
                                   });
@@ -395,7 +395,7 @@ export function ModulePermissionsPage() {
                                   setError(null);
                                   await upsertPermission.mutateAsync({
                                     user_id: entry.user_id,
-                                    module: entry.module,
+                                    modules: [entry.module],
                                     can_view: event.target.checked ? true : entry.can_view,
                                     can_edit: event.target.checked
                                   });
