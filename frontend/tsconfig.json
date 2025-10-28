@@ -6,6 +6,7 @@
     "moduleResolution": "Node",
     "strict": true,
     "allowJs": false,
+    "noEmit": true,
     "jsx": "react-jsx",
     "esModuleInterop": true,
     "skipLibCheck": true,
