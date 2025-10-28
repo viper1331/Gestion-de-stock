@@ -39,6 +39,18 @@ def shutil_which(cmd: str) -> str | None:
     return which(cmd)
 
 
+def backend_python_executable() -> str:
+    """Return the python executable for the backend virtual environment if present."""
+    if os.name == "nt":
+        candidate = BACKEND_DIR / ".venv" / "Scripts" / "python.exe"
+    else:
+        candidate = BACKEND_DIR / ".venv" / "bin" / "python"
+
+    if candidate.exists():
+        return str(candidate)
+    return sys.executable
+
+
 def start_process(command: List[str], cwd: Path, name: str) -> Process:
     env = os.environ.copy()
     print(f"\n➡️  Lancement de {name} : {' '.join(command)}")
@@ -77,8 +89,9 @@ def main() -> int:
     check_prerequisites(frontend=not args.no_frontend)
 
     commands: List[Tuple[str, List[str], Path]] = []
+    backend_python = backend_python_executable()
     backend_cmd = [
-        sys.executable,
+        backend_python,
         "-m",
         "uvicorn",
         "backend.app:app",

@@ -11,8 +11,8 @@ from subprocess import TimeoutExpired
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
-VENV_DIR = ROOT_DIR / ".venv"
-REQUIREMENTS_FILE = ROOT_DIR / "requirements.txt"
+VENV_DIR = BACKEND_DIR / ".venv"
+REQUIREMENTS_FILE = BACKEND_DIR / "requirements.txt"
 
 
 def parse_args() -> argparse.Namespace:
@@ -68,15 +68,17 @@ def main() -> int:
 
     if not args.skip_install:
         if not REQUIREMENTS_FILE.exists():
-            raise SystemExit("requirements.txt est introuvable à la racine du projet.")
+            raise SystemExit(
+                "requirements.txt est introuvable dans le dossier backend."
+            )
         run_step(
             "Installation des dépendances",
             [str(python_bin), "-m", "pip", "install", "-r", str(REQUIREMENTS_FILE)],
-            ROOT_DIR,
+            BACKEND_DIR,
         )
 
     if not args.skip_tests:
-        run_step("Exécution des tests", [str(python_bin), "-m", "pytest"], ROOT_DIR)
+        run_step("Exécution des tests", [str(python_bin), "-m", "pytest"], BACKEND_DIR)
 
     command = [
         str(python_bin),
