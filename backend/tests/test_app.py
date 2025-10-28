@@ -349,6 +349,21 @@ def test_module_permissions_control_supplier_access() -> None:
     assert data["name"] == supplier_name
 
 
+def test_available_modules_listing_requires_admin() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    response = client.get("/permissions/modules/available", headers=admin_headers)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert any(entry["key"] == "suppliers" for entry in data)
+
+    username = f"user-{uuid4().hex[:6]}"
+    _create_user(username, "Testpass123", role="user")
+    worker_headers = _login_headers(username, "Testpass123")
+    forbidden = client.get("/permissions/modules/available", headers=worker_headers)
+    assert forbidden.status_code == 403
+
+
 def test_admin_user_management_flow() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

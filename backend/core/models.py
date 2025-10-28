@@ -236,3 +236,8 @@ class ModulePermissionUpsert(ModulePermissionBase):
 
 class ModulePermission(ModulePermissionBase):
     id: int
+
+
+class ModuleDefinition(BaseModel):
+    key: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=128)

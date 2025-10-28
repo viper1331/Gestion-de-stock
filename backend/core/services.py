@@ -12,6 +12,13 @@ _db_initialized = False
 
 _AUTO_PO_CLOSED_STATUSES = ("CANCELLED", "RECEIVED")
 
+_AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
+    ("suppliers", "Fournisseurs"),
+    ("dotations", "Dotations"),
+    ("pharmacy", "Pharmacie"),
+)
+_AVAILABLE_MODULE_KEYS: set[str] = {key for key, _ in _AVAILABLE_MODULE_DEFINITIONS}
+
 
 def ensure_database_ready() -> None:
     global _db_initialized
@@ -397,6 +404,19 @@ def delete_item(item_id: int) -> None:
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
         conn.commit()
+
+
+def _normalize_sizes(sizes: Iterable[str]) -> list[str]:
+    unique: dict[str, str] = {}
+    for raw in sizes:
+        trimmed = raw.strip()
+        if not trimmed:
+            continue
+        normalized = trimmed.upper()
+        key = normalized.casefold()
+        if key not in unique:
+            unique[key] = normalized
+    return sorted(unique.values(), key=str.lower)
 
 
 def list_low_stock(threshold: int) -> list[models.LowStockReport]:
@@ -938,6 +958,29 @@ def delete_pharmacy_item(item_id: int) -> None:
         conn.commit()
 
 
+def list_available_modules() -> list[models.ModuleDefinition]:
+    ensure_database_ready()
+    definitions = [
+        models.ModuleDefinition(key=key, label=label)
+        for key, label in _AVAILABLE_MODULE_DEFINITIONS
+    ]
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            "SELECT DISTINCT module FROM module_permissions ORDER BY module COLLATE NOCASE"
+        )
+        for row in cur.fetchall():
+            module_key = row["module"]
+            if module_key in _AVAILABLE_MODULE_KEYS:
+                continue
+            definitions.append(
+                models.ModuleDefinition(
+                    key=module_key,
+                    label=module_key.replace("_", " ").title(),
+                )
+            )
+    return definitions
+
+
 def list_module_permissions() -> list[models.ModulePermission]:
     ensure_database_ready()
     with db.get_users_connection() as conn:
@@ -1001,6 +1044,13 @@ def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.M
     if get_user_by_id(payload.user_id) is None:
         raise ValueError("User not found")
     with db.get_users_connection() as conn:
+        if payload.module not in _AVAILABLE_MODULE_KEYS:
+            cur = conn.execute(
+                "SELECT 1 FROM module_permissions WHERE module = ? LIMIT 1",
+                (payload.module,),
+            )
+            if cur.fetchone() is None:
+                raise ValueError("Module not found")
         conn.execute(
             """
             INSERT INTO module_permissions (user_id, module, can_view, can_edit)
