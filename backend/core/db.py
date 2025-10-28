@@ -127,6 +127,7 @@ def init_databases() -> None:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL COLLATE NOCASE,
                     dosage TEXT,
+                    packaging TEXT,
                     quantity INTEGER NOT NULL DEFAULT 0,
                     expiration_date DATE,
                     location TEXT

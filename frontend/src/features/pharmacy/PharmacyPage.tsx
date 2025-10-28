@@ -9,6 +9,7 @@ interface PharmacyItem {
   id: number;
   name: string;
   dosage: string | null;
+  packaging: string | null;
   quantity: number;
   expiration_date: string | null;
   location: string | null;
@@ -17,6 +18,7 @@ interface PharmacyItem {
 interface PharmacyPayload {
   name: string;
   dosage: string | null;
+  packaging: string | null;
   quantity: number;
   expiration_date: string | null;
   location: string | null;
@@ -88,12 +90,13 @@ export function PharmacyPage() {
       return {
         name: selected.name,
         dosage: selected.dosage,
+        packaging: selected.packaging,
         quantity: selected.quantity,
         expiration_date: selected.expiration_date,
         location: selected.location
       };
     }
-    return { name: "", dosage: "", quantity: 0, expiration_date: "", location: "" };
+    return { name: "", dosage: "", packaging: "", quantity: 0, expiration_date: "", location: "" };
   }, [formMode, selected]);
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
@@ -126,6 +129,7 @@ export function PharmacyPage() {
     const payload: PharmacyPayload = {
       name: (formData.get("name") as string).trim(),
       dosage: ((formData.get("dosage") as string) || "").trim() || null,
+      packaging: ((formData.get("packaging") as string) || "").trim() || null,
       quantity: Number(formData.get("quantity") ?? 0),
       expiration_date: ((formData.get("expiration_date") as string) || "").trim() || null,
       location: ((formData.get("location") as string) || "").trim() || null
@@ -180,6 +184,7 @@ export function PharmacyPage() {
                 <tr>
                   <th className="px-4 py-3 text-left">Nom</th>
                   <th className="px-4 py-3 text-left">Dosage</th>
+                  <th className="px-4 py-3 text-left">Conditionnement</th>
                   <th className="px-4 py-3 text-left">Quantité</th>
                   <th className="px-4 py-3 text-left">Expiration</th>
                   <th className="px-4 py-3 text-left">Localisation</th>
@@ -196,6 +201,7 @@ export function PharmacyPage() {
                   >
                     <td className="px-4 py-3 font-medium">{item.name}</td>
                     <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
+                    <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
                     <td className="px-4 py-3 font-semibold">{item.quantity}</td>
                     <td className="px-4 py-3 text-slate-300">{formatDate(item.expiration_date)}</td>
                     <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
@@ -272,6 +278,18 @@ export function PharmacyPage() {
                   defaultValue={formValues.dosage ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Dosage ou concentration si applicable"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-packaging">
+                  Conditionnement
+                </label>
+                <input
+                  id="pharmacy-packaging"
+                  name="packaging"
+                  defaultValue={formValues.packaging ?? ""}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Conditionnement de l'article (boîte, unité...)"
                 />
               </div>
               <div className="space-y-1">

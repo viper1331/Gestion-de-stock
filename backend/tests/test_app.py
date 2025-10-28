@@ -608,6 +608,7 @@ def test_pharmacy_crud_cycle() -> None:
         json={
             "name": "Doliprane",
             "dosage": "500mg",
+            "packaging": "Boîte de 10",
             "quantity": 10,
             "expiration_date": "2025-12-31",
             "location": "Armoire A",
@@ -616,6 +617,7 @@ def test_pharmacy_crud_cycle() -> None:
     )
     assert create.status_code == 201, create.text
     pharmacy_id = create.json()["id"]
+    assert create.json()["packaging"] == "Boîte de 10"
 
     update = client.put(
         f"/pharmacy/{pharmacy_id}",
@@ -624,10 +626,14 @@ def test_pharmacy_crud_cycle() -> None:
     )
     assert update.status_code == 200, update.text
     assert update.json()["quantity"] == 7
+    assert update.json()["packaging"] == "Boîte de 10"
 
     listing = client.get("/pharmacy/", headers=admin_headers)
     assert listing.status_code == 200
-    assert any(entry["id"] == pharmacy_id for entry in listing.json())
+    assert any(
+        entry["id"] == pharmacy_id and entry["packaging"] == "Boîte de 10"
+        for entry in listing.json()
+    )
 
     delete = client.delete(f"/pharmacy/{pharmacy_id}", headers=admin_headers)
     assert delete.status_code == 204
