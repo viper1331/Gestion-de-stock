@@ -12,6 +12,7 @@ interface PharmacyItem {
   name: string;
   dosage: string | null;
   packaging: string | null;
+  barcode: string | null;
   quantity: number;
   expiration_date: string | null;
   location: string | null;
@@ -21,6 +22,7 @@ interface PharmacyPayload {
   name: string;
   dosage: string | null;
   packaging: string | null;
+  barcode: string | null;
   quantity: number;
   expiration_date: string | null;
   location: string | null;
@@ -87,18 +89,29 @@ export function PharmacyPage() {
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
+  const apiBaseUrl = (api.defaults.baseURL ?? "").replace(/\/$/, "");
+
   const formValues = useMemo<PharmacyPayload>(() => {
     if (formMode === "edit" && selected) {
       return {
         name: selected.name,
         dosage: selected.dosage,
         packaging: selected.packaging,
+        barcode: selected.barcode,
         quantity: selected.quantity,
         expiration_date: selected.expiration_date,
         location: selected.location
       };
     }
-    return { name: "", dosage: "", packaging: "", quantity: 0, expiration_date: "", location: "" };
+    return {
+      name: "",
+      dosage: "",
+      packaging: "",
+      barcode: "",
+      quantity: 0,
+      expiration_date: "",
+      location: ""
+    };
   }, [formMode, selected]);
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
@@ -132,6 +145,7 @@ export function PharmacyPage() {
       name: (formData.get("name") as string).trim(),
       dosage: ((formData.get("dosage") as string) || "").trim() || null,
       packaging: ((formData.get("packaging") as string) || "").trim() || null,
+      barcode: ((formData.get("barcode") as string) || "").trim() || null,
       quantity: Number(formData.get("quantity") ?? 0),
       expiration_date: ((formData.get("expiration_date") as string) || "").trim() || null,
       location: ((formData.get("location") as string) || "").trim() || null
@@ -185,6 +199,7 @@ export function PharmacyPage() {
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
                   <th className="px-4 py-3 text-left">Nom</th>
+                  <th className="px-4 py-3 text-left">Code-barres</th>
                   <th className="px-4 py-3 text-left">Dosage</th>
                   <th className="px-4 py-3 text-left">Conditionnement</th>
                   <th className="px-4 py-3 text-left">Quantité</th>
@@ -194,49 +209,52 @@ export function PharmacyPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900">
-                {items.map((item) => (
-                  <tr
-                    key={item.id}
-                    className={`bg-slate-950 text-sm text-slate-100 ${
-                      selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
-                    }`}
-                  >
-                    <td className="px-4 py-3 font-medium">{item.name}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
-                    <td className="px-4 py-3 font-semibold">{item.quantity}</td>
-                    <td className="px-4 py-3 text-slate-300">{formatDate(item.expiration_date)}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
-                    {canEdit ? (
-                      <td className="px-4 py-3 text-xs text-slate-200">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelected(item);
-                              setFormMode("edit");
-                            }}
-                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                            title={`Modifier la fiche de ${item.name}`}
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!window.confirm("Supprimer cet article pharmaceutique ?")) {
-                                return;
-                              }
-                              setMessage(null);
-                              setError(null);
-                              void deleteItem.mutateAsync(item.id);
-                            }}
-                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
-                            title={`Supprimer ${item.name} de la pharmacie`}
-                          >
-                            Supprimer
-                          </button>
-                        </div>
+                {items.map((item) => {
+                  const { isOutOfStock, isLowStock, expirationStatus } = getPharmacyAlerts(item);
+                  const barcodeDownloadUrl = item.barcode
+                    ? `${apiBaseUrl}/barcode/generate/${encodeURIComponent(item.barcode)}`
+                    : null;
+                  return (
+                    <tr
+                      key={item.id}
+                      className={`bg-slate-950 text-sm text-slate-100 ${
+                        selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
+                      }`}
+                    >
+                      <td className="px-4 py-3 font-medium">{item.name}</td>
+                      <td className="px-4 py-3 text-slate-300">
+                        {item.barcode ? (
+                          <div className="flex items-center gap-2">
+                            <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100">{item.barcode}</code>
+                            {barcodeDownloadUrl ? (
+                              <a
+                                href={barcodeDownloadUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[10px] font-semibold uppercase tracking-wide text-indigo-300 hover:text-indigo-200"
+                                title="Télécharger le code-barres (PNG)"
+                              >
+                                PNG
+                              </a>
+                            ) : null}
+                          </div>
+                        ) : (
+                          <span className="text-slate-500">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
+                      <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
+                      <td className="px-4 py-3 font-semibold">
+                        {item.quantity}
+                        {isOutOfStock ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-200">
+                            Rupture
+                          </span>
+                        ) : isLowStock ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                            Faible stock
+                          </span>
+                        ) : null}
                       </td>
                       <td
                         className={`px-4 py-3 ${
@@ -246,13 +264,6 @@ export function PharmacyPage() {
                               ? "text-amber-200"
                               : "text-slate-300"
                         }`}
-                        title={
-                          expirationStatus === "expired"
-                            ? "Ce lot est expiré"
-                            : expirationStatus === "expiring-soon"
-                              ? "Ce lot approche de sa date de péremption"
-                              : undefined
-                        }
                       >
                         {formatDate(item.expiration_date)}
                         {expirationStatus === "expired" ? (
@@ -269,7 +280,7 @@ export function PharmacyPage() {
                       <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
                       {canEdit ? (
                         <td className="px-4 py-3 text-xs text-slate-200">
-                          <div className="flex gap-2">
+                          <div className="flex flex-wrap gap-2">
                             <button
                               type="button"
                               onClick={() => {
@@ -353,6 +364,20 @@ export function PharmacyPage() {
                   defaultValue={formValues.packaging ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Conditionnement de l'article (boîte, unité...)"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-barcode">
+                  Code-barres
+                </label>
+                <input
+                  id="pharmacy-barcode"
+                  name="barcode"
+                  defaultValue={formValues.barcode ?? ""}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Code-barres associé (facultatif)"
+                  inputMode="text"
+                  pattern="[\x20-\x7E]*"
                 />
               </div>
               <div className="space-y-1">
