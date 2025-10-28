@@ -1333,18 +1333,66 @@ def init_stock_db(db_path=DB_PATH):
         cursor.execute('''
             CREATE TABLE IF NOT EXISTS stock_alerts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                item_id INTEGER NOT NULL,
+                module TEXT NOT NULL DEFAULT 'inventory',
+                entity_id INTEGER NOT NULL,
+                related_item_id INTEGER,
                 triggered_at TEXT NOT NULL,
                 alert_level TEXT,
                 channel TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 message TEXT,
-                FOREIGN KEY(item_id) REFERENCES items(id)
+                FOREIGN KEY(related_item_id) REFERENCES items(id)
             )
         ''')
         cursor.execute('''
-            CREATE INDEX IF NOT EXISTS idx_stock_alerts_item ON stock_alerts(item_id)
+            CREATE INDEX IF NOT EXISTS idx_stock_alerts_item ON stock_alerts(related_item_id)
         ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_stock_alerts_entity ON stock_alerts(module, entity_id)
+        ''')
+
+        cursor.execute("PRAGMA table_info(stock_alerts)")
+        alert_columns = {row[1] for row in cursor.fetchall()}
+        if 'module' not in alert_columns or 'entity_id' not in alert_columns:
+            cursor.execute("ALTER TABLE stock_alerts RENAME TO stock_alerts_old")
+            cursor.execute('''
+                CREATE TABLE stock_alerts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    module TEXT NOT NULL DEFAULT 'inventory',
+                    entity_id INTEGER NOT NULL,
+                    related_item_id INTEGER,
+                    triggered_at TEXT NOT NULL,
+                    alert_level TEXT,
+                    channel TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    message TEXT,
+                    FOREIGN KEY(related_item_id) REFERENCES items(id)
+                )
+            ''')
+            cursor.execute('''
+                INSERT INTO stock_alerts (
+                    id, module, entity_id, related_item_id, triggered_at,
+                    alert_level, channel, status, message
+                )
+                SELECT
+                    id,
+                    'inventory' AS module,
+                    item_id AS entity_id,
+                    item_id AS related_item_id,
+                    triggered_at,
+                    alert_level,
+                    channel,
+                    status,
+                    message
+                FROM stock_alerts_old
+            ''')
+            cursor.execute("DROP TABLE stock_alerts_old")
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_stock_alerts_item ON stock_alerts(related_item_id)
+            ''')
+            cursor.execute('''
+                CREATE INDEX IF NOT EXISTS idx_stock_alerts_entity ON stock_alerts(module, entity_id)
+            ''')
 
         # Ajouter colonnes si manquantes (migration)
         cursor.execute("PRAGMA table_info(items)")
@@ -2492,16 +2540,39 @@ def get_item_from_gear(gear_id):
 # ALERTES / TABLEAU DE BORD
 # ------------------------
 
-def record_stock_alert(item_id, message, channel='internal', alert_level='low'):
+def record_stock_alert(
+    entity_id,
+    message,
+    channel='internal',
+    alert_level='low',
+    *,
+    module: str = 'inventory',
+    related_item_id: Optional[int] = None,
+):
     conn = None
     try:
         timestamp = datetime.now().isoformat()
+        if related_item_id is None and module in ('inventory', 'pharmacy'):
+            related_item_id = entity_id
         with db_lock:
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute(
-                "INSERT INTO stock_alerts (item_id, triggered_at, alert_level, channel, message) VALUES (?, ?, ?, ?, ?)",
-                (item_id, timestamp, alert_level, channel, message),
+                """
+                INSERT INTO stock_alerts (
+                    module, entity_id, related_item_id,
+                    triggered_at, alert_level, channel, message
+                ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    module,
+                    entity_id,
+                    related_item_id,
+                    timestamp,
+                    alert_level,
+                    channel,
+                    message,
+                ),
             )
             conn.commit()
             return cursor.lastrowid
@@ -2513,7 +2584,7 @@ def record_stock_alert(item_id, message, channel='internal', alert_level='low'):
             conn.close()
 
 
-def has_recent_alert(item_id, within_hours=24):
+def has_recent_alert(entity_id, within_hours=24, *, module: str = 'inventory'):
     conn = None
     try:
         threshold_time = (datetime.now() - timedelta(hours=within_hours)).isoformat()
@@ -2521,8 +2592,14 @@ def has_recent_alert(item_id, within_hours=24):
             conn = sqlite3.connect(DB_PATH, timeout=30)
             cursor = conn.cursor()
             cursor.execute(
-                "SELECT COUNT(*) FROM stock_alerts WHERE item_id = ? AND triggered_at >= ?",
-                (item_id, threshold_time),
+                """
+                SELECT COUNT(*)
+                  FROM stock_alerts
+                 WHERE module = ?
+                   AND entity_id = ?
+                   AND triggered_at >= ?
+                """,
+                (module, entity_id, threshold_time),
             )
             count = cursor.fetchone()[0]
             return count > 0
@@ -6518,7 +6595,13 @@ class StockApp(tk.Tk):
                 ),
             )
             if hasattr(self, 'alert_manager') and self.alert_manager:
-                self.alert_manager.dispatch_low_stock_alert(item_id, item_name, new_qty, threshold)
+                self.alert_manager.dispatch_low_stock_alert(
+                    module='inventory',
+                    entity_id=item_id,
+                    item_name=item_name,
+                    quantity=new_qty,
+                    threshold=threshold,
+                )
 
     def refresh_dashboard(self):
         pending_job = getattr(self, "_pending_dashboard_refresh", None)
@@ -7768,33 +7851,66 @@ class StockApp(tk.Tk):
 
 
 class AlertManager:
-    """Gère les alertes de stock faible et la génération automatique de propositions."""
+    """Gère les alertes multi-modules (inventaire, habillement, pharmacie)."""
 
-    def __init__(self, app, threshold):
+    MODULE_LABELS = {
+        'inventory': 'Inventaire',
+        'pharmacy': 'Pharmacie',
+        'clothing': 'Habillement',
+    }
+
+    def __init__(self, app, threshold, *, auto_start: bool = True):
         self.app = app
         self.threshold = threshold
         self.running = True
-        self.thread = threading.Thread(target=self._worker, daemon=True)
-        self.thread.start()
+        self.thread: Optional[threading.Thread] = None
+        if auto_start:
+            self.thread = threading.Thread(target=self._worker, daemon=True)
+            self.thread.start()
 
     def stop(self):
         self.running = False
+        thread = getattr(self, 'thread', None)
+        if thread and thread.is_alive():
+            thread.join(timeout=1)
 
-    def dispatch_low_stock_alert(self, item_id, item_name, quantity, threshold):
-        if has_recent_alert(item_id, within_hours=6):
+    def dispatch_low_stock_alert(
+        self,
+        *,
+        module: str,
+        entity_id: int,
+        item_name: str,
+        quantity: int,
+        threshold: int,
+        related_item_id: Optional[int] = None,
+    ) -> None:
+        if has_recent_alert(entity_id, within_hours=6, module=module):
             return
+        label = self.MODULE_LABELS.get(module, module.capitalize())
         message = (
-            f"Alerte stock faible pour {item_name} : {quantity} unité(s) restante(s) (seuil {threshold})."
+            f"[{label}] Stock faible pour {item_name} : {quantity} unité(s) restante(s) "
+            f"(seuil {threshold})."
         )
-        record_stock_alert(item_id, message, channel='internal', alert_level='low')
-        deficit = max(threshold - quantity, 1)
-        create_suggested_purchase_order(
-            item_id,
-            deficit,
-            created_by=getattr(self.app, 'current_user', 'system'),
+        record_stock_alert(
+            entity_id,
+            message,
+            channel='internal',
+            alert_level='low',
+            module=module,
+            related_item_id=related_item_id,
         )
+        if module in {'inventory', 'pharmacy'} and related_item_id is not None:
+            deficit = max(threshold - quantity, 1)
+            create_suggested_purchase_order(
+                related_item_id,
+                deficit,
+                created_by=getattr(self.app, 'current_user', 'system'),
+            )
         if self.app and self.app.winfo_exists():
-            self.app.after(0, lambda msg=message: self._update_status(msg))
+            status_message = (
+                f"{label} · {item_name} sous le seuil ({quantity}/{threshold})."
+            )
+            self.app.after(0, lambda msg=status_message: self._update_status(msg))
 
     def _update_status(self, message):
         if hasattr(self.app, 'status'):
@@ -7815,30 +7931,122 @@ class AlertManager:
                 time.sleep(1)
 
     def scan_low_stock(self):
+        self._scan_items_low_stock()
+        self._scan_clothing_low_stock()
+
+    def _scan_items_low_stock(self):
         conn = None
+        rows: list[tuple[int, str, object, object, int]] = []
         try:
             with db_lock:
                 conn = sqlite3.connect(DB_PATH, timeout=30)
                 cursor = conn.cursor()
-                cursor.execute(
-                    """
-                    SELECT id, name, quantity, COALESCE(reorder_point, ?) as threshold
-                    FROM items
-                    WHERE quantity <= COALESCE(reorder_point, ?)
-                    """,
-                    (self.threshold, self.threshold),
-                )
-                rows = cursor.fetchall()
+                try:
+                    cursor.execute(
+                        """
+                        SELECT id,
+                               name,
+                               quantity,
+                               COALESCE(reorder_point, ?) AS threshold,
+                               COALESCE(is_medicine, 0) AS is_medicine
+                          FROM items
+                         WHERE quantity <= COALESCE(reorder_point, ?)
+                        """,
+                        (self.threshold, self.threshold),
+                    )
+                    rows = cursor.fetchall()
+                except sqlite3.OperationalError:
+                    cursor.execute(
+                        """
+                        SELECT id,
+                               name,
+                               quantity,
+                               COALESCE(reorder_point, ?) AS threshold
+                          FROM items
+                         WHERE quantity <= COALESCE(reorder_point, ?)
+                        """,
+                        (self.threshold, self.threshold),
+                    )
+                    base_rows = cursor.fetchall()
+                    rows = [(*row, 0) for row in base_rows]
         except sqlite3.Error as e:
-            print(f"[AlertManager] Erreur BD: {e}")
+            print(f"[AlertManager] Erreur BD inventaire: {e}")
             rows = []
         finally:
             if conn:
                 conn.close()
 
-        for item_id, name, qty, threshold in rows:
-            if not has_recent_alert(item_id, within_hours=24):
-                self.dispatch_low_stock_alert(item_id, name, qty, threshold)
+        for item_id, name, qty, threshold, is_medicine in rows:
+            module = 'pharmacy' if (is_medicine or 0) else 'inventory'
+            try:
+                qty_int = int(qty)
+            except (TypeError, ValueError):
+                continue
+            try:
+                threshold_int = int(threshold)
+            except (TypeError, ValueError):
+                threshold_int = self.threshold
+            if not has_recent_alert(item_id, within_hours=24, module=module):
+                display_name = name or f"Article #{item_id}"
+                self.dispatch_low_stock_alert(
+                    module=module,
+                    entity_id=item_id,
+                    item_name=display_name,
+                    quantity=qty_int,
+                    threshold=threshold_int,
+                    related_item_id=item_id,
+                )
+
+    def _scan_clothing_low_stock(self):
+        if not ENABLE_CLOTHING_MODULE or clothing_inventory_manager is None:
+            return
+        if not CLOTHING_DB_PATH:
+            return
+        conn = None
+        try:
+            with db_lock:
+                conn = sqlite3.connect(CLOTHING_DB_PATH, timeout=30)
+                cursor = conn.cursor()
+                cursor.execute(
+                    """
+                    SELECT id,
+                           name,
+                           quantity,
+                           COALESCE(reorder_point, ?) AS threshold
+                      FROM clothing_inventory
+                     WHERE quantity <= COALESCE(reorder_point, ?)
+                    """,
+                    (self.threshold, self.threshold),
+                )
+                rows = cursor.fetchall()
+        except sqlite3.OperationalError:
+            return
+        except sqlite3.Error as e:
+            print(f"[AlertManager] Erreur BD habillement: {e}")
+            rows = []
+        finally:
+            if conn:
+                conn.close()
+
+        for clothing_id, name, qty, threshold in rows:
+            try:
+                qty_int = int(qty)
+            except (TypeError, ValueError):
+                continue
+            try:
+                threshold_int = int(threshold)
+            except (TypeError, ValueError):
+                threshold_int = self.threshold
+            if not has_recent_alert(clothing_id, within_hours=24, module='clothing'):
+                display_name = name or f"Article #{clothing_id}"
+                self.dispatch_low_stock_alert(
+                    module='clothing',
+                    entity_id=clothing_id,
+                    item_name=display_name,
+                    quantity=qty_int,
+                    threshold=threshold_int,
+                    related_item_id=None,
+                )
 
 
 class SupplierFormDialog(tk.Toplevel):
