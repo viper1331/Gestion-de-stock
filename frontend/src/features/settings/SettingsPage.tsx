@@ -22,6 +22,7 @@ export function SettingsPage() {
   const [changes, setChanges] = useState<Record<string, string>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isBackingUp, setIsBackingUp] = useState(false);
 
   const groupedEntries = useMemo(() => {
     return entries.reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
@@ -57,6 +58,26 @@ export function SettingsPage() {
       delete next[key];
       return next;
     });
+  };
+
+  const handleBackup = async () => {
+    setIsBackingUp(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const response = await api.get<Blob>("/backup/", { responseType: "blob" });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "backup-stock.zip";
+      link.click();
+      URL.revokeObjectURL(url);
+      setMessage("Sauvegarde téléchargée.");
+    } catch (err) {
+      setError("Impossible de générer la sauvegarde.");
+    } finally {
+      setIsBackingUp(false);
+    }
   };
 
   return (
@@ -105,6 +126,22 @@ export function SettingsPage() {
               </div>
             </div>
           ))}
+        </div>
+      </div>
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <h3 className="text-sm font-semibold text-white">Sauvegarde des bases</h3>
+            <p className="text-xs text-slate-400">Téléchargez un export ZIP des bases utilisateurs et stock.</p>
+          </div>
+          <button
+            type="button"
+            onClick={handleBackup}
+            disabled={isBackingUp}
+            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            {isBackingUp ? "Sauvegarde..." : "Exporter"}
+          </button>
         </div>
       </div>
     </section>

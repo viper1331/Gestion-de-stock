@@ -1,11 +1,14 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useEffect } from "react";
+import { useEffect, useMemo } from "react";
 
 import { useAuth } from "../features/auth/useAuth";
 import { ThemeToggle } from "./ThemeToggle";
+import { MicToggle } from "../features/voice/MicToggle";
+import { useModulePermissions } from "../features/permissions/useModulePermissions";
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
+  const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
 
   useEffect(() => {
@@ -30,6 +33,43 @@ export function AppLayout() {
     return null;
   }
 
+  const navigationLinks = useMemo(
+    () => {
+      type NavLinkConfig = {
+        to: string;
+        label: string;
+        module?: string;
+        adminOnly?: boolean;
+      };
+
+      const baseLinks: NavLinkConfig[] = [
+        { to: "/", label: "Inventaire" },
+        { to: "/barcode", label: "Codes-barres" },
+        { to: "/reports", label: "Rapports" },
+        { to: "/suppliers", label: "Fournisseurs", module: "suppliers" },
+        { to: "/collaborators", label: "Collaborateurs", module: "dotations" },
+        { to: "/dotations", label: "Dotations", module: "dotations" },
+        { to: "/pharmacy", label: "Pharmacie", module: "pharmacy" },
+        { to: "/settings", label: "Paramètres" },
+        { to: "/permissions", label: "Permissions", adminOnly: true }
+      ];
+
+      return baseLinks.filter((link) => {
+        if (link.adminOnly) {
+          return user?.role === "admin";
+        }
+        if (!link.module) {
+          return true;
+        }
+        if (user?.role === "admin") {
+          return true;
+        }
+        return modulePermissions.canAccess(link.module);
+      });
+    },
+    [modulePermissions.canAccess, user?.role]
+  );
+
   return (
     <div className="flex h-screen bg-slate-950 text-slate-50">
       <aside className="w-64 border-r border-slate-800 bg-slate-900 p-6">
@@ -37,24 +77,21 @@ export function AppLayout() {
           Gestion Stock Pro
         </Link>
         <nav className="mt-8 flex flex-col gap-2 text-sm">
-          <NavLink to="/" end className={({ isActive }) => navClass(isActive)}>
-            Inventaire
-          </NavLink>
-          <NavLink to="/barcode" className={({ isActive }) => navClass(isActive)}>
-            Codes-barres
-          </NavLink>
-          <NavLink to="/reports" className={({ isActive }) => navClass(isActive)}>
-            Rapports
-          </NavLink>
-          <NavLink to="/settings" className={({ isActive }) => navClass(isActive)}>
-            Paramètres
-          </NavLink>
+          {navigationLinks.map((link) => (
+            <NavLink key={link.to} to={link.to} end={link.to === "/"} className={({ isActive }) => navClass(isActive)}>
+              {link.label}
+            </NavLink>
+          ))}
         </nav>
+        {modulePermissions.isLoading && user?.role !== "admin" ? (
+          <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
+        ) : null}
         <div className="mt-auto flex flex-col gap-3 pt-6">
           <div className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
             <p className="font-semibold text-slate-200">{user.username}</p>
             <p>Rôle : {user.role}</p>
           </div>
+          <MicToggle />
           <ThemeToggle />
           <button
             onClick={logout}

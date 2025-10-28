@@ -7,6 +7,11 @@ import { Dashboard } from "../features/inventory/Dashboard";
 import { BarcodePage } from "../features/barcode/BarcodePage";
 import { ReportsPage } from "../features/reports/ReportsPage";
 import { SettingsPage } from "../features/settings/SettingsPage";
+import { SuppliersPage } from "../features/suppliers/SuppliersPage";
+import { CollaboratorsPage } from "../features/dotations/CollaboratorsPage";
+import { DotationsPage } from "../features/dotations/DotationsPage";
+import { PharmacyPage } from "../features/pharmacy/PharmacyPage";
+import { ModulePermissionsPage } from "../features/permissions/ModulePermissionsPage";
 
 export const router = createBrowserRouter([
   {
@@ -21,7 +26,12 @@ export const router = createBrowserRouter([
       { path: "", element: <Dashboard /> },
       { path: "barcode", element: <BarcodePage /> },
       { path: "reports", element: <ReportsPage /> },
-      { path: "settings", element: <SettingsPage /> }
+      { path: "settings", element: <SettingsPage /> },
+      { path: "suppliers", element: <SuppliersPage /> },
+      { path: "collaborators", element: <CollaboratorsPage /> },
+      { path: "dotations", element: <DotationsPage /> },
+      { path: "pharmacy", element: <PharmacyPage /> },
+      { path: "permissions", element: <ModulePermissionsPage /> }
     ]
   }
 ]);
