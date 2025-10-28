@@ -1390,9 +1390,50 @@ def init_stock_db(db_path=DB_PATH):
             cursor.execute('''
                 CREATE INDEX IF NOT EXISTS idx_stock_alerts_item ON stock_alerts(related_item_id)
             ''')
-            cursor.execute('''
-                CREATE INDEX IF NOT EXISTS idx_stock_alerts_entity ON stock_alerts(module, entity_id)
-            ''')
+        cursor.execute('''
+            CREATE INDEX IF NOT EXISTS idx_stock_alerts_entity ON stock_alerts(module, entity_id)
+        ''')
+
+        # Suggestions de réapprovisionnement multi-modules
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS reorder_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                module TEXT NOT NULL,
+                entity_id INTEGER NOT NULL,
+                item_name TEXT NOT NULL,
+                quantity INTEGER NOT NULL,
+                threshold INTEGER NOT NULL,
+                deficit INTEGER NOT NULL,
+                supplier_id INTEGER,
+                supplier_name TEXT,
+                supplier_contact TEXT,
+                status TEXT NOT NULL DEFAULT 'SUGGESTED',
+                metadata TEXT,
+                document_path TEXT,
+                note TEXT,
+                created_at TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                FOREIGN KEY(supplier_id) REFERENCES suppliers(id)
+            )
+        ''')
+        cursor.execute('''
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_reorder_suggestions_entity
+            ON reorder_suggestions(module, entity_id)
+        ''')
+        cursor.execute("PRAGMA table_info(reorder_suggestions)")
+        suggestion_columns = {row[1] for row in cursor.fetchall()}
+        if 'supplier_contact' not in suggestion_columns:
+            cursor.execute("ALTER TABLE reorder_suggestions ADD COLUMN supplier_contact TEXT")
+        if 'metadata' not in suggestion_columns:
+            cursor.execute("ALTER TABLE reorder_suggestions ADD COLUMN metadata TEXT")
+        if 'document_path' not in suggestion_columns:
+            cursor.execute("ALTER TABLE reorder_suggestions ADD COLUMN document_path TEXT")
+        if 'note' not in suggestion_columns:
+            cursor.execute("ALTER TABLE reorder_suggestions ADD COLUMN note TEXT")
+        if 'created_at' not in suggestion_columns:
+            cursor.execute("ALTER TABLE reorder_suggestions ADD COLUMN created_at TEXT NOT NULL DEFAULT ''")
+        if 'updated_at' not in suggestion_columns:
+            cursor.execute("ALTER TABLE reorder_suggestions ADD COLUMN updated_at TEXT NOT NULL DEFAULT ''")
 
         # Ajouter colonnes si manquantes (migration)
         cursor.execute("PRAGMA table_info(items)")
@@ -2099,6 +2140,345 @@ def create_suggested_purchase_order(item_id, deficit, created_by='system'):
         return existing[0]
     note = f"Suggestion automatique pour item:{item_id} déficit:{deficit}"
     return create_purchase_order(None, None, note, created_by, lines, status='SUGGESTED')
+
+
+def get_supplier_details(supplier_id: Optional[int]) -> tuple[Optional[str], Optional[str]]:
+    if not supplier_id:
+        return None, None
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT name, contact_name, email, phone FROM suppliers WHERE id = ?",
+                (supplier_id,),
+            )
+            row = cursor.fetchone()
+            if row:
+                name, contact_name, email, phone = row
+                parts = [part for part in (contact_name, email, phone) if part]
+                contact = " | ".join(parts) if parts else None
+                return name or None, contact
+    except sqlite3.Error as e:
+        print(f"[DB Error] get_supplier_details: {e}")
+    finally:
+        if conn:
+            conn.close()
+    return None, None
+
+
+def _get_item_supplier_context(
+    item_id: int,
+) -> tuple[Optional[int], Optional[str], Optional[str], dict[str, Any]]:
+    conn = None
+    metadata: dict[str, Any] = {}
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT preferred_supplier_id, size, barcode, category_id FROM items WHERE id = ?",
+                (item_id,),
+            )
+            row = cursor.fetchone()
+            if row is None:
+                return None, None, None, {}
+            supplier_id, size_value, barcode_value, category_id = row
+            if size_value:
+                metadata['size'] = size_value
+            if barcode_value:
+                metadata['barcode'] = barcode_value
+            if category_id:
+                cursor.execute(
+                    "SELECT name FROM categories WHERE id = ?",
+                    (category_id,),
+                )
+                cat_row = cursor.fetchone()
+                if cat_row and cat_row[0]:
+                    metadata['category'] = cat_row[0]
+    except sqlite3.Error as e:
+        print(f"[DB Error] _get_item_supplier_context: {e}")
+        return None, None, None, {}
+    finally:
+        if conn:
+            conn.close()
+    supplier_name, supplier_contact = get_supplier_details(supplier_id) if supplier_id else (None, None)
+    return supplier_id, supplier_name, supplier_contact, metadata
+
+
+def upsert_reorder_suggestion(
+    module: str,
+    entity_id: int,
+    *,
+    item_name: str,
+    quantity: int,
+    threshold: int,
+    deficit: Optional[int] = None,
+    supplier_id: Optional[int] = None,
+    supplier_name: Optional[str] = None,
+    supplier_contact: Optional[str] = None,
+    metadata: Optional[dict[str, Any]] = None,
+) -> None:
+    normalized_module = (module or 'inventory').strip().lower() or 'inventory'
+    now = datetime.now().isoformat()
+    try:
+        qty_value = int(quantity)
+    except (TypeError, ValueError):
+        qty_value = 0
+    try:
+        threshold_value = int(threshold)
+    except (TypeError, ValueError):
+        threshold_value = DEFAULT_LOW_STOCK_THRESHOLD
+    deficit_value = deficit if deficit is not None else threshold_value - qty_value
+    if deficit_value is None:
+        deficit_value = threshold_value - qty_value
+    try:
+        deficit_value = int(deficit_value)
+    except (TypeError, ValueError):
+        deficit_value = threshold_value or 1
+    if deficit_value <= 0:
+        deficit_value = 1
+    metadata_json = json.dumps(metadata, ensure_ascii=False) if metadata else None
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id FROM reorder_suggestions WHERE module = ? AND entity_id = ?",
+                (normalized_module, entity_id),
+            )
+            row = cursor.fetchone()
+            if row:
+                cursor.execute(
+                    """
+                    UPDATE reorder_suggestions
+                       SET item_name = ?,
+                           quantity = ?,
+                           threshold = ?,
+                           deficit = ?,
+                           supplier_id = ?,
+                           supplier_name = ?,
+                           supplier_contact = ?,
+                           metadata = ?,
+                           status = 'SUGGESTED',
+                           document_path = NULL,
+                           updated_at = ?
+                     WHERE id = ?
+                    """,
+                    (
+                        item_name,
+                        qty_value,
+                        threshold_value,
+                        deficit_value,
+                        supplier_id,
+                        supplier_name,
+                        supplier_contact,
+                        metadata_json,
+                        now,
+                        row[0],
+                    ),
+                )
+            else:
+                cursor.execute(
+                    """
+                    INSERT INTO reorder_suggestions (
+                        module, entity_id, item_name, quantity, threshold, deficit,
+                        supplier_id, supplier_name, supplier_contact, status,
+                        metadata, document_path, note, created_at, updated_at
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'SUGGESTED', ?, NULL, NULL, ?, ?)
+                    """,
+                    (
+                        normalized_module,
+                        entity_id,
+                        item_name,
+                        qty_value,
+                        threshold_value,
+                        deficit_value,
+                        supplier_id,
+                        supplier_name,
+                        supplier_contact,
+                        metadata_json,
+                        now,
+                        now,
+                    ),
+                )
+            conn.commit()
+    except sqlite3.Error as e:
+        print(f"[DB Error] upsert_reorder_suggestion: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+
+def fetch_reorder_suggestions(
+    module: Optional[str] = None,
+    status: Optional[str] = None,
+) -> list[dict[str, Any]]:
+    conn = None
+    suggestions: list[dict[str, Any]] = []
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            conn.row_factory = sqlite3.Row
+            cursor = conn.cursor()
+            query = "SELECT * FROM reorder_suggestions"
+            clauses: list[str] = []
+            params: list[Any] = []
+            if module:
+                clauses.append("module = ?")
+                params.append(module.strip().lower())
+            if status:
+                clauses.append("UPPER(status) = ?")
+                params.append(status.strip().upper())
+            if clauses:
+                query += " WHERE " + " AND ".join(clauses)
+            query += " ORDER BY updated_at DESC, created_at DESC"
+            cursor.execute(query, params)
+            rows = cursor.fetchall()
+            for row in rows:
+                metadata = {}
+                raw_metadata = row['metadata']
+                if raw_metadata:
+                    try:
+                        metadata = json.loads(raw_metadata)
+                    except json.JSONDecodeError:
+                        metadata = {}
+                suggestions.append(
+                    {
+                        'id': row['id'],
+                        'module': row['module'],
+                        'entity_id': row['entity_id'],
+                        'item_name': row['item_name'],
+                        'quantity': row['quantity'],
+                        'threshold': row['threshold'],
+                        'deficit': row['deficit'],
+                        'supplier_id': row['supplier_id'],
+                        'supplier_name': row['supplier_name'],
+                        'supplier_contact': row['supplier_contact'],
+                        'status': row['status'],
+                        'metadata': metadata,
+                        'document_path': row['document_path'],
+                        'note': row['note'],
+                        'created_at': row['created_at'],
+                        'updated_at': row['updated_at'],
+                    }
+                )
+    except sqlite3.Error as e:
+        print(f"[DB Error] fetch_reorder_suggestions: {e}")
+    finally:
+        if conn:
+            conn.close()
+    return suggestions
+
+
+def update_reorder_suggestion_status(
+    suggestion_ids: Iterable[int],
+    status: str,
+    *,
+    document_path: Optional[str] = None,
+    note: Optional[str] = None,
+) -> None:
+    ids = [int(sid) for sid in suggestion_ids if sid is not None]
+    if not ids:
+        return
+    normalized_status = (status or 'SUGGESTED').strip().upper() or 'SUGGESTED'
+    now = datetime.now().isoformat()
+    conn = None
+    try:
+        with db_lock:
+            conn = sqlite3.connect(DB_PATH, timeout=30)
+            cursor = conn.cursor()
+            setters = ["status = ?", "updated_at = ?"]
+            params: list[Any] = [normalized_status, now]
+            if document_path is not None:
+                setters.append("document_path = ?")
+                params.append(document_path)
+            if note is not None:
+                setters.append("note = ?")
+                params.append(note)
+            placeholders = ','.join('?' for _ in ids)
+            params.extend(ids)
+            cursor.execute(
+                f"UPDATE reorder_suggestions SET {', '.join(setters)} WHERE id IN ({placeholders})",
+                tuple(params),
+            )
+            conn.commit()
+    except sqlite3.Error as e:
+        print(f"[DB Error] update_reorder_suggestion_status: {e}")
+    finally:
+        if conn:
+            conn.close()
+
+
+def register_reorder_suggestion_event(
+    *,
+    module: str,
+    entity_id: int,
+    item_name: str,
+    quantity: int,
+    threshold: int,
+    related_item_id: Optional[int] = None,
+) -> None:
+    normalized_module = (module or '').strip().lower()
+    if normalized_module not in {'clothing', 'pharmacy'}:
+        return
+    supplier_id: Optional[int] = None
+    supplier_name: Optional[str] = None
+    supplier_contact: Optional[str] = None
+    metadata: dict[str, Any] = {}
+    try:
+        if normalized_module == 'clothing':
+            if clothing_inventory_manager is None:
+                return
+            clothing_item = clothing_inventory_manager.get_item(entity_id)
+            if clothing_item is None:
+                return
+            supplier_id = clothing_item.preferred_supplier_id
+            supplier_name = clothing_item.preferred_supplier_name
+            metadata = {
+                key: value
+                for key, value in (
+                    ('size', clothing_item.size),
+                    ('category', clothing_item.category),
+                    ('barcode', clothing_item.barcode),
+                )
+                if value
+            }
+            if supplier_id:
+                resolved_name, contact = get_supplier_details(supplier_id)
+                if resolved_name:
+                    supplier_name = resolved_name
+                supplier_contact = contact
+        else:
+            target_item = related_item_id or entity_id
+            if target_item is None:
+                return
+            (
+                supplier_id,
+                supplier_name,
+                supplier_contact,
+                metadata,
+            ) = _get_item_supplier_context(target_item)
+    except Exception as exc:  # pragma: no cover - sécurité runtime
+        print(f"[AlertManager] Unable to build reorder suggestion: {exc}")
+        return
+
+    metadata_payload = metadata or None
+    deficit = max(threshold - quantity, 1)
+    upsert_reorder_suggestion(
+        normalized_module,
+        entity_id,
+        item_name=item_name,
+        quantity=quantity,
+        threshold=threshold,
+        deficit=deficit,
+        supplier_id=supplier_id,
+        supplier_name=supplier_name,
+        supplier_contact=supplier_contact,
+        metadata=metadata_payload,
+    )
 
 
 # ------------------------
@@ -4958,6 +5338,13 @@ class StockApp(tk.Tk):
             text="Exporter CSV",
             command=self.export_clothing_inventory,
         ).grid(row=0, column=7, padx=5, pady=2, sticky=tk.W)
+        ttk.Button(
+            control_frame,
+            text="Suggestions commande",
+            command=self.open_clothing_reorder_dialog,
+        ).grid(row=0, column=8, padx=5, pady=2, sticky=tk.W)
+
+        control_frame.grid_columnconfigure(1, weight=1)
 
         control_frame.columnconfigure(8, weight=1)
 
@@ -5361,6 +5748,16 @@ class StockApp(tk.Tk):
             f"Export réalisé avec succès : {file_path}",
             parent=self,
         )
+
+    def open_clothing_reorder_dialog(self) -> None:
+        if clothing_inventory_manager is None:
+            messagebox.showerror(
+                "Module indisponible",
+                "Le module habillement n'est pas disponible sur cette installation.",
+                parent=self,
+            )
+            return
+        ReorderSuggestionDialog(self, 'clothing')
 
     def on_clothing_item_double_click(self, _event=None) -> None:
         if not hasattr(self, 'clothing_tree'):
@@ -5901,6 +6298,11 @@ class StockApp(tk.Tk):
             text="Lots à surveiller",
             command=self.show_expiring_pharmacy_batches,
         ).grid(row=0, column=5, padx=5, pady=5)
+        ttk.Button(
+            control_frame,
+            text="Suggestions commande",
+            command=self.open_pharmacy_reorder_dialog,
+        ).grid(row=0, column=6, padx=5, pady=5)
 
         control_frame.grid_columnconfigure(1, weight=1)
 
@@ -6322,6 +6724,16 @@ class StockApp(tk.Tk):
             "\n\n".join(lines),
             parent=self,
         )
+
+    def open_pharmacy_reorder_dialog(self) -> None:
+        if pharmacy_inventory_manager is None:
+            messagebox.showerror(
+                "Module indisponible",
+                "La gestion pharmacie n'est pas disponible sur cette installation.",
+                parent=self,
+            )
+            return
+        ReorderSuggestionDialog(self, 'pharmacy')
 
     def on_pharmacy_batch_double_click(self, _event=None):
         if not hasattr(self, 'pharmacy_tree'):
@@ -7890,6 +8302,14 @@ class AlertManager:
         threshold: int,
         related_item_id: Optional[int] = None,
     ) -> None:
+        register_reorder_suggestion_event(
+            module=module,
+            entity_id=entity_id,
+            item_name=item_name,
+            quantity=quantity,
+            threshold=threshold,
+            related_item_id=related_item_id,
+        )
         if has_recent_alert(entity_id, within_hours=6, module=module):
             return
         label = self.MODULE_LABELS.get(module, module.capitalize())
@@ -8051,7 +8471,7 @@ class AlertManager:
                     item_name=display_name,
                     quantity=qty_int,
                     threshold=threshold_int,
-                    related_item_id=None,
+                    related_item_id=clothing_id,
                 )
 
 
@@ -8849,6 +9269,216 @@ class PurchaseOrderManagementDialog(tk.Toplevel):
             messagebox.showinfo("Bons de commande", f"Export réalisé vers {file_path}", parent=self)
         except Exception as exc:
             messagebox.showerror("Bons de commande", f"Impossible d'exporter : {exc}", parent=self)
+
+
+class ReorderSuggestionDialog(tk.Toplevel):
+    MODULE_LABELS = {
+        'clothing': 'Habillement',
+        'pharmacy': 'Pharmacie',
+    }
+
+    STATUS_DISPLAY = {
+        'SUGGESTED': 'Suggéré',
+        'GENERATED': 'Préparé',
+        'COMPLETED': 'Traité',
+    }
+
+    COLUMN_LABELS = {
+        'item': 'Article',
+        'quantity': 'Qté actuelle',
+        'threshold': 'Seuil',
+        'deficit': 'À commander',
+        'supplier': 'Fournisseur',
+        'contact': 'Contact',
+        'details': 'Détails',
+        'status': 'Statut',
+        'updated': 'Mise à jour',
+    }
+
+    def __init__(self, parent, module: str):
+        super().__init__(parent)
+        self.parent = parent
+        self.module = (module or '').strip().lower()
+        title_suffix = self.MODULE_LABELS.get(self.module, self.module.capitalize())
+        self.title(f"Suggestions de commande · {title_suffix}")
+        self.geometry("920x420")
+        self.minsize(720, 360)
+        self.suggestions_cache: dict[str, dict[str, Any]] = {}
+
+        header = ttk.Label(
+            self,
+            text="Articles sous le seuil — préparez vos bons de commande en quelques clics",
+            font=("Segoe UI", 11, "bold"),
+        )
+        header.pack(anchor=tk.W, padx=10, pady=(10, 5))
+
+        tree_frame = ttk.Frame(self)
+        tree_frame.pack(fill=tk.BOTH, expand=True, padx=10, pady=(0, 10))
+
+        columns = (
+            'item',
+            'quantity',
+            'threshold',
+            'deficit',
+            'supplier',
+            'contact',
+            'details',
+            'status',
+            'updated',
+        )
+        self.tree = ttk.Treeview(tree_frame, columns=columns, show='headings', selectmode='extended')
+        vsb = ttk.Scrollbar(tree_frame, orient=tk.VERTICAL, command=self.tree.yview)
+        hsb = ttk.Scrollbar(tree_frame, orient=tk.HORIZONTAL, command=self.tree.xview)
+        self.tree.configure(yscrollcommand=vsb.set, xscrollcommand=hsb.set)
+        self.tree.grid(row=0, column=0, sticky='nsew')
+        vsb.grid(row=0, column=1, sticky='ns')
+        hsb.grid(row=1, column=0, sticky='ew')
+        tree_frame.columnconfigure(0, weight=1)
+        tree_frame.rowconfigure(0, weight=1)
+
+        for column in columns:
+            self.tree.heading(column, text=self.COLUMN_LABELS.get(column, column))
+        self.tree.column('item', width=220, anchor=tk.W)
+        self.tree.column('quantity', width=110, anchor=tk.CENTER)
+        self.tree.column('threshold', width=110, anchor=tk.CENTER)
+        self.tree.column('deficit', width=120, anchor=tk.CENTER)
+        self.tree.column('supplier', width=180, anchor=tk.W)
+        self.tree.column('contact', width=200, anchor=tk.W)
+        self.tree.column('details', width=220, anchor=tk.W)
+        self.tree.column('status', width=110, anchor=tk.CENTER)
+        self.tree.column('updated', width=140, anchor=tk.CENTER)
+
+        self.tree.tag_configure('status_suggested', foreground='#b76a00')
+        self.tree.tag_configure('status_generated', foreground='#0c5460')
+        self.tree.tag_configure('status_completed', foreground='#2c662d')
+
+        action_frame = ttk.Frame(self)
+        action_frame.pack(fill=tk.X, padx=10, pady=(0, 10))
+        ttk.Button(action_frame, text="Générer bon", command=self.generate_document).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="Marquer traité", command=self.mark_completed).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="Rafraîchir", command=self.refresh).pack(side=tk.LEFT, padx=5)
+        ttk.Button(action_frame, text="Fermer", command=self.destroy).pack(side=tk.RIGHT, padx=5)
+
+        self.refresh()
+        self.after(150, lambda: self.tree.focus_set())
+        self.grab_set()
+
+    def get_selected_ids(self) -> list[int]:
+        selection = self.tree.selection()
+        return [int(item) for item in selection]
+
+    def refresh(self):
+        suggestions = fetch_reorder_suggestions(module=self.module)
+        self.suggestions_cache.clear()
+        self.tree.delete(*self.tree.get_children())
+        for suggestion in suggestions:
+            iid = str(suggestion['id'])
+            self.suggestions_cache[iid] = suggestion
+            status_raw = (suggestion.get('status') or 'SUGGESTED').upper()
+            status_display = self.STATUS_DISPLAY.get(status_raw, status_raw.title())
+            updated_display = format_display_datetime(suggestion.get('updated_at'))
+            supplier_display = suggestion.get('supplier_name') or '—'
+            contact_display = suggestion.get('supplier_contact') or '—'
+            metadata = suggestion.get('metadata') or {}
+            details_parts: list[str] = []
+            if isinstance(metadata, dict):
+                size_val = metadata.get('size')
+                category_val = metadata.get('category')
+                barcode_val = metadata.get('barcode')
+                if size_val:
+                    details_parts.append(f"Taille : {size_val}")
+                if category_val:
+                    details_parts.append(f"Catégorie : {category_val}")
+                if barcode_val:
+                    details_parts.append(f"Code-barres : {barcode_val}")
+            details_display = ' | '.join(details_parts) if details_parts else '—'
+            row_values = (
+                suggestion.get('item_name', ''),
+                suggestion.get('quantity', 0),
+                suggestion.get('threshold', 0),
+                suggestion.get('deficit', 0),
+                supplier_display,
+                contact_display,
+                details_display,
+                status_display,
+                updated_display,
+            )
+            tag = f"status_{status_raw.lower()}"
+            self.tree.insert('', tk.END, iid=iid, values=row_values, tags=(tag,))
+        if suggestions:
+            first = self.tree.get_children()[0]
+            self.tree.selection_set(first)
+            self.tree.focus(first)
+
+    def generate_document(self):
+        ids = self.get_selected_ids()
+        if not ids:
+            messagebox.showwarning("Suggestions", "Sélectionnez au moins une suggestion.", parent=self)
+            return
+        file_path = filedialog.asksaveasfilename(
+            defaultextension='.csv',
+            filetypes=[('CSV', '*.csv')],
+            title='Exporter le bon de commande',
+        )
+        if not file_path:
+            return
+        rows: list[tuple] = []
+        headers = (
+            'Article',
+            'Quantité actuelle',
+            'Seuil',
+            'À commander',
+            'Fournisseur',
+            'Contact',
+            'Détails',
+        )
+        for sid in ids:
+            suggestion = self.suggestions_cache.get(str(sid))
+            if not suggestion:
+                continue
+            metadata = suggestion.get('metadata') or {}
+            details_parts: list[str] = []
+            if isinstance(metadata, dict):
+                for label, key in (('Taille', 'size'), ('Catégorie', 'category'), ('Code-barres', 'barcode')):
+                    value = metadata.get(key)
+                    if value:
+                        details_parts.append(f"{label}: {value}")
+            rows.append(
+                (
+                    suggestion.get('item_name', ''),
+                    suggestion.get('quantity', 0),
+                    suggestion.get('threshold', 0),
+                    suggestion.get('deficit', 0),
+                    suggestion.get('supplier_name') or '',
+                    suggestion.get('supplier_contact') or '',
+                    ' | '.join(details_parts),
+                )
+            )
+        if not rows:
+            messagebox.showinfo("Suggestions", "Aucune donnée à exporter.", parent=self)
+            return
+        try:
+            export_rows_to_csv(file_path, headers, rows)
+        except Exception as exc:
+            messagebox.showerror("Suggestions", f"Impossible d'exporter : {exc}", parent=self)
+            return
+        update_reorder_suggestion_status(ids, 'GENERATED', document_path=file_path)
+        messagebox.showinfo(
+            "Suggestions",
+            f"Bon de commande préparé :\n{file_path}",
+            parent=self,
+        )
+        self.refresh()
+
+    def mark_completed(self):
+        ids = self.get_selected_ids()
+        if not ids:
+            messagebox.showwarning("Suggestions", "Sélectionnez au moins une suggestion.", parent=self)
+            return
+        update_reorder_suggestion_status(ids, 'COMPLETED')
+        self.refresh()
+
+
 class CollaboratorFormDialog(tk.Toplevel):
     def __init__(self, parent, title, collaborator=None):
         super().__init__(parent)
