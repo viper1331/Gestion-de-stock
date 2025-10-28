@@ -78,12 +78,18 @@ export function AppLayout() {
   return (
     <div className="flex h-screen bg-slate-950 text-slate-50">
       <aside className="w-64 border-r border-slate-800 bg-slate-900 p-6">
-        <Link to="/" className="block text-lg font-semibold">
+        <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
           Gestion Stock Pro
         </Link>
         <nav className="mt-8 flex flex-col gap-2 text-sm">
           {navigationLinks.map((link) => (
-            <NavLink key={link.to} to={link.to} end={link.to === "/"} className={({ isActive }) => navClass(isActive)}>
+            <NavLink
+              key={link.to}
+              to={link.to}
+              end={link.to === "/"}
+              className={({ isActive }) => navClass(isActive)}
+              title={`Accéder à la section ${link.label}`}
+            >
               {link.label}
             </NavLink>
           ))}
@@ -101,6 +107,7 @@ export function AppLayout() {
           <button
             onClick={logout}
             className="rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-red-400"
+            title="Se déconnecter de votre session"
           >
             Se déconnecter
           </button>

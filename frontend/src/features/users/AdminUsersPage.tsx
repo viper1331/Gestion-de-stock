@@ -240,6 +240,7 @@ export function AdminUsersPage() {
             value={createForm.username}
             onChange={(event) => setCreateForm((prev) => ({ ...prev, username: event.target.value }))}
             placeholder="ex: jdupont"
+            title="Identifiant de connexion du nouvel utilisateur"
           />
         </div>
         <div className="flex flex-1 flex-col">
@@ -250,6 +251,7 @@ export function AdminUsersPage() {
             type="password"
             onChange={(event) => setCreateForm((prev) => ({ ...prev, password: event.target.value }))}
             placeholder="Minimum 8 caractères"
+            title="Définissez un mot de passe temporaire pour ce compte"
           />
         </div>
         <label className="flex flex-col text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -260,6 +262,7 @@ export function AdminUsersPage() {
             onChange={(event) =>
               setCreateForm((prev) => ({ ...prev, role: event.target.value as UserRole }))
             }
+            title="Choisissez le niveau d'accès du nouvel utilisateur"
           >
             <option value="user">Utilisateur</option>
             <option value="admin">Administrateur</option>
@@ -269,6 +272,7 @@ export function AdminUsersPage() {
           type="submit"
           disabled={createUser.isPending || isProcessing}
           className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          title="Créer le compte utilisateur"
         >
           {createUser.isPending ? "Création..." : "Créer"}
         </button>
@@ -298,6 +302,7 @@ export function AdminUsersPage() {
                       onChange={(event) =>
                         handleDraftChange(entry, { role: event.target.value as UserRole })
                       }
+                      title="Modifier le rôle attribué à cet utilisateur"
                     >
                       <option value="user">Utilisateur</option>
                       <option value="admin">Administrateur</option>
@@ -311,6 +316,7 @@ export function AdminUsersPage() {
                         onChange={(event) =>
                           handleDraftChange(entry, { is_active: event.target.checked })
                         }
+                        title="Activer ou désactiver le compte"
                       />
                       Actif
                     </label>
@@ -322,6 +328,7 @@ export function AdminUsersPage() {
                       onChange={(event) => handleDraftChange(entry, { password: event.target.value })}
                       placeholder="Laisser vide pour ne pas changer"
                       className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                      title="Définissez un nouveau mot de passe si nécessaire"
                     />
                   </td>
                   <td className="px-4 py-3">
@@ -331,6 +338,11 @@ export function AdminUsersPage() {
                         onClick={() => handleSave(entry)}
                         disabled={!hasPendingChanges(entry) || updateUser.isPending}
                         className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                        title={
+                          hasPendingChanges(entry)
+                            ? "Enregistrer les modifications"
+                            : "Aucune modification à sauvegarder"
+                        }
                       >
                         {updateUser.isPending ? "Enregistrement..." : "Enregistrer"}
                       </button>
@@ -339,6 +351,11 @@ export function AdminUsersPage() {
                         onClick={() => handleDelete(entry)}
                         disabled={deleteUser.isPending || entry.username === "admin"}
                         className="rounded-md bg-red-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-70"
+                        title={
+                          entry.username === "admin"
+                            ? "Le compte administrateur par défaut ne peut pas être supprimé"
+                            : "Supprimer cet utilisateur"
+                        }
                       >
                         {deleteUser.isPending ? "Suppression..." : "Supprimer"}
                       </button>

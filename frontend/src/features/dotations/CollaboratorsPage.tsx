@@ -157,6 +157,7 @@ export function CollaboratorsPage() {
               setFormMode("create");
             }}
             className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+            title="Ajouter un nouveau collaborateur"
           >
             Nouveau collaborateur
           </button>
@@ -200,6 +201,7 @@ export function CollaboratorsPage() {
                               setFormMode("edit");
                             }}
                             className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Modifier la fiche de ${collaborator.full_name}`}
                           >
                             Modifier
                           </button>
@@ -214,6 +216,7 @@ export function CollaboratorsPage() {
                               void deleteCollaborator.mutateAsync(collaborator.id);
                             }}
                             className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                            title={`Supprimer ${collaborator.full_name} de la liste`}
                           >
                             Supprimer
                           </button>
@@ -248,6 +251,7 @@ export function CollaboratorsPage() {
                   defaultValue={formValues.full_name}
                   required
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Nom et prénom du collaborateur"
                 />
               </div>
               <div className="space-y-1">
@@ -259,6 +263,7 @@ export function CollaboratorsPage() {
                   name="department"
                   defaultValue={formValues.department ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Service ou département d'affectation"
                 />
               </div>
               <div className="space-y-1">
@@ -271,6 +276,7 @@ export function CollaboratorsPage() {
                   type="email"
                   defaultValue={formValues.email ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Adresse e-mail professionnelle"
                 />
               </div>
               <div className="space-y-1">
@@ -282,6 +288,7 @@ export function CollaboratorsPage() {
                   name="phone"
                   defaultValue={formValues.phone ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Numéro de téléphone de contact"
                 />
               </div>
               <div className="flex gap-2">
@@ -289,6 +296,11 @@ export function CollaboratorsPage() {
                   type="submit"
                   disabled={createCollaborator.isPending || updateCollaborator.isPending}
                   className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  title={
+                    formMode === "edit"
+                      ? "Enregistrer les informations du collaborateur"
+                      : "Ajouter ce collaborateur aux dotations"
+                  }
                 >
                   {formMode === "edit"
                     ? updateCollaborator.isPending
@@ -306,6 +318,7 @@ export function CollaboratorsPage() {
                       setFormMode("create");
                     }}
                     className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                    title="Annuler la modification en cours"
                   >
                     Annuler
                   </button>

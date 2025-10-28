@@ -163,6 +163,7 @@ export function PharmacyPage() {
               setFormMode("create");
             }}
             className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+            title="Créer une nouvelle référence pharmaceutique"
           >
             Nouvel article
           </button>
@@ -208,6 +209,7 @@ export function PharmacyPage() {
                               setFormMode("edit");
                             }}
                             className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Modifier la fiche de ${item.name}`}
                           >
                             Modifier
                           </button>
@@ -222,6 +224,7 @@ export function PharmacyPage() {
                               void deleteItem.mutateAsync(item.id);
                             }}
                             className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                            title={`Supprimer ${item.name} de la pharmacie`}
                           >
                             Supprimer
                           </button>
@@ -256,6 +259,7 @@ export function PharmacyPage() {
                   defaultValue={formValues.name}
                   required
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Nom du médicament ou du consommable"
                 />
               </div>
               <div className="space-y-1">
@@ -267,6 +271,7 @@ export function PharmacyPage() {
                   name="dosage"
                   defaultValue={formValues.dosage ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Dosage ou concentration si applicable"
                 />
               </div>
               <div className="space-y-1">
@@ -281,6 +286,7 @@ export function PharmacyPage() {
                   defaultValue={formValues.quantity}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   required
+                  title="Quantité disponible en stock"
                 />
               </div>
               <div className="space-y-1">
@@ -293,6 +299,7 @@ export function PharmacyPage() {
                   type="date"
                   defaultValue={formValues.expiration_date ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Date d'expiration (facultative)"
                 />
               </div>
               <div className="space-y-1">
@@ -304,6 +311,7 @@ export function PharmacyPage() {
                   name="location"
                   defaultValue={formValues.location ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Emplacement de stockage (armoire, pièce...)"
                 />
               </div>
               <div className="flex gap-2">
@@ -311,6 +319,11 @@ export function PharmacyPage() {
                   type="submit"
                   disabled={createItem.isPending || updateItem.isPending}
                   className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  title={
+                    formMode === "edit"
+                      ? "Enregistrer les modifications du médicament"
+                      : "Ajouter ce médicament au stock"
+                  }
                 >
                   {formMode === "edit"
                     ? updateItem.isPending
@@ -328,6 +341,7 @@ export function PharmacyPage() {
                       setFormMode("create");
                     }}
                     className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                    title="Annuler la modification en cours"
                   >
                     Annuler
                   </button>

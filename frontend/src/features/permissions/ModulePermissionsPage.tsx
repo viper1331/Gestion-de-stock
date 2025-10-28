@@ -207,6 +207,7 @@ export function ModulePermissionsPage() {
                 user_id: event.target.value ? Number(event.target.value) : null
               }))
             }
+            title="Choisissez l'utilisateur concerné par la règle"
           >
             <option value="" disabled>
               Sélectionner un utilisateur
@@ -235,6 +236,7 @@ export function ModulePermissionsPage() {
             }
             disabled={isFetchingModules || availableModules.length === 0}
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Indiquez ou sélectionnez le module à autoriser"
           />
           <datalist id="module-suggestions">
             {availableModules.map((module) => (
@@ -260,6 +262,7 @@ export function ModulePermissionsPage() {
                 can_edit: event.target.checked ? prev.can_edit : false
               }))
             }
+            title="Autoriser l'utilisateur à consulter le module"
           />
           Lecture
         </label>
@@ -274,6 +277,7 @@ export function ModulePermissionsPage() {
                 can_edit: event.target.checked
               }))
             }
+            title="Autoriser les modifications sur le module"
           />
           Écriture
         </label>
@@ -281,6 +285,7 @@ export function ModulePermissionsPage() {
           type="submit"
           disabled={isProcessing}
           className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          title="Enregistrer la règle de permissions"
         >
           {upsertPermission.isPending ? "Enregistrement..." : "Enregistrer"}
         </button>
@@ -343,6 +348,11 @@ export function ModulePermissionsPage() {
                                     can_edit: nextCanView ? entry.can_edit : false
                                   });
                                 }}
+                                title={
+                                  disableEdits
+                                    ? "Les administrateurs possèdent déjà tous les droits"
+                                    : "Autoriser la consultation de ce module"
+                                }
                               />
                               Autorisé
                             </label>
@@ -363,6 +373,11 @@ export function ModulePermissionsPage() {
                                     can_edit: event.target.checked
                                   });
                                 }}
+                                title={
+                                  disableEdits
+                                    ? "Les administrateurs possèdent déjà tous les droits"
+                                    : "Autoriser les modifications sur ce module"
+                                }
                               />
                               Autorisé
                             </label>
@@ -380,6 +395,11 @@ export function ModulePermissionsPage() {
                                 await deletePermission.mutateAsync({ user_id: entry.user_id, module: entry.module });
                               }}
                               className="rounded bg-red-600 px-3 py-1 font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                              title={
+                                disableEdits
+                                  ? "Les droits de l'administrateur ne peuvent pas être supprimés"
+                                  : "Supprimer cette règle personnalisée"
+                              }
                             >
                               Supprimer
                             </button>
