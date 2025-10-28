@@ -128,6 +128,16 @@ def init_databases() -> None:
                     is_degraded INTEGER NOT NULL DEFAULT 0,
                     allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS pharmacy_categories (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT UNIQUE NOT NULL
+                );
+                CREATE TABLE IF NOT EXISTS pharmacy_category_sizes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER NOT NULL REFERENCES pharmacy_categories(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    UNIQUE(category_id, name)
+                );
                 CREATE TABLE IF NOT EXISTS pharmacy_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL COLLATE NOCASE,
@@ -137,7 +147,15 @@ def init_databases() -> None:
                     quantity INTEGER NOT NULL DEFAULT 0,
                     low_stock_threshold INTEGER NOT NULL DEFAULT 5,
                     expiration_date DATE,
-                    location TEXT
+                    location TEXT,
+                    category_id INTEGER REFERENCES pharmacy_categories(id) ON DELETE SET NULL
+                );
+                CREATE TABLE IF NOT EXISTS pharmacy_movements (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
+                    delta INTEGER NOT NULL,
+                    reason TEXT,
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS pharmacy_purchase_orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

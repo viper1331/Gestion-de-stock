@@ -20,6 +20,7 @@ def setup_module(_: object) -> None:
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM pharmacy_purchase_order_items")
         conn.execute("DELETE FROM pharmacy_purchase_orders")
+        conn.execute("DELETE FROM pharmacy_movements")
         conn.execute("DELETE FROM purchase_order_items")
         conn.execute("DELETE FROM purchase_orders")
         conn.execute("DELETE FROM dotations")
@@ -30,6 +31,8 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM items")
         conn.execute("DELETE FROM category_sizes")
         conn.execute("DELETE FROM categories")
+        conn.execute("DELETE FROM pharmacy_category_sizes")
+        conn.execute("DELETE FROM pharmacy_categories")
         conn.commit()
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM module_permissions")
@@ -958,6 +961,79 @@ def test_pharmacy_barcode_uniqueness_validation() -> None:
         headers=admin_headers,
     )
     assert conflict.status_code == 400, conflict.text
+
+
+def test_pharmacy_movement_management() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    create = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Solution hydroalcoolique",
+            "quantity": 10,
+        },
+        headers=admin_headers,
+    )
+    assert create.status_code == 201, create.text
+    item_id = create.json()["id"]
+
+    movement = client.post(
+        f"/pharmacy/{item_id}/movements",
+        json={"delta": -3, "reason": "Inventaire"},
+        headers=admin_headers,
+    )
+    assert movement.status_code == 204, movement.text
+
+    updated = services.get_pharmacy_item(item_id)
+    assert updated.quantity == 7
+
+    history = client.get(f"/pharmacy/{item_id}/movements", headers=admin_headers)
+    assert history.status_code == 200, history.text
+    entries = history.json()
+    assert entries and entries[0]["delta"] == -3
+    assert entries[0]["reason"] == "Inventaire"
+
+    missing = client.post(
+        "/pharmacy/999999/movements",
+        json={"delta": 1},
+        headers=admin_headers,
+    )
+    assert missing.status_code == 404
+
+
+def test_pharmacy_category_crud() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    create = client.post(
+        "/pharmacy/categories/",
+        json={"name": "Antibiotiques", "sizes": ["10mg", "20mg", "10mg"]},
+        headers=admin_headers,
+    )
+    assert create.status_code == 201, create.text
+    category_id = create.json()["id"]
+    assert create.json()["sizes"] == ["10MG", "20MG"]
+
+    listing = client.get("/pharmacy/categories/", headers=admin_headers)
+    assert listing.status_code == 200
+    categories = {entry["id"]: entry for entry in listing.json()}
+    assert categories[category_id]["sizes"] == ["10MG", "20MG"]
+
+    update = client.put(
+        f"/pharmacy/categories/{category_id}",
+        json={"sizes": ["100mg", "50mg"]},
+        headers=admin_headers,
+    )
+    assert update.status_code == 200, update.text
+    assert sorted(update.json()["sizes"], key=str.lower) == sorted(["50MG", "100MG"], key=str.lower)
+
+    delete = client.delete(f"/pharmacy/categories/{category_id}", headers=admin_headers)
+    assert delete.status_code == 204, delete.text
+
+    remaining = client.get("/pharmacy/categories/", headers=admin_headers)
+    remaining_ids = {entry["id"] for entry in remaining.json()}
+    assert category_id not in remaining_ids
 
 
 def test_create_category_with_sizes() -> None:
