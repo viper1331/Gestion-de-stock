@@ -118,6 +118,9 @@ def init_databases() -> None:
                     item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
                     quantity INTEGER NOT NULL,
                     notes TEXT,
+                    perceived_at DATE DEFAULT CURRENT_DATE,
+                    is_lost INTEGER NOT NULL DEFAULT 0,
+                    is_degraded INTEGER NOT NULL DEFAULT 0,
                     allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS pharmacy_items (
