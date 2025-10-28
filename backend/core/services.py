@@ -160,6 +160,10 @@ def _apply_schema_migrations() -> None:
             conn.execute("ALTER TABLE pharmacy_items ADD COLUMN packaging TEXT")
         if "barcode" not in pharmacy_columns:
             conn.execute("ALTER TABLE pharmacy_items ADD COLUMN barcode TEXT")
+        if "low_stock_threshold" not in pharmacy_columns:
+            conn.execute(
+                "ALTER TABLE pharmacy_items ADD COLUMN low_stock_threshold INTEGER NOT NULL DEFAULT 5"
+            )
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_pharmacy_items_barcode
@@ -1415,6 +1419,7 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 packaging=row["packaging"],
                 barcode=row["barcode"],
                 quantity=row["quantity"],
+                low_stock_threshold=row["low_stock_threshold"],
                 expiration_date=row["expiration_date"],
                 location=row["location"],
             )
@@ -1436,6 +1441,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
             packaging=row["packaging"],
             barcode=row["barcode"],
             quantity=row["quantity"],
+            low_stock_threshold=row["low_stock_threshold"],
             expiration_date=row["expiration_date"],
             location=row["location"],
         )
@@ -1454,10 +1460,11 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     packaging,
                     barcode,
                     quantity,
+                    low_stock_threshold,
                     expiration_date,
                     location
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
@@ -1465,6 +1472,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     payload.packaging,
                     barcode,
                     payload.quantity,
+                    payload.low_stock_threshold,
                     payload.expiration_date,
                     payload.location,
                 ),

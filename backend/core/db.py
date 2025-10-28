@@ -130,6 +130,7 @@ def init_databases() -> None:
                     packaging TEXT,
                     barcode TEXT,
                     quantity INTEGER NOT NULL DEFAULT 0,
+                    low_stock_threshold INTEGER NOT NULL DEFAULT 5,
                     expiration_date DATE,
                     location TEXT
                 );
