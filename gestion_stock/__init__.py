@@ -4459,8 +4459,12 @@ class StockApp(tk.Tk):
         self.title(f"Gestion Stock Pro - Connecté : {self.current_user} ({self.current_role})")
         self.geometry("950x600")
         self.protocol("WM_DELETE_WINDOW", self.on_closing)
-        self.style = ttk.Style(self)
-        self.style.theme_use("clam")
+        # ``apply_theme`` already instantiates and configures the ``ttk`` style on
+        # the root window. Re-initialising it here with ``theme_use`` reset the
+        # palette, which meant the custom colours were only visible on widgets
+        # like the themed toolbar.  We simply reuse the style configured by the
+        # theme so that every widget benefits from the selected palette.
+        self.style = getattr(self, "style", ttk.Style(self))
 
         self.low_stock_threshold = config['Settings'].getint(
             'low_stock_threshold',
