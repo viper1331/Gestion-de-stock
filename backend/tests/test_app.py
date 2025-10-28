@@ -550,6 +550,81 @@ def test_dotation_flow_updates_stock() -> None:
     }
 
 
+def test_update_dotation_adjusts_stock_and_movements() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    first_item = client.post(
+        "/items/",
+        json={"name": "Radio", "sku": f"SKU-{uuid4().hex[:6]}", "quantity": 6},
+        headers=admin_headers,
+    )
+    assert first_item.status_code == 201, first_item.text
+    first_item_id = first_item.json()["id"]
+    second_item = client.post(
+        "/items/",
+        json={"name": "Lampe", "sku": f"SKU-{uuid4().hex[:6]}", "quantity": 4},
+        headers=admin_headers,
+    )
+    assert second_item.status_code == 201, second_item.text
+    second_item_id = second_item.json()["id"]
+
+    collaborator = client.post(
+        "/dotations/collaborators",
+        json={"full_name": "Bob", "department": "OPS"},
+        headers=admin_headers,
+    )
+    assert collaborator.status_code == 201, collaborator.text
+    collaborator_id = collaborator.json()["id"]
+
+    created = client.post(
+        "/dotations/dotations",
+        json={"collaborator_id": collaborator_id, "item_id": first_item_id, "quantity": 2},
+        headers=admin_headers,
+    )
+    assert created.status_code == 201, created.text
+    dotation_id = created.json()["id"]
+
+    update_quantity = client.put(
+        f"/dotations/dotations/{dotation_id}",
+        json={"quantity": 3, "notes": "Ajout d'accessoires"},
+        headers=admin_headers,
+    )
+    assert update_quantity.status_code == 200, update_quantity.text
+    updated_payload = update_quantity.json()
+    assert updated_payload["quantity"] == 3
+    assert updated_payload["notes"] == "Ajout d'accessoires"
+
+    first_item_movements = client.get(
+        f"/items/{first_item_id}/movements", headers=admin_headers
+    )
+    assert first_item_movements.status_code == 200, first_item_movements.text
+    first_history = first_item_movements.json()
+    assert any(entry["reason"] == "Ajustement dotation - Bob" for entry in first_history)
+
+    transfer_update = client.put(
+        f"/dotations/dotations/{dotation_id}",
+        json={"item_id": second_item_id, "quantity": 1, "is_lost": True},
+        headers=admin_headers,
+    )
+    assert transfer_update.status_code == 200, transfer_update.text
+    transfer_body = transfer_update.json()
+    assert transfer_body["item_id"] == second_item_id
+    assert transfer_body["quantity"] == 1
+    assert transfer_body["is_lost"] is True
+
+    first_after_transfer = services.get_item(first_item_id)
+    second_after_transfer = services.get_item(second_item_id)
+    assert first_after_transfer.quantity == 6
+    assert second_after_transfer.quantity == 3
+
+    second_item_movements = client.get(
+        f"/items/{second_item_id}/movements", headers=admin_headers
+    )
+    assert second_item_movements.status_code == 200, second_item_movements.text
+    second_history = second_item_movements.json()
+    assert any(entry["reason"] == "Ajustement dotation - Bob" for entry in second_history)
+
+
 def test_dotation_obsolete_and_alerts() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

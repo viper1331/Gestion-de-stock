@@ -952,6 +952,125 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
         return get_dotation(cur.lastrowid)
 
 
+def update_dotation(dotation_id: int, payload: models.DotationUpdate) -> models.Dotation:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM dotations WHERE id = ?", (dotation_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Dotation introuvable")
+
+        base_perceived_at = _ensure_date(row["perceived_at"], fallback=_ensure_date(row["allocated_at"]))
+        new_collaborator_id = (
+            payload.collaborator_id if payload.collaborator_id is not None else row["collaborator_id"]
+        )
+        new_item_id = payload.item_id if payload.item_id is not None else row["item_id"]
+        new_quantity = payload.quantity if payload.quantity is not None else row["quantity"]
+        if new_quantity <= 0:
+            raise ValueError("La quantité doit être positive")
+        new_notes = payload.notes if payload.notes is not None else row["notes"]
+        new_perceived_at = payload.perceived_at if payload.perceived_at is not None else base_perceived_at
+        new_is_lost = payload.is_lost if payload.is_lost is not None else bool(row["is_lost"])
+        new_is_degraded = (
+            payload.is_degraded if payload.is_degraded is not None else bool(row["is_degraded"])
+        )
+
+        collaborator_cur = conn.execute(
+            "SELECT full_name FROM collaborators WHERE id = ?",
+            (new_collaborator_id,),
+        )
+        collaborator_row = collaborator_cur.fetchone()
+        if collaborator_row is None:
+            raise ValueError("Collaborateur introuvable")
+        collaborator_name = collaborator_row["full_name"]
+
+        original_item_cur = conn.execute(
+            "SELECT quantity FROM items WHERE id = ?",
+            (row["item_id"],),
+        )
+        original_item_row = original_item_cur.fetchone()
+        if original_item_row is None:
+            raise ValueError("Article introuvable")
+
+        target_item_cur = conn.execute(
+            "SELECT quantity FROM items WHERE id = ?",
+            (new_item_id,),
+        )
+        target_item_row = target_item_cur.fetchone()
+        if target_item_row is None:
+            raise ValueError("Article introuvable")
+
+        reason = f"Ajustement dotation - {collaborator_name}"
+
+        if new_item_id == row["item_id"]:
+            delta_quantity = new_quantity - row["quantity"]
+            if delta_quantity > 0:
+                if target_item_row["quantity"] < delta_quantity:
+                    raise ValueError("Stock insuffisant pour la dotation")
+                conn.execute(
+                    "UPDATE items SET quantity = quantity - ? WHERE id = ?",
+                    (delta_quantity, new_item_id),
+                )
+                conn.execute(
+                    "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                    (new_item_id, -delta_quantity, reason),
+                )
+            elif delta_quantity < 0:
+                conn.execute(
+                    "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                    (-delta_quantity, new_item_id),
+                )
+                conn.execute(
+                    "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                    (new_item_id, -delta_quantity, reason),
+                )
+        else:
+            if target_item_row["quantity"] < new_quantity:
+                raise ValueError("Stock insuffisant pour la dotation")
+            conn.execute(
+                "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                (row["quantity"], row["item_id"]),
+            )
+            conn.execute(
+                "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                (row["item_id"], row["quantity"], reason),
+            )
+            conn.execute(
+                "UPDATE items SET quantity = quantity - ? WHERE id = ?",
+                (new_quantity, new_item_id),
+            )
+            conn.execute(
+                "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                (new_item_id, -new_quantity, reason),
+            )
+
+        conn.execute(
+            """
+            UPDATE dotations
+            SET collaborator_id = ?,
+                item_id = ?,
+                quantity = ?,
+                notes = ?,
+                perceived_at = ?,
+                is_lost = ?,
+                is_degraded = ?
+            WHERE id = ?
+            """,
+            (
+                new_collaborator_id,
+                new_item_id,
+                new_quantity,
+                new_notes,
+                new_perceived_at.isoformat(),
+                int(new_is_lost),
+                int(new_is_degraded),
+                dotation_id,
+            ),
+        )
+        conn.commit()
+    return get_dotation(dotation_id)
+
+
 def delete_dotation(dotation_id: int, *, restock: bool = False) -> None:
     ensure_database_ready()
     with db.get_stock_connection() as conn:

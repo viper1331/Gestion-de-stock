@@ -203,6 +203,16 @@ class Dotation(DotationBase):
     is_obsolete: bool = False
 
 
+class DotationUpdate(BaseModel):
+    collaborator_id: Optional[int] = Field(default=None, gt=0)
+    item_id: Optional[int] = Field(default=None, gt=0)
+    quantity: Optional[int] = Field(default=None, gt=0)
+    notes: Optional[str] = Field(default=None, max_length=256)
+    perceived_at: Optional[date] = None
+    is_lost: Optional[bool] = None
+    is_degraded: Optional[bool] = None
+
+
 class PharmacyItemBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     dosage: Optional[str] = Field(default=None, max_length=64)

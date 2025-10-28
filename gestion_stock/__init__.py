@@ -5953,9 +5953,11 @@ class StockApp(tk.Tk):
 
         self.pharmacy_tree.bind("<Double-1>", self.on_pharmacy_batch_double_click)
 
-        self.pharmacy_tree.pack(fill=tk.BOTH, expand=True, side=tk.LEFT)
-        vsb.pack(side=tk.RIGHT, fill=tk.Y)
-        hsb.pack(side=tk.BOTTOM, fill=tk.X)
+        self.pharmacy_tree.grid(row=0, column=0, sticky="nsew")
+        vsb.grid(row=0, column=1, sticky="ns")
+        hsb.grid(row=1, column=0, sticky="ew")
+        tree_container.columnconfigure(0, weight=1)
+        tree_container.rowconfigure(0, weight=1)
 
         self.pharmacy_batch_cache: dict[str, PharmacyBatch] = {}
         self._pharmacy_search_job: Optional[str] = None
