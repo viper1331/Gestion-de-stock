@@ -39,6 +39,7 @@ export function AppLayout() {
         { to: "/dotations", label: "Dotations", module: "dotations" },
         { to: "/pharmacy", label: "Pharmacie", module: "pharmacy" },
         { to: "/settings", label: "Paramètres" },
+        { to: "/users", label: "Utilisateurs", adminOnly: true },
         { to: "/permissions", label: "Permissions", adminOnly: true }
       ];
 

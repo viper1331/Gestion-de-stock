@@ -200,6 +200,118 @@ def test_module_permissions_control_supplier_access() -> None:
     assert data["name"] == supplier_name
 
 
+def test_admin_user_management_flow() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    username = f"user-{uuid4().hex[:6]}"
+
+    create = client.post(
+        "/users/",
+        json={"username": username, "password": "Testpass123", "role": "user"},
+        headers=admin_headers,
+    )
+    assert create.status_code == 201, create.text
+    user_id = create.json()["id"]
+
+    listing = client.get("/users/", headers=admin_headers)
+    assert listing.status_code == 200
+    assert any(entry["username"] == username for entry in listing.json())
+
+    promote = client.put(
+        f"/users/{user_id}",
+        json={"role": "admin", "is_active": False},
+        headers=admin_headers,
+    )
+    assert promote.status_code == 200, promote.text
+    assert promote.json()["role"] == "admin"
+    assert promote.json()["is_active"] is False
+
+    reset = client.put(
+        f"/users/{user_id}",
+        json={"password": "Newpass123", "is_active": True},
+        headers=admin_headers,
+    )
+    assert reset.status_code == 200, reset.text
+
+    headers_new = _login_headers(username, "Newpass123")
+    assert "Authorization" in headers_new
+
+    delete = client.delete(f"/users/{user_id}", headers=admin_headers)
+    assert delete.status_code == 204, delete.text
+
+
+def test_admin_cannot_create_duplicate_user() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    username = f"dup-{uuid4().hex[:6]}"
+
+    first = client.post(
+        "/users/",
+        json={"username": username, "password": "Testpass123", "role": "user"},
+        headers=admin_headers,
+    )
+    assert first.status_code == 201, first.text
+    user_id = first.json()["id"]
+
+    duplicate = client.post(
+        "/users/",
+        json={"username": username, "password": "Another123", "role": "user"},
+        headers=admin_headers,
+    )
+    assert duplicate.status_code == 400
+
+    cleanup = client.delete(f"/users/{user_id}", headers=admin_headers)
+    assert cleanup.status_code == 204, cleanup.text
+
+
+def test_non_admin_cannot_manage_users() -> None:
+    services.ensure_database_ready()
+    username = f"worker-{uuid4().hex[:6]}"
+    _create_user(username, "Workerpass123", role="user")
+    worker_headers = _login_headers(username, "Workerpass123")
+
+    forbidden_list = client.get("/users/", headers=worker_headers)
+    assert forbidden_list.status_code == 403
+
+    forbidden_create = client.post(
+        "/users/",
+        json={"username": "blocked", "password": "Blocked123", "role": "user"},
+        headers=worker_headers,
+    )
+    assert forbidden_create.status_code == 403
+
+    admin_headers = _login_headers("admin", "admin123")
+    listing = client.get("/users/", headers=admin_headers)
+    worker_entry = next(entry for entry in listing.json() if entry["username"] == username)
+    remove_worker = client.delete(f"/users/{worker_entry['id']}", headers=admin_headers)
+    assert remove_worker.status_code == 204
+
+
+def test_cannot_modify_default_admin_protection() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    listing = client.get("/users/", headers=admin_headers)
+    assert listing.status_code == 200
+    admin_entry = next(entry for entry in listing.json() if entry["username"] == "admin")
+
+    downgrade = client.put(
+        f"/users/{admin_entry['id']}",
+        json={"role": "user"},
+        headers=admin_headers,
+    )
+    assert downgrade.status_code == 400
+
+    deactivate = client.put(
+        f"/users/{admin_entry['id']}",
+        json={"is_active": False},
+        headers=admin_headers,
+    )
+    assert deactivate.status_code == 400
+
+    delete_admin = client.delete(f"/users/{admin_entry['id']}", headers=admin_headers)
+    assert delete_admin.status_code == 400
+
+
 def test_dotation_flow_updates_stock() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

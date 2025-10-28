@@ -12,6 +12,7 @@ import { CollaboratorsPage } from "../features/dotations/CollaboratorsPage";
 import { DotationsPage } from "../features/dotations/DotationsPage";
 import { PharmacyPage } from "../features/pharmacy/PharmacyPage";
 import { ModulePermissionsPage } from "../features/permissions/ModulePermissionsPage";
+import { AdminUsersPage } from "../features/users/AdminUsersPage";
 
 export const router = createBrowserRouter([
   {
@@ -31,6 +32,7 @@ export const router = createBrowserRouter([
       { path: "collaborators", element: <CollaboratorsPage /> },
       { path: "dotations", element: <DotationsPage /> },
       { path: "pharmacy", element: <PharmacyPage /> },
+      { path: "users", element: <AdminUsersPage /> },
       { path: "permissions", element: <ModulePermissionsPage /> }
     ]
   }

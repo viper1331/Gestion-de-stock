@@ -33,6 +33,12 @@ class User(UserBase):
     is_active: bool = True
 
 
+class UserUpdate(BaseModel):
+    role: Optional[str] = Field(default=None, pattern=r"^(admin|user)$")
+    password: Optional[str] = Field(default=None, min_length=8, max_length=128)
+    is_active: Optional[bool] = None
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str
