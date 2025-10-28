@@ -819,6 +819,7 @@ def test_pharmacy_crud_cycle() -> None:
             "name": "Doliprane",
             "dosage": "500mg",
             "packaging": "Boîte de 10",
+            "barcode": "3400934058479",
             "quantity": 10,
             "expiration_date": "2025-12-31",
             "location": "Armoire A",
@@ -828,6 +829,7 @@ def test_pharmacy_crud_cycle() -> None:
     assert create.status_code == 201, create.text
     pharmacy_id = create.json()["id"]
     assert create.json()["packaging"] == "Boîte de 10"
+    assert create.json()["barcode"] == "3400934058479"
 
     update = client.put(
         f"/pharmacy/{pharmacy_id}",
@@ -837,6 +839,7 @@ def test_pharmacy_crud_cycle() -> None:
     assert update.status_code == 200, update.text
     assert update.json()["quantity"] == 7
     assert update.json()["packaging"] == "Boîte de 10"
+    assert update.json()["barcode"] == "3400934058479"
 
     listing = client.get("/pharmacy/", headers=admin_headers)
     assert listing.status_code == 200
@@ -850,6 +853,61 @@ def test_pharmacy_crud_cycle() -> None:
 
     missing = client.get(f"/pharmacy/{pharmacy_id}", headers=admin_headers)
     assert missing.status_code == 404
+
+
+def test_pharmacy_barcode_uniqueness_validation() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    barcode_value = f"34009{uuid4().hex[:6]}"
+    first = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Paracétamol",
+            "dosage": "500mg",
+            "packaging": "Boîte de 16",
+            "barcode": barcode_value,
+            "quantity": 12,
+            "expiration_date": "2026-01-15",
+            "location": "Armoire B",
+        },
+        headers=admin_headers,
+    )
+    assert first.status_code == 201, first.text
+
+    duplicate = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Ibuprofène",
+            "dosage": "400mg",
+            "packaging": "Boîte de 12",
+            "barcode": barcode_value,
+            "quantity": 8,
+        },
+        headers=admin_headers,
+    )
+    assert duplicate.status_code == 400, duplicate.text
+
+    unique = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Arnica",
+            "dosage": "Crème",
+            "packaging": "Tube",
+            "barcode": f"34009{uuid4().hex[:6]}",
+            "quantity": 3,
+        },
+        headers=admin_headers,
+    )
+    assert unique.status_code == 201, unique.text
+    other_id = unique.json()["id"]
+
+    conflict = client.put(
+        f"/pharmacy/{other_id}",
+        json={"barcode": barcode_value},
+        headers=admin_headers,
+    )
+    assert conflict.status_code == 400, conflict.text
 
 
 def test_create_category_with_sizes() -> None:

@@ -128,6 +128,7 @@ def init_databases() -> None:
                     name TEXT NOT NULL COLLATE NOCASE,
                     dosage TEXT,
                     packaging TEXT,
+                    barcode TEXT,
                     quantity INTEGER NOT NULL DEFAULT 0,
                     expiration_date DATE,
                     location TEXT

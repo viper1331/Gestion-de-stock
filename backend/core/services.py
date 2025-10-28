@@ -158,6 +158,15 @@ def _apply_schema_migrations() -> None:
         pharmacy_columns = {row["name"] for row in pharmacy_info}
         if "packaging" not in pharmacy_columns:
             conn.execute("ALTER TABLE pharmacy_items ADD COLUMN packaging TEXT")
+        if "barcode" not in pharmacy_columns:
+            conn.execute("ALTER TABLE pharmacy_items ADD COLUMN barcode TEXT")
+        conn.execute(
+            """
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_pharmacy_items_barcode
+            ON pharmacy_items(barcode)
+            WHERE barcode IS NOT NULL
+            """
+        )
 
         pharmacy_po_info = conn.execute("PRAGMA table_info(pharmacy_purchase_orders)").fetchall()
         pharmacy_po_columns = {row["name"] for row in pharmacy_po_info}
@@ -1395,6 +1404,7 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 name=row["name"],
                 dosage=row["dosage"],
                 packaging=row["packaging"],
+                barcode=row["barcode"],
                 quantity=row["quantity"],
                 expiration_date=row["expiration_date"],
                 location=row["location"],
@@ -1415,6 +1425,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
             name=row["name"],
             dosage=row["dosage"],
             packaging=row["packaging"],
+            barcode=row["barcode"],
             quantity=row["quantity"],
             expiration_date=row["expiration_date"],
             location=row["location"],
@@ -1424,27 +1435,33 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
 def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyItem:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO pharmacy_items (
-                name,
-                dosage,
-                packaging,
-                quantity,
-                expiration_date,
-                location
+        barcode = _normalize_barcode(payload.barcode)
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO pharmacy_items (
+                    name,
+                    dosage,
+                    packaging,
+                    barcode,
+                    quantity,
+                    expiration_date,
+                    location
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload.name,
+                    payload.dosage,
+                    payload.packaging,
+                    barcode,
+                    payload.quantity,
+                    payload.expiration_date,
+                    payload.location,
+                ),
             )
-            VALUES (?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload.name,
-                payload.dosage,
-                payload.packaging,
-                payload.quantity,
-                payload.expiration_date,
-                payload.location,
-            ),
-        )
+        except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
+            raise ValueError("Ce code-barres est déjà utilisé") from exc
         conn.commit()
         return get_pharmacy_item(cur.lastrowid)
 
@@ -1452,6 +1469,8 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
 def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> models.PharmacyItem:
     ensure_database_ready()
     fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    if "barcode" in fields:
+        fields["barcode"] = _normalize_barcode(fields["barcode"])
     if not fields:
         return get_pharmacy_item(item_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)
@@ -1461,7 +1480,10 @@ def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> mo
         cur = conn.execute("SELECT 1 FROM pharmacy_items WHERE id = ?", (item_id,))
         if cur.fetchone() is None:
             raise ValueError("Produit pharmaceutique introuvable")
-        conn.execute(f"UPDATE pharmacy_items SET {assignments} WHERE id = ?", values)
+        try:
+            conn.execute(f"UPDATE pharmacy_items SET {assignments} WHERE id = ?", values)
+        except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
+            raise ValueError("Ce code-barres est déjà utilisé") from exc
         conn.commit()
     return get_pharmacy_item(item_id)
 

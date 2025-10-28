@@ -250,6 +250,7 @@ class PharmacyItemBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     dosage: Optional[str] = Field(default=None, max_length=64)
     packaging: Optional[str] = Field(default=None, max_length=128)
+    barcode: Optional[str] = Field(default=None, min_length=1, max_length=64)
     quantity: int = Field(default=0, ge=0)
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
@@ -263,6 +264,7 @@ class PharmacyItemUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     dosage: Optional[str] = Field(default=None, max_length=64)
     packaging: Optional[str] = Field(default=None, max_length=128)
+    barcode: Optional[str] = Field(default=None, min_length=1, max_length=64)
     quantity: Optional[int] = Field(default=None, ge=0)
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
