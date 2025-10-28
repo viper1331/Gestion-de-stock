@@ -37,16 +37,17 @@ def parse_args() -> argparse.Namespace:
 
 
 def main() -> int:
-    if which("npm") is None:
+    npm_path = which("npm")
+    if npm_path is None:
         raise SystemExit("npm doit être installé pour lancer le frontend.")
 
     args = parse_args()
 
-    install_cmd = ["npm", "install"]
+    install_cmd = [npm_path, "install"]
     print(f"➡️  Installation des dépendances frontend : {' '.join(install_cmd)}")
     subprocess.run(install_cmd, cwd=str(FRONTEND_DIR), check=True)
 
-    command = ["npm", "run", "dev"]
+    command = [npm_path, "run", "dev"]
     extra_args: list[str] = []
     if args.host:
         extra_args.extend(["--host", args.host])
