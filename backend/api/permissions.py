@@ -22,18 +22,18 @@ async def list_module_permissions(
 async def list_my_module_permissions(
     user: models.User = Depends(get_current_user),
 ) -> list[models.ModulePermission]:
-    return services.list_module_permissions_for_role(user.role)
+    return services.list_module_permissions_for_user(user.id)
 
 
-@router.get("/modules/{role}/{module}", response_model=models.ModulePermission)
+@router.get("/modules/{user_id}/{module}", response_model=models.ModulePermission)
 async def get_module_permission(
-    role: str,
+    user_id: int,
     module: str,
     user: models.User = Depends(get_current_user),
 ) -> models.ModulePermission:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Insufficient permissions")
-    permission = services.get_module_permission(role, module)
+    permission = services.get_module_permission_for_user(user_id, module)
     if permission is None:
         raise HTTPException(status_code=404, detail="Module permission not found")
     return permission
@@ -46,18 +46,21 @@ async def upsert_module_permission(
 ) -> models.ModulePermission:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Insufficient permissions")
-    return services.upsert_module_permission(payload)
+    try:
+        return services.upsert_module_permission(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.delete("/modules/{role}/{module}", status_code=204)
+@router.delete("/modules/{user_id}/{module}", status_code=204)
 async def delete_module_permission(
-    role: str,
+    user_id: int,
     module: str,
     user: models.User = Depends(get_current_user),
 ) -> None:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Insufficient permissions")
     try:
-        services.delete_module_permission(role, module)
+        services.delete_module_permission_for_user(user_id, module)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail="Module permission not found") from exc

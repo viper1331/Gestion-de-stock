@@ -11,6 +11,7 @@ import { persistValue, readPersistedValue } from "../../lib/persist";
 interface Category {
   id: number;
   name: string;
+  sizes: string[];
 }
 
 interface Item {
@@ -38,6 +39,11 @@ interface ItemFormValues {
   size: string;
   quantity: number;
   low_stock_threshold: number;
+}
+
+interface CategoryFormValues {
+  name: string;
+  sizes: string[];
 }
 
 const COLUMN_STORAGE_KEY = "gsp/columns";
@@ -132,14 +138,31 @@ export function Dashboard() {
   });
 
   const createCategory = useMutation({
-    mutationFn: async (name: string) => {
-      await api.post("/categories/", { name });
+    mutationFn: async (payload: CategoryFormValues) => {
+      await api.post("/categories/", payload);
     },
     onSuccess: async () => {
       setMessage("Catégorie ajoutée.");
       await queryClient.invalidateQueries({ queryKey: ["categories"] });
     },
     onError: () => setError("Impossible d'ajouter la catégorie.")
+  });
+
+  const updateCategoryEntry = useMutation({
+    mutationFn: async ({
+      categoryId,
+      payload
+    }: {
+      categoryId: number;
+      payload: Partial<CategoryFormValues>;
+    }) => {
+      await api.put(`/categories/${categoryId}`, payload);
+    },
+    onSuccess: async () => {
+      setMessage("Catégorie mise à jour.");
+      await queryClient.invalidateQueries({ queryKey: ["categories"] });
+    },
+    onError: () => setError("Impossible de mettre à jour la catégorie.")
   });
 
   const removeCategory = useMutation({
@@ -389,17 +412,24 @@ export function Dashboard() {
             <h3 className="text-sm font-semibold text-white">Catégories</h3>
             <CategoryManager
               categories={categories}
-              onCreate={async (name) => {
+              onCreate={async (payload) => {
                 setMessage(null);
                 setError(null);
-                await createCategory.mutateAsync(name);
+                await createCategory.mutateAsync(payload);
               }}
               onDelete={async (categoryId) => {
                 setMessage(null);
                 setError(null);
                 await removeCategory.mutateAsync(categoryId);
               }}
-              isSubmitting={createCategory.isPending || removeCategory.isPending}
+              onUpdate={async (categoryId, payload) => {
+                setMessage(null);
+                setError(null);
+                await updateCategoryEntry.mutateAsync({ categoryId, payload });
+              }}
+              isSubmitting={
+                createCategory.isPending || removeCategory.isPending || updateCategoryEntry.isPending
+              }
             />
           </div>
         </aside>
@@ -462,6 +492,14 @@ function ItemForm({
   isSubmitting: boolean;
 }) {
   const [values, setValues] = useState<ItemFormValues>(initialValues);
+  const selectedCategory = useMemo(
+    () => categories.find((category) => category.id === values.category_id),
+    [categories, values.category_id]
+  );
+  const sizeOptionsId =
+    selectedCategory && selectedCategory.sizes.length > 0
+      ? `category-size-options-${selectedCategory.id}`
+      : undefined;
 
   useEffect(() => {
     setValues(initialValues);
@@ -541,9 +579,22 @@ function ItemForm({
         <input
           id="item-size"
           value={values.size}
+          list={sizeOptionsId}
           onChange={(event) => setValues((prev) => ({ ...prev, size: event.target.value }))}
+          placeholder={
+            selectedCategory && selectedCategory.sizes.length > 0
+              ? "Sélectionnez ou saisissez une taille"
+              : undefined
+          }
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
         />
+        {sizeOptionsId ? (
+          <datalist id={sizeOptionsId}>
+            {selectedCategory?.sizes.map((size) => (
+              <option key={size} value={size} />
+            ))}
+          </datalist>
+        ) : null}
       </div>
       <div className="space-y-1">
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-category">
@@ -713,60 +764,138 @@ function CategoryManager({
   categories,
   onCreate,
   onDelete,
+  onUpdate,
   isSubmitting
 }: {
   categories: Category[];
-  onCreate: (name: string) => Promise<void>;
+  onCreate: (values: CategoryFormValues) => Promise<void>;
   onDelete: (categoryId: number) => Promise<void>;
+  onUpdate: (categoryId: number, payload: { sizes: string[] }) => Promise<void>;
   isSubmitting: boolean;
 }) {
   const [name, setName] = useState("");
+  const [sizes, setSizes] = useState("");
+  const [editedSizes, setEditedSizes] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    setEditedSizes((previous) => {
+      const next: Record<number, string> = {};
+      for (const category of categories) {
+        next[category.id] = previous[category.id] ?? category.sizes.join(", ");
+      }
+      return next;
+    });
+  }, [categories]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    if (!name.trim()) {
+    const trimmedName = name.trim();
+    if (!trimmedName) {
       return;
     }
-    await onCreate(name.trim());
+    const parsedSizes = parseSizesInput(sizes);
+    await onCreate({ name: trimmedName, sizes: parsedSizes });
     setName("");
+    setSizes("");
+  };
+
+  const handleSave = async (categoryId: number) => {
+    const rawValue = editedSizes[categoryId] ?? "";
+    const parsedSizes = parseSizesInput(rawValue);
+    await onUpdate(categoryId, { sizes: parsedSizes });
+    setEditedSizes((previous) => ({ ...previous, [categoryId]: parsedSizes.join(", ") }));
   };
 
   return (
     <div className="space-y-3">
-      <form className="flex gap-2" onSubmit={handleSubmit}>
+      <form className="space-y-2" onSubmit={handleSubmit}>
+        <div className="flex gap-2">
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Nouvelle catégorie"
+            className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          />
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          >
+            Ajouter
+          </button>
+        </div>
         <input
-          value={name}
-          onChange={(event) => setName(event.target.value)}
-          placeholder="Nouvelle catégorie"
-          className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          value={sizes}
+          onChange={(event) => setSizes(event.target.value)}
+          placeholder="Tailles (séparées par des virgules)"
+          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
         />
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-        >
-          Ajouter
-        </button>
       </form>
-      <ul className="space-y-1 text-xs text-slate-200">
+      <ul className="space-y-2 text-xs text-slate-200">
         {categories.length === 0 ? (
           <li className="text-slate-500">Aucune catégorie définie.</li>
         ) : null}
-        {categories.map((category) => (
-          <li key={category.id} className="flex items-center justify-between rounded border border-slate-800 bg-slate-950 px-3 py-2">
-            <span>{category.name}</span>
-            <button
-              type="button"
-              onClick={() => onDelete(category.id)}
-              className="rounded bg-slate-800 px-2 py-1 text-[10px] font-semibold hover:bg-slate-700"
-            >
-              Supprimer
-            </button>
-          </li>
-        ))}
+        {categories.map((category) => {
+          const currentValue = editedSizes[category.id] ?? category.sizes.join(", ");
+          return (
+            <li key={category.id} className="rounded border border-slate-800 bg-slate-950 p-3">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
+                <div className="flex-1 space-y-2">
+                  <p className="text-sm font-semibold text-slate-100">{category.name}</p>
+                  <input
+                    value={currentValue}
+                    onChange={(event) =>
+                      setEditedSizes((previous) => ({ ...previous, [category.id]: event.target.value }))
+                    }
+                    placeholder="Tailles (séparées par des virgules)"
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div className="flex gap-2 sm:flex-col">
+                  <button
+                    type="button"
+                    onClick={() => handleSave(category.id)}
+                    disabled={isSubmitting}
+                    className="rounded bg-indigo-500 px-3 py-2 text-[10px] font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    Enregistrer
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      await onDelete(category.id);
+                    }}
+                    disabled={isSubmitting}
+                    className="rounded bg-slate-800 px-3 py-2 text-[10px] font-semibold hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    Supprimer
+                  </button>
+                </div>
+              </div>
+            </li>
+          );
+        })}
       </ul>
     </div>
   );
+}
+
+function parseSizesInput(value: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of value.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
 }
 
 function formatDate(value: string) {

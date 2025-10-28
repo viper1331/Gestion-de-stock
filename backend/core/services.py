@@ -433,26 +433,108 @@ def list_low_stock(threshold: int) -> list[models.LowStockReport]:
 def list_categories() -> list[models.Category]:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT * FROM categories ORDER BY name COLLATE NOCASE")
-        return [models.Category(id=row["id"], name=row["name"]) for row in cur.fetchall()]
+        cur = conn.execute("SELECT id, name FROM categories ORDER BY name COLLATE NOCASE")
+        rows = cur.fetchall()
+        if not rows:
+            return []
+
+        category_ids = [row["id"] for row in rows]
+        sizes_map: dict[int, list[str]] = {category_id: [] for category_id in category_ids}
+        placeholders = ",".join("?" for _ in category_ids)
+        size_rows = conn.execute(
+            f"SELECT category_id, name FROM category_sizes WHERE category_id IN ({placeholders}) ORDER BY name COLLATE NOCASE",
+            category_ids,
+        ).fetchall()
+        for size in size_rows:
+            sizes_map.setdefault(size["category_id"], []).append(size["name"])
+
+        return [
+            models.Category(
+                id=row["id"],
+                name=row["name"],
+                sizes=sizes_map.get(row["id"], []),
+            )
+            for row in rows
+        ]
+
+
+def get_category(category_id: int) -> Optional[models.Category]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id, name FROM categories WHERE id = ?", (category_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        size_rows = conn.execute(
+            "SELECT name FROM category_sizes WHERE category_id = ? ORDER BY name COLLATE NOCASE",
+            (category_id,),
+        ).fetchall()
+        return models.Category(
+            id=row["id"],
+            name=row["name"],
+            sizes=[size_row["name"] for size_row in size_rows],
+        )
 
 
 def create_category(payload: models.CategoryCreate) -> models.Category:
     ensure_database_ready()
+    normalized_sizes = _normalize_sizes(payload.sizes)
     with db.get_stock_connection() as conn:
         cur = conn.execute(
             "INSERT INTO categories (name) VALUES (?)",
             (payload.name,),
         )
+        category_id = cur.lastrowid
+        if normalized_sizes:
+            conn.executemany(
+                "INSERT INTO category_sizes (category_id, name) VALUES (?, ?)",
+                ((category_id, size) for size in normalized_sizes),
+            )
         conn.commit()
-        return models.Category(id=cur.lastrowid, name=payload.name)
+        return models.Category(id=category_id, name=payload.name, sizes=normalized_sizes)
 
 
 def delete_category(category_id: int) -> None:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM category_sizes WHERE category_id = ?", (category_id,))
         conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
         conn.commit()
+
+
+def update_category(category_id: int, payload: models.CategoryUpdate) -> models.Category:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM categories WHERE id = ?", (category_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Category not found")
+
+        updates: list[str] = []
+        values: list[object] = []
+        if payload.name is not None:
+            updates.append("name = ?")
+            values.append(payload.name)
+        if updates:
+            values.append(category_id)
+            conn.execute(
+                f"UPDATE categories SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+
+        if payload.sizes is not None:
+            conn.execute("DELETE FROM category_sizes WHERE category_id = ?", (category_id,))
+            normalized_sizes = _normalize_sizes(payload.sizes)
+            if normalized_sizes:
+                conn.executemany(
+                    "INSERT INTO category_sizes (category_id, name) VALUES (?, ?)",
+                    ((category_id, size) for size in normalized_sizes),
+                )
+        conn.commit()
+
+    updated = get_category(category_id)
+    if updated is None:  # pragma: no cover - deleted row in concurrent context
+        raise ValueError("Category not found")
+    return updated
 
 
 def record_movement(item_id: int, payload: models.MovementCreate) -> None:
@@ -860,12 +942,12 @@ def list_module_permissions() -> list[models.ModulePermission]:
     ensure_database_ready()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT * FROM module_permissions ORDER BY role, module COLLATE NOCASE"
+            "SELECT * FROM module_permissions ORDER BY user_id, module COLLATE NOCASE"
         )
         return [
             models.ModulePermission(
                 id=row["id"],
-                role=row["role"],
+                user_id=row["user_id"],
                 module=row["module"],
                 can_view=bool(row["can_view"]),
                 can_edit=bool(row["can_edit"]),
@@ -874,20 +956,17 @@ def list_module_permissions() -> list[models.ModulePermission]:
         ]
 
 
-def list_module_permissions_for_role(role: str) -> list[models.ModulePermission]:
+def list_module_permissions_for_user(user_id: int) -> list[models.ModulePermission]:
     ensure_database_ready()
-    if role == "admin":
-        # Admins implicitly have access to every module; return stored overrides for completeness.
-        return list_module_permissions()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT * FROM module_permissions WHERE role = ? ORDER BY module COLLATE NOCASE",
-            (role,),
+            "SELECT * FROM module_permissions WHERE user_id = ? ORDER BY module COLLATE NOCASE",
+            (user_id,),
         )
         return [
             models.ModulePermission(
                 id=row["id"],
-                role=row["role"],
+                user_id=row["user_id"],
                 module=row["module"],
                 can_view=bool(row["can_view"]),
                 can_edit=bool(row["can_edit"]),
@@ -896,19 +975,21 @@ def list_module_permissions_for_role(role: str) -> list[models.ModulePermission]
         ]
 
 
-def get_module_permission(role: str, module: str) -> Optional[models.ModulePermission]:
+def get_module_permission_for_user(
+    user_id: int, module: str
+) -> Optional[models.ModulePermission]:
     ensure_database_ready()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT * FROM module_permissions WHERE role = ? AND module = ?",
-            (role, module),
+            "SELECT * FROM module_permissions WHERE user_id = ? AND module = ?",
+            (user_id, module),
         )
         row = cur.fetchone()
         if row is None:
             return None
         return models.ModulePermission(
             id=row["id"],
-            role=row["role"],
+            user_id=row["user_id"],
             module=row["module"],
             can_view=bool(row["can_view"]),
             can_edit=bool(row["can_edit"]),
@@ -917,46 +998,48 @@ def get_module_permission(role: str, module: str) -> Optional[models.ModulePermi
 
 def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.ModulePermission:
     ensure_database_ready()
+    if get_user_by_id(payload.user_id) is None:
+        raise ValueError("User not found")
     with db.get_users_connection() as conn:
         conn.execute(
             """
-            INSERT INTO module_permissions (role, module, can_view, can_edit)
+            INSERT INTO module_permissions (user_id, module, can_view, can_edit)
             VALUES (?, ?, ?, ?)
-            ON CONFLICT(role, module) DO UPDATE SET
+            ON CONFLICT(user_id, module) DO UPDATE SET
                 can_view = excluded.can_view,
                 can_edit = excluded.can_edit
             """,
             (
-                payload.role,
+                payload.user_id,
                 payload.module,
                 int(payload.can_view),
                 int(payload.can_edit),
             ),
         )
         conn.commit()
-    permission = get_module_permission(payload.role, payload.module)
+    permission = get_module_permission_for_user(payload.user_id, payload.module)
     if permission is None:
         raise RuntimeError("Failed to persist module permission")
     return permission
 
 
-def delete_module_permission(role: str, module: str) -> None:
+def delete_module_permission_for_user(user_id: int, module: str) -> None:
     ensure_database_ready()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "DELETE FROM module_permissions WHERE role = ? AND module = ?",
-            (role, module),
+            "DELETE FROM module_permissions WHERE user_id = ? AND module = ?",
+            (user_id, module),
         )
         if cur.rowcount == 0:
             raise ValueError("Module permission not found")
         conn.commit()
 
 
-def has_module_access(role: str, module: str, *, action: str = "view") -> bool:
+def has_module_access(user: models.User, module: str, *, action: str = "view") -> bool:
     ensure_database_ready()
-    if role == "admin":
+    if user.role == "admin":
         return True
-    permission = get_module_permission(role, module)
+    permission = get_module_permission_for_user(user.id, module)
     if permission is None:
         return False
     if action == "edit":

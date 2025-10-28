@@ -21,6 +21,20 @@ async def create_category(payload: models.CategoryCreate, user: models.User = De
     return services.create_category(payload)
 
 
+@router.put("/{category_id}", response_model=models.Category)
+async def update_category(
+    category_id: int,
+    payload: models.CategoryUpdate,
+    user: models.User = Depends(get_current_user),
+) -> models.Category:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    try:
+        return services.update_category(category_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail="Category not found") from exc
+
+
 @router.delete("/{category_id}", status_code=204)
 async def delete_category(category_id: int, user: models.User = Depends(get_current_user)) -> None:
     if user.role != "admin":
