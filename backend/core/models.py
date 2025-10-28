@@ -159,6 +159,39 @@ class PurchaseOrderItem(BaseModel):
     item_id: int
     quantity_ordered: int
     quantity_received: int
+    item_name: str | None = None
+
+
+class PurchaseOrderItemInput(BaseModel):
+    item_id: int = Field(..., gt=0)
+    quantity_ordered: int = Field(..., gt=0)
+
+
+class PurchaseOrderReceiveItem(BaseModel):
+    item_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class PurchaseOrderReceivePayload(BaseModel):
+    items: list[PurchaseOrderReceiveItem] = Field(default_factory=list)
+
+
+class PurchaseOrderCreate(BaseModel):
+    supplier_id: Optional[int] = None
+    status: str = "PENDING"
+    note: Optional[str] = None
+    items: list[PurchaseOrderItemInput] = Field(default_factory=list)
+
+
+class PurchaseOrderUpdate(BaseModel):
+    supplier_id: Optional[int] = None
+    status: Optional[str] = None
+    note: Optional[str] = None
+
+
+class PurchaseOrderDetail(PurchaseOrder):
+    supplier_name: str | None = None
+    items: list[PurchaseOrderItem] = Field(default_factory=list)
 
 
 class CollaboratorBase(BaseModel):
@@ -239,6 +272,55 @@ class PharmacyItemUpdate(BaseModel):
 
 class PharmacyItem(PharmacyItemBase):
     id: int
+
+
+class PharmacyPurchaseOrderItem(BaseModel):
+    id: int
+    purchase_order_id: int
+    pharmacy_item_id: int
+    quantity_ordered: int
+    quantity_received: int
+    pharmacy_item_name: str | None = None
+
+
+class PharmacyPurchaseOrderItemInput(BaseModel):
+    pharmacy_item_id: int = Field(..., gt=0)
+    quantity_ordered: int = Field(..., gt=0)
+
+
+class PharmacyPurchaseOrderReceiveItem(BaseModel):
+    pharmacy_item_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class PharmacyPurchaseOrderReceivePayload(BaseModel):
+    items: list[PharmacyPurchaseOrderReceiveItem] = Field(default_factory=list)
+
+
+class PharmacyPurchaseOrder(BaseModel):
+    id: int
+    supplier_id: int | None = None
+    status: str
+    created_at: datetime
+    note: str | None = None
+
+
+class PharmacyPurchaseOrderDetail(PharmacyPurchaseOrder):
+    supplier_name: str | None = None
+    items: list[PharmacyPurchaseOrderItem] = Field(default_factory=list)
+
+
+class PharmacyPurchaseOrderCreate(BaseModel):
+    supplier_id: Optional[int] = None
+    status: str = "PENDING"
+    note: Optional[str] = None
+    items: list[PharmacyPurchaseOrderItemInput] = Field(default_factory=list)
+
+
+class PharmacyPurchaseOrderUpdate(BaseModel):
+    supplier_id: Optional[int] = None
+    status: Optional[str] = None
+    note: Optional[str] = None
 
 
 class ModulePermissionBase(BaseModel):
