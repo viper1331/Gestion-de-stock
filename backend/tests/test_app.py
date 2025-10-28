@@ -24,6 +24,7 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM pharmacy_items")
         conn.execute("DELETE FROM movements")
         conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM category_sizes")
         conn.execute("DELETE FROM categories")
         conn.commit()
     with db.get_users_connection() as conn:
@@ -412,3 +413,54 @@ def test_pharmacy_crud_cycle() -> None:
 
     missing = client.get(f"/pharmacy/{pharmacy_id}", headers=admin_headers)
     assert missing.status_code == 404
+
+
+def test_create_category_with_sizes() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    category_name = f"Cat-{uuid4().hex[:6]}"
+
+    response = client.post(
+        "/categories/",
+        json={"name": category_name, "sizes": [" XS", "S", "M", "m"]},
+        headers=admin_headers,
+    )
+    assert response.status_code == 201, response.text
+    data = response.json()
+    assert data["name"] == category_name
+    expected_sizes = sorted(["XS", "S", "M"], key=str.lower)
+    assert data["sizes"] == expected_sizes
+
+    listing = client.get("/categories/", headers=admin_headers)
+    assert listing.status_code == 200
+    categories = listing.json()
+    assert any(entry["name"] == category_name and entry["sizes"] == expected_sizes for entry in categories)
+
+
+def test_update_category_sizes() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    category_name = f"Cat-{uuid4().hex[:6]}"
+
+    created = client.post(
+        "/categories/",
+        json={"name": category_name, "sizes": ["38", "39"]},
+        headers=admin_headers,
+    )
+    assert created.status_code == 201, created.text
+    category_id = created.json()["id"]
+
+    update = client.put(
+        f"/categories/{category_id}",
+        json={"sizes": ["39", "40", " 40 ", "41", ""]},
+        headers=admin_headers,
+    )
+    assert update.status_code == 200, update.text
+    updated = update.json()
+    assert updated["id"] == category_id
+    assert updated["sizes"] == sorted(["39", "40", "41"], key=str.lower)
+
+    listing = client.get("/categories/", headers=admin_headers)
+    assert listing.status_code == 200
+    categories = {entry["id"]: entry for entry in listing.json()}
+    assert categories[category_id]["sizes"] == sorted(["39", "40", "41"], key=str.lower)

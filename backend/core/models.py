@@ -52,10 +52,17 @@ class RefreshRequest(BaseModel):
 class Category(BaseModel):
     id: int
     name: str
+    sizes: list[str] = Field(default_factory=list)
 
 
 class CategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
+    sizes: list[str] = Field(default_factory=list)
+
+
+class CategoryUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    sizes: Optional[list[str]] = None
 
 
 class Item(BaseModel):
