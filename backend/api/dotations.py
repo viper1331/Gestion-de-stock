@@ -13,7 +13,7 @@ MODULE_KEY = "dotations"
 
 def _require_permission(user: models.User, *, action: str) -> None:
     if not services.has_module_access(user, MODULE_KEY, action=action):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
 @router.get("/collaborators", response_model=list[models.Collaborator])
@@ -43,7 +43,7 @@ async def update_collaborator(
     try:
         return services.update_collaborator(collaborator_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Collaborator not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/collaborators/{collaborator_id}", status_code=204)
@@ -55,7 +55,7 @@ async def delete_collaborator(
     try:
         services.delete_collaborator(collaborator_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Collaborator not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.get("/dotations", response_model=list[models.Dotation])
@@ -90,4 +90,4 @@ async def delete_dotation(
     try:
         services.delete_dotation(dotation_id, restock=restock)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Dotation not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

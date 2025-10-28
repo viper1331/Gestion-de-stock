@@ -17,7 +17,7 @@ router = APIRouter()
 async def generate_barcode(sku: str, _: models.User = Depends(get_current_user)) -> FileResponse:
     path = barcode_service.generate_barcode_png(sku)
     if not path:
-        raise HTTPException(status_code=500, detail="Failed to generate barcode")
+        raise HTTPException(status_code=500, detail="Échec de la génération du code-barres")
     return FileResponse(path, filename=f"{sku}.png", media_type="image/png")
 
 

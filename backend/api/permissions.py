@@ -14,7 +14,7 @@ async def list_module_permissions(
     user: models.User = Depends(get_current_user),
 ) -> list[models.ModulePermission]:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.list_module_permissions()
 
 
@@ -23,7 +23,7 @@ async def list_available_modules(
     user: models.User = Depends(get_current_user),
 ) -> list[models.ModuleDefinition]:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.list_available_modules()
 
 
@@ -41,10 +41,10 @@ async def get_module_permission(
     user: models.User = Depends(get_current_user),
 ) -> models.ModulePermission:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     permission = services.get_module_permission_for_user(user_id, module)
     if permission is None:
-        raise HTTPException(status_code=404, detail="Module permission not found")
+        raise HTTPException(status_code=404, detail="Permission de module introuvable")
     return permission
 
 
@@ -54,7 +54,7 @@ async def upsert_module_permission(
     user: models.User = Depends(get_current_user),
 ) -> models.ModulePermission:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
         return services.upsert_module_permission(payload)
     except ValueError as exc:
@@ -68,8 +68,8 @@ async def delete_module_permission(
     user: models.User = Depends(get_current_user),
 ) -> None:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
         services.delete_module_permission_for_user(user_id, module)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Module permission not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

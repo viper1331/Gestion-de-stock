@@ -13,7 +13,7 @@ MODULE_KEY = "pharmacy"
 
 def _require_permission(user: models.User, *, action: str) -> None:
     if not services.has_module_access(user, MODULE_KEY, action=action):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
 @router.get("/", response_model=list[models.PharmacyItem])
@@ -42,7 +42,7 @@ async def get_pharmacy_item(
     try:
         return services.get_pharmacy_item(item_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Pharmacy item not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/{item_id}", response_model=models.PharmacyItem)
@@ -55,7 +55,7 @@ async def update_pharmacy_item(
     try:
         return services.update_pharmacy_item(item_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Pharmacy item not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/{item_id}", status_code=204)
@@ -67,4 +67,4 @@ async def delete_pharmacy_item(
     try:
         services.delete_pharmacy_item(item_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Pharmacy item not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

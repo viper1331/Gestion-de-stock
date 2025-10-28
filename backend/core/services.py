@@ -238,12 +238,12 @@ def create_user(payload: models.UserCreate) -> models.User:
                 (payload.username, hashed, payload.role),
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
-            raise ValueError("Username already exists") from exc
+            raise ValueError("Ce nom d'utilisateur existe déjà") from exc
         conn.commit()
         user_id = cur.lastrowid
     created = get_user_by_id(user_id)
     if created is None:  # pragma: no cover - inserted row should exist
-        raise ValueError("Failed to create user")
+        raise ValueError("Échec de la création de l'utilisateur")
     return created
 
 
@@ -251,13 +251,13 @@ def update_user(user_id: int, payload: models.UserUpdate) -> models.User:
     ensure_database_ready()
     current = get_user_by_id(user_id)
     if current is None:
-        raise ValueError("User not found")
+        raise ValueError("Utilisateur introuvable")
 
     if current.username == "admin":
         if payload.role is not None and payload.role != "admin":
-            raise ValueError("Cannot change default admin role")
+            raise ValueError("Impossible de modifier le rôle de l'administrateur par défaut")
         if payload.is_active is not None and not payload.is_active:
-            raise ValueError("Cannot deactivate default admin")
+            raise ValueError("Impossible de désactiver l'administrateur par défaut")
 
     fields: dict[str, object] = {}
     if payload.role is not None:
@@ -280,7 +280,7 @@ def update_user(user_id: int, payload: models.UserUpdate) -> models.User:
 
     updated = get_user_by_id(user_id)
     if updated is None:  # pragma: no cover
-        raise ValueError("User not found")
+        raise ValueError("Utilisateur introuvable")
     return updated
 
 
@@ -288,9 +288,9 @@ def delete_user(user_id: int) -> None:
     ensure_database_ready()
     current = get_user_by_id(user_id)
     if current is None:
-        raise ValueError("User not found")
+        raise ValueError("Utilisateur introuvable")
     if current.username == "admin":
-        raise ValueError("Cannot delete default admin user")
+        raise ValueError("Impossible de supprimer l'utilisateur administrateur par défaut")
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
         conn.commit()
@@ -369,7 +369,7 @@ def get_item(item_id: int) -> models.Item:
         cur = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,))
         row = cur.fetchone()
         if not row:
-            raise ValueError("Item not found")
+            raise ValueError("Article introuvable")
         return models.Item(
             id=row["id"],
             name=row["name"],
@@ -527,7 +527,7 @@ def update_category(category_id: int, payload: models.CategoryUpdate) -> models.
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT id FROM categories WHERE id = ?", (category_id,))
         if cur.fetchone() is None:
-            raise ValueError("Category not found")
+            raise ValueError("Catégorie introuvable")
 
         updates: list[str] = []
         values: list[object] = []
@@ -553,7 +553,7 @@ def update_category(category_id: int, payload: models.CategoryUpdate) -> models.
 
     updated = get_category(category_id)
     if updated is None:  # pragma: no cover - deleted row in concurrent context
-        raise ValueError("Category not found")
+        raise ValueError("Catégorie introuvable")
     return updated
 
 
@@ -563,7 +563,7 @@ def record_movement(item_id: int, payload: models.MovementCreate) -> None:
         cur = conn.execute("SELECT quantity FROM items WHERE id = ?", (item_id,))
         row = cur.fetchone()
         if row is None:
-            raise ValueError("Item not found")
+            raise ValueError("Article introuvable")
 
         conn.execute(
             "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
@@ -653,7 +653,7 @@ def get_supplier(supplier_id: int) -> models.Supplier:
         cur = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,))
         row = cur.fetchone()
         if row is None:
-            raise ValueError("Supplier not found")
+            raise ValueError("Fournisseur introuvable")
         return models.Supplier(
             id=row["id"],
             name=row["name"],
@@ -689,7 +689,7 @@ def update_supplier(supplier_id: int, payload: models.SupplierUpdate) -> models.
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,))
         if cur.fetchone() is None:
-            raise ValueError("Supplier not found")
+            raise ValueError("Fournisseur introuvable")
         conn.execute(f"UPDATE suppliers SET {assignments} WHERE id = ?", values)
         conn.commit()
     return get_supplier(supplier_id)
@@ -700,7 +700,7 @@ def delete_supplier(supplier_id: int) -> None:
     with db.get_stock_connection() as conn:
         cur = conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
         if cur.rowcount == 0:
-            raise ValueError("Supplier not found")
+            raise ValueError("Fournisseur introuvable")
         conn.commit()
 
 
@@ -726,7 +726,7 @@ def get_collaborator(collaborator_id: int) -> models.Collaborator:
         cur = conn.execute("SELECT * FROM collaborators WHERE id = ?", (collaborator_id,))
         row = cur.fetchone()
         if row is None:
-            raise ValueError("Collaborator not found")
+            raise ValueError("Collaborateur introuvable")
         return models.Collaborator(
             id=row["id"],
             full_name=row["full_name"],
@@ -761,7 +761,7 @@ def update_collaborator(collaborator_id: int, payload: models.CollaboratorUpdate
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT 1 FROM collaborators WHERE id = ?", (collaborator_id,))
         if cur.fetchone() is None:
-            raise ValueError("Collaborator not found")
+            raise ValueError("Collaborateur introuvable")
         conn.execute(f"UPDATE collaborators SET {assignments} WHERE id = ?", values)
         conn.commit()
     return get_collaborator(collaborator_id)
@@ -772,7 +772,7 @@ def delete_collaborator(collaborator_id: int) -> None:
     with db.get_stock_connection() as conn:
         cur = conn.execute("DELETE FROM collaborators WHERE id = ?", (collaborator_id,))
         if cur.rowcount == 0:
-            raise ValueError("Collaborator not found")
+            raise ValueError("Collaborateur introuvable")
         conn.commit()
 
 
@@ -813,7 +813,7 @@ def get_dotation(dotation_id: int) -> models.Dotation:
         cur = conn.execute("SELECT * FROM dotations WHERE id = ?", (dotation_id,))
         row = cur.fetchone()
         if row is None:
-            raise ValueError("Dotation not found")
+            raise ValueError("Dotation introuvable")
         return models.Dotation(
             id=row["id"],
             collaborator_id=row["collaborator_id"],
@@ -830,15 +830,15 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
         cur = conn.execute("SELECT quantity FROM items WHERE id = ?", (payload.item_id,))
         item_row = cur.fetchone()
         if item_row is None:
-            raise ValueError("Item not found")
+            raise ValueError("Article introuvable")
         if item_row["quantity"] < payload.quantity:
-            raise ValueError("Insufficient stock for allocation")
+            raise ValueError("Stock insuffisant pour la dotation")
 
         collaborator_cur = conn.execute(
             "SELECT 1 FROM collaborators WHERE id = ?", (payload.collaborator_id,)
         )
         if collaborator_cur.fetchone() is None:
-            raise ValueError("Collaborator not found")
+            raise ValueError("Collaborateur introuvable")
 
         cur = conn.execute(
             """
@@ -868,7 +868,7 @@ def delete_dotation(dotation_id: int, *, restock: bool = False) -> None:
         )
         row = cur.fetchone()
         if row is None:
-            raise ValueError("Dotation not found")
+            raise ValueError("Dotation introuvable")
         conn.execute("DELETE FROM dotations WHERE id = ?", (dotation_id,))
         if restock:
             conn.execute(
@@ -901,7 +901,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
         cur = conn.execute("SELECT * FROM pharmacy_items WHERE id = ?", (item_id,))
         row = cur.fetchone()
         if row is None:
-            raise ValueError("Pharmacy item not found")
+            raise ValueError("Produit pharmaceutique introuvable")
         return models.PharmacyItem(
             id=row["id"],
             name=row["name"],
@@ -943,7 +943,7 @@ def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> mo
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT 1 FROM pharmacy_items WHERE id = ?", (item_id,))
         if cur.fetchone() is None:
-            raise ValueError("Pharmacy item not found")
+            raise ValueError("Produit pharmaceutique introuvable")
         conn.execute(f"UPDATE pharmacy_items SET {assignments} WHERE id = ?", values)
         conn.commit()
     return get_pharmacy_item(item_id)
@@ -954,7 +954,7 @@ def delete_pharmacy_item(item_id: int) -> None:
     with db.get_stock_connection() as conn:
         cur = conn.execute("DELETE FROM pharmacy_items WHERE id = ?", (item_id,))
         if cur.rowcount == 0:
-            raise ValueError("Pharmacy item not found")
+            raise ValueError("Produit pharmaceutique introuvable")
         conn.commit()
 
 
@@ -1042,7 +1042,7 @@ def get_module_permission_for_user(
 def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.ModulePermission:
     ensure_database_ready()
     if get_user_by_id(payload.user_id) is None:
-        raise ValueError("User not found")
+        raise ValueError("Utilisateur introuvable")
     with db.get_users_connection() as conn:
         if payload.module not in _AVAILABLE_MODULE_KEYS:
             cur = conn.execute(
@@ -1050,7 +1050,7 @@ def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.M
                 (payload.module,),
             )
             if cur.fetchone() is None:
-                raise ValueError("Module not found")
+                raise ValueError("Module introuvable")
         conn.execute(
             """
             INSERT INTO module_permissions (user_id, module, can_view, can_edit)
@@ -1069,7 +1069,7 @@ def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.M
         conn.commit()
     permission = get_module_permission_for_user(payload.user_id, payload.module)
     if permission is None:
-        raise RuntimeError("Failed to persist module permission")
+        raise RuntimeError("Échec de l'enregistrement de la permission du module")
     return permission
 
 
@@ -1081,7 +1081,7 @@ def delete_module_permission_for_user(user_id: int, module: str) -> None:
             (user_id, module),
         )
         if cur.rowcount == 0:
-            raise ValueError("Module permission not found")
+            raise ValueError("Permission de module introuvable")
         conn.commit()
 
 

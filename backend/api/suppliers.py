@@ -13,7 +13,7 @@ MODULE_KEY = "suppliers"
 
 def _require_permission(user: models.User, *, action: str) -> None:
     if not services.has_module_access(user, MODULE_KEY, action=action):
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
 @router.get("/", response_model=list[models.Supplier])
@@ -38,7 +38,7 @@ async def get_supplier(
     try:
         return services.get_supplier(supplier_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Supplier not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/{supplier_id}", response_model=models.Supplier)
@@ -51,7 +51,7 @@ async def update_supplier(
     try:
         return services.update_supplier(supplier_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Supplier not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/{supplier_id}", status_code=204)
@@ -62,4 +62,4 @@ async def delete_supplier(
     try:
         services.delete_supplier(supplier_id)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Supplier not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc

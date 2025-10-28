@@ -17,7 +17,7 @@ async def list_categories() -> list[models.Category]:
 @router.post("/", response_model=models.Category, status_code=201)
 async def create_category(payload: models.CategoryCreate, user: models.User = Depends(get_current_user)) -> models.Category:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.create_category(payload)
 
 
@@ -28,15 +28,15 @@ async def update_category(
     user: models.User = Depends(get_current_user),
 ) -> models.Category:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
         return services.update_category(category_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail="Category not found") from exc
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.delete("/{category_id}", status_code=204)
 async def delete_category(category_id: int, user: models.User = Depends(get_current_user)) -> None:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     services.delete_category(category_id)
