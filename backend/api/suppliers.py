@@ -12,7 +12,7 @@ MODULE_KEY = "suppliers"
 
 
 def _require_permission(user: models.User, *, action: str) -> None:
-    if not services.has_module_access(user.role, MODULE_KEY, action=action):
+    if not services.has_module_access(user, MODULE_KEY, action=action):
         raise HTTPException(status_code=403, detail="Insufficient permissions")
 
 

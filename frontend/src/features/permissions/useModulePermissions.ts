@@ -5,7 +5,7 @@ import { api } from "../../lib/api";
 
 export interface ModulePermission {
   id: number;
-  role: string;
+  user_id: number;
   module: string;
   can_view: boolean;
   can_edit: boolean;

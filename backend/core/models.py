@@ -197,7 +197,7 @@ class PharmacyItem(PharmacyItemBase):
 
 
 class ModulePermissionBase(BaseModel):
-    role: str = Field(..., pattern=r"^(admin|user)$")
+    user_id: int = Field(..., gt=0)
     module: str = Field(..., min_length=1, max_length=64)
     can_view: bool = True
     can_edit: bool = False

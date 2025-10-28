@@ -729,12 +729,12 @@ def list_module_permissions() -> list[models.ModulePermission]:
     ensure_database_ready()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT * FROM module_permissions ORDER BY role, module COLLATE NOCASE"
+            "SELECT * FROM module_permissions ORDER BY user_id, module COLLATE NOCASE"
         )
         return [
             models.ModulePermission(
                 id=row["id"],
-                role=row["role"],
+                user_id=row["user_id"],
                 module=row["module"],
                 can_view=bool(row["can_view"]),
                 can_edit=bool(row["can_edit"]),
@@ -743,20 +743,17 @@ def list_module_permissions() -> list[models.ModulePermission]:
         ]
 
 
-def list_module_permissions_for_role(role: str) -> list[models.ModulePermission]:
+def list_module_permissions_for_user(user_id: int) -> list[models.ModulePermission]:
     ensure_database_ready()
-    if role == "admin":
-        # Admins implicitly have access to every module; return stored overrides for completeness.
-        return list_module_permissions()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT * FROM module_permissions WHERE role = ? ORDER BY module COLLATE NOCASE",
-            (role,),
+            "SELECT * FROM module_permissions WHERE user_id = ? ORDER BY module COLLATE NOCASE",
+            (user_id,),
         )
         return [
             models.ModulePermission(
                 id=row["id"],
-                role=row["role"],
+                user_id=row["user_id"],
                 module=row["module"],
                 can_view=bool(row["can_view"]),
                 can_edit=bool(row["can_edit"]),
@@ -765,19 +762,21 @@ def list_module_permissions_for_role(role: str) -> list[models.ModulePermission]
         ]
 
 
-def get_module_permission(role: str, module: str) -> Optional[models.ModulePermission]:
+def get_module_permission_for_user(
+    user_id: int, module: str
+) -> Optional[models.ModulePermission]:
     ensure_database_ready()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT * FROM module_permissions WHERE role = ? AND module = ?",
-            (role, module),
+            "SELECT * FROM module_permissions WHERE user_id = ? AND module = ?",
+            (user_id, module),
         )
         row = cur.fetchone()
         if row is None:
             return None
         return models.ModulePermission(
             id=row["id"],
-            role=row["role"],
+            user_id=row["user_id"],
             module=row["module"],
             can_view=bool(row["can_view"]),
             can_edit=bool(row["can_edit"]),
@@ -786,46 +785,48 @@ def get_module_permission(role: str, module: str) -> Optional[models.ModulePermi
 
 def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.ModulePermission:
     ensure_database_ready()
+    if get_user_by_id(payload.user_id) is None:
+        raise ValueError("User not found")
     with db.get_users_connection() as conn:
         conn.execute(
             """
-            INSERT INTO module_permissions (role, module, can_view, can_edit)
+            INSERT INTO module_permissions (user_id, module, can_view, can_edit)
             VALUES (?, ?, ?, ?)
-            ON CONFLICT(role, module) DO UPDATE SET
+            ON CONFLICT(user_id, module) DO UPDATE SET
                 can_view = excluded.can_view,
                 can_edit = excluded.can_edit
             """,
             (
-                payload.role,
+                payload.user_id,
                 payload.module,
                 int(payload.can_view),
                 int(payload.can_edit),
             ),
         )
         conn.commit()
-    permission = get_module_permission(payload.role, payload.module)
+    permission = get_module_permission_for_user(payload.user_id, payload.module)
     if permission is None:
         raise RuntimeError("Failed to persist module permission")
     return permission
 
 
-def delete_module_permission(role: str, module: str) -> None:
+def delete_module_permission_for_user(user_id: int, module: str) -> None:
     ensure_database_ready()
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "DELETE FROM module_permissions WHERE role = ? AND module = ?",
-            (role, module),
+            "DELETE FROM module_permissions WHERE user_id = ? AND module = ?",
+            (user_id, module),
         )
         if cur.rowcount == 0:
             raise ValueError("Module permission not found")
         conn.commit()
 
 
-def has_module_access(role: str, module: str, *, action: str = "view") -> bool:
+def has_module_access(user: models.User, module: str, *, action: str = "view") -> bool:
     ensure_database_ready()
-    if role == "admin":
+    if user.role == "admin":
         return True
-    permission = get_module_permission(role, module)
+    permission = get_module_permission_for_user(user.id, module)
     if permission is None:
         return False
     if action == "edit":
