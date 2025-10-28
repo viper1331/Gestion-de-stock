@@ -60,6 +60,7 @@ export function Dashboard() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -69,6 +70,13 @@ export function Dashboard() {
     }, 300);
     return () => window.clearTimeout(timeout);
   }, [searchValue]);
+
+  const openSidebar = () => setIsSidebarOpen(true);
+  const closeSidebar = () => {
+    setIsSidebarOpen(false);
+    setFormMode("create");
+    setSelectedItem(null);
+  };
 
   const {
     data: items = [],
@@ -130,8 +138,7 @@ export function Dashboard() {
     },
     onSuccess: async () => {
       setMessage("Article supprimé.");
-      setSelectedItem(null);
-      setFormMode("create");
+      closeSidebar();
       await queryClient.invalidateQueries({ queryKey: ["items"] });
     },
     onError: () => setError("Suppression impossible."),
@@ -298,40 +305,61 @@ export function Dashboard() {
 
   return (
     <section className="space-y-6">
-      <header className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-        <div>
+      <header className="space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
+        <div className="space-y-1">
           <h2 className="text-2xl font-semibold text-white">Inventaire</h2>
           <p className="text-sm text-slate-400">
             Retrouvez l'ensemble des articles, appliquez des mouvements et gérez les catégories.
           </p>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
           <input
             value={searchValue}
             onChange={(event) => setSearchValue(event.target.value)}
             placeholder="Rechercher par nom ou SKU"
-            className="w-64 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none lg:w-72"
             title="Filtrer la liste des articles par nom ou SKU"
           />
-          <button
-            type="button"
-            onClick={() => {
-              setFormMode("create");
-              setSelectedItem(null);
-            }}
-            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-            title="Créer un nouvel article dans l'inventaire"
-          >
-            Nouvel article
-          </button>
+          <div className="flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                if (isSidebarOpen) {
+                  closeSidebar();
+                } else {
+                  openSidebar();
+                }
+              }}
+              className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              title={
+                isSidebarOpen
+                  ? "Masquer le panneau latéral des formulaires"
+                  : "Afficher le panneau latéral des formulaires"
+              }
+            >
+              {isSidebarOpen ? "Masquer les formulaires" : "Afficher les formulaires"}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setFormMode("create");
+                setSelectedItem(null);
+                openSidebar();
+              }}
+              className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+              title="Créer un nouvel article dans l'inventaire"
+            >
+              Nouvel article
+            </button>
+          </div>
         </div>
       </header>
 
       {message ? <Alert tone="success" message={message} /> : null}
       {error ? <Alert tone="error" message={error} /> : null}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2 space-y-4">
+      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+        <div className="flex-1 space-y-4">
           <div className="overflow-hidden rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60">
@@ -392,6 +420,7 @@ export function Dashboard() {
                           onClick={() => {
                             setSelectedItem(item);
                             setFormMode("edit");
+                            openSidebar();
                           }}
                           className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
                           title={`Modifier les informations de ${item.name}`}
@@ -402,6 +431,7 @@ export function Dashboard() {
                           type="button"
                           onClick={() => {
                             setSelectedItem(item);
+                            openSidebar();
                           }}
                           className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
                           title={`Saisir un mouvement de stock pour ${item.name}`}
@@ -428,67 +458,76 @@ export function Dashboard() {
           ) : null}
         </div>
 
-        <aside className="space-y-6">
-          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <h3 className="text-sm font-semibold text-white">
-              {formMode === "edit" ? "Modifier l'article" : "Nouvel article"}
-            </h3>
-            <ItemForm
-              key={`${formMode}-${selectedItem?.id ?? "new"}`}
-              initialValues={formInitialValues}
-              categories={categories}
-              mode={formMode}
-              isSubmitting={createItem.isPending || updateItem.isPending}
-              onSubmit={handleSubmitItem}
-              onCancel={() => {
-                setFormMode("create");
-                setSelectedItem(null);
-              }}
-            />
-          </div>
+        {isSidebarOpen ? (
+          <aside className="w-full space-y-6 lg:w-[380px]">
+            <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+              <div className="flex items-center justify-between gap-2">
+                <h3 className="text-sm font-semibold text-white">
+                  {formMode === "edit" ? "Modifier l'article" : "Nouvel article"}
+                </h3>
+                <button
+                  type="button"
+                  onClick={closeSidebar}
+                  className="rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                  title="Fermer le panneau latéral"
+                >
+                  Fermer
+                </button>
+              </div>
+              <ItemForm
+                key={`${formMode}-${selectedItem?.id ?? "new"}`}
+                initialValues={formInitialValues}
+                categories={categories}
+                mode={formMode}
+                isSubmitting={createItem.isPending || updateItem.isPending}
+                onSubmit={handleSubmitItem}
+                onCancel={closeSidebar}
+              />
+            </div>
 
-          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <h3 className="text-sm font-semibold text-white">Mouvement de stock</h3>
-            <MovementForm
-              item={selectedItem}
-              onSubmit={async (values) => {
-                if (!selectedItem) {
-                  return;
+            <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+              <h3 className="text-sm font-semibold text-white">Mouvement de stock</h3>
+              <MovementForm
+                item={selectedItem}
+                onSubmit={async (values) => {
+                  if (!selectedItem) {
+                    return;
+                  }
+                  setMessage(null);
+                  setError(null);
+                  await recordMovement.mutateAsync({ itemId: selectedItem.id, ...values });
+                }}
+                isSubmitting={recordMovement.isPending}
+              />
+              <MovementHistory item={selectedItem} />
+            </div>
+
+            <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+              <h3 className="text-sm font-semibold text-white">Catégories</h3>
+              <CategoryManager
+                categories={categories}
+                onCreate={async (payload) => {
+                  setMessage(null);
+                  setError(null);
+                  await createCategory.mutateAsync(payload);
+                }}
+                onDelete={async (categoryId) => {
+                  setMessage(null);
+                  setError(null);
+                  await removeCategory.mutateAsync(categoryId);
+                }}
+                onUpdate={async (categoryId, payload) => {
+                  setMessage(null);
+                  setError(null);
+                  await updateCategoryEntry.mutateAsync({ categoryId, payload });
+                }}
+                isSubmitting={
+                  createCategory.isPending || removeCategory.isPending || updateCategoryEntry.isPending
                 }
-                setMessage(null);
-                setError(null);
-                await recordMovement.mutateAsync({ itemId: selectedItem.id, ...values });
-              }}
-              isSubmitting={recordMovement.isPending}
-            />
-            <MovementHistory item={selectedItem} />
-          </div>
-
-          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <h3 className="text-sm font-semibold text-white">Catégories</h3>
-            <CategoryManager
-              categories={categories}
-              onCreate={async (payload) => {
-                setMessage(null);
-                setError(null);
-                await createCategory.mutateAsync(payload);
-              }}
-              onDelete={async (categoryId) => {
-                setMessage(null);
-                setError(null);
-                await removeCategory.mutateAsync(categoryId);
-              }}
-              onUpdate={async (categoryId, payload) => {
-                setMessage(null);
-                setError(null);
-                await updateCategoryEntry.mutateAsync({ categoryId, payload });
-              }}
-              isSubmitting={
-                createCategory.isPending || removeCategory.isPending || updateCategoryEntry.isPending
-              }
-            />
-          </div>
-        </aside>
+              />
+            </div>
+          </aside>
+        ) : null}
       </div>
     </section>
   );
