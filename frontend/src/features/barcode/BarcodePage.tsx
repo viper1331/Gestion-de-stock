@@ -69,12 +69,14 @@ export function BarcodePage() {
             value={sku}
             onChange={(event) => setSku(event.target.value)}
             className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Identifiant de l'article pour générer le code-barres"
           />
         </label>
         <button
           type="submit"
           disabled={isGenerating}
           className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          title="Lancer la génération du code-barres"
         >
           {isGenerating ? "Génération..." : "Générer"}
         </button>
@@ -84,6 +86,7 @@ export function BarcodePage() {
             onClick={handleDelete}
             disabled={isDeleting}
             className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-70"
+            title="Supprimer le fichier généré sur le serveur"
           >
             {isDeleting ? "Suppression..." : "Supprimer"}
           </button>
@@ -99,6 +102,7 @@ export function BarcodePage() {
               href={imageUrl}
               download={`${sku}.png`}
               className="rounded-md bg-slate-800 px-4 py-2 text-slate-200 hover:bg-slate-700"
+              title="Télécharger le fichier PNG du code-barres"
             >
               Télécharger
             </a>
@@ -106,6 +110,7 @@ export function BarcodePage() {
               type="button"
               onClick={() => navigator.clipboard.writeText(sku)}
               className="rounded-md bg-slate-800 px-4 py-2 text-slate-200 hover:bg-slate-700"
+              title="Copier la valeur du SKU dans le presse-papiers"
             >
               Copier le SKU
             </button>

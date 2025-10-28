@@ -159,6 +159,7 @@ export function SuppliersPage() {
               setFormMode("create");
             }}
             className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+            title="Ajouter un nouveau fournisseur"
           >
             Nouveau fournisseur
           </button>
@@ -202,6 +203,7 @@ export function SuppliersPage() {
                               setFormMode("edit");
                             }}
                             className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Modifier les informations de ${supplier.name}`}
                           >
                             Modifier
                           </button>
@@ -216,6 +218,7 @@ export function SuppliersPage() {
                               void deleteSupplier.mutateAsync(supplier.id);
                             }}
                             className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                            title={`Supprimer le fournisseur ${supplier.name}`}
                           >
                             Supprimer
                           </button>
@@ -250,6 +253,7 @@ export function SuppliersPage() {
                   defaultValue={formValues.name}
                   required
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Nom légal ou commercial du fournisseur"
                 />
               </div>
               <div className="space-y-1">
@@ -261,6 +265,7 @@ export function SuppliersPage() {
                   name="contact_name"
                   defaultValue={formValues.contact_name ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Nom de votre interlocuteur principal"
                 />
               </div>
               <div className="space-y-1">
@@ -272,6 +277,7 @@ export function SuppliersPage() {
                   name="phone"
                   defaultValue={formValues.phone ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Numéro de téléphone du fournisseur"
                 />
               </div>
               <div className="space-y-1">
@@ -284,6 +290,7 @@ export function SuppliersPage() {
                   type="email"
                   defaultValue={formValues.email ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Adresse e-mail de contact"
                 />
               </div>
               <div className="space-y-1">
@@ -296,6 +303,7 @@ export function SuppliersPage() {
                   defaultValue={formValues.address ?? ""}
                   rows={3}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Adresse postale du fournisseur"
                 />
               </div>
               <div className="flex gap-2">
@@ -303,6 +311,11 @@ export function SuppliersPage() {
                   type="submit"
                   disabled={createSupplier.isPending || updateSupplier.isPending}
                   className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  title={
+                    formMode === "edit"
+                      ? "Enregistrer les modifications du fournisseur"
+                      : "Créer un nouveau fournisseur"
+                  }
                 >
                   {formMode === "edit"
                     ? updateSupplier.isPending
@@ -320,6 +333,7 @@ export function SuppliersPage() {
                       setFormMode("create");
                     }}
                     className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                    title="Annuler l'édition en cours"
                   >
                     Annuler
                   </button>

@@ -195,6 +195,7 @@ export function DotationsPage() {
               onChange={(event) =>
                 setFilters((prev) => ({ ...prev, collaborator: event.target.value }))
               }
+              title="Filtrer les dotations par collaborateur"
             >
               <option value="all">Tous</option>
               {collaborators.map((collaborator) => (
@@ -212,6 +213,7 @@ export function DotationsPage() {
               onChange={(event) =>
                 setFilters((prev) => ({ ...prev, item: event.target.value }))
               }
+              title="Filtrer les dotations par article"
             >
               <option value="all">Tous</option>
               {items.map((item) => (
@@ -266,6 +268,7 @@ export function DotationsPage() {
                               void deleteDotation.mutateAsync({ id: dotation.id, restock });
                             }}
                             className="rounded bg-red-600 px-3 py-1 font-semibold text-white hover:bg-red-500"
+                            title="Supprimer la dotation et éventuellement réintégrer le stock"
                           >
                             Supprimer
                           </button>
@@ -295,6 +298,7 @@ export function DotationsPage() {
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   disabled={isFetchingCollaborators}
                   required
+                  title="Choisissez le collaborateur bénéficiaire"
                 >
                   <option value="">Sélectionner...</option>
                   {collaborators.map((collaborator) => (
@@ -315,6 +319,7 @@ export function DotationsPage() {
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   disabled={isFetchingItems}
                   required
+                  title="Sélectionnez l'article à allouer"
                 >
                   <option value="">Sélectionner...</option>
                   {items.map((item) => (
@@ -338,6 +343,7 @@ export function DotationsPage() {
                   }
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   required
+                  title="Quantité remise au collaborateur"
                 />
               </div>
               <div className="space-y-1">
@@ -351,12 +357,14 @@ export function DotationsPage() {
                   rows={3}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   placeholder="Optionnel"
+                  title="Ajoutez des précisions (numéro de série, conditions, etc.)"
                 />
               </div>
               <button
                 type="submit"
                 disabled={createDotation.isPending}
                 className="w-full rounded-md bg-indigo-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                title="Valider l'enregistrement de la dotation"
               >
                 {createDotation.isPending ? "Enregistrement..." : "Enregistrer"}
               </button>

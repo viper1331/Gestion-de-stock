@@ -71,12 +71,14 @@ export function ReportsPage() {
             value={threshold}
             onChange={(event) => setThreshold(Number(event.target.value))}
             className="ml-2 w-24 rounded-md border border-slate-800 bg-slate-950 px-3 py-1 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Afficher les articles dont le stock est inférieur ou égal à ce seuil"
           />
         </label>
         <button
           type="submit"
           disabled={isExporting}
           className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          title="Télécharger le rapport des stocks en CSV"
         >
           {isExporting ? "Export..." : "Exporter en CSV"}
         </button>

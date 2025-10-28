@@ -112,11 +112,19 @@ export function SettingsPage() {
                         value={pendingValue}
                         onChange={(event) => setChanges((prev) => ({ ...prev, [key]: event.target.value }))}
                         className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                        title="Modifier la valeur qui sera synchronisée avec le serveur"
                       />
                       <button
                         type="submit"
                         disabled={updateConfig.isPending || pendingValue === entry.value}
                         className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                        title={
+                          updateConfig.isPending
+                            ? "Enregistrement en cours"
+                            : pendingValue === entry.value
+                            ? "Aucune modification à sauvegarder"
+                            : "Sauvegarder ce paramètre"
+                        }
                       >
                         {updateConfig.isPending ? "Enregistrement..." : "Enregistrer"}
                       </button>
@@ -139,6 +147,7 @@ export function SettingsPage() {
             onClick={handleBackup}
             disabled={isBackingUp}
             className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+            title="Télécharger une sauvegarde complète des données"
           >
             {isBackingUp ? "Sauvegarde..." : "Exporter"}
           </button>

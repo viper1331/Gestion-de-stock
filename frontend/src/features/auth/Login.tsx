@@ -27,6 +27,7 @@ export function Login() {
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
           value={username}
           onChange={(event) => setUsername(event.target.value)}
+          title="Entrez votre identifiant de connexion"
         />
       </div>
       <div className="space-y-2">
@@ -39,10 +40,16 @@ export function Login() {
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
           value={password}
           onChange={(event) => setPassword(event.target.value)}
+          title="Saisissez votre mot de passe"
         />
       </div>
       <label className="flex items-center gap-2 text-sm text-slate-300">
-        <input type="checkbox" checked={remember} onChange={(event) => setRemember(event.target.checked)} />
+        <input
+          type="checkbox"
+          checked={remember}
+          onChange={(event) => setRemember(event.target.checked)}
+          title="Rester connecté sur cet appareil"
+        />
         Se souvenir de moi
       </label>
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
@@ -50,6 +57,7 @@ export function Login() {
         type="submit"
         disabled={isLoading}
         className="w-full rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+        title="Valider mes identifiants"
       >
         {isLoading ? "Connexion..." : "Se connecter"}
       </button>

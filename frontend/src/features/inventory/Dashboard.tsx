@@ -274,6 +274,7 @@ export function Dashboard() {
             onChange={(event) => setSearchValue(event.target.value)}
             placeholder="Rechercher par nom ou SKU"
             className="w-64 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Filtrer la liste des articles par nom ou SKU"
           />
           <button
             type="button"
@@ -282,6 +283,7 @@ export function Dashboard() {
               setSelectedItem(null);
             }}
             className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+            title="Créer un nouvel article dans l'inventaire"
           >
             Nouvel article
           </button>
@@ -341,6 +343,7 @@ export function Dashboard() {
                             setFormMode("edit");
                           }}
                           className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                          title={`Modifier les informations de ${item.name}`}
                         >
                           Modifier
                         </button>
@@ -350,6 +353,7 @@ export function Dashboard() {
                             setSelectedItem(item);
                           }}
                           className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                          title={`Saisir un mouvement de stock pour ${item.name}`}
                         >
                           Mouvement
                         </button>
@@ -357,6 +361,7 @@ export function Dashboard() {
                           type="button"
                           onClick={() => handleDeleteItem(item.id)}
                           className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                          title={`Supprimer définitivement ${item.name}`}
                         >
                           Supprimer
                         </button>
@@ -458,6 +463,7 @@ function ResizableHeader({
           value={width}
           onChange={(event) => onResize(Number(event.target.value))}
           className="h-1 w-24 cursor-ew-resize appearance-none rounded-full bg-slate-700"
+          title={`Ajuster la largeur de la colonne ${label}`}
         />
       </div>
     </th>
@@ -532,6 +538,7 @@ function ItemForm({
           onChange={(event) => setValues((prev) => ({ ...prev, name: event.target.value }))}
           required
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          title="Saisissez le nom complet de l'article"
         />
       </div>
       <div className="space-y-1">
@@ -544,6 +551,7 @@ function ItemForm({
           onChange={(event) => setValues((prev) => ({ ...prev, sku: event.target.value }))}
           required
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          title="Identifiant unique ou code-barres associé"
         />
       </div>
       <div className="flex gap-3">
@@ -557,6 +565,7 @@ function ItemForm({
             value={values.quantity}
             onChange={(event) => setValues((prev) => ({ ...prev, quantity: Number(event.target.value) }))}
             className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Quantité physique disponible en stock"
           />
         </div>
         <div className="flex-1 space-y-1">
@@ -569,6 +578,7 @@ function ItemForm({
             value={values.low_stock_threshold}
             onChange={(event) => setValues((prev) => ({ ...prev, low_stock_threshold: Number(event.target.value) }))}
             className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Seuil d'alerte déclenchant les ruptures"
           />
         </div>
       </div>
@@ -587,6 +597,7 @@ function ItemForm({
               : undefined
           }
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          title="Indiquez la taille ou variante lorsque nécessaire"
         />
         {sizeOptionsId ? (
           <datalist id={sizeOptionsId}>
@@ -610,6 +621,7 @@ function ItemForm({
             }))
           }
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          title="Associez l'article à une catégorie métier"
         >
           <option value="">Aucune</option>
           {categories.map((category) => (
@@ -625,6 +637,7 @@ function ItemForm({
             type="button"
             onClick={onCancel}
             className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+            title="Annuler la modification en cours"
           >
             Annuler
           </button>
@@ -633,6 +646,7 @@ function ItemForm({
           type="submit"
           disabled={isSubmitting}
           className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          title={mode === "edit" ? "Enregistrer les modifications de l'article" : "Ajouter l'article au stock"}
         >
           {isSubmitting ? "Enregistrement..." : mode === "edit" ? "Mettre à jour" : "Créer"}
         </button>
@@ -686,6 +700,7 @@ function MovementForm({
             value={delta}
             onChange={(event) => setDelta(Number(event.target.value))}
             className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Indiquez la variation positive ou négative à appliquer"
           />
         </div>
         <div className="flex-1 space-y-1">
@@ -698,6 +713,7 @@ function MovementForm({
             onChange={(event) => setReason(event.target.value)}
             placeholder="Inventaire, sortie..."
             className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Précisez la raison du mouvement pour le suivi"
           />
         </div>
       </div>
@@ -705,6 +721,7 @@ function MovementForm({
         type="submit"
         disabled={!item || isSubmitting}
         className="w-full rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+        title={item ? "Valider ce mouvement de stock" : "Sélectionnez d'abord un article"}
       >
         {isSubmitting ? "Enregistrement..." : "Valider le mouvement"}
       </button>
@@ -815,11 +832,13 @@ function CategoryManager({
             onChange={(event) => setName(event.target.value)}
             placeholder="Nouvelle catégorie"
             className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Nom de la nouvelle catégorie à créer"
           />
           <button
             type="submit"
             disabled={isSubmitting}
             className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+            title="Ajouter cette catégorie"
           >
             Ajouter
           </button>
@@ -829,6 +848,7 @@ function CategoryManager({
           onChange={(event) => setSizes(event.target.value)}
           placeholder="Tailles (séparées par des virgules)"
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+          title="Définissez les tailles proposées pour cette catégorie"
         />
       </form>
       <ul className="space-y-2 text-xs text-slate-200">
@@ -849,6 +869,7 @@ function CategoryManager({
                     }
                     placeholder="Tailles (séparées par des virgules)"
                     className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-200 focus:border-indigo-500 focus:outline-none"
+                    title="Modifiez les tailles disponibles pour cette catégorie"
                   />
                 </div>
                 <div className="flex gap-2 sm:flex-col">
@@ -857,6 +878,7 @@ function CategoryManager({
                     onClick={() => handleSave(category.id)}
                     disabled={isSubmitting}
                     className="rounded bg-indigo-500 px-3 py-2 text-[10px] font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    title="Enregistrer les tailles saisies"
                   >
                     Enregistrer
                   </button>
@@ -867,6 +889,7 @@ function CategoryManager({
                     }}
                     disabled={isSubmitting}
                     className="rounded bg-slate-800 px-3 py-2 text-[10px] font-semibold hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
+                    title="Supprimer cette catégorie"
                   >
                     Supprimer
                   </button>
