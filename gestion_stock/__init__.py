@@ -2422,6 +2422,16 @@ def register_reorder_suggestion_event(
     related_item_id: Optional[int] = None,
 ) -> None:
     normalized_module = (module or '').strip().lower()
+    module_aliases = {
+        'habillement': 'clothing',
+        'vêtement': 'clothing',
+        'vêtements': 'clothing',
+        'vetement': 'clothing',
+        'vetements': 'clothing',
+        'pharmacie': 'pharmacy',
+        'pharma': 'pharmacy',
+    }
+    normalized_module = module_aliases.get(normalized_module, normalized_module)
     if normalized_module not in {'clothing', 'pharmacy'}:
         return
     supplier_id: Optional[int] = None
