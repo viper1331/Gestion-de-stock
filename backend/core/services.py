@@ -1,6 +1,7 @@
 """Services métier pour Gestion Stock Pro."""
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -63,6 +64,107 @@ def get_user(username: str) -> Optional[models.User]:
             role=row["role"],
             is_active=bool(row["is_active"]),
         )
+
+
+def get_user_by_id(user_id: int) -> Optional[models.User]:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        cur = conn.execute("SELECT * FROM users WHERE id = ?", (user_id,))
+        row = cur.fetchone()
+        if not row:
+            return None
+        return models.User(
+            id=row["id"],
+            username=row["username"],
+            role=row["role"],
+            is_active=bool(row["is_active"]),
+        )
+
+
+def list_users() -> list[models.User]:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            "SELECT * FROM users ORDER BY username COLLATE NOCASE",
+        )
+        rows = cur.fetchall()
+        return [
+            models.User(
+                id=row["id"],
+                username=row["username"],
+                role=row["role"],
+                is_active=bool(row["is_active"]),
+            )
+            for row in rows
+        ]
+
+
+def create_user(payload: models.UserCreate) -> models.User:
+    ensure_database_ready()
+    hashed = security.hash_password(payload.password)
+    with db.get_users_connection() as conn:
+        try:
+            cur = conn.execute(
+                "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
+                (payload.username, hashed, payload.role),
+            )
+        except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
+            raise ValueError("Username already exists") from exc
+        conn.commit()
+        user_id = cur.lastrowid
+    created = get_user_by_id(user_id)
+    if created is None:  # pragma: no cover - inserted row should exist
+        raise ValueError("Failed to create user")
+    return created
+
+
+def update_user(user_id: int, payload: models.UserUpdate) -> models.User:
+    ensure_database_ready()
+    current = get_user_by_id(user_id)
+    if current is None:
+        raise ValueError("User not found")
+
+    if current.username == "admin":
+        if payload.role is not None and payload.role != "admin":
+            raise ValueError("Cannot change default admin role")
+        if payload.is_active is not None and not payload.is_active:
+            raise ValueError("Cannot deactivate default admin")
+
+    fields: dict[str, object] = {}
+    if payload.role is not None:
+        fields["role"] = payload.role
+    if payload.password is not None:
+        fields["password"] = security.hash_password(payload.password)
+    if payload.is_active is not None:
+        fields["is_active"] = 1 if payload.is_active else 0
+
+    if not fields:
+        return current
+
+    assignments = ", ".join(f"{column} = ?" for column in fields)
+    values = list(fields.values())
+    values.append(user_id)
+
+    with db.get_users_connection() as conn:
+        conn.execute(f"UPDATE users SET {assignments} WHERE id = ?", values)
+        conn.commit()
+
+    updated = get_user_by_id(user_id)
+    if updated is None:  # pragma: no cover
+        raise ValueError("User not found")
+    return updated
+
+
+def delete_user(user_id: int) -> None:
+    ensure_database_ready()
+    current = get_user_by_id(user_id)
+    if current is None:
+        raise ValueError("User not found")
+    if current.username == "admin":
+        raise ValueError("Cannot delete default admin user")
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
 
 
 def authenticate(username: str, password: str) -> Optional[models.User]:

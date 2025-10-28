@@ -14,6 +14,7 @@ from backend.api import (
     dotations,
     pharmacy,
     permissions,
+    users,
 )
 from backend.ws import camera, voice
 
@@ -38,6 +39,7 @@ app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
 app.include_router(dotations.router, prefix="/dotations", tags=["dotations"])
 app.include_router(pharmacy.router, prefix="/pharmacy", tags=["pharmacy"])
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
+app.include_router(users.router, prefix="/users", tags=["users"])
 
 app.include_router(camera.router, prefix="/ws", tags=["ws-camera"])
 app.include_router(voice.router, prefix="/ws", tags=["ws-voice"])
