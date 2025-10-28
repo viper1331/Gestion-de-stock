@@ -6,3 +6,4 @@ pyjwt
 Pillow
 httpx
 pytest
+reportlab
