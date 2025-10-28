@@ -32,7 +32,7 @@ def setup_module(_: object) -> None:
         conn.commit()
 
 
-def _create_user(username: str, password: str, role: str = "user") -> None:
+def _create_user(username: str, password: str, role: str = "user") -> int:
     services.ensure_database_ready()
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
@@ -41,6 +41,13 @@ def _create_user(username: str, password: str, role: str = "user") -> None:
             (username, security.hash_password(password), role),
         )
         conn.commit()
+        cur = conn.execute(
+            "SELECT id FROM users WHERE username = ?",
+            (username,),
+        )
+        row = cur.fetchone()
+        assert row is not None
+        return int(row["id"])
 
 
 def _login_headers(username: str, password: str) -> dict[str, str]:
@@ -157,7 +164,7 @@ def test_record_movement_unknown_item_returns_404() -> None:
 
 def test_module_permissions_control_supplier_access() -> None:
     services.ensure_database_ready()
-    _create_user("worker", "worker1234", role="user")
+    worker_id = _create_user("worker", "worker1234", role="user")
     admin_headers = _login_headers("admin", "admin123")
     worker_headers = _login_headers("worker", "worker1234")
 
@@ -166,7 +173,12 @@ def test_module_permissions_control_supplier_access() -> None:
 
     grant_view = client.put(
         "/permissions/modules",
-        json={"role": "user", "module": "suppliers", "can_view": True, "can_edit": False},
+        json={
+            "user_id": worker_id,
+            "module": "suppliers",
+            "can_view": True,
+            "can_edit": False,
+        },
         headers=admin_headers,
     )
     assert grant_view.status_code == 200, grant_view.text
@@ -184,7 +196,12 @@ def test_module_permissions_control_supplier_access() -> None:
 
     grant_edit = client.put(
         "/permissions/modules",
-        json={"role": "user", "module": "suppliers", "can_view": True, "can_edit": True},
+        json={
+            "user_id": worker_id,
+            "module": "suppliers",
+            "can_view": True,
+            "can_edit": True,
+        },
         headers=admin_headers,
     )
     assert grant_edit.status_code == 200

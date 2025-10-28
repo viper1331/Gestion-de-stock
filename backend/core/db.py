@@ -43,11 +43,11 @@ def init_databases() -> None:
                 );
                 CREATE TABLE IF NOT EXISTS module_permissions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
-                    role TEXT NOT NULL,
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
                     module TEXT NOT NULL,
                     can_view INTEGER NOT NULL DEFAULT 0,
                     can_edit INTEGER NOT NULL DEFAULT 0,
-                    UNIQUE(role, module)
+                    UNIQUE(user_id, module)
                 );
                 """
             )
