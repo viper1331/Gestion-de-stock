@@ -126,6 +126,7 @@ class SupplierBase(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=64)
     email: Optional[str] = Field(default=None, max_length=128)
     address: Optional[str] = Field(default=None, max_length=256)
+    modules: list[str] = Field(default_factory=list)
 
 
 class SupplierCreate(SupplierBase):
@@ -138,6 +139,7 @@ class SupplierUpdate(BaseModel):
     phone: Optional[str] = Field(default=None, max_length=64)
     email: Optional[str] = Field(default=None, max_length=128)
     address: Optional[str] = Field(default=None, max_length=256)
+    modules: Optional[list[str]] = None
 
 
 class Supplier(SupplierBase):

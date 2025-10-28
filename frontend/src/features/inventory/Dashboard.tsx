@@ -113,9 +113,11 @@ export function Dashboard() {
   });
 
   const { data: suppliers = [] } = useQuery({
-    queryKey: ["suppliers"],
+    queryKey: ["suppliers", { module: "suppliers" }],
     queryFn: async () => {
-      const response = await api.get<Supplier[]>("/suppliers/");
+      const response = await api.get<Supplier[]>("/suppliers/", {
+        params: { module: "suppliers" }
+      });
       return response.data;
     }
   });
