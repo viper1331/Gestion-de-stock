@@ -8,7 +8,7 @@ import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
 
-const PHARMACY_LOW_STOCK_THRESHOLD = 5;
+const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
 interface PharmacyItem {
   id: number;
@@ -17,6 +17,7 @@ interface PharmacyItem {
   packaging: string | null;
   barcode: string | null;
   quantity: number;
+  low_stock_threshold: number;
   expiration_date: string | null;
   location: string | null;
 }
@@ -27,6 +28,7 @@ interface PharmacyPayload {
   packaging: string | null;
   barcode: string | null;
   quantity: number;
+  low_stock_threshold: number;
   expiration_date: string | null;
   location: string | null;
 }
@@ -37,6 +39,7 @@ type PharmacyColumnKey =
   | "dosage"
   | "packaging"
   | "quantity"
+  | "low_stock_threshold"
   | "expiration"
   | "location";
 
@@ -48,6 +51,7 @@ const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
   dosage: true,
   packaging: true,
   quantity: true,
+  low_stock_threshold: true,
   expiration: true,
   location: true
 };
@@ -58,6 +62,7 @@ const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
   { key: "dosage", label: "Dosage" },
   { key: "packaging", label: "Conditionnement" },
   { key: "quantity", label: "Quantité" },
+  { key: "low_stock_threshold", label: "Seuil faible" },
   { key: "expiration", label: "Expiration" },
   { key: "location", label: "Localisation" }
 ];
@@ -161,6 +166,7 @@ export function PharmacyPage() {
         packaging: selected.packaging,
         barcode: selected.barcode,
         quantity: selected.quantity,
+        low_stock_threshold: selected.low_stock_threshold,
         expiration_date: selected.expiration_date,
         location: selected.location
       };
@@ -171,6 +177,7 @@ export function PharmacyPage() {
       packaging: "",
       barcode: "",
       quantity: 0,
+      low_stock_threshold: DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
       expiration_date: "",
       location: ""
     };
@@ -203,12 +210,20 @@ export function PharmacyPage() {
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
+    const rawThreshold = formData.get("low_stock_threshold");
+    const normalizedThreshold =
+      rawThreshold === null || (typeof rawThreshold === "string" && rawThreshold.trim() === "")
+        ? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD
+        : Number(rawThreshold);
     const payload: PharmacyPayload = {
       name: (formData.get("name") as string).trim(),
       dosage: ((formData.get("dosage") as string) || "").trim() || null,
       packaging: ((formData.get("packaging") as string) || "").trim() || null,
       barcode: ((formData.get("barcode") as string) || "").trim() || null,
       quantity: Number(formData.get("quantity") ?? 0),
+      low_stock_threshold: Number.isNaN(normalizedThreshold)
+        ? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD
+        : normalizedThreshold,
       expiration_date: ((formData.get("expiration_date") as string) || "").trim() || null,
       location: ((formData.get("location") as string) || "").trim() || null
     };
@@ -218,6 +233,10 @@ export function PharmacyPage() {
     }
     if (payload.quantity < 0) {
       setError("La quantité doit être positive.");
+      return;
+    }
+    if (payload.low_stock_threshold < 0) {
+      setError("Le seuil de stock doit être positif ou nul.");
       return;
     }
     setMessage(null);
@@ -274,6 +293,9 @@ export function PharmacyPage() {
                   {columnVisibility.dosage !== false ? <th className="px-4 py-3 text-left">Dosage</th> : null}
                   {columnVisibility.packaging !== false ? <th className="px-4 py-3 text-left">Conditionnement</th> : null}
                   {columnVisibility.quantity !== false ? <th className="px-4 py-3 text-left">Quantité</th> : null}
+                  {columnVisibility.low_stock_threshold !== false ? (
+                    <th className="px-4 py-3 text-left">Seuil faible</th>
+                  ) : null}
                   {columnVisibility.expiration !== false ? <th className="px-4 py-3 text-left">Expiration</th> : null}
                   {columnVisibility.location !== false ? <th className="px-4 py-3 text-left">Localisation</th> : null}
                   {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
@@ -335,6 +357,11 @@ export function PharmacyPage() {
                               Faible stock
                             </span>
                           ) : null}
+                        </td>
+                      ) : null}
+                      {columnVisibility.low_stock_threshold !== false ? (
+                        <td className="px-4 py-3 text-slate-300">
+                          {item.low_stock_threshold > 0 ? item.low_stock_threshold : "-"}
                         </td>
                       ) : null}
                       {columnVisibility.expiration !== false ? (
@@ -481,6 +508,21 @@ export function PharmacyPage() {
                 />
               </div>
               <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-low-stock-threshold">
+                  Seuil de stock faible
+                </label>
+                <input
+                  id="pharmacy-low-stock-threshold"
+                  name="low_stock_threshold"
+                  type="number"
+                  min={0}
+                  defaultValue={formValues.low_stock_threshold}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  required
+                  title="Quantité minimale avant alerte de stock faible"
+                />
+              </div>
+              <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-expiration">
                   Date d'expiration
                 </label>
@@ -563,7 +605,9 @@ type ExpirationStatus = "expired" | "expiring-soon" | null;
 
 function getPharmacyAlerts(item: PharmacyItem) {
   const isOutOfStock = item.quantity <= 0;
-  const isLowStock = item.quantity > 0 && item.quantity <= PHARMACY_LOW_STOCK_THRESHOLD;
+  const threshold = item.low_stock_threshold ?? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD;
+  const hasThreshold = threshold > 0;
+  const isLowStock = !isOutOfStock && hasThreshold && item.quantity <= threshold;
   const expirationStatus = getExpirationStatus(item.expiration_date);
 
   return { isOutOfStock, isLowStock, expirationStatus };

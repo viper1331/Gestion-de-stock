@@ -378,6 +378,7 @@ def test_pharmacy_purchase_order_flow() -> None:
             "dosage": "500mg",
             "packaging": "Boîte",
             "quantity": 10,
+            "low_stock_threshold": 4,
             "expiration_date": None,
             "location": "Pharma",
         },
@@ -821,6 +822,7 @@ def test_pharmacy_crud_cycle() -> None:
             "packaging": "Boîte de 10",
             "barcode": "3400934058479",
             "quantity": 10,
+            "low_stock_threshold": 6,
             "expiration_date": "2025-12-31",
             "location": "Armoire A",
         },
@@ -830,6 +832,7 @@ def test_pharmacy_crud_cycle() -> None:
     pharmacy_id = create.json()["id"]
     assert create.json()["packaging"] == "Boîte de 10"
     assert create.json()["barcode"] == "3400934058479"
+    assert create.json()["low_stock_threshold"] == 6
 
     update = client.put(
         f"/pharmacy/{pharmacy_id}",
@@ -840,11 +843,14 @@ def test_pharmacy_crud_cycle() -> None:
     assert update.json()["quantity"] == 7
     assert update.json()["packaging"] == "Boîte de 10"
     assert update.json()["barcode"] == "3400934058479"
+    assert update.json()["low_stock_threshold"] == 6
 
     listing = client.get("/pharmacy/", headers=admin_headers)
     assert listing.status_code == 200
     assert any(
-        entry["id"] == pharmacy_id and entry["packaging"] == "Boîte de 10"
+        entry["id"] == pharmacy_id
+        and entry["packaging"] == "Boîte de 10"
+        and entry["low_stock_threshold"] == 6
         for entry in listing.json()
     )
 
