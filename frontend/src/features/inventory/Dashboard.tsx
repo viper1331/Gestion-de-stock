@@ -22,6 +22,7 @@ interface Item {
   size: string | null;
   quantity: number;
   low_stock_threshold: number;
+  supplier_id: number | null;
 }
 
 interface Movement {
@@ -44,6 +45,11 @@ interface ItemFormValues {
 interface CategoryFormValues {
   name: string;
   sizes: string[];
+}
+
+interface Supplier {
+  id: number;
+  name: string;
 }
 
 const COLUMN_STORAGE_KEY = "gsp/columns";
@@ -81,6 +87,14 @@ export function Dashboard() {
     queryKey: ["categories"],
     queryFn: async () => {
       const response = await api.get<Category[]>("/categories/");
+      return response.data;
+    }
+  });
+
+  const { data: suppliers = [] } = useQuery({
+    queryKey: ["suppliers"],
+    queryFn: async () => {
+      const response = await api.get<Supplier[]>("/suppliers/");
       return response.data;
     }
   });
@@ -178,17 +192,40 @@ export function Dashboard() {
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["reports"] })
   });
 
-  const columnWidths = readPersistedValue<Record<string, number>>(COLUMN_STORAGE_KEY, {
+  const defaultColumnWidths: Record<string, number> = {
     name: 220,
     sku: 140,
     quantity: 100,
+    size: 140,
     category: 150,
+    supplier: 180,
     threshold: 120
-  });
+  };
+
+  const columnWidths = {
+    ...defaultColumnWidths,
+    ...readPersistedValue<Record<string, number>>(COLUMN_STORAGE_KEY, defaultColumnWidths)
+  };
 
   const saveWidth = (key: string, width: number) => {
     persistValue(COLUMN_STORAGE_KEY, { ...columnWidths, [key]: width });
   };
+
+  const categoryNames = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const category of categories) {
+      map.set(category.id, category.name);
+    }
+    return map;
+  }, [categories]);
+
+  const supplierNames = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const supplier of suppliers) {
+      map.set(supplier.id, supplier.name);
+    }
+    return map;
+  }, [suppliers]);
 
   useEffect(() => {
     if (selectedItem) {
@@ -307,9 +344,19 @@ export function Dashboard() {
                     onResize={(value) => saveWidth("quantity", value)}
                   />
                   <ResizableHeader
+                    label="Taille / Variante"
+                    width={columnWidths.size}
+                    onResize={(value) => saveWidth("size", value)}
+                  />
+                  <ResizableHeader
                     label="Catégorie"
                     width={columnWidths.category}
                     onResize={(value) => saveWidth("category", value)}
+                  />
+                  <ResizableHeader
+                    label="Fournisseur"
+                    width={columnWidths.supplier}
+                    onResize={(value) => saveWidth("supplier", value)}
                   />
                   <ResizableHeader
                     label="Seuil"
@@ -330,8 +377,12 @@ export function Dashboard() {
                     <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
                     <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
                     <td className="px-4 py-3 text-sm font-semibold text-slate-100">{item.quantity}</td>
+                    <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
                     <td className="px-4 py-3 text-sm text-slate-300">
-                      {categories.find((category) => category.id === item.category_id)?.name ?? "-"}
+                      {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                    </td>
+                    <td className="px-4 py-3 text-sm text-slate-300">
+                      {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
                     </td>
                     <td className="px-4 py-3 text-sm text-slate-300">{item.low_stock_threshold}</td>
                     <td className="px-4 py-3 text-xs text-slate-200">
