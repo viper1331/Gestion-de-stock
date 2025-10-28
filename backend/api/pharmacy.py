@@ -11,6 +11,13 @@ router = APIRouter()
 MODULE_KEY = "pharmacy"
 
 
+def _pharmacy_http_error(exc: ValueError) -> HTTPException:
+    detail = str(exc)
+    if "introuvable" in detail.lower():
+        return HTTPException(status_code=404, detail=detail)
+    return HTTPException(status_code=400, detail=detail)
+
+
 def _require_permission(user: models.User, *, action: str) -> None:
     if not services.has_module_access(user, MODULE_KEY, action=action):
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
@@ -30,7 +37,10 @@ async def create_pharmacy_item(
     user: models.User = Depends(get_current_user),
 ) -> models.PharmacyItem:
     _require_permission(user, action="edit")
-    return services.create_pharmacy_item(payload)
+    try:
+        return services.create_pharmacy_item(payload)
+    except ValueError as exc:
+        raise _pharmacy_http_error(exc) from exc
 
 
 @router.get("/{item_id}", response_model=models.PharmacyItem)
@@ -55,7 +65,7 @@ async def update_pharmacy_item(
     try:
         return services.update_pharmacy_item(item_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        raise _pharmacy_http_error(exc) from exc
 
 
 @router.delete("/{item_id}", status_code=204)
