@@ -21,18 +21,6 @@ export function AppLayout() {
     }
   }, [isReady, navigate, user]);
 
-  if (!isReady || isCheckingSession) {
-    return (
-      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
-        <p className="text-sm text-slate-300">Chargement de votre session...</p>
-      </div>
-    );
-  }
-
-  if (!user) {
-    return null;
-  }
-
   const navigationLinks = useMemo(
     () => {
       type NavLinkConfig = {
@@ -54,6 +42,10 @@ export function AppLayout() {
         { to: "/permissions", label: "Permissions", adminOnly: true }
       ];
 
+      if (!user) {
+        return [];
+      }
+
       return baseLinks.filter((link) => {
         if (link.adminOnly) {
           return user?.role === "admin";
@@ -61,7 +53,7 @@ export function AppLayout() {
         if (!link.module) {
           return true;
         }
-        if (user?.role === "admin") {
+        if (user.role === "admin") {
           return true;
         }
         return modulePermissions.canAccess(link.module);
@@ -69,6 +61,18 @@ export function AppLayout() {
     },
     [modulePermissions.canAccess, user?.role]
   );
+
+  if (!isReady || isCheckingSession) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
+        <p className="text-sm text-slate-300">Chargement de votre session...</p>
+      </div>
+    );
+  }
+
+  if (!user) {
+    return null;
+  }
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-50">
