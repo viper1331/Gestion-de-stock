@@ -194,50 +194,23 @@ export function PharmacyPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900">
-                {items.map((item) => (
-                  <tr
-                    key={item.id}
-                    className={`bg-slate-950 text-sm text-slate-100 ${
-                      selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
-                    }`}
-                  >
-                    <td className="px-4 py-3 font-medium">{item.name}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
-                    <td className="px-4 py-3 font-semibold">{item.quantity}</td>
-                    <td className="px-4 py-3 text-slate-300">{formatDate(item.expiration_date)}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
-                    {canEdit ? (
-                      <td className="px-4 py-3 text-xs text-slate-200">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelected(item);
-                              setFormMode("edit");
-                            }}
-                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                            title={`Modifier la fiche de ${item.name}`}
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!window.confirm("Supprimer cet article pharmaceutique ?")) {
-                                return;
-                              }
-                              setMessage(null);
-                              setError(null);
-                              void deleteItem.mutateAsync(item.id);
-                            }}
-                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
-                            title={`Supprimer ${item.name} de la pharmacie`}
-                          >
-                            Supprimer
-                          </button>
-                        </div>
-                      </td>
+                {items.map((item) => {
+                  const { isOutOfStock, isLowStock, expirationStatus } = getPharmacyAlerts(item);
+                  const rowClassName = [
+                    "bg-slate-950 text-sm text-slate-100",
+                    selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "",
+                    isOutOfStock ? "bg-red-950/40" : "",
+                    !isOutOfStock && isLowStock ? "bg-amber-900/20" : ""
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+
+                  return (
+                    <tr key={item.id} className={rowClassName}>
+                      <td className="px-4 py-3 font-medium">{item.name}</td>
+                      <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
+                      <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
+                      <td className="px-4 py-3 font-semibold">{item.quantity}</td>
                       <td
                         className={`px-4 py-3 ${
                           expirationStatus === "expired"
