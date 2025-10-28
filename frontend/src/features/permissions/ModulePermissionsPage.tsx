@@ -258,84 +258,85 @@ export function ModulePermissionsPage() {
                     <span className="text-xs text-slate-400">Accès illimités par défaut</span>
                   ) : null}
                 </div>
-            <table className="min-w-full divide-y divide-slate-800">
-              <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-4 py-2 text-left">Module</th>
-                  <th className="px-4 py-2 text-left">Lecture</th>
-                  <th className="px-4 py-2 text-left">Écriture</th>
-                  <th className="px-4 py-2 text-left">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900">
-                {entries.map((entry) => {
-                  return (
-                    <tr key={entry.id} className="bg-slate-950 text-sm text-slate-100">
-                      <td className="px-4 py-2 font-medium">{entry.module}</td>
-                      <td className="px-4 py-2">
-                        <label className="inline-flex items-center gap-2 text-xs">
-                          <input
-                            type="checkbox"
-                            checked={entry.can_view}
-                            disabled={disableEdits || isProcessing}
-                            onChange={async (event) => {
-                              setMessage(null);
-                              setError(null);
-                              const nextCanView = event.target.checked;
-                              await upsertPermission.mutateAsync({
-                                user_id: entry.user_id,
-                                module: entry.module,
-                                can_view: nextCanView,
-                                can_edit: nextCanView ? entry.can_edit : false
-                              });
-                            }}
-                          />
-                          Autorisé
-                        </label>
-                      </td>
-                      <td className="px-4 py-2">
-                        <label className="inline-flex items-center gap-2 text-xs">
-                          <input
-                            type="checkbox"
-                            checked={entry.can_edit}
-                            disabled={disableEdits || isProcessing}
-                            onChange={async (event) => {
-                              setMessage(null);
-                              setError(null);
-                              await upsertPermission.mutateAsync({
-                                user_id: entry.user_id,
-                                module: entry.module,
-                                can_view: event.target.checked ? true : entry.can_view,
-                                can_edit: event.target.checked
-                              });
-                            }}
-                          />
-                          Autorisé
-                        </label>
-                      </td>
-                      <td className="px-4 py-2 text-xs">
-                        <button
-                          type="button"
-                          disabled={disableEdits || isProcessing}
-                          onClick={async () => {
-                            if (!window.confirm("Supprimer cette règle ?")) {
-                              return;
-                            }
-                            setMessage(null);
-                            setError(null);
-                            await deletePermission.mutateAsync({ user_id: entry.user_id, module: entry.module });
-                          }}
-                          className="rounded bg-red-600 px-3 py-1 font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Supprimer
-                        </button>
-                      </td>
+                <table className="min-w-full divide-y divide-slate-800">
+                  <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+                    <tr>
+                      <th className="px-4 py-2 text-left">Module</th>
+                      <th className="px-4 py-2 text-left">Lecture</th>
+                      <th className="px-4 py-2 text-left">Écriture</th>
+                      <th className="px-4 py-2 text-left">Actions</th>
                     </tr>
-                  );
-                })}
-              </tbody>
-            </table>
-          </div>
+                  </thead>
+                  <tbody className="divide-y divide-slate-900">
+                    {entries.map((entry) => {
+                      return (
+                        <tr key={entry.id} className="bg-slate-950 text-sm text-slate-100">
+                          <td className="px-4 py-2 font-medium">{entry.module}</td>
+                          <td className="px-4 py-2">
+                            <label className="inline-flex items-center gap-2 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={entry.can_view}
+                                disabled={disableEdits || isProcessing}
+                                onChange={async (event) => {
+                                  setMessage(null);
+                                  setError(null);
+                                  const nextCanView = event.target.checked;
+                                  await upsertPermission.mutateAsync({
+                                    user_id: entry.user_id,
+                                    module: entry.module,
+                                    can_view: nextCanView,
+                                    can_edit: nextCanView ? entry.can_edit : false
+                                  });
+                                }}
+                              />
+                              Autorisé
+                            </label>
+                          </td>
+                          <td className="px-4 py-2">
+                            <label className="inline-flex items-center gap-2 text-xs">
+                              <input
+                                type="checkbox"
+                                checked={entry.can_edit}
+                                disabled={disableEdits || isProcessing}
+                                onChange={async (event) => {
+                                  setMessage(null);
+                                  setError(null);
+                                  await upsertPermission.mutateAsync({
+                                    user_id: entry.user_id,
+                                    module: entry.module,
+                                    can_view: event.target.checked ? true : entry.can_view,
+                                    can_edit: event.target.checked
+                                  });
+                                }}
+                              />
+                              Autorisé
+                            </label>
+                          </td>
+                          <td className="px-4 py-2 text-xs">
+                            <button
+                              type="button"
+                              disabled={disableEdits || isProcessing}
+                              onClick={async () => {
+                                if (!window.confirm("Supprimer cette règle ?")) {
+                                  return;
+                                }
+                                setMessage(null);
+                                setError(null);
+                                await deletePermission.mutateAsync({ user_id: entry.user_id, module: entry.module });
+                              }}
+                              className="rounded bg-red-600 px-3 py-1 font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              Supprimer
+                            </button>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            );
           })}
         {permissions.length === 0 && !isFetching ? (
           <p className="text-sm text-slate-400">Aucune règle personnalisée définie.</p>
