@@ -12,6 +12,11 @@ interface ModulePermissionEntry {
   can_edit: boolean;
 }
 
+interface ModuleDefinition {
+  key: string;
+  label: string;
+}
+
 interface UserEntry {
   id: number;
   username: string;
@@ -48,11 +53,23 @@ export function ModulePermissionsPage() {
 
   const {
     data: permissions = [],
-    isFetching
+    isFetching: isFetchingPermissions
   } = useQuery({
     queryKey: ["module-permissions", "admin"],
     queryFn: async () => {
       const response = await api.get<ModulePermissionEntry[]>("/permissions/modules");
+      return response.data;
+    },
+    enabled: user?.role === "admin"
+  });
+
+  const {
+    data: availableModules = [],
+    isFetching: isFetchingModules
+  } = useQuery({
+    queryKey: ["available-modules"],
+    queryFn: async () => {
+      const response = await api.get<ModuleDefinition[]>("/permissions/modules/available");
       return response.data;
     },
     enabled: user?.role === "admin"
@@ -107,6 +124,13 @@ export function ModulePermissionsPage() {
     }, {} as Record<number, UserEntry>);
   }, [users]);
 
+  const moduleLabelLookup = useMemo(() => {
+    return availableModules.reduce<Record<string, string>>((acc, entry) => {
+      acc[entry.key] = entry.label;
+      return acc;
+    }, {} as Record<string, string>);
+  }, [availableModules]);
+
   const groupedByUser = useMemo(() => {
     return permissions.reduce<Record<number, ModulePermissionEntry[]>>((acc, entry) => {
       if (!acc[entry.user_id]) {
@@ -132,8 +156,13 @@ export function ModulePermissionsPage() {
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
-    if (!formValues.module.trim()) {
+    const trimmedModule = formValues.module.trim();
+    if (!trimmedModule) {
       setError("Veuillez indiquer un nom de module.");
+      return;
+    }
+    if (!availableModules.some((entry) => entry.key === trimmedModule)) {
+      setError("Veuillez sélectionner un module existant.");
       return;
     }
     if (formValues.user_id === null) {
@@ -144,9 +173,9 @@ export function ModulePermissionsPage() {
     setError(null);
     await upsertPermission.mutateAsync({
       ...formValues,
-      module: formValues.module.trim()
+      module: trimmedModule
     });
-    setFormValues((prev) => ({ ...prev, module: "" }));
+    setFormValues((prev) => ({ ...prev, module: trimmedModule }));
   };
 
   const isProcessing = upsertPermission.isPending || deletePermission.isPending;
@@ -159,7 +188,7 @@ export function ModulePermissionsPage() {
           Gérez les droits d'accès par utilisateur. Les administrateurs disposent de tous les accès par défaut.
         </p>
       </header>
-      {isFetching || isFetchingUsers ? (
+      {isFetchingPermissions || isFetchingUsers || isFetchingModules ? (
         <p className="text-sm text-slate-400">Chargement des données...</p>
       ) : null}
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
@@ -194,12 +223,32 @@ export function ModulePermissionsPage() {
         <label className="flex flex-1 flex-col text-xs font-semibold uppercase tracking-wide text-slate-400">
           Module
           <input
+            list="module-suggestions"
             value={formValues.module}
             onChange={(event) => setFormValues((prev) => ({ ...prev, module: event.target.value }))}
-            placeholder="ex: suppliers"
+            placeholder={
+              isFetchingModules
+                ? "Chargement..."
+                : availableModules.length > 0
+                ? "Sélectionner un module"
+                : "Aucun module disponible"
+            }
+            disabled={isFetchingModules || availableModules.length === 0}
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
           />
+          <datalist id="module-suggestions">
+            {availableModules.map((module) => (
+              <option key={module.key} value={module.key}>
+                {module.label}
+              </option>
+            ))}
+          </datalist>
         </label>
+        {availableModules.length === 0 && !isFetchingModules ? (
+          <p className="basis-full text-xs text-amber-300">
+            Aucun module disponible. Vérifiez la configuration côté serveur.
+          </p>
+        ) : null}
         <label className="flex items-center gap-2 text-xs text-slate-300">
           <input
             type="checkbox"
@@ -271,7 +320,12 @@ export function ModulePermissionsPage() {
                     {entries.map((entry) => {
                       return (
                         <tr key={entry.id} className="bg-slate-950 text-sm text-slate-100">
-                          <td className="px-4 py-2 font-medium">{entry.module}</td>
+                          <td className="px-4 py-2 font-medium">
+                            <span>{moduleLabelLookup[entry.module] ?? entry.module}</span>
+                            {moduleLabelLookup[entry.module] ? (
+                              <span className="ml-2 text-xs font-normal text-slate-400">({entry.module})</span>
+                            ) : null}
+                          </td>
                           <td className="px-4 py-2">
                             <label className="inline-flex items-center gap-2 text-xs">
                               <input
@@ -338,7 +392,7 @@ export function ModulePermissionsPage() {
               </div>
             );
           })}
-        {permissions.length === 0 && !isFetching ? (
+        {permissions.length === 0 && !isFetchingPermissions ? (
           <p className="text-sm text-slate-400">Aucune règle personnalisée définie.</p>
         ) : null}
       </div>

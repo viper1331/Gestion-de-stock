@@ -18,6 +18,15 @@ async def list_module_permissions(
     return services.list_module_permissions()
 
 
+@router.get("/modules/available", response_model=list[models.ModuleDefinition])
+async def list_available_modules(
+    user: models.User = Depends(get_current_user),
+) -> list[models.ModuleDefinition]:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Insufficient permissions")
+    return services.list_available_modules()
+
+
 @router.get("/modules/me", response_model=list[models.ModulePermission])
 async def list_my_module_permissions(
     user: models.User = Depends(get_current_user),
