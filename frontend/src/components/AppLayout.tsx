@@ -5,14 +5,26 @@ import { useAuth } from "../features/auth/useAuth";
 import { ThemeToggle } from "./ThemeToggle";
 
 export function AppLayout() {
-  const { user, logout } = useAuth();
+  const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const navigate = useNavigate();
 
   useEffect(() => {
-    if (!user) {
-      navigate("/login");
+    initialize();
+  }, [initialize]);
+
+  useEffect(() => {
+    if (isReady && !user) {
+      navigate("/login", { replace: true });
     }
-  }, [user, navigate]);
+  }, [isReady, navigate, user]);
+
+  if (!isReady || isCheckingSession) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-slate-950 text-slate-100">
+        <p className="text-sm text-slate-300">Chargement de votre session...</p>
+      </div>
+    );
+  }
 
   if (!user) {
     return null;
@@ -39,6 +51,10 @@ export function AppLayout() {
           </NavLink>
         </nav>
         <div className="mt-auto flex flex-col gap-3 pt-6">
+          <div className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
+            <p className="font-semibold text-slate-200">{user.username}</p>
+            <p>Rôle : {user.role}</p>
+          </div>
           <ThemeToggle />
           <button
             onClick={logout}
