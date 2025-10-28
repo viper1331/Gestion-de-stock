@@ -41,6 +41,14 @@ def init_databases() -> None:
                     role TEXT NOT NULL DEFAULT 'user',
                     is_active INTEGER NOT NULL DEFAULT 1
                 );
+                CREATE TABLE IF NOT EXISTS module_permissions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    role TEXT NOT NULL,
+                    module TEXT NOT NULL,
+                    can_view INTEGER NOT NULL DEFAULT 0,
+                    can_edit INTEGER NOT NULL DEFAULT 0,
+                    UNIQUE(role, module)
+                );
                 """
             )
         with get_stock_connection() as conn:
@@ -65,6 +73,38 @@ def init_databases() -> None:
                     delta INTEGER NOT NULL,
                     reason TEXT,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS suppliers (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    contact_name TEXT,
+                    phone TEXT,
+                    email TEXT,
+                    address TEXT,
+                    UNIQUE(name)
+                );
+                CREATE TABLE IF NOT EXISTS collaborators (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    full_name TEXT NOT NULL COLLATE NOCASE,
+                    department TEXT,
+                    email TEXT,
+                    phone TEXT
+                );
+                CREATE TABLE IF NOT EXISTS dotations (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    collaborator_id INTEGER NOT NULL REFERENCES collaborators(id) ON DELETE CASCADE,
+                    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                    quantity INTEGER NOT NULL,
+                    notes TEXT,
+                    allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS pharmacy_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    dosage TEXT,
+                    quantity INTEGER NOT NULL DEFAULT 0,
+                    expiration_date DATE,
+                    location TEXT
                 );
                 """
             )

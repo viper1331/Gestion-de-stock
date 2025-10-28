@@ -1,7 +1,7 @@
 """Modèles Pydantic pour l'API."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Optional
 
 from pydantic import BaseModel, Field
@@ -102,3 +102,104 @@ class ConfigEntry(BaseModel):
     section: str
     key: str
     value: str
+
+
+class SupplierBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    contact_name: Optional[str] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, max_length=64)
+    email: Optional[str] = Field(default=None, max_length=128)
+    address: Optional[str] = Field(default=None, max_length=256)
+
+
+class SupplierCreate(SupplierBase):
+    pass
+
+
+class SupplierUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    contact_name: Optional[str] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, max_length=64)
+    email: Optional[str] = Field(default=None, max_length=128)
+    address: Optional[str] = Field(default=None, max_length=256)
+
+
+class Supplier(SupplierBase):
+    id: int
+
+
+class CollaboratorBase(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=128)
+    department: Optional[str] = Field(default=None, max_length=128)
+    email: Optional[str] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, max_length=64)
+
+
+class CollaboratorCreate(CollaboratorBase):
+    pass
+
+
+class CollaboratorUpdate(BaseModel):
+    full_name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    department: Optional[str] = Field(default=None, max_length=128)
+    email: Optional[str] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, max_length=64)
+
+
+class Collaborator(CollaboratorBase):
+    id: int
+
+
+class DotationBase(BaseModel):
+    collaborator_id: int
+    item_id: int
+    quantity: int = Field(..., gt=0)
+    notes: Optional[str] = Field(default=None, max_length=256)
+
+
+class DotationCreate(DotationBase):
+    pass
+
+
+class Dotation(DotationBase):
+    id: int
+    allocated_at: datetime
+
+
+class PharmacyItemBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    dosage: Optional[str] = Field(default=None, max_length=64)
+    quantity: int = Field(default=0, ge=0)
+    expiration_date: Optional[date] = None
+    location: Optional[str] = Field(default=None, max_length=128)
+
+
+class PharmacyItemCreate(PharmacyItemBase):
+    pass
+
+
+class PharmacyItemUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    dosage: Optional[str] = Field(default=None, max_length=64)
+    quantity: Optional[int] = Field(default=None, ge=0)
+    expiration_date: Optional[date] = None
+    location: Optional[str] = Field(default=None, max_length=128)
+
+
+class PharmacyItem(PharmacyItemBase):
+    id: int
+
+
+class ModulePermissionBase(BaseModel):
+    role: str = Field(..., pattern=r"^(admin|user)$")
+    module: str = Field(..., min_length=1, max_length=64)
+    can_view: bool = True
+    can_edit: bool = False
+
+
+class ModulePermissionUpsert(ModulePermissionBase):
+    pass
+
+
+class ModulePermission(ModulePermissionBase):
+    id: int

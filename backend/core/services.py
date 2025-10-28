@@ -293,3 +293,439 @@ def available_config_sections() -> Iterable[str]:
     parser = ConfigParser()
     parser.read(config_path, encoding="utf-8")
     return parser.sections()
+
+
+def list_suppliers() -> list[models.Supplier]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM suppliers ORDER BY name COLLATE NOCASE")
+        return [
+            models.Supplier(
+                id=row["id"],
+                name=row["name"],
+                contact_name=row["contact_name"],
+                phone=row["phone"],
+                email=row["email"],
+                address=row["address"],
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def get_supplier(supplier_id: int) -> models.Supplier:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Supplier not found")
+        return models.Supplier(
+            id=row["id"],
+            name=row["name"],
+            contact_name=row["contact_name"],
+            phone=row["phone"],
+            email=row["email"],
+            address=row["address"],
+        )
+
+
+def create_supplier(payload: models.SupplierCreate) -> models.Supplier:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO suppliers (name, contact_name, phone, email, address)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (payload.name, payload.contact_name, payload.phone, payload.email, payload.address),
+        )
+        conn.commit()
+        return get_supplier(cur.lastrowid)
+
+
+def update_supplier(supplier_id: int, payload: models.SupplierUpdate) -> models.Supplier:
+    ensure_database_ready()
+    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    if not fields:
+        return get_supplier(supplier_id)
+    assignments = ", ".join(f"{col} = ?" for col in fields)
+    values = list(fields.values())
+    values.append(supplier_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Supplier not found")
+        conn.execute(f"UPDATE suppliers SET {assignments} WHERE id = ?", values)
+        conn.commit()
+    return get_supplier(supplier_id)
+
+
+def delete_supplier(supplier_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        if cur.rowcount == 0:
+            raise ValueError("Supplier not found")
+        conn.commit()
+
+
+def list_collaborators() -> list[models.Collaborator]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM collaborators ORDER BY full_name COLLATE NOCASE")
+        return [
+            models.Collaborator(
+                id=row["id"],
+                full_name=row["full_name"],
+                department=row["department"],
+                email=row["email"],
+                phone=row["phone"],
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def get_collaborator(collaborator_id: int) -> models.Collaborator:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM collaborators WHERE id = ?", (collaborator_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Collaborator not found")
+        return models.Collaborator(
+            id=row["id"],
+            full_name=row["full_name"],
+            department=row["department"],
+            email=row["email"],
+            phone=row["phone"],
+        )
+
+
+def create_collaborator(payload: models.CollaboratorCreate) -> models.Collaborator:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO collaborators (full_name, department, email, phone)
+            VALUES (?, ?, ?, ?)
+            """,
+            (payload.full_name, payload.department, payload.email, payload.phone),
+        )
+        conn.commit()
+        return get_collaborator(cur.lastrowid)
+
+
+def update_collaborator(collaborator_id: int, payload: models.CollaboratorUpdate) -> models.Collaborator:
+    ensure_database_ready()
+    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    if not fields:
+        return get_collaborator(collaborator_id)
+    assignments = ", ".join(f"{col} = ?" for col in fields)
+    values = list(fields.values())
+    values.append(collaborator_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT 1 FROM collaborators WHERE id = ?", (collaborator_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Collaborator not found")
+        conn.execute(f"UPDATE collaborators SET {assignments} WHERE id = ?", values)
+        conn.commit()
+    return get_collaborator(collaborator_id)
+
+
+def delete_collaborator(collaborator_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("DELETE FROM collaborators WHERE id = ?", (collaborator_id,))
+        if cur.rowcount == 0:
+            raise ValueError("Collaborator not found")
+        conn.commit()
+
+
+def list_dotations(
+    *, collaborator_id: Optional[int] = None, item_id: Optional[int] = None
+) -> list[models.Dotation]:
+    ensure_database_ready()
+    query = "SELECT * FROM dotations"
+    clauses: list[str] = []
+    params: list[object] = []
+    if collaborator_id is not None:
+        clauses.append("collaborator_id = ?")
+        params.append(collaborator_id)
+    if item_id is not None:
+        clauses.append("item_id = ?")
+        params.append(item_id)
+    if clauses:
+        query += " WHERE " + " AND ".join(clauses)
+    query += " ORDER BY allocated_at DESC"
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(query, tuple(params))
+        return [
+            models.Dotation(
+                id=row["id"],
+                collaborator_id=row["collaborator_id"],
+                item_id=row["item_id"],
+                quantity=row["quantity"],
+                notes=row["notes"],
+                allocated_at=row["allocated_at"],
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def get_dotation(dotation_id: int) -> models.Dotation:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM dotations WHERE id = ?", (dotation_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Dotation not found")
+        return models.Dotation(
+            id=row["id"],
+            collaborator_id=row["collaborator_id"],
+            item_id=row["item_id"],
+            quantity=row["quantity"],
+            notes=row["notes"],
+            allocated_at=row["allocated_at"],
+        )
+
+
+def create_dotation(payload: models.DotationCreate) -> models.Dotation:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT quantity FROM items WHERE id = ?", (payload.item_id,))
+        item_row = cur.fetchone()
+        if item_row is None:
+            raise ValueError("Item not found")
+        if item_row["quantity"] < payload.quantity:
+            raise ValueError("Insufficient stock for allocation")
+
+        collaborator_cur = conn.execute(
+            "SELECT 1 FROM collaborators WHERE id = ?", (payload.collaborator_id,)
+        )
+        if collaborator_cur.fetchone() is None:
+            raise ValueError("Collaborator not found")
+
+        cur = conn.execute(
+            """
+            INSERT INTO dotations (collaborator_id, item_id, quantity, notes)
+            VALUES (?, ?, ?, ?)
+            """,
+            (
+                payload.collaborator_id,
+                payload.item_id,
+                payload.quantity,
+                payload.notes,
+            ),
+        )
+        conn.execute(
+            "UPDATE items SET quantity = quantity - ? WHERE id = ?",
+            (payload.quantity, payload.item_id),
+        )
+        conn.commit()
+        return get_dotation(cur.lastrowid)
+
+
+def delete_dotation(dotation_id: int, *, restock: bool = False) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "SELECT item_id, quantity FROM dotations WHERE id = ?", (dotation_id,)
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Dotation not found")
+        conn.execute("DELETE FROM dotations WHERE id = ?", (dotation_id,))
+        if restock:
+            conn.execute(
+                "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                (row["quantity"], row["item_id"]),
+            )
+        conn.commit()
+
+
+def list_pharmacy_items() -> list[models.PharmacyItem]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM pharmacy_items ORDER BY name COLLATE NOCASE")
+        return [
+            models.PharmacyItem(
+                id=row["id"],
+                name=row["name"],
+                dosage=row["dosage"],
+                quantity=row["quantity"],
+                expiration_date=row["expiration_date"],
+                location=row["location"],
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT * FROM pharmacy_items WHERE id = ?", (item_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Pharmacy item not found")
+        return models.PharmacyItem(
+            id=row["id"],
+            name=row["name"],
+            dosage=row["dosage"],
+            quantity=row["quantity"],
+            expiration_date=row["expiration_date"],
+            location=row["location"],
+        )
+
+
+def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyItem:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, dosage, quantity, expiration_date, location)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                payload.name,
+                payload.dosage,
+                payload.quantity,
+                payload.expiration_date,
+                payload.location,
+            ),
+        )
+        conn.commit()
+        return get_pharmacy_item(cur.lastrowid)
+
+
+def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> models.PharmacyItem:
+    ensure_database_ready()
+    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    if not fields:
+        return get_pharmacy_item(item_id)
+    assignments = ", ".join(f"{col} = ?" for col in fields)
+    values = list(fields.values())
+    values.append(item_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT 1 FROM pharmacy_items WHERE id = ?", (item_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Pharmacy item not found")
+        conn.execute(f"UPDATE pharmacy_items SET {assignments} WHERE id = ?", values)
+        conn.commit()
+    return get_pharmacy_item(item_id)
+
+
+def delete_pharmacy_item(item_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("DELETE FROM pharmacy_items WHERE id = ?", (item_id,))
+        if cur.rowcount == 0:
+            raise ValueError("Pharmacy item not found")
+        conn.commit()
+
+
+def list_module_permissions() -> list[models.ModulePermission]:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            "SELECT * FROM module_permissions ORDER BY role, module COLLATE NOCASE"
+        )
+        return [
+            models.ModulePermission(
+                id=row["id"],
+                role=row["role"],
+                module=row["module"],
+                can_view=bool(row["can_view"]),
+                can_edit=bool(row["can_edit"]),
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def list_module_permissions_for_role(role: str) -> list[models.ModulePermission]:
+    ensure_database_ready()
+    if role == "admin":
+        # Admins implicitly have access to every module; return stored overrides for completeness.
+        return list_module_permissions()
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            "SELECT * FROM module_permissions WHERE role = ? ORDER BY module COLLATE NOCASE",
+            (role,),
+        )
+        return [
+            models.ModulePermission(
+                id=row["id"],
+                role=row["role"],
+                module=row["module"],
+                can_view=bool(row["can_view"]),
+                can_edit=bool(row["can_edit"]),
+            )
+            for row in cur.fetchall()
+        ]
+
+
+def get_module_permission(role: str, module: str) -> Optional[models.ModulePermission]:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            "SELECT * FROM module_permissions WHERE role = ? AND module = ?",
+            (role, module),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        return models.ModulePermission(
+            id=row["id"],
+            role=row["role"],
+            module=row["module"],
+            can_view=bool(row["can_view"]),
+            can_edit=bool(row["can_edit"]),
+        )
+
+
+def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.ModulePermission:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO module_permissions (role, module, can_view, can_edit)
+            VALUES (?, ?, ?, ?)
+            ON CONFLICT(role, module) DO UPDATE SET
+                can_view = excluded.can_view,
+                can_edit = excluded.can_edit
+            """,
+            (
+                payload.role,
+                payload.module,
+                int(payload.can_view),
+                int(payload.can_edit),
+            ),
+        )
+        conn.commit()
+    permission = get_module_permission(payload.role, payload.module)
+    if permission is None:
+        raise RuntimeError("Failed to persist module permission")
+    return permission
+
+
+def delete_module_permission(role: str, module: str) -> None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            "DELETE FROM module_permissions WHERE role = ? AND module = ?",
+            (role, module),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("Module permission not found")
+        conn.commit()
+
+
+def has_module_access(role: str, module: str, *, action: str = "view") -> bool:
+    ensure_database_ready()
+    if role == "admin":
+        return True
+    permission = get_module_permission(role, module)
+    if permission is None:
+        return False
+    if action == "edit":
+        return permission.can_edit
+    return permission.can_view
