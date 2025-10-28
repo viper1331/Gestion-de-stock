@@ -65,7 +65,8 @@ def init_databases() -> None:
                     category_id INTEGER REFERENCES categories(id) ON DELETE SET NULL,
                     size TEXT,
                     quantity INTEGER NOT NULL DEFAULT 0,
-                    low_stock_threshold INTEGER NOT NULL DEFAULT 0
+                    low_stock_threshold INTEGER NOT NULL DEFAULT 0,
+                    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
                 );
                 CREATE TABLE IF NOT EXISTS movements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -82,6 +83,21 @@ def init_databases() -> None:
                     email TEXT,
                     address TEXT,
                     UNIQUE(name)
+                );
+                CREATE TABLE IF NOT EXISTS purchase_orders (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL DEFAULT 'PENDING',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    note TEXT,
+                    auto_created INTEGER NOT NULL DEFAULT 0
+                );
+                CREATE TABLE IF NOT EXISTS purchase_order_items (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                    item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                    quantity_ordered INTEGER NOT NULL,
+                    quantity_received INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS collaborators (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
