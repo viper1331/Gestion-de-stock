@@ -130,6 +130,11 @@ def _apply_schema_migrations() -> None:
             "UPDATE dotations SET perceived_at = DATE(allocated_at) WHERE perceived_at IS NULL OR perceived_at = ''"
         )
 
+        pharmacy_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
+        pharmacy_columns = {row["name"] for row in pharmacy_info}
+        if "packaging" not in pharmacy_columns:
+            conn.execute("ALTER TABLE pharmacy_items ADD COLUMN packaging TEXT")
+
         conn.commit()
 
 
@@ -1112,6 +1117,7 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 id=row["id"],
                 name=row["name"],
                 dosage=row["dosage"],
+                packaging=row["packaging"],
                 quantity=row["quantity"],
                 expiration_date=row["expiration_date"],
                 location=row["location"],
@@ -1131,6 +1137,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
             id=row["id"],
             name=row["name"],
             dosage=row["dosage"],
+            packaging=row["packaging"],
             quantity=row["quantity"],
             expiration_date=row["expiration_date"],
             location=row["location"],
@@ -1142,12 +1149,20 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
     with db.get_stock_connection() as conn:
         cur = conn.execute(
             """
-            INSERT INTO pharmacy_items (name, dosage, quantity, expiration_date, location)
-            VALUES (?, ?, ?, ?, ?)
+            INSERT INTO pharmacy_items (
+                name,
+                dosage,
+                packaging,
+                quantity,
+                expiration_date,
+                location
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.name,
                 payload.dosage,
+                payload.packaging,
                 payload.quantity,
                 payload.expiration_date,
                 payload.location,

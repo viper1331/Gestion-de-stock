@@ -11,6 +11,7 @@ interface PharmacyItem {
   id: number;
   name: string;
   dosage: string | null;
+  packaging: string | null;
   quantity: number;
   expiration_date: string | null;
   location: string | null;
@@ -19,6 +20,7 @@ interface PharmacyItem {
 interface PharmacyPayload {
   name: string;
   dosage: string | null;
+  packaging: string | null;
   quantity: number;
   expiration_date: string | null;
   location: string | null;
@@ -90,12 +92,13 @@ export function PharmacyPage() {
       return {
         name: selected.name,
         dosage: selected.dosage,
+        packaging: selected.packaging,
         quantity: selected.quantity,
         expiration_date: selected.expiration_date,
         location: selected.location
       };
     }
-    return { name: "", dosage: "", quantity: 0, expiration_date: "", location: "" };
+    return { name: "", dosage: "", packaging: "", quantity: 0, expiration_date: "", location: "" };
   }, [formMode, selected]);
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
@@ -128,6 +131,7 @@ export function PharmacyPage() {
     const payload: PharmacyPayload = {
       name: (formData.get("name") as string).trim(),
       dosage: ((formData.get("dosage") as string) || "").trim() || null,
+      packaging: ((formData.get("packaging") as string) || "").trim() || null,
       quantity: Number(formData.get("quantity") ?? 0),
       expiration_date: ((formData.get("expiration_date") as string) || "").trim() || null,
       location: ((formData.get("location") as string) || "").trim() || null
@@ -182,6 +186,7 @@ export function PharmacyPage() {
                 <tr>
                   <th className="px-4 py-3 text-left">Nom</th>
                   <th className="px-4 py-3 text-left">Dosage</th>
+                  <th className="px-4 py-3 text-left">Conditionnement</th>
                   <th className="px-4 py-3 text-left">Quantité</th>
                   <th className="px-4 py-3 text-left">Expiration</th>
                   <th className="px-4 py-3 text-left">Localisation</th>
@@ -189,48 +194,49 @@ export function PharmacyPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900">
-                {items.map((item, index) => {
-                  const { isLowStock, isOutOfStock, expirationStatus } = getPharmacyAlerts(item);
-                  const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
-                  const alertTone = isOutOfStock
-                    ? "bg-red-950/50"
-                    : expirationStatus === "expired"
-                      ? "bg-red-950/50"
-                      : expirationStatus === "expiring-soon"
-                        ? "bg-amber-950/40"
-                        : isLowStock
-                          ? "bg-amber-950/20"
-                          : "";
-                  const selectionTone =
-                    selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
-
-                  return (
-                    <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone} text-sm text-slate-100`}>
-                      <td className="px-4 py-3 font-medium">{item.name}</td>
-                      <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
-                      <td
-                        className={`px-4 py-3 font-semibold ${
-                          isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
-                        }`}
-                        title={
-                          isOutOfStock
-                            ? "Cet article est en rupture de stock"
-                            : isLowStock
-                              ? "Stock faible"
-                              : undefined
-                        }
-                      >
-                        {item.quantity}
-                        {isOutOfStock ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                            Rupture
-                          </span>
-                        ) : null}
-                        {!isOutOfStock && isLowStock ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                            Stock faible
-                          </span>
-                        ) : null}
+                {items.map((item) => (
+                  <tr
+                    key={item.id}
+                    className={`bg-slate-950 text-sm text-slate-100 ${
+                      selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
+                    }`}
+                  >
+                    <td className="px-4 py-3 font-medium">{item.name}</td>
+                    <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
+                    <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
+                    <td className="px-4 py-3 font-semibold">{item.quantity}</td>
+                    <td className="px-4 py-3 text-slate-300">{formatDate(item.expiration_date)}</td>
+                    <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
+                    {canEdit ? (
+                      <td className="px-4 py-3 text-xs text-slate-200">
+                        <div className="flex gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelected(item);
+                              setFormMode("edit");
+                            }}
+                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Modifier la fiche de ${item.name}`}
+                          >
+                            Modifier
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              if (!window.confirm("Supprimer cet article pharmaceutique ?")) {
+                                return;
+                              }
+                              setMessage(null);
+                              setError(null);
+                              void deleteItem.mutateAsync(item.id);
+                            }}
+                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                            title={`Supprimer ${item.name} de la pharmacie`}
+                          >
+                            Supprimer
+                          </button>
+                        </div>
                       </td>
                       <td
                         className={`px-4 py-3 ${
@@ -335,6 +341,18 @@ export function PharmacyPage() {
                   defaultValue={formValues.dosage ?? ""}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Dosage ou concentration si applicable"
+                />
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-packaging">
+                  Conditionnement
+                </label>
+                <input
+                  id="pharmacy-packaging"
+                  name="packaging"
+                  defaultValue={formValues.packaging ?? ""}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Conditionnement de l'article (boîte, unité...)"
                 />
               </div>
               <div className="space-y-1">
