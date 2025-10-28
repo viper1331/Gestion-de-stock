@@ -5,6 +5,7 @@ import {
   useQueryClient
 } from "@tanstack/react-query";
 
+import { ColumnManager } from "../../components/ColumnManager";
 import { api } from "../../lib/api";
 import { persistValue, readPersistedValue } from "../../lib/persist";
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
@@ -55,6 +56,16 @@ interface Supplier {
 }
 
 const COLUMN_STORAGE_KEY = "gsp/columns";
+const COLUMN_VISIBILITY_STORAGE_KEY = "gsp/inventory-column-visibility";
+
+type InventoryColumnKey =
+  | "name"
+  | "sku"
+  | "quantity"
+  | "size"
+  | "category"
+  | "supplier"
+  | "threshold";
 
 export function Dashboard() {
   const queryClient = useQueryClient();
@@ -211,6 +222,54 @@ export function Dashboard() {
     threshold: 120
   };
 
+  const defaultColumnVisibility: Record<InventoryColumnKey, boolean> = {
+    name: true,
+    sku: true,
+    quantity: true,
+    size: true,
+    category: true,
+    supplier: true,
+    threshold: true
+  };
+
+  const [columnVisibility, setColumnVisibility] = useState<Record<InventoryColumnKey, boolean>>(() => ({
+    ...readPersistedValue<Record<InventoryColumnKey, boolean>>(
+      COLUMN_VISIBILITY_STORAGE_KEY,
+      defaultColumnVisibility
+    )
+  }));
+
+  const toggleColumnVisibility = (key: InventoryColumnKey) => {
+    setColumnVisibility((previous) => {
+      const isCurrentlyVisible = previous[key] !== false;
+      if (isCurrentlyVisible) {
+        const visibleCount = Object.values(previous).filter(Boolean).length;
+        if (visibleCount <= 1) {
+          return previous;
+        }
+      }
+      const next = { ...previous, [key]: !isCurrentlyVisible } as Record<InventoryColumnKey, boolean>;
+      persistValue(COLUMN_VISIBILITY_STORAGE_KEY, next);
+      return next;
+    });
+  };
+
+  const resetColumnVisibility = () => {
+    const next = { ...defaultColumnVisibility };
+    setColumnVisibility(next);
+    persistValue(COLUMN_VISIBILITY_STORAGE_KEY, next);
+  };
+
+  const columnOptions: { key: InventoryColumnKey; label: string }[] = [
+    { key: "name", label: "Article" },
+    { key: "sku", label: "SKU" },
+    { key: "quantity", label: "Quantité" },
+    { key: "size", label: "Taille / Variante" },
+    { key: "category", label: "Catégorie" },
+    { key: "supplier", label: "Fournisseur" },
+    { key: "threshold", label: "Seuil" }
+  ];
+
   const columnWidths = {
     ...defaultColumnWidths,
     ...readPersistedValue<Record<string, number>>(COLUMN_STORAGE_KEY, defaultColumnWidths)
@@ -325,6 +384,13 @@ export function Dashboard() {
             title="Filtrer la liste des articles par nom ou SKU"
           />
           <div className="flex flex-wrap items-center gap-2">
+            <ColumnManager
+              options={columnOptions}
+              visibility={columnVisibility}
+              onToggle={(key) => toggleColumnVisibility(key as InventoryColumnKey)}
+              onReset={resetColumnVisibility}
+              description="Choisissez les colonnes à afficher dans la liste."
+            />
             <button
               type="button"
               onClick={() => {
@@ -368,33 +434,55 @@ export function Dashboard() {
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60">
                 <tr>
-                  <ResizableHeader label="Article" width={columnWidths.name} onResize={(value) => saveWidth("name", value)} />
-                  <ResizableHeader label="SKU" width={columnWidths.sku} onResize={(value) => saveWidth("sku", value)} />
-                  <ResizableHeader
-                    label="Quantité"
-                    width={columnWidths.quantity}
-                    onResize={(value) => saveWidth("quantity", value)}
-                  />
-                  <ResizableHeader
-                    label="Taille / Variante"
-                    width={columnWidths.size}
-                    onResize={(value) => saveWidth("size", value)}
-                  />
-                  <ResizableHeader
-                    label="Catégorie"
-                    width={columnWidths.category}
-                    onResize={(value) => saveWidth("category", value)}
-                  />
-                  <ResizableHeader
-                    label="Fournisseur"
-                    width={columnWidths.supplier}
-                    onResize={(value) => saveWidth("supplier", value)}
-                  />
-                  <ResizableHeader
-                    label="Seuil"
-                    width={columnWidths.threshold}
-                    onResize={(value) => saveWidth("threshold", value)}
-                  />
+                  {columnVisibility.name !== false ? (
+                    <ResizableHeader
+                      label="Article"
+                      width={columnWidths.name}
+                      onResize={(value) => saveWidth("name", value)}
+                    />
+                  ) : null}
+                  {columnVisibility.sku !== false ? (
+                    <ResizableHeader
+                      label="SKU"
+                      width={columnWidths.sku}
+                      onResize={(value) => saveWidth("sku", value)}
+                    />
+                  ) : null}
+                  {columnVisibility.quantity !== false ? (
+                    <ResizableHeader
+                      label="Quantité"
+                      width={columnWidths.quantity}
+                      onResize={(value) => saveWidth("quantity", value)}
+                    />
+                  ) : null}
+                  {columnVisibility.size !== false ? (
+                    <ResizableHeader
+                      label="Taille / Variante"
+                      width={columnWidths.size}
+                      onResize={(value) => saveWidth("size", value)}
+                    />
+                  ) : null}
+                  {columnVisibility.category !== false ? (
+                    <ResizableHeader
+                      label="Catégorie"
+                      width={columnWidths.category}
+                      onResize={(value) => saveWidth("category", value)}
+                    />
+                  ) : null}
+                  {columnVisibility.supplier !== false ? (
+                    <ResizableHeader
+                      label="Fournisseur"
+                      width={columnWidths.supplier}
+                      onResize={(value) => saveWidth("supplier", value)}
+                    />
+                  ) : null}
+                  {columnVisibility.threshold !== false ? (
+                    <ResizableHeader
+                      label="Seuil"
+                      width={columnWidths.threshold}
+                      onResize={(value) => saveWidth("threshold", value)}
+                    />
+                  ) : null}
                   <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Actions</th>
                 </tr>
               </thead>
@@ -408,42 +496,56 @@ export function Dashboard() {
 
                   return (
                     <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
-                      <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
-                      <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
-                      <td
-                        className={`px-4 py-3 text-sm font-semibold ${
-                          isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
-                        }`}
-                        title={
-                          isOutOfStock
-                            ? "Cet article est en rupture de stock"
-                            : isLowStock
-                              ? "Stock faible"
-                              : undefined
-                        }
-                      >
-                        {item.quantity}
-                        {isOutOfStock ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                            Rupture
-                          </span>
-                        ) : null}
-                        {!isOutOfStock && isLowStock ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                            Stock faible
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
-                      <td className="px-4 py-3 text-sm text-slate-300">
-                        {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
-                      </td>
-                      <td className="px-4 py-3 text-sm text-slate-300">
-                        {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
-                      </td>
-                      <td className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}>
-                        {item.low_stock_threshold}
-                      </td>
+                      {columnVisibility.name !== false ? (
+                        <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
+                      ) : null}
+                      {columnVisibility.sku !== false ? (
+                        <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
+                      ) : null}
+                      {columnVisibility.quantity !== false ? (
+                        <td
+                          className={`px-4 py-3 text-sm font-semibold ${
+                            isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                          }`}
+                          title={
+                            isOutOfStock
+                              ? "Cet article est en rupture de stock"
+                              : isLowStock
+                                ? "Stock faible"
+                                : undefined
+                          }
+                        >
+                          {item.quantity}
+                          {isOutOfStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                              Rupture
+                            </span>
+                          ) : null}
+                          {!isOutOfStock && isLowStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                              Stock faible
+                            </span>
+                          ) : null}
+                        </td>
+                      ) : null}
+                      {columnVisibility.size !== false ? (
+                        <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
+                      ) : null}
+                      {columnVisibility.category !== false ? (
+                        <td className="px-4 py-3 text-sm text-slate-300">
+                          {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                        </td>
+                      ) : null}
+                      {columnVisibility.supplier !== false ? (
+                        <td className="px-4 py-3 text-sm text-slate-300">
+                          {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                        </td>
+                      ) : null}
+                      {columnVisibility.threshold !== false ? (
+                        <td className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}>
+                          {item.low_stock_threshold}
+                        </td>
+                      ) : null}
                       <td className="px-4 py-3 text-xs text-slate-200">
                         <div className="flex flex-wrap gap-2">
                           <button

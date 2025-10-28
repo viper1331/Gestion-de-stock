@@ -1,7 +1,9 @@
 import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { ColumnManager } from "../../components/ColumnManager";
 import { api } from "../../lib/api";
+import { persistValue, readPersistedValue } from "../../lib/persist";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
@@ -29,6 +31,37 @@ interface PharmacyPayload {
   location: string | null;
 }
 
+type PharmacyColumnKey =
+  | "name"
+  | "barcode"
+  | "dosage"
+  | "packaging"
+  | "quantity"
+  | "expiration"
+  | "location";
+
+const PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY = "gsp/pharmacy-column-visibility";
+
+const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
+  name: true,
+  barcode: true,
+  dosage: true,
+  packaging: true,
+  quantity: true,
+  expiration: true,
+  location: true
+};
+
+const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
+  { key: "name", label: "Nom" },
+  { key: "barcode", label: "Code-barres" },
+  { key: "dosage", label: "Dosage" },
+  { key: "packaging", label: "Conditionnement" },
+  { key: "quantity", label: "Quantité" },
+  { key: "expiration", label: "Expiration" },
+  { key: "location", label: "Localisation" }
+];
+
 export function PharmacyPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -36,6 +69,34 @@ export function PharmacyPage() {
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+
+  const [columnVisibility, setColumnVisibility] = useState<Record<PharmacyColumnKey, boolean>>(() => ({
+    ...readPersistedValue<Record<PharmacyColumnKey, boolean>>(
+      PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY,
+      DEFAULT_PHARMACY_COLUMN_VISIBILITY
+    )
+  }));
+
+  const toggleColumnVisibility = (key: PharmacyColumnKey) => {
+    setColumnVisibility((previous) => {
+      const isCurrentlyVisible = previous[key] !== false;
+      if (isCurrentlyVisible) {
+        const visibleCount = Object.values(previous).filter(Boolean).length;
+        if (visibleCount <= 1) {
+          return previous;
+        }
+      }
+      const next = { ...previous, [key]: !isCurrentlyVisible } as Record<PharmacyColumnKey, boolean>;
+      persistValue(PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY, next);
+      return next;
+    });
+  };
+
+  const resetColumnVisibility = () => {
+    const next = { ...DEFAULT_PHARMACY_COLUMN_VISIBILITY };
+    setColumnVisibility(next);
+    persistValue(PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY, next);
+  };
 
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const canView = user?.role === "admin" || modulePermissions.canAccess("pharmacy");
@@ -171,24 +232,33 @@ export function PharmacyPage() {
 
   return (
     <section className="space-y-6">
-      <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+      <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-white">Pharmacie</h2>
           <p className="text-sm text-slate-400">Gérez vos médicaments et consommables médicaux.</p>
         </div>
-        {canEdit ? (
-          <button
-            type="button"
-            onClick={() => {
-              setSelected(null);
-              setFormMode("create");
-            }}
-            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-            title="Créer une nouvelle référence pharmaceutique"
-          >
-            Nouvel article
-          </button>
-        ) : null}
+        <div className="flex flex-wrap items-center gap-2">
+          <ColumnManager
+            options={PHARMACY_COLUMN_OPTIONS}
+            visibility={columnVisibility}
+            onToggle={(key) => toggleColumnVisibility(key as PharmacyColumnKey)}
+            onReset={resetColumnVisibility}
+            description="Personnalisez les colonnes visibles dans le tableau."
+          />
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => {
+                setSelected(null);
+                setFormMode("create");
+              }}
+              className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+              title="Créer une nouvelle référence pharmaceutique"
+            >
+              Nouvel article
+            </button>
+          ) : null}
+        </div>
       </header>
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
@@ -199,13 +269,13 @@ export function PharmacyPage() {
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
-                  <th className="px-4 py-3 text-left">Nom</th>
-                  <th className="px-4 py-3 text-left">Code-barres</th>
-                  <th className="px-4 py-3 text-left">Dosage</th>
-                  <th className="px-4 py-3 text-left">Conditionnement</th>
-                  <th className="px-4 py-3 text-left">Quantité</th>
-                  <th className="px-4 py-3 text-left">Expiration</th>
-                  <th className="px-4 py-3 text-left">Localisation</th>
+                  {columnVisibility.name !== false ? <th className="px-4 py-3 text-left">Nom</th> : null}
+                  {columnVisibility.barcode !== false ? <th className="px-4 py-3 text-left">Code-barres</th> : null}
+                  {columnVisibility.dosage !== false ? <th className="px-4 py-3 text-left">Dosage</th> : null}
+                  {columnVisibility.packaging !== false ? <th className="px-4 py-3 text-left">Conditionnement</th> : null}
+                  {columnVisibility.quantity !== false ? <th className="px-4 py-3 text-left">Quantité</th> : null}
+                  {columnVisibility.expiration !== false ? <th className="px-4 py-3 text-left">Expiration</th> : null}
+                  {columnVisibility.location !== false ? <th className="px-4 py-3 text-left">Localisation</th> : null}
                   {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
                 </tr>
               </thead>
@@ -222,63 +292,77 @@ export function PharmacyPage() {
                         selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
                       }`}
                     >
-                      <td className="px-4 py-3 font-medium">{item.name}</td>
-                      <td className="px-4 py-3 text-slate-300">
-                        {item.barcode ? (
-                          <div className="flex items-center gap-2">
-                            <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100">{item.barcode}</code>
-                            {barcodeDownloadUrl ? (
-                              <a
-                                href={barcodeDownloadUrl}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="text-[10px] font-semibold uppercase tracking-wide text-indigo-300 hover:text-indigo-200"
-                                title="Télécharger le code-barres (PNG)"
-                              >
-                                PNG
-                              </a>
-                            ) : null}
-                          </div>
-                        ) : (
-                          <span className="text-slate-500">—</span>
-                        )}
-                      </td>
-                      <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
-                      <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
-                      <td className="px-4 py-3 font-semibold">
-                        {item.quantity}
-                        {isOutOfStock ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-200">
-                            Rupture
-                          </span>
-                        ) : isLowStock ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                            Faible stock
-                          </span>
-                        ) : null}
-                      </td>
-                      <td
-                        className={`px-4 py-3 ${
-                          expirationStatus === "expired"
-                            ? "text-red-300"
-                            : expirationStatus === "expiring-soon"
-                              ? "text-amber-200"
-                              : "text-slate-300"
-                        }`}
-                      >
-                        {formatDate(item.expiration_date)}
-                        {expirationStatus === "expired" ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                            Expiré
-                          </span>
-                        ) : null}
-                        {expirationStatus === "expiring-soon" ? (
-                          <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
-                            Bientôt périmé
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
+                      {columnVisibility.name !== false ? (
+                        <td className="px-4 py-3 font-medium">{item.name}</td>
+                      ) : null}
+                      {columnVisibility.barcode !== false ? (
+                        <td className="px-4 py-3 text-slate-300">
+                          {item.barcode ? (
+                            <div className="flex items-center gap-2">
+                              <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100">{item.barcode}</code>
+                              {barcodeDownloadUrl ? (
+                                <a
+                                  href={barcodeDownloadUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[10px] font-semibold uppercase tracking-wide text-indigo-300 hover:text-indigo-200"
+                                  title="Télécharger le code-barres (PNG)"
+                                >
+                                  PNG
+                                </a>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </td>
+                      ) : null}
+                      {columnVisibility.dosage !== false ? (
+                        <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
+                      ) : null}
+                      {columnVisibility.packaging !== false ? (
+                        <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
+                      ) : null}
+                      {columnVisibility.quantity !== false ? (
+                        <td className="px-4 py-3 font-semibold">
+                          {item.quantity}
+                          {isOutOfStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-200">
+                              Rupture
+                            </span>
+                          ) : isLowStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                              Faible stock
+                            </span>
+                          ) : null}
+                        </td>
+                      ) : null}
+                      {columnVisibility.expiration !== false ? (
+                        <td
+                          className={`px-4 py-3 ${
+                            expirationStatus === "expired"
+                              ? "text-red-300"
+                              : expirationStatus === "expiring-soon"
+                                ? "text-amber-200"
+                                : "text-slate-300"
+                          }`}
+                        >
+                          {formatDate(item.expiration_date)}
+                          {expirationStatus === "expired" ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                              Expiré
+                            </span>
+                          ) : null}
+                          {expirationStatus === "expiring-soon" ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
+                              Bientôt périmé
+                            </span>
+                          ) : null}
+                        </td>
+                      ) : null}
+                      {columnVisibility.location !== false ? (
+                        <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
+                      ) : null}
                       {canEdit ? (
                         <td className="px-4 py-3 text-xs text-slate-200">
                           <div className="flex flex-wrap gap-2">
