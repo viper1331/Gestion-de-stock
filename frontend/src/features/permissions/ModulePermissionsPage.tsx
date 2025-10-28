@@ -23,9 +23,16 @@ interface UserEntry {
   role: string;
 }
 
-interface PermissionFormValues {
+interface PermissionFormState {
   user_id: number | null;
-  module: string;
+  modules: string[];
+  can_view: boolean;
+  can_edit: boolean;
+}
+
+interface PermissionFormSubmission {
+  user_id: number;
+  modules: string[];
   can_view: boolean;
   can_edit: boolean;
 }
@@ -35,9 +42,9 @@ export function ModulePermissionsPage() {
   const queryClient = useQueryClient();
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [formValues, setFormValues] = useState<PermissionFormValues>({
+  const [formValues, setFormValues] = useState<PermissionFormState>({
     user_id: null,
-    module: "",
+    modules: [],
     can_view: true,
     can_edit: false
   });
@@ -89,12 +96,25 @@ export function ModulePermissionsPage() {
     setFormValues((prev) => ({ ...prev, user_id: sortedUsers[0]?.id ?? null }));
   }, [formValues.user_id, user?.role, users]);
 
-  const upsertPermission = useMutation({
-    mutationFn: async (payload: PermissionFormValues) => {
-      await api.put("/permissions/modules", payload);
+  const upsertPermission = useMutation<void, unknown, PermissionFormSubmission>({
+    mutationFn: async ({ user_id, modules, can_view, can_edit }: PermissionFormSubmission) => {
+      await Promise.all(
+        modules.map((module) =>
+          api.put("/permissions/modules", {
+            user_id,
+            module,
+            can_view,
+            can_edit
+          })
+        )
+      );
     },
-    onSuccess: async () => {
-      setMessage("Droits enregistrés.");
+    onSuccess: async (_, variables) => {
+      setMessage(
+        variables.modules.length > 1
+          ? "Droits enregistrés pour les modules sélectionnés."
+          : "Droits enregistrés."
+      );
       await queryClient.invalidateQueries({ queryKey: ["module-permissions", "admin"] });
     },
     onError: () => setError("Impossible d'enregistrer les droits."),
@@ -156,13 +176,16 @@ export function ModulePermissionsPage() {
 
   const handleCreate = async (event: FormEvent) => {
     event.preventDefault();
-    const trimmedModule = formValues.module.trim();
-    if (!trimmedModule) {
-      setError("Veuillez indiquer un nom de module.");
+    const selectedModules = Array.from(new Set(formValues.modules.map((module) => module.trim()).filter(Boolean)));
+    if (selectedModules.length === 0) {
+      setError("Veuillez sélectionner au moins un module.");
       return;
     }
-    if (!availableModules.some((entry) => entry.key === trimmedModule)) {
-      setError("Veuillez sélectionner un module existant.");
+    const invalidModules = selectedModules.filter(
+      (module) => !availableModules.some((entry) => entry.key === module)
+    );
+    if (invalidModules.length > 0) {
+      setError("Veuillez sélectionner uniquement des modules existants.");
       return;
     }
     if (formValues.user_id === null) {
@@ -172,10 +195,12 @@ export function ModulePermissionsPage() {
     setMessage(null);
     setError(null);
     await upsertPermission.mutateAsync({
-      ...formValues,
-      module: trimmedModule
+      user_id: formValues.user_id,
+      modules: selectedModules,
+      can_view: formValues.can_view,
+      can_edit: formValues.can_edit
     });
-    setFormValues((prev) => ({ ...prev, module: trimmedModule }));
+    setFormValues((prev) => ({ ...prev, modules: selectedModules }));
   };
 
   const isProcessing = upsertPermission.isPending || deletePermission.isPending;
@@ -204,7 +229,8 @@ export function ModulePermissionsPage() {
             onChange={(event) =>
               setFormValues((prev) => ({
                 ...prev,
-                user_id: event.target.value ? Number(event.target.value) : null
+                user_id: event.target.value ? Number(event.target.value) : null,
+                modules: []
               }))
             }
             title="Choisissez l'utilisateur concerné par la règle"
@@ -222,29 +248,30 @@ export function ModulePermissionsPage() {
           </select>
         </label>
         <label className="flex flex-1 flex-col text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Module
-          <input
-            list="module-suggestions"
-            value={formValues.module}
-            onChange={(event) => setFormValues((prev) => ({ ...prev, module: event.target.value }))}
-            placeholder={
-              isFetchingModules
-                ? "Chargement..."
-                : availableModules.length > 0
-                ? "Sélectionner un module"
-                : "Aucun module disponible"
+          Modules
+          <select
+            multiple
+            value={formValues.modules}
+            onChange={(event) =>
+              setFormValues((prev) => ({
+                ...prev,
+                modules: Array.from(event.target.selectedOptions, (option) => option.value)
+              }))
             }
             disabled={isFetchingModules || availableModules.length === 0}
+            size={Math.min(Math.max(availableModules.length, 1), 6)}
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-            title="Indiquez ou sélectionnez le module à autoriser"
-          />
-          <datalist id="module-suggestions">
+            title="Sélectionnez un ou plusieurs modules à autoriser"
+          >
             {availableModules.map((module) => (
               <option key={module.key} value={module.key}>
-                {module.label}
+                {module.label} ({module.key})
               </option>
             ))}
-          </datalist>
+          </select>
+          <span className="mt-1 text-[11px] font-normal normal-case text-slate-400">
+            Maintenez Ctrl (Windows) ou ⌘ (macOS) pour sélectionner plusieurs modules.
+          </span>
         </label>
         {availableModules.length === 0 && !isFetchingModules ? (
           <p className="basis-full text-xs text-amber-300">
