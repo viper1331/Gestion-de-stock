@@ -835,10 +835,13 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
             raise ValueError("Stock insuffisant pour la dotation")
 
         collaborator_cur = conn.execute(
-            "SELECT 1 FROM collaborators WHERE id = ?", (payload.collaborator_id,)
+            "SELECT full_name FROM collaborators WHERE id = ?",
+            (payload.collaborator_id,),
         )
-        if collaborator_cur.fetchone() is None:
+        collaborator_row = collaborator_cur.fetchone()
+        if collaborator_row is None:
             raise ValueError("Collaborateur introuvable")
+        collaborator_name = collaborator_row["full_name"]
 
         cur = conn.execute(
             """
@@ -856,6 +859,14 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
             "UPDATE items SET quantity = quantity - ? WHERE id = ?",
             (payload.quantity, payload.item_id),
         )
+        conn.execute(
+            "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+            (
+                payload.item_id,
+                -payload.quantity,
+                f"Dotation - {collaborator_name}",
+            ),
+        )
         conn.commit()
         return get_dotation(cur.lastrowid)
 
@@ -864,16 +875,35 @@ def delete_dotation(dotation_id: int, *, restock: bool = False) -> None:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
         cur = conn.execute(
-            "SELECT item_id, quantity FROM dotations WHERE id = ?", (dotation_id,)
+            "SELECT collaborator_id, item_id, quantity FROM dotations WHERE id = ?",
+            (dotation_id,),
         )
         row = cur.fetchone()
         if row is None:
             raise ValueError("Dotation introuvable")
+        collaborator_name: str | None = None
+        if row["collaborator_id"] is not None:
+            name_cur = conn.execute(
+                "SELECT full_name FROM collaborators WHERE id = ?",
+                (row["collaborator_id"],),
+            )
+            collaborator_row = name_cur.fetchone()
+            if collaborator_row is not None:
+                collaborator_name = collaborator_row["full_name"]
         conn.execute("DELETE FROM dotations WHERE id = ?", (dotation_id,))
         if restock:
             conn.execute(
                 "UPDATE items SET quantity = quantity + ? WHERE id = ?",
                 (row["quantity"], row["item_id"]),
+            )
+            reason = (
+                f"Retour dotation - {collaborator_name}"
+                if collaborator_name
+                else "Retour dotation"
+            )
+            conn.execute(
+                "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                (row["item_id"], row["quantity"], reason),
             )
         conn.commit()
 

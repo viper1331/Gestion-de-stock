@@ -508,6 +508,15 @@ def test_dotation_flow_updates_stock() -> None:
     after_allocation = services.get_item(item_id)
     assert after_allocation.quantity == initial_quantity - 2
 
+    movements_after_allocation = client.get(
+        f"/items/{item_id}/movements", headers=admin_headers
+    )
+    assert movements_after_allocation.status_code == 200, movements_after_allocation.text
+    history = movements_after_allocation.json()
+    assert history
+    assert history[0]["delta"] == -2
+    assert history[0]["reason"] == "Dotation - Alice"
+
     listed = client.get(
         f"/dotations/dotations?collaborator_id={collaborator_id}", headers=admin_headers
     )
@@ -522,6 +531,16 @@ def test_dotation_flow_updates_stock() -> None:
 
     after_restock = services.get_item(item_id)
     assert after_restock.quantity == initial_quantity
+
+    movements_after_restock = client.get(
+        f"/items/{item_id}/movements", headers=admin_headers
+    )
+    assert movements_after_restock.status_code == 200, movements_after_restock.text
+    restock_history = movements_after_restock.json()
+    assert {entry["reason"] for entry in restock_history} >= {
+        "Dotation - Alice",
+        "Retour dotation - Alice",
+    }
 
 
 def test_pharmacy_crud_cycle() -> None:
