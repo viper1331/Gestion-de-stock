@@ -58,6 +58,12 @@ def init_databases() -> None:
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL
                 );
+                CREATE TABLE IF NOT EXISTS category_sizes (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    category_id INTEGER NOT NULL REFERENCES categories(id) ON DELETE CASCADE,
+                    name TEXT NOT NULL COLLATE NOCASE,
+                    UNIQUE(category_id, name)
+                );
                 CREATE TABLE IF NOT EXISTS items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT NOT NULL,

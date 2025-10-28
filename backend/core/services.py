@@ -19,6 +19,21 @@ def ensure_database_ready() -> None:
         _db_initialized = True
 
 
+def _normalize_sizes(values: Iterable[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for value in values:
+        candidate = value.strip()
+        if not candidate:
+            continue
+        key = candidate.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(candidate)
+    return sorted(normalized, key=str.casefold)
+
+
 def seed_default_admin() -> None:
     default_username = "admin"
     default_password = "admin123"
@@ -303,26 +318,108 @@ def list_low_stock(threshold: int) -> list[models.LowStockReport]:
 def list_categories() -> list[models.Category]:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT * FROM categories ORDER BY name COLLATE NOCASE")
-        return [models.Category(id=row["id"], name=row["name"]) for row in cur.fetchall()]
+        cur = conn.execute("SELECT id, name FROM categories ORDER BY name COLLATE NOCASE")
+        rows = cur.fetchall()
+        if not rows:
+            return []
+
+        category_ids = [row["id"] for row in rows]
+        sizes_map: dict[int, list[str]] = {category_id: [] for category_id in category_ids}
+        placeholders = ",".join("?" for _ in category_ids)
+        size_rows = conn.execute(
+            f"SELECT category_id, name FROM category_sizes WHERE category_id IN ({placeholders}) ORDER BY name COLLATE NOCASE",
+            category_ids,
+        ).fetchall()
+        for size in size_rows:
+            sizes_map.setdefault(size["category_id"], []).append(size["name"])
+
+        return [
+            models.Category(
+                id=row["id"],
+                name=row["name"],
+                sizes=sizes_map.get(row["id"], []),
+            )
+            for row in rows
+        ]
+
+
+def get_category(category_id: int) -> Optional[models.Category]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id, name FROM categories WHERE id = ?", (category_id,))
+        row = cur.fetchone()
+        if row is None:
+            return None
+        size_rows = conn.execute(
+            "SELECT name FROM category_sizes WHERE category_id = ? ORDER BY name COLLATE NOCASE",
+            (category_id,),
+        ).fetchall()
+        return models.Category(
+            id=row["id"],
+            name=row["name"],
+            sizes=[size_row["name"] for size_row in size_rows],
+        )
 
 
 def create_category(payload: models.CategoryCreate) -> models.Category:
     ensure_database_ready()
+    normalized_sizes = _normalize_sizes(payload.sizes)
     with db.get_stock_connection() as conn:
         cur = conn.execute(
             "INSERT INTO categories (name) VALUES (?)",
             (payload.name,),
         )
+        category_id = cur.lastrowid
+        if normalized_sizes:
+            conn.executemany(
+                "INSERT INTO category_sizes (category_id, name) VALUES (?, ?)",
+                ((category_id, size) for size in normalized_sizes),
+            )
         conn.commit()
-        return models.Category(id=cur.lastrowid, name=payload.name)
+        return models.Category(id=category_id, name=payload.name, sizes=normalized_sizes)
 
 
 def delete_category(category_id: int) -> None:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM category_sizes WHERE category_id = ?", (category_id,))
         conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
         conn.commit()
+
+
+def update_category(category_id: int, payload: models.CategoryUpdate) -> models.Category:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM categories WHERE id = ?", (category_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Category not found")
+
+        updates: list[str] = []
+        values: list[object] = []
+        if payload.name is not None:
+            updates.append("name = ?")
+            values.append(payload.name)
+        if updates:
+            values.append(category_id)
+            conn.execute(
+                f"UPDATE categories SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+
+        if payload.sizes is not None:
+            conn.execute("DELETE FROM category_sizes WHERE category_id = ?", (category_id,))
+            normalized_sizes = _normalize_sizes(payload.sizes)
+            if normalized_sizes:
+                conn.executemany(
+                    "INSERT INTO category_sizes (category_id, name) VALUES (?, ?)",
+                    ((category_id, size) for size in normalized_sizes),
+                )
+        conn.commit()
+
+    updated = get_category(category_id)
+    if updated is None:  # pragma: no cover - deleted row in concurrent context
+        raise ValueError("Category not found")
+    return updated
 
 
 def record_movement(item_id: int, payload: models.MovementCreate) -> None:
