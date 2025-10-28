@@ -10,7 +10,10 @@ router = APIRouter()
 @router.get("/", response_model=list[models.User])
 async def list_users(current_user: models.User = Depends(get_current_user)) -> list[models.User]:
     if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Autorisations insuffisantes",
+        )
     return services.list_users()
 
 
@@ -20,7 +23,10 @@ async def create_user(
     current_user: models.User = Depends(get_current_user),
 ) -> models.User:
     if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Autorisations insuffisantes",
+        )
     try:
         return services.create_user(payload)
     except ValueError as exc:
@@ -34,12 +40,15 @@ async def update_user(
     current_user: models.User = Depends(get_current_user),
 ) -> models.User:
     if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Autorisations insuffisantes",
+        )
     try:
         return services.update_user(user_id, payload)
     except ValueError as exc:
         message = str(exc)
-        if message == "User not found":
+        if message == "Utilisateur introuvable":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message) from exc
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message) from exc
 
@@ -50,11 +59,14 @@ async def delete_user(
     current_user: models.User = Depends(get_current_user),
 ) -> None:
     if current_user.role != "admin":
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Insufficient permissions")
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Autorisations insuffisantes",
+        )
     try:
         services.delete_user(user_id)
     except ValueError as exc:
         message = str(exc)
-        if message == "User not found":
+        if message == "Utilisateur introuvable":
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=message) from exc
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=message) from exc

@@ -27,7 +27,7 @@ async def read_config(_: models.User = Depends(get_current_user)) -> list[models
 @router.post("/", status_code=204)
 async def write_config(entry: models.ConfigEntry, user: models.User = Depends(get_current_user)) -> None:
     if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Insufficient permissions")
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     parser = ConfigParser()
     parser.read(CONFIG_PATH, encoding="utf-8")
     if not parser.has_section(entry.section):
