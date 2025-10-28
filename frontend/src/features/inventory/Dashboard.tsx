@@ -395,61 +395,89 @@ export function Dashboard() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900 bg-slate-950/60">
-                {items.map((item, index) => (
-                  <tr
-                    key={item.id}
-                    className={`${
-                      index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40"
-                    } ${selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""}`}
-                  >
-                    <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
-                    <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
-                    <td className="px-4 py-3 text-sm font-semibold text-slate-100">{item.quantity}</td>
-                    <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
-                    <td className="px-4 py-3 text-sm text-slate-300">
-                      {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-slate-300">
-                      {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
-                    </td>
-                    <td className="px-4 py-3 text-sm text-slate-300">{item.low_stock_threshold}</td>
-                    <td className="px-4 py-3 text-xs text-slate-200">
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedItem(item);
-                            setFormMode("edit");
-                            openSidebar();
-                          }}
-                          className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                          title={`Modifier les informations de ${item.name}`}
-                        >
-                          Modifier
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => {
-                            setSelectedItem(item);
-                            openSidebar();
-                          }}
-                          className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                          title={`Saisir un mouvement de stock pour ${item.name}`}
-                        >
-                          Mouvement
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleDeleteItem(item.id)}
-                          className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
-                          title={`Supprimer définitivement ${item.name}`}
-                        >
-                          Supprimer
-                        </button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
+                {items.map((item, index) => {
+                  const { isOutOfStock, isLowStock } = getInventoryAlerts(item);
+                  const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
+                  const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
+                  const selectionTone =
+                    selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
+
+                  return (
+                    <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
+                      <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
+                      <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
+                      <td
+                        className={`px-4 py-3 text-sm font-semibold ${
+                          isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                        }`}
+                        title={
+                          isOutOfStock
+                            ? "Cet article est en rupture de stock"
+                            : isLowStock
+                              ? "Stock faible"
+                              : undefined
+                        }
+                      >
+                        {item.quantity}
+                        {isOutOfStock ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                            Rupture
+                          </span>
+                        ) : null}
+                        {!isOutOfStock && isLowStock ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                            Stock faible
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
+                      <td className="px-4 py-3 text-sm text-slate-300">
+                        {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                      </td>
+                      <td className="px-4 py-3 text-sm text-slate-300">
+                        {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                      </td>
+                      <td className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}>
+                        {item.low_stock_threshold}
+                      </td>
+                      <td className="px-4 py-3 text-xs text-slate-200">
+                        <div className="flex flex-wrap gap-2">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedItem(item);
+                              setFormMode("edit");
+                              openSidebar();
+                            }}
+                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Modifier les informations de ${item.name}`}
+                          >
+                            Modifier
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedItem(item);
+                              openSidebar();
+                            }}
+                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Saisir un mouvement de stock pour ${item.name}`}
+                          >
+                            Mouvement
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteItem(item.id)}
+                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                            title={`Supprimer définitivement ${item.name}`}
+                          >
+                            Supprimer
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -991,6 +1019,14 @@ function CategoryManager({
       </ul>
     </div>
   );
+}
+
+function getInventoryAlerts(item: Item) {
+  const isOutOfStock = item.quantity <= 0;
+  const hasThreshold = item.low_stock_threshold > 0;
+  const isLowStock = !isOutOfStock && hasThreshold && item.quantity <= item.low_stock_threshold;
+
+  return { isOutOfStock, isLowStock };
 }
 
 function parseSizesInput(value: string): string[] {

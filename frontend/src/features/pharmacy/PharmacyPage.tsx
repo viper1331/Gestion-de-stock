@@ -5,6 +5,8 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 
+const PHARMACY_LOW_STOCK_THRESHOLD = 5;
+
 interface PharmacyItem {
   id: number;
   name: string;
@@ -187,52 +189,113 @@ export function PharmacyPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900">
-                {items.map((item) => (
-                  <tr
-                    key={item.id}
-                    className={`bg-slate-950 text-sm text-slate-100 ${
-                      selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
-                    }`}
-                  >
-                    <td className="px-4 py-3 font-medium">{item.name}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
-                    <td className="px-4 py-3 font-semibold">{item.quantity}</td>
-                    <td className="px-4 py-3 text-slate-300">{formatDate(item.expiration_date)}</td>
-                    <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
-                    {canEdit ? (
-                      <td className="px-4 py-3 text-xs text-slate-200">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelected(item);
-                              setFormMode("edit");
-                            }}
-                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                            title={`Modifier la fiche de ${item.name}`}
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!window.confirm("Supprimer cet article pharmaceutique ?")) {
-                                return;
-                              }
-                              setMessage(null);
-                              setError(null);
-                              void deleteItem.mutateAsync(item.id);
-                            }}
-                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
-                            title={`Supprimer ${item.name} de la pharmacie`}
-                          >
-                            Supprimer
-                          </button>
-                        </div>
+                {items.map((item, index) => {
+                  const { isLowStock, isOutOfStock, expirationStatus } = getPharmacyAlerts(item);
+                  const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
+                  const alertTone = isOutOfStock
+                    ? "bg-red-950/50"
+                    : expirationStatus === "expired"
+                      ? "bg-red-950/50"
+                      : expirationStatus === "expiring-soon"
+                        ? "bg-amber-950/40"
+                        : isLowStock
+                          ? "bg-amber-950/20"
+                          : "";
+                  const selectionTone =
+                    selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
+
+                  return (
+                    <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone} text-sm text-slate-100`}>
+                      <td className="px-4 py-3 font-medium">{item.name}</td>
+                      <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
+                      <td
+                        className={`px-4 py-3 font-semibold ${
+                          isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                        }`}
+                        title={
+                          isOutOfStock
+                            ? "Cet article est en rupture de stock"
+                            : isLowStock
+                              ? "Stock faible"
+                              : undefined
+                        }
+                      >
+                        {item.quantity}
+                        {isOutOfStock ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                            Rupture
+                          </span>
+                        ) : null}
+                        {!isOutOfStock && isLowStock ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                            Stock faible
+                          </span>
+                        ) : null}
                       </td>
-                    ) : null}
-                  </tr>
-                ))}
+                      <td
+                        className={`px-4 py-3 ${
+                          expirationStatus === "expired"
+                            ? "text-red-300"
+                            : expirationStatus === "expiring-soon"
+                              ? "text-amber-200"
+                              : "text-slate-300"
+                        }`}
+                        title={
+                          expirationStatus === "expired"
+                            ? "Ce lot est expiré"
+                            : expirationStatus === "expiring-soon"
+                              ? "Ce lot approche de sa date de péremption"
+                              : undefined
+                        }
+                      >
+                        {formatDate(item.expiration_date)}
+                        {expirationStatus === "expired" ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                            Expiré
+                          </span>
+                        ) : null}
+                        {expirationStatus === "expiring-soon" ? (
+                          <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
+                            Bientôt périmé
+                          </span>
+                        ) : null}
+                      </td>
+                      <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
+                      {canEdit ? (
+                        <td className="px-4 py-3 text-xs text-slate-200">
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelected(item);
+                                setFormMode("edit");
+                              }}
+                              className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                              title={`Modifier la fiche de ${item.name}`}
+                            >
+                              Modifier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!window.confirm("Supprimer cet article pharmaceutique ?")) {
+                                  return;
+                                }
+                                setMessage(null);
+                                setError(null);
+                                void deleteItem.mutateAsync(item.id);
+                              }}
+                              className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                              title={`Supprimer ${item.name} de la pharmacie`}
+                            >
+                              Supprimer
+                            </button>
+                          </div>
+                        </td>
+                      ) : null}
+                    </tr>
+                  );
+                })}
               </tbody>
             </table>
           </div>
@@ -364,5 +427,44 @@ function formatDate(value: string | null) {
   } catch (error) {
     return value;
   }
+}
+
+type ExpirationStatus = "expired" | "expiring-soon" | null;
+
+function getPharmacyAlerts(item: PharmacyItem) {
+  const isOutOfStock = item.quantity <= 0;
+  const isLowStock = item.quantity > 0 && item.quantity <= PHARMACY_LOW_STOCK_THRESHOLD;
+  const expirationStatus = getExpirationStatus(item.expiration_date);
+
+  return { isOutOfStock, isLowStock, expirationStatus };
+}
+
+function getExpirationStatus(value: string | null): ExpirationStatus {
+  if (!value) {
+    return null;
+  }
+
+  const expirationDate = new Date(value);
+  if (Number.isNaN(expirationDate.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expiration = new Date(expirationDate);
+  expiration.setHours(0, 0, 0, 0);
+
+  const diffInMs = expiration.getTime() - today.getTime();
+  const diffInDays = Math.floor(diffInMs / (1000 * 60 * 60 * 24));
+
+  if (diffInDays < 0) {
+    return "expired";
+  }
+
+  if (diffInDays <= 30) {
+    return "expiring-soon";
+  }
+
+  return null;
 }
 
