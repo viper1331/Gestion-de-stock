@@ -40,6 +40,7 @@ interface ItemFormValues {
   size: string;
   quantity: number;
   low_stock_threshold: number;
+  supplier_id: number | null;
 }
 
 interface CategoryFormValues {
@@ -270,7 +271,8 @@ export function Dashboard() {
         category_id: selectedItem.category_id,
         size: selectedItem.size ?? "",
         quantity: selectedItem.quantity,
-        low_stock_threshold: selectedItem.low_stock_threshold
+        low_stock_threshold: selectedItem.low_stock_threshold,
+        supplier_id: selectedItem.supplier_id
       };
     }
     return {
@@ -279,7 +281,8 @@ export function Dashboard() {
       category_id: null,
       size: "",
       quantity: 0,
-      low_stock_threshold: 0
+      low_stock_threshold: 0,
+      supplier_id: null
     };
   }, [formMode, selectedItem]);
 
@@ -478,6 +481,7 @@ export function Dashboard() {
                 key={`${formMode}-${selectedItem?.id ?? "new"}`}
                 initialValues={formInitialValues}
                 categories={categories}
+                suppliers={suppliers}
                 mode={formMode}
                 isSubmitting={createItem.isPending || updateItem.isPending}
                 onSubmit={handleSubmitItem}
@@ -575,6 +579,7 @@ function Alert({ tone, message }: { tone: "success" | "error"; message: string }
 function ItemForm({
   initialValues,
   categories,
+  suppliers,
   mode,
   onSubmit,
   onCancel,
@@ -582,6 +587,7 @@ function ItemForm({
 }: {
   initialValues: ItemFormValues;
   categories: Category[];
+  suppliers: Supplier[];
   mode: "create" | "edit";
   onSubmit: (values: ItemFormValues) => Promise<void>;
   onCancel: () => void;
@@ -608,11 +614,20 @@ function ItemForm({
       quantity: Number(values.quantity) || 0,
       low_stock_threshold: Number(values.low_stock_threshold) || 0,
       category_id: values.category_id ?? null,
+      supplier_id: values.supplier_id ?? null,
       size: values.size.trim()
     };
     await onSubmit(payload);
     if (mode === "create") {
-      setValues({ name: "", sku: "", category_id: null, size: "", quantity: 0, low_stock_threshold: 0 });
+      setValues({
+        name: "",
+        sku: "",
+        category_id: null,
+        size: "",
+        quantity: 0,
+        low_stock_threshold: 0,
+        supplier_id: null
+      });
     }
   };
 
@@ -717,6 +732,30 @@ function ItemForm({
           {categories.map((category) => (
             <option key={category.id} value={category.id}>
               {category.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="space-y-1">
+        <label className="text-xs font-semibold text-slate-300" htmlFor="item-supplier">
+          Fournisseur
+        </label>
+        <select
+          id="item-supplier"
+          value={values.supplier_id ?? ""}
+          onChange={(event) =>
+            setValues((prev) => ({
+              ...prev,
+              supplier_id: event.target.value ? Number(event.target.value) : null
+            }))
+          }
+          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          title="Associez l'article à un fournisseur pour activer les commandes"
+        >
+          <option value="">Aucun</option>
+          {suppliers.map((supplier) => (
+            <option key={supplier.id} value={supplier.id}>
+              {supplier.name}
             </option>
           ))}
         </select>
