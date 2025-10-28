@@ -1,5 +1,5 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useEffect, useMemo } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "../features/auth/useAuth";
 import { ThemeToggle } from "./ThemeToggle";
@@ -21,47 +21,172 @@ export function AppLayout() {
     }
   }, [isReady, navigate, user]);
 
-  const navigationLinks = useMemo(
+  const navigationGroups = useMemo(
     () => {
-      type NavLinkConfig = {
+      type NavLinkItem = {
         to: string;
         label: string;
+        tooltip: string;
         module?: string;
         adminOnly?: boolean;
       };
 
-      const baseLinks: NavLinkConfig[] = [
-        { to: "/", label: "Inventaire" },
-        { to: "/barcode", label: "Codes-barres" },
-        { to: "/reports", label: "Rapports" },
-        { to: "/suppliers", label: "Fournisseurs", module: "suppliers" },
-        { to: "/collaborators", label: "Collaborateurs", module: "dotations" },
-        { to: "/dotations", label: "Dotations", module: "dotations" },
-        { to: "/pharmacy", label: "Pharmacie", module: "pharmacy" },
-        { to: "/settings", label: "Paramètres" },
-        { to: "/users", label: "Utilisateurs", adminOnly: true },
-        { to: "/permissions", label: "Permissions", adminOnly: true }
+      type NavSection = {
+        id: string;
+        label: string;
+        tooltip: string;
+        links: NavLinkItem[];
+      };
+
+      type NavGroup = {
+        id: string;
+        label: string;
+        tooltip: string;
+        sections: NavSection[];
+      };
+
+      const groups: NavGroup[] = [
+        {
+          id: "habillement",
+          label: "Habillement",
+          tooltip: "Accéder aux fonctionnalités d'habillement",
+          sections: [
+            {
+              id: "habillement-operations",
+              label: "Opérations",
+              tooltip: "Outils de suivi du stock d'habillement",
+              links: [
+                {
+                  to: "/",
+                  label: "Vue d'ensemble",
+                  tooltip: "Consulter le tableau de bord habillement"
+                },
+                {
+                  to: "/barcode",
+                  label: "Codes-barres",
+                  tooltip: "Générer et scanner les codes-barres d'habillement"
+                },
+                {
+                  to: "/reports",
+                  label: "Rapports",
+                  tooltip: "Analyser les rapports d'habillement"
+                }
+              ]
+            },
+            {
+              id: "habillement-ressources",
+              label: "Ressources",
+              tooltip: "Référentiels liés à l'habillement",
+              links: [
+                {
+                  to: "/suppliers",
+                  label: "Fournisseurs",
+                  tooltip: "Gérer les fournisseurs d'habillement",
+                  module: "suppliers"
+                },
+                {
+                  to: "/collaborators",
+                  label: "Collaborateurs",
+                  tooltip: "Suivre les collaborateurs et leurs dotations",
+                  module: "dotations"
+                },
+                {
+                  to: "/dotations",
+                  label: "Dotations",
+                  tooltip: "Attribuer les dotations d'habillement",
+                  module: "dotations"
+                }
+              ]
+            },
+            {
+              id: "habillement-administration",
+              label: "Administration",
+              tooltip: "Paramétrer votre environnement d'habillement",
+              links: [
+                {
+                  to: "/settings",
+                  label: "Paramètres",
+                  tooltip: "Configurer les paramètres généraux"
+                },
+                {
+                  to: "/users",
+                  label: "Utilisateurs",
+                  tooltip: "Administrer les comptes utilisateurs",
+                  adminOnly: true
+                },
+                {
+                  to: "/permissions",
+                  label: "Permissions",
+                  tooltip: "Gérer les droits d'accès",
+                  adminOnly: true
+                }
+              ]
+            }
+          ]
+        },
+        {
+          id: "pharmacie",
+          label: "Pharmacie",
+          tooltip: "Accéder aux fonctionnalités de pharmacie",
+          sections: [
+            {
+              id: "pharmacie-operations",
+              label: "Opérations",
+              tooltip: "Outils de suivi du stock de pharmacie",
+              links: [
+                {
+                  to: "/pharmacy",
+                  label: "Vue d'ensemble pharmacie",
+                  tooltip: "Consulter le tableau de bord pharmacie",
+                  module: "pharmacy"
+                }
+              ]
+            }
+          ]
+        }
       ];
 
       if (!user) {
         return [];
       }
 
-      return baseLinks.filter((link) => {
-        if (link.adminOnly) {
-          return user?.role === "admin";
-        }
-        if (!link.module) {
-          return true;
-        }
-        if (user.role === "admin") {
-          return true;
-        }
-        return modulePermissions.canAccess(link.module);
-      });
+      return groups
+        .map((group) => ({
+          ...group,
+          sections: group.sections
+            .map((section) => ({
+              ...section,
+              links: section.links.filter((link) => {
+                if (link.adminOnly) {
+                  return user?.role === "admin";
+                }
+                if (!link.module) {
+                  return true;
+                }
+                if (user.role === "admin") {
+                  return true;
+                }
+                return modulePermissions.canAccess(link.module);
+              })
+            }))
+            .filter((section) => section.links.length > 0)
+        }))
+        .filter((group) => group.sections.length > 0);
     },
-    [modulePermissions.canAccess, user?.role]
+    [modulePermissions.canAccess, user]
   );
+
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
+    habillement: true,
+    pharmacie: false
+  });
+
+  const toggleGroup = (groupId: string) => {
+    setOpenGroups((prev) => ({
+      ...prev,
+      [groupId]: !prev[groupId]
+    }));
+  };
 
   if (!isReady || isCheckingSession) {
     return (
@@ -81,18 +206,52 @@ export function AppLayout() {
         <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
           Gestion Stock Pro
         </Link>
-        <nav className="mt-8 flex flex-col gap-2 text-sm">
-          {navigationLinks.map((link) => (
-            <NavLink
-              key={link.to}
-              to={link.to}
-              end={link.to === "/"}
-              className={({ isActive }) => navClass(isActive)}
-              title={`Accéder à la section ${link.label}`}
-            >
-              {link.label}
-            </NavLink>
-          ))}
+        <nav className="mt-8 flex flex-col gap-4 text-sm">
+          {navigationGroups.map((group) => {
+            const isOpen = openGroups[group.id] ?? false;
+
+            return (
+              <div key={group.id}>
+                <button
+                  type="button"
+                  onClick={() => toggleGroup(group.id)}
+                  className="flex w-full items-center justify-between rounded-md px-3 py-2 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+                  aria-expanded={isOpen}
+                  title={group.tooltip}
+                >
+                  <span>{group.label}</span>
+                  <span aria-hidden>{isOpen ? "−" : "+"}</span>
+                </button>
+                {isOpen ? (
+                  <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
+                    {group.sections.map((section) => (
+                      <div key={section.id}>
+                        <p
+                          className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                          title={section.tooltip}
+                        >
+                          {section.label}
+                        </p>
+                        <div className="mt-2 flex flex-col gap-1">
+                          {section.links.map((link) => (
+                            <NavLink
+                              key={link.to}
+                              to={link.to}
+                              end={link.to === "/"}
+                              className={({ isActive }) => navClass(isActive)}
+                              title={link.tooltip}
+                            >
+                              {link.label}
+                            </NavLink>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
         </nav>
         {modulePermissions.isLoading && user?.role !== "admin" ? (
           <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
