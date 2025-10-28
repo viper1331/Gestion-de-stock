@@ -523,6 +523,15 @@ def delete_item(item_id: int) -> None:
         conn.commit()
 
 
+def _normalize_barcode(barcode: str | None) -> str | None:
+    if barcode is None:
+        return None
+    normalized = barcode.strip()
+    if not normalized:
+        raise ValueError("Le code-barres ne peut pas être vide")
+    return normalized.upper()
+
+
 def _normalize_sizes(sizes: Iterable[str]) -> list[str]:
     unique: dict[str, str] = {}
     for raw in sizes:
