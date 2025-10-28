@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+from datetime import date, datetime, timedelta
 from pathlib import Path
 from typing import Iterable, Optional
 
@@ -18,6 +19,41 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("pharmacy", "Pharmacie"),
 )
 _AVAILABLE_MODULE_KEYS: set[str] = {key for key, _ in _AVAILABLE_MODULE_DEFINITIONS}
+
+
+def _parse_date(value: object) -> date | None:
+    if value is None:
+        return None
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str):
+        value = value.strip()
+        if not value:
+            return None
+        try:
+            return date.fromisoformat(value)
+        except ValueError:
+            try:
+                return datetime.fromisoformat(value).date()
+            except ValueError:
+                return None
+    return None
+
+
+def _ensure_date(value: object, *, fallback: date | None = None) -> date:
+    parsed = _parse_date(value)
+    if parsed is not None:
+        return parsed
+    return fallback or date.today()
+
+
+def _is_obsolete(perceived_at: date | None, *, reference: date | None = None) -> bool:
+    if perceived_at is None:
+        return False
+    limit = (reference or date.today()) - timedelta(days=365)
+    return perceived_at <= limit
 
 
 def ensure_database_ready() -> None:
@@ -81,6 +117,18 @@ def _apply_schema_migrations() -> None:
             conn.execute(
                 "ALTER TABLE purchase_order_items ADD COLUMN quantity_received INTEGER NOT NULL DEFAULT 0"
             )
+
+        dotation_info = conn.execute("PRAGMA table_info(dotations)").fetchall()
+        dotation_columns = {row["name"] for row in dotation_info}
+        if "perceived_at" not in dotation_columns:
+            conn.execute("ALTER TABLE dotations ADD COLUMN perceived_at DATE DEFAULT CURRENT_DATE")
+        if "is_lost" not in dotation_columns:
+            conn.execute("ALTER TABLE dotations ADD COLUMN is_lost INTEGER NOT NULL DEFAULT 0")
+        if "is_degraded" not in dotation_columns:
+            conn.execute("ALTER TABLE dotations ADD COLUMN is_degraded INTEGER NOT NULL DEFAULT 0")
+        conn.execute(
+            "UPDATE dotations SET perceived_at = DATE(allocated_at) WHERE perceived_at IS NULL OR perceived_at = ''"
+        )
 
         conn.commit()
 
@@ -794,17 +842,27 @@ def list_dotations(
     query += " ORDER BY allocated_at DESC"
     with db.get_stock_connection() as conn:
         cur = conn.execute(query, tuple(params))
-        return [
-            models.Dotation(
-                id=row["id"],
-                collaborator_id=row["collaborator_id"],
-                item_id=row["item_id"],
-                quantity=row["quantity"],
-                notes=row["notes"],
-                allocated_at=row["allocated_at"],
+        rows = cur.fetchall()
+        dotations: list[models.Dotation] = []
+        for row in rows:
+            allocated_at_value = row["allocated_at"]
+            allocated_date = _ensure_date(allocated_at_value)
+            perceived_at = _ensure_date(row["perceived_at"], fallback=allocated_date)
+            dotations.append(
+                models.Dotation(
+                    id=row["id"],
+                    collaborator_id=row["collaborator_id"],
+                    item_id=row["item_id"],
+                    quantity=row["quantity"],
+                    notes=row["notes"],
+                    perceived_at=perceived_at,
+                    is_lost=bool(row["is_lost"]),
+                    is_degraded=bool(row["is_degraded"]),
+                    allocated_at=allocated_at_value,
+                    is_obsolete=_is_obsolete(perceived_at),
+                )
             )
-            for row in cur.fetchall()
-        ]
+        return dotations
 
 
 def get_dotation(dotation_id: int) -> models.Dotation:
@@ -814,13 +872,20 @@ def get_dotation(dotation_id: int) -> models.Dotation:
         row = cur.fetchone()
         if row is None:
             raise ValueError("Dotation introuvable")
+        allocated_at_value = row["allocated_at"]
+        allocated_date = _ensure_date(allocated_at_value)
+        perceived_at = _ensure_date(row["perceived_at"], fallback=allocated_date)
         return models.Dotation(
             id=row["id"],
             collaborator_id=row["collaborator_id"],
             item_id=row["item_id"],
             quantity=row["quantity"],
             notes=row["notes"],
-            allocated_at=row["allocated_at"],
+            perceived_at=perceived_at,
+            is_lost=bool(row["is_lost"]),
+            is_degraded=bool(row["is_degraded"]),
+            allocated_at=allocated_at_value,
+            is_obsolete=_is_obsolete(perceived_at),
         )
 
 
@@ -845,14 +910,25 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
 
         cur = conn.execute(
             """
-            INSERT INTO dotations (collaborator_id, item_id, quantity, notes)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO dotations (
+                collaborator_id,
+                item_id,
+                quantity,
+                notes,
+                perceived_at,
+                is_lost,
+                is_degraded
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.collaborator_id,
                 payload.item_id,
                 payload.quantity,
                 payload.notes,
+                payload.perceived_at.isoformat(),
+                int(payload.is_lost),
+                int(payload.is_degraded),
             ),
         )
         conn.execute(

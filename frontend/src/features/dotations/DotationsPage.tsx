@@ -24,7 +24,11 @@ interface Dotation {
   item_id: number;
   quantity: number;
   notes: string | null;
+  perceived_at: string;
+  is_lost: boolean;
+  is_degraded: boolean;
   allocated_at: string;
+  is_obsolete: boolean;
 }
 
 interface DotationFormValues {
@@ -32,6 +36,9 @@ interface DotationFormValues {
   item_id: string;
   quantity: number;
   notes: string;
+  perceived_at: string;
+  is_lost: boolean;
+  is_degraded: boolean;
 }
 
 export function DotationsPage() {
@@ -41,12 +48,16 @@ export function DotationsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<{ collaborator: string; item: string }>({ collaborator: "all", item: "all" });
-  const [formValues, setFormValues] = useState<DotationFormValues>({
+  const buildDefaultFormValues = () => ({
     collaborator_id: "",
     item_id: "",
     quantity: 1,
-    notes: ""
+    notes: "",
+    perceived_at: new Date().toISOString().slice(0, 10),
+    is_lost: false,
+    is_degraded: false
   });
+  const [formValues, setFormValues] = useState<DotationFormValues>(() => buildDefaultFormValues());
 
   const canView = user?.role === "admin" || modulePermissions.canAccess("dotations");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("dotations", "edit");
@@ -86,7 +97,15 @@ export function DotationsPage() {
   });
 
   const createDotation = useMutation({
-    mutationFn: async (payload: { collaborator_id: number; item_id: number; quantity: number; notes: string | null }) => {
+    mutationFn: async (payload: {
+      collaborator_id: number;
+      item_id: number;
+      quantity: number;
+      notes: string | null;
+      perceived_at: string;
+      is_lost: boolean;
+      is_degraded: boolean;
+    }) => {
       await api.post("/dotations/dotations", payload);
     },
     onSuccess: async () => {
@@ -167,13 +186,17 @@ export function DotationsPage() {
     }
     setMessage(null);
     setError(null);
+    const perceived_at = formValues.perceived_at || new Date().toISOString().slice(0, 10);
     await createDotation.mutateAsync({
       collaborator_id: Number(formValues.collaborator_id),
       item_id: Number(formValues.item_id),
       quantity: formValues.quantity,
-      notes: formValues.notes.trim() ? formValues.notes.trim() : null
+      notes: formValues.notes.trim() ? formValues.notes.trim() : null,
+      perceived_at,
+      is_lost: formValues.is_lost,
+      is_degraded: formValues.is_degraded
     });
-    setFormValues({ collaborator_id: "", item_id: "", quantity: 1, notes: "" });
+    setFormValues(buildDefaultFormValues());
   };
 
   return (
@@ -237,7 +260,9 @@ export function DotationsPage() {
                   <th className="px-4 py-3 text-left">Article</th>
                   <th className="px-4 py-3 text-left">Quantité</th>
                   <th className="px-4 py-3 text-left">Notes</th>
-                  <th className="px-4 py-3 text-left">Date</th>
+                  <th className="px-4 py-3 text-left">Perçue le</th>
+                  <th className="px-4 py-3 text-left">Enregistrée le</th>
+                  <th className="px-4 py-3 text-left">Alertes</th>
                   {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
                 </tr>
               </thead>
@@ -245,13 +270,57 @@ export function DotationsPage() {
                 {dotations.map((dotation) => {
                   const collaborator = collaboratorById.get(dotation.collaborator_id);
                   const item = itemById.get(dotation.item_id);
+                  const rowClassName = [
+                    "bg-slate-950 text-sm text-slate-100",
+                    dotation.is_obsolete ? "bg-amber-950/40" : "",
+                    dotation.is_lost ? "ring-1 ring-red-500/50" : "",
+                    !dotation.is_obsolete && dotation.is_degraded ? "bg-amber-900/20" : ""
+                  ]
+                    .filter(Boolean)
+                    .join(" ");
+                  const alerts: Array<{ key: string; label: string; className: string }> = [];
+                  if (dotation.is_obsolete) {
+                    alerts.push({
+                      key: "obsolete",
+                      label: "Vétusté",
+                      className: "rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-300"
+                    });
+                  }
+                  if (dotation.is_lost) {
+                    alerts.push({
+                      key: "lost",
+                      label: "Perte",
+                      className: "rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-red-300"
+                    });
+                  }
+                  if (dotation.is_degraded) {
+                    alerts.push({
+                      key: "degraded",
+                      label: "Dégradation",
+                      className: "rounded border border-orange-500/40 bg-orange-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-orange-300"
+                    });
+                  }
                   return (
-                    <tr key={dotation.id} className="bg-slate-950 text-sm text-slate-100">
+                    <tr key={dotation.id} className={rowClassName}>
                       <td className="px-4 py-3 font-medium">{collaborator?.full_name ?? `#${dotation.collaborator_id}`}</td>
                       <td className="px-4 py-3 text-slate-300">{item ? `${item.name} (${item.sku})` : `#${dotation.item_id}`}</td>
                       <td className="px-4 py-3 font-semibold">{dotation.quantity}</td>
                       <td className="px-4 py-3 text-slate-300">{dotation.notes ?? "-"}</td>
+                      <td className="px-4 py-3 text-slate-300">{formatDateOnly(dotation.perceived_at)}</td>
                       <td className="px-4 py-3 text-slate-300">{formatDate(dotation.allocated_at)}</td>
+                      <td className="px-4 py-3 text-slate-300">
+                        <div className="flex flex-wrap gap-2">
+                          {alerts.length > 0 ? (
+                            alerts.map((alert) => (
+                              <span key={alert.key} className={alert.className}>
+                                {alert.label}
+                              </span>
+                            ))
+                          ) : (
+                            <span className="text-xs text-slate-500">RAS</span>
+                          )}
+                        </div>
+                      </td>
                       {canEdit ? (
                         <td className="px-4 py-3 text-xs">
                           <button
@@ -347,6 +416,20 @@ export function DotationsPage() {
                 />
               </div>
               <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-perceived-at">
+                  Date de perception
+                </label>
+                <input
+                  id="dotation-perceived-at"
+                  type="date"
+                  value={formValues.perceived_at}
+                  onChange={(event) => setFormValues((prev) => ({ ...prev, perceived_at: event.target.value }))}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  required
+                  title="Date de remise au collaborateur"
+                />
+              </div>
+              <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-notes">
                   Notes
                 </label>
@@ -359,6 +442,35 @@ export function DotationsPage() {
                   placeholder="Optionnel"
                   title="Ajoutez des précisions (numéro de série, conditions, etc.)"
                 />
+              </div>
+              <div className="flex items-center gap-4">
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor="dotation-lost">
+                  <input
+                    id="dotation-lost"
+                    type="checkbox"
+                    checked={formValues.is_lost}
+                    onChange={(event) =>
+                      setFormValues((prev) => ({ ...prev, is_lost: event.target.checked }))
+                    }
+                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                  />
+                  Perte déclarée
+                </label>
+                <label
+                  className="flex items-center gap-2 text-xs font-semibold text-slate-300"
+                  htmlFor="dotation-degraded"
+                >
+                  <input
+                    id="dotation-degraded"
+                    type="checkbox"
+                    checked={formValues.is_degraded}
+                    onChange={(event) =>
+                      setFormValues((prev) => ({ ...prev, is_degraded: event.target.checked }))
+                    }
+                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                  />
+                  Dégradation constatée
+                </label>
               </div>
               <button
                 type="submit"
@@ -383,6 +495,14 @@ export function DotationsPage() {
 function formatDate(value: string) {
   try {
     return new Intl.DateTimeFormat("fr-FR", { dateStyle: "short", timeStyle: "short" }).format(new Date(value));
+  } catch (error) {
+    return value;
+  }
+}
+
+function formatDateOnly(value: string) {
+  try {
+    return new Intl.DateTimeFormat("fr-FR", { dateStyle: "short" }).format(new Date(value));
   } catch (error) {
     return value;
   }

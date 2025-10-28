@@ -504,6 +504,11 @@ def test_dotation_flow_updates_stock() -> None:
     )
     assert dotation.status_code == 201, dotation.text
     dotation_id = dotation.json()["id"]
+    dotation_data = dotation.json()
+    assert dotation_data["is_lost"] is False
+    assert dotation_data["is_degraded"] is False
+    assert dotation_data["is_obsolete"] is False
+    assert dotation_data["perceived_at"]
 
     after_allocation = services.get_item(item_id)
     assert after_allocation.quantity == initial_quantity - 2
@@ -521,7 +526,9 @@ def test_dotation_flow_updates_stock() -> None:
         f"/dotations/dotations?collaborator_id={collaborator_id}", headers=admin_headers
     )
     assert listed.status_code == 200
-    assert len(listed.json()) == 1
+    listed_payload = listed.json()
+    assert len(listed_payload) == 1
+    assert listed_payload[0]["is_obsolete"] is False
 
     delete = client.delete(
         f"/dotations/dotations/{dotation_id}?restock=1",
@@ -541,6 +548,55 @@ def test_dotation_flow_updates_stock() -> None:
         "Dotation - Alice",
         "Retour dotation - Alice",
     }
+
+
+def test_dotation_obsolete_and_alerts() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    item_sku = f"SKU-{uuid4().hex[:6]}"
+
+    created_item = client.post(
+        "/items/",
+        json={"name": "Casque", "sku": item_sku, "quantity": 3},
+        headers=admin_headers,
+    )
+    assert created_item.status_code == 201, created_item.text
+    item_id = created_item.json()["id"]
+
+    collaborator = client.post(
+        "/dotations/collaborators",
+        json={"full_name": "Bob"},
+        headers=admin_headers,
+    )
+    assert collaborator.status_code == 201, collaborator.text
+    collaborator_id = collaborator.json()["id"]
+
+    perceived_at = "2020-01-01"
+    dotation = client.post(
+        "/dotations/dotations",
+        json={
+            "collaborator_id": collaborator_id,
+            "item_id": item_id,
+            "quantity": 1,
+            "perceived_at": perceived_at,
+            "is_lost": True,
+            "is_degraded": False,
+        },
+        headers=admin_headers,
+    )
+    assert dotation.status_code == 201, dotation.text
+    dotation_body = dotation.json()
+    assert dotation_body["is_lost"] is True
+    assert dotation_body["is_degraded"] is False
+    assert dotation_body["perceived_at"] == perceived_at
+    assert dotation_body["is_obsolete"] is True
+
+    listing = client.get("/dotations/dotations", headers=admin_headers)
+    assert listing.status_code == 200, listing.text
+    records = listing.json()
+    created = next(entry for entry in records if entry["id"] == dotation_body["id"])
+    assert created["is_obsolete"] is True
+    assert created["is_lost"] is True
 
 
 def test_pharmacy_crud_cycle() -> None:

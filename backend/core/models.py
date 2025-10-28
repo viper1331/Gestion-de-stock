@@ -188,6 +188,9 @@ class DotationBase(BaseModel):
     item_id: int
     quantity: int = Field(..., gt=0)
     notes: Optional[str] = Field(default=None, max_length=256)
+    perceived_at: date = Field(default_factory=date.today)
+    is_lost: bool = False
+    is_degraded: bool = False
 
 
 class DotationCreate(DotationBase):
@@ -197,6 +200,7 @@ class DotationCreate(DotationBase):
 class Dotation(DotationBase):
     id: int
     allocated_at: datetime
+    is_obsolete: bool = False
 
 
 class PharmacyItemBase(BaseModel):
