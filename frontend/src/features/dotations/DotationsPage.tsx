@@ -41,6 +41,15 @@ interface DotationFormValues {
   is_degraded: boolean;
 }
 
+interface DotationEditFormValues {
+  item_id: string;
+  quantity: number;
+  notes: string;
+  perceived_at: string;
+  is_lost: boolean;
+  is_degraded: boolean;
+}
+
 export function DotationsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -58,6 +67,8 @@ export function DotationsPage() {
     is_degraded: false
   });
   const [formValues, setFormValues] = useState<DotationFormValues>(() => buildDefaultFormValues());
+  const [editingDotationId, setEditingDotationId] = useState<number | null>(null);
+  const [editFormValues, setEditFormValues] = useState<DotationEditFormValues | null>(null);
 
   const canView = user?.role === "admin" || modulePermissions.canAccess("dotations");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("dotations", "edit");
@@ -142,6 +153,40 @@ export function DotationsPage() {
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
+  const updateDotation = useMutation({
+    mutationFn: async ({
+      id,
+      payload
+    }: {
+      id: number;
+      payload: {
+        item_id: number;
+        quantity: number;
+        notes: string | null;
+        perceived_at: string;
+        is_lost: boolean;
+        is_degraded: boolean;
+      };
+    }) => {
+      await api.put(`/dotations/dotations/${id}`, payload);
+    },
+    onSuccess: async () => {
+      setMessage("Dotation mise à jour.");
+      setEditingDotationId(null);
+      setEditFormValues(null);
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dotations", "list"], exact: false }),
+        queryClient.invalidateQueries({ queryKey: ["items"], exact: false }),
+        queryClient.invalidateQueries({ queryKey: ["reports"], exact: false })
+      ]);
+    },
+    onError: (err: AxiosError<{ detail?: string }>) => {
+      const detail = err.response?.data?.detail;
+      setError(detail ?? "Impossible de mettre à jour la dotation.");
+    },
+    onSettled: () => setTimeout(() => setMessage(null), 4000)
+  });
+
   const collaboratorById = useMemo(() => {
     return new Map(collaborators.map((collaborator) => [collaborator.id, collaborator]));
   }, [collaborators]);
@@ -149,6 +194,33 @@ export function DotationsPage() {
   const itemById = useMemo(() => {
     return new Map(items.map((item) => [item.id, item]));
   }, [items]);
+
+  const groupedDotations = useMemo(() => {
+    const groups = new Map<
+      number,
+      {
+        collaborator: Collaborator | undefined;
+        dotations: Dotation[];
+      }
+    >();
+    for (const dotation of dotations) {
+      const collaborator = collaboratorById.get(dotation.collaborator_id);
+      if (!groups.has(dotation.collaborator_id)) {
+        groups.set(dotation.collaborator_id, {
+          collaborator,
+          dotations: []
+        });
+      }
+      groups.get(dotation.collaborator_id)?.dotations.push(dotation);
+    }
+    return Array.from(groups.entries())
+      .map(([collaboratorId, value]) => ({ collaboratorId, ...value }))
+      .sort((a, b) => {
+        const labelA = a.collaborator?.full_name ?? `#${a.collaboratorId}`;
+        const labelB = b.collaborator?.full_name ?? `#${b.collaboratorId}`;
+        return labelA.localeCompare(labelB, "fr");
+      });
+  }, [dotations, collaboratorById]);
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
     return (
@@ -197,6 +269,54 @@ export function DotationsPage() {
       is_degraded: formValues.is_degraded
     });
     setFormValues(buildDefaultFormValues());
+  };
+
+  const handleStartEditing = (dotation: Dotation) => {
+    setMessage(null);
+    setError(null);
+    setEditingDotationId(dotation.id);
+    setEditFormValues({
+      item_id: dotation.item_id.toString(),
+      quantity: dotation.quantity,
+      notes: dotation.notes ?? "",
+      perceived_at: dotation.perceived_at.slice(0, 10),
+      is_lost: dotation.is_lost,
+      is_degraded: dotation.is_degraded
+    });
+  };
+
+  const handleCancelEditing = () => {
+    setEditingDotationId(null);
+    setEditFormValues(null);
+  };
+
+  const handleUpdateSubmit = async (event: FormEvent<HTMLFormElement>, dotation: Dotation) => {
+    event.preventDefault();
+    if (!editFormValues) {
+      return;
+    }
+    if (!editFormValues.item_id) {
+      setError("Veuillez sélectionner un article.");
+      return;
+    }
+    if (editFormValues.quantity <= 0) {
+      setError("La quantité doit être positive.");
+      return;
+    }
+    setMessage(null);
+    setError(null);
+    const perceived_at = editFormValues.perceived_at || new Date().toISOString().slice(0, 10);
+    await updateDotation.mutateAsync({
+      id: dotation.id,
+      payload: {
+        item_id: Number(editFormValues.item_id),
+        quantity: editFormValues.quantity,
+        notes: editFormValues.notes.trim() ? editFormValues.notes.trim() : null,
+        perceived_at,
+        is_lost: editFormValues.is_lost,
+        is_degraded: editFormValues.is_degraded
+      }
+    });
   };
 
   return (
@@ -250,34 +370,30 @@ export function DotationsPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
-          <div className="overflow-hidden rounded-lg border border-slate-800">
-            <table className="min-w-full divide-y divide-slate-800">
-              <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-4 py-3 text-left">Collaborateur</th>
-                  <th className="px-4 py-3 text-left">Article</th>
-                  <th className="px-4 py-3 text-left">Quantité</th>
-                  <th className="px-4 py-3 text-left">Notes</th>
-                  <th className="px-4 py-3 text-left">Perçue le</th>
-                  <th className="px-4 py-3 text-left">Enregistrée le</th>
-                  <th className="px-4 py-3 text-left">Alertes</th>
-                  {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900">
-                {dotations.map((dotation) => {
-                  const collaborator = collaboratorById.get(dotation.collaborator_id);
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
+        <div className="space-y-5">
+          {isFetching ? <p className="text-xs text-slate-400">Actualisation des dotations...</p> : null}
+          {groupedDotations.length === 0 ? (
+            <p className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-6 text-sm text-slate-400">
+              Aucune dotation enregistrée pour le moment.
+            </p>
+          ) : null}
+          {groupedDotations.map(({ collaboratorId, collaborator, dotations: collaboratorDotations }) => (
+            <article key={collaboratorId} className="space-y-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
+              <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
+                <div>
+                  <h3 className="text-lg font-semibold text-white">
+                    {collaborator?.full_name ?? `Collaborateur #${collaboratorId}`}
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    {collaboratorDotations.length} article{collaboratorDotations.length > 1 ? "s" : ""} attribué{collaboratorDotations.length > 1 ? "s" : ""}
+                  </p>
+                </div>
+              </header>
+              <ul className="space-y-3">
+                {collaboratorDotations.map((dotation) => {
                   const item = itemById.get(dotation.item_id);
-                  const rowClassName = [
-                    "bg-slate-950 text-sm text-slate-100",
-                    dotation.is_obsolete ? "bg-amber-950/40" : "",
-                    dotation.is_lost ? "ring-1 ring-red-500/50" : "",
-                    !dotation.is_obsolete && dotation.is_degraded ? "bg-amber-900/20" : ""
-                  ]
-                    .filter(Boolean)
-                    .join(" ");
+                  const isEditing = editingDotationId === dotation.id && editFormValues;
                   const alerts: Array<{ key: string; label: string; className: string }> = [];
                   if (dotation.is_obsolete) {
                     alerts.push({
@@ -301,14 +417,14 @@ export function DotationsPage() {
                     });
                   }
                   return (
-                    <tr key={dotation.id} className={rowClassName}>
-                      <td className="px-4 py-3 font-medium">{collaborator?.full_name ?? `#${dotation.collaborator_id}`}</td>
-                      <td className="px-4 py-3 text-slate-300">{item ? `${item.name} (${item.sku})` : `#${dotation.item_id}`}</td>
-                      <td className="px-4 py-3 font-semibold">{dotation.quantity}</td>
-                      <td className="px-4 py-3 text-slate-300">{dotation.notes ?? "-"}</td>
-                      <td className="px-4 py-3 text-slate-300">{formatDateOnly(dotation.perceived_at)}</td>
-                      <td className="px-4 py-3 text-slate-300">{formatDate(dotation.allocated_at)}</td>
-                      <td className="px-4 py-3 text-slate-300">
+                    <li key={dotation.id} className="rounded border border-slate-800 bg-slate-900/40 p-4">
+                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+                        <div>
+                          <p className="text-sm font-semibold text-white">
+                            {item ? `${item.name} (${item.sku})` : `Article #${dotation.item_id}`}
+                          </p>
+                          <p className="text-xs text-slate-400">Dotation créée le {formatDate(dotation.allocated_at)}</p>
+                        </div>
                         <div className="flex flex-wrap gap-2">
                           {alerts.length > 0 ? (
                             alerts.map((alert) => (
@@ -317,39 +433,219 @@ export function DotationsPage() {
                               </span>
                             ))
                           ) : (
-                            <span className="text-xs text-slate-500">RAS</span>
+                            <span className="rounded border border-slate-800 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-400">
+                              RAS
+                            </span>
                           )}
                         </div>
-                      </td>
+                      </div>
+                      <dl className="mt-3 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-slate-500">Quantité</dt>
+                          <dd className="font-semibold text-white">{dotation.quantity}</dd>
+                        </div>
+                        <div>
+                          <dt className="text-xs uppercase tracking-wide text-slate-500">Perçue le</dt>
+                          <dd>{formatDateOnly(dotation.perceived_at)}</dd>
+                        </div>
+                        <div className="sm:col-span-2">
+                          <dt className="text-xs uppercase tracking-wide text-slate-500">Notes</dt>
+                          <dd>{dotation.notes ? dotation.notes : <span className="text-slate-500">-</span>}</dd>
+                        </div>
+                      </dl>
                       {canEdit ? (
-                        <td className="px-4 py-3 text-xs">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!window.confirm("Supprimer cette dotation ?")) {
-                                return;
-                              }
-                              const restock = window.confirm(
-                                "Faut-il réintégrer les quantités au stock ?\nOK pour réintégrer, Annuler pour ignorer."
-                              );
-                              setMessage(null);
-                              setError(null);
-                              void deleteDotation.mutateAsync({ id: dotation.id, restock });
-                            }}
-                            className="rounded bg-red-600 px-3 py-1 font-semibold text-white hover:bg-red-500"
-                            title="Supprimer la dotation et éventuellement réintégrer le stock"
-                          >
-                            Supprimer
-                          </button>
-                        </td>
+                        <div className="mt-4 space-y-3">
+                          {isEditing ? (
+                            <form
+                              className="space-y-3 rounded border border-slate-800 bg-slate-950 p-3"
+                              onSubmit={(event) => void handleUpdateSubmit(event, dotation)}
+                            >
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-item-${dotation.id}`}>
+                                  Article attribué
+                                </label>
+                                <select
+                                  id={`edit-item-${dotation.id}`}
+                                  value={editFormValues?.item_id ?? ""}
+                                  onChange={(event) =>
+                                    setEditFormValues((prev) =>
+                                      prev
+                                        ? {
+                                            ...prev,
+                                            item_id: event.target.value
+                                          }
+                                        : prev
+                                    )
+                                  }
+                                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                                >
+                                  <option value="">Sélectionner...</option>
+                                  {items.map((option) => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.name} - Stock: {option.quantity}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              <div className="grid gap-3 sm:grid-cols-2">
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-quantity-${dotation.id}`}>
+                                    Quantité
+                                  </label>
+                                  <input
+                                    id={`edit-quantity-${dotation.id}`}
+                                    type="number"
+                                    min={1}
+                                    value={editFormValues?.quantity ?? dotation.quantity}
+                                    onChange={(event) =>
+                                      setEditFormValues((prev) =>
+                                        prev
+                                          ? {
+                                              ...prev,
+                                              quantity: Number(event.target.value)
+                                            }
+                                          : prev
+                                      )
+                                    }
+                                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                                  />
+                                </div>
+                                <div className="space-y-1">
+                                  <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-perceived-${dotation.id}`}>
+                                    Date de perception
+                                  </label>
+                                  <input
+                                    id={`edit-perceived-${dotation.id}`}
+                                    type="date"
+                                    value={editFormValues?.perceived_at ?? dotation.perceived_at.slice(0, 10)}
+                                    onChange={(event) =>
+                                      setEditFormValues((prev) =>
+                                        prev
+                                          ? {
+                                              ...prev,
+                                              perceived_at: event.target.value
+                                            }
+                                          : prev
+                                      )
+                                    }
+                                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                                  />
+                                </div>
+                              </div>
+                              <div className="space-y-1">
+                                <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-notes-${dotation.id}`}>
+                                  Notes
+                                </label>
+                                <textarea
+                                  id={`edit-notes-${dotation.id}`}
+                                  rows={3}
+                                  value={editFormValues?.notes ?? dotation.notes ?? ""}
+                                  onChange={(event) =>
+                                    setEditFormValues((prev) =>
+                                      prev
+                                        ? {
+                                            ...prev,
+                                            notes: event.target.value
+                                          }
+                                        : prev
+                                    )
+                                  }
+                                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                                />
+                              </div>
+                              <div className="flex flex-wrap items-center gap-4">
+                                <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-lost-${dotation.id}`}>
+                                  <input
+                                    id={`edit-lost-${dotation.id}`}
+                                    type="checkbox"
+                                    checked={editFormValues?.is_lost ?? dotation.is_lost}
+                                    onChange={(event) =>
+                                      setEditFormValues((prev) =>
+                                        prev
+                                          ? {
+                                              ...prev,
+                                              is_lost: event.target.checked
+                                            }
+                                          : prev
+                                      )
+                                    }
+                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                                  />
+                                  Perte déclarée
+                                </label>
+                                <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-degraded-${dotation.id}`}>
+                                  <input
+                                    id={`edit-degraded-${dotation.id}`}
+                                    type="checkbox"
+                                    checked={editFormValues?.is_degraded ?? dotation.is_degraded}
+                                    onChange={(event) =>
+                                      setEditFormValues((prev) =>
+                                        prev
+                                          ? {
+                                              ...prev,
+                                              is_degraded: event.target.checked
+                                            }
+                                          : prev
+                                      )
+                                    }
+                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                                  />
+                                  Dégradation constatée
+                                </label>
+                              </div>
+                              <div className="flex flex-wrap items-center gap-3">
+                                <button
+                                  type="submit"
+                                  disabled={updateDotation.isPending}
+                                  className="rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                                >
+                                  {updateDotation.isPending ? "Enregistrement..." : "Enregistrer les modifications"}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={handleCancelEditing}
+                                  className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-slate-500"
+                                >
+                                  Annuler
+                                </button>
+                              </div>
+                            </form>
+                          ) : (
+                            <div className="flex flex-wrap gap-3 text-xs">
+                              <button
+                                type="button"
+                                onClick={() => handleStartEditing(dotation)}
+                                className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-indigo-300 hover:border-indigo-400 hover:text-indigo-200"
+                              >
+                                Modifier
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (!window.confirm("Supprimer cette dotation ?")) {
+                                    return;
+                                  }
+                                  const restock = window.confirm(
+                                    "Faut-il réintégrer les quantités au stock ?\nOK pour réintégrer, Annuler pour ignorer."
+                                  );
+                                  setMessage(null);
+                                  setError(null);
+                                  void deleteDotation.mutateAsync({ id: dotation.id, restock });
+                                }}
+                                className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-red-300 hover:border-red-400 hover:text-red-200"
+                              >
+                                Supprimer
+                              </button>
+                            </div>
+                          )}
+                        </div>
                       ) : null}
-                    </tr>
+                    </li>
                   );
                 })}
-              </tbody>
-            </table>
-          </div>
-          {isFetching ? <p className="mt-2 text-xs text-slate-400">Chargement des dotations...</p> : null}
+              </ul>
+            </article>
+          ))}
         </div>
 
         <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
