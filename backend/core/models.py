@@ -257,6 +257,7 @@ class PharmacyItemBase(BaseModel):
     low_stock_threshold: int = Field(default=5, ge=0)
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
+    category_id: Optional[int] = Field(default=None, gt=0)
 
 
 class PharmacyItemCreate(PharmacyItemBase):
@@ -272,10 +273,40 @@ class PharmacyItemUpdate(BaseModel):
     low_stock_threshold: Optional[int] = Field(default=None, ge=0)
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
+    category_id: Optional[int] = Field(default=None, gt=0)
 
 
 class PharmacyItem(PharmacyItemBase):
     id: int
+
+
+class PharmacyCategory(BaseModel):
+    id: int
+    name: str
+    sizes: list[str] = Field(default_factory=list)
+
+
+class PharmacyCategoryCreate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    sizes: list[str] = Field(default_factory=list)
+
+
+class PharmacyCategoryUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    sizes: Optional[list[str]] = None
+
+
+class PharmacyMovement(BaseModel):
+    id: int
+    pharmacy_item_id: int
+    delta: int
+    reason: str | None = None
+    created_at: datetime
+
+
+class PharmacyMovementCreate(BaseModel):
+    delta: int
+    reason: Optional[str] = None
 
 
 class PharmacyPurchaseOrderItem(BaseModel):

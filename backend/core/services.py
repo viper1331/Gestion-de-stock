@@ -255,8 +255,36 @@ def _apply_schema_migrations() -> None:
                 module TEXT NOT NULL,
                 PRIMARY KEY (supplier_id, module)
             );
+            CREATE TABLE IF NOT EXISTS pharmacy_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS pharmacy_category_sizes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL REFERENCES pharmacy_categories(id) ON DELETE CASCADE,
+                name TEXT NOT NULL COLLATE NOCASE,
+                UNIQUE(category_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS pharmacy_movements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
+                delta INTEGER NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_pharmacy_movements_item ON pharmacy_movements(pharmacy_item_id);
             """
         )
+
+        pharmacy_category_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
+        pharmacy_category_columns = {row["name"] for row in pharmacy_category_info}
+        if "category_id" not in pharmacy_category_columns:
+            conn.execute(
+                """
+                ALTER TABLE pharmacy_items
+                ADD COLUMN category_id INTEGER REFERENCES pharmacy_categories(id) ON DELETE SET NULL
+                """
+            )
 
         conn.commit()
 
@@ -1527,6 +1555,7 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 low_stock_threshold=row["low_stock_threshold"],
                 expiration_date=row["expiration_date"],
                 location=row["location"],
+                category_id=row["category_id"],
             )
             for row in cur.fetchall()
         ]
@@ -1549,6 +1578,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
             low_stock_threshold=row["low_stock_threshold"],
             expiration_date=row["expiration_date"],
             location=row["location"],
+            category_id=row["category_id"],
         )
 
 
@@ -1567,9 +1597,10 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     quantity,
                     low_stock_threshold,
                     expiration_date,
-                    location
+                    location,
+                    category_id
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
@@ -1580,6 +1611,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     payload.low_stock_threshold,
                     payload.expiration_date,
                     payload.location,
+                    payload.category_id,
                 ),
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
@@ -1617,6 +1649,165 @@ def delete_pharmacy_item(item_id: int) -> None:
         if cur.rowcount == 0:
             raise ValueError("Produit pharmaceutique introuvable")
         conn.commit()
+
+
+def list_pharmacy_categories() -> list[models.PharmacyCategory]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id, name FROM pharmacy_categories ORDER BY name COLLATE NOCASE")
+        rows = cur.fetchall()
+        if not rows:
+            return []
+
+        category_ids = [row["id"] for row in rows]
+        sizes_map: dict[int, list[str]] = {category_id: [] for category_id in category_ids}
+        placeholders = ",".join("?" for _ in category_ids)
+        size_rows = conn.execute(
+            f"""
+            SELECT category_id, name
+            FROM pharmacy_category_sizes
+            WHERE category_id IN ({placeholders})
+            ORDER BY name COLLATE NOCASE
+            """,
+            category_ids,
+        ).fetchall()
+        for size_row in size_rows:
+            sizes_map.setdefault(size_row["category_id"], []).append(size_row["name"])
+
+        return [
+            models.PharmacyCategory(
+                id=row["id"],
+                name=row["name"],
+                sizes=sizes_map.get(row["id"], []),
+            )
+            for row in rows
+        ]
+
+
+def get_pharmacy_category(category_id: int) -> models.PharmacyCategory:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id, name FROM pharmacy_categories WHERE id = ?", (category_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Catégorie pharmaceutique introuvable")
+        size_rows = conn.execute(
+            """
+            SELECT name
+            FROM pharmacy_category_sizes
+            WHERE category_id = ?
+            ORDER BY name COLLATE NOCASE
+            """,
+            (category_id,),
+        ).fetchall()
+        return models.PharmacyCategory(
+            id=row["id"],
+            name=row["name"],
+            sizes=[size_row["name"] for size_row in size_rows],
+        )
+
+
+def create_pharmacy_category(payload: models.PharmacyCategoryCreate) -> models.PharmacyCategory:
+    ensure_database_ready()
+    normalized_sizes = _normalize_sizes(payload.sizes)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO pharmacy_categories (name) VALUES (?)",
+            (payload.name,),
+        )
+        category_id = cur.lastrowid
+        if normalized_sizes:
+            conn.executemany(
+                "INSERT INTO pharmacy_category_sizes (category_id, name) VALUES (?, ?)",
+                ((category_id, size) for size in normalized_sizes),
+            )
+        conn.commit()
+        return models.PharmacyCategory(id=category_id, name=payload.name, sizes=normalized_sizes)
+
+
+def update_pharmacy_category(
+    category_id: int, payload: models.PharmacyCategoryUpdate
+) -> models.PharmacyCategory:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM pharmacy_categories WHERE id = ?", (category_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Catégorie pharmaceutique introuvable")
+
+        updates: list[str] = []
+        values: list[object] = []
+        if payload.name is not None:
+            updates.append("name = ?")
+            values.append(payload.name)
+        if updates:
+            values.append(category_id)
+            conn.execute(
+                f"UPDATE pharmacy_categories SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+
+        if payload.sizes is not None:
+            conn.execute("DELETE FROM pharmacy_category_sizes WHERE category_id = ?", (category_id,))
+            normalized_sizes = _normalize_sizes(payload.sizes)
+            if normalized_sizes:
+                conn.executemany(
+                    "INSERT INTO pharmacy_category_sizes (category_id, name) VALUES (?, ?)",
+                    ((category_id, size) for size in normalized_sizes),
+                )
+        conn.commit()
+
+    return get_pharmacy_category(category_id)
+
+
+def delete_pharmacy_category(category_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM pharmacy_category_sizes WHERE category_id = ?", (category_id,))
+        conn.execute("DELETE FROM pharmacy_categories WHERE id = ?", (category_id,))
+        conn.commit()
+
+
+def record_pharmacy_movement(item_id: int, payload: models.PharmacyMovementCreate) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT quantity FROM pharmacy_items WHERE id = ?", (item_id,))
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Produit pharmaceutique introuvable")
+
+        conn.execute(
+            "INSERT INTO pharmacy_movements (pharmacy_item_id, delta, reason) VALUES (?, ?, ?)",
+            (item_id, payload.delta, payload.reason),
+        )
+        conn.execute(
+            "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
+            (payload.delta, item_id),
+        )
+        conn.commit()
+
+
+def fetch_pharmacy_movements(item_id: int) -> list[models.PharmacyMovement]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT *
+            FROM pharmacy_movements
+            WHERE pharmacy_item_id = ?
+            ORDER BY created_at DESC
+            """,
+            (item_id,),
+        )
+        return [
+            models.PharmacyMovement(
+                id=row["id"],
+                pharmacy_item_id=row["pharmacy_item_id"],
+                delta=row["delta"],
+                reason=row["reason"],
+                created_at=row["created_at"],
+            )
+            for row in cur.fetchall()
+        ]
 
 
 def _build_pharmacy_purchase_order_detail(
@@ -1822,6 +2013,10 @@ def receive_pharmacy_purchase_order(
                 conn.execute(
                     "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
                     (delta, item_id),
+                )
+                conn.execute(
+                    "INSERT INTO pharmacy_movements (pharmacy_item_id, delta, reason) VALUES (?, ?, ?)",
+                    (item_id, delta, f"Réception bon de commande pharmacie #{order_id}"),
                 )
             totals = conn.execute(
                 """

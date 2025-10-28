@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ColumnManager } from "../../components/ColumnManager";
@@ -20,6 +20,7 @@ interface PharmacyItem {
   low_stock_threshold: number;
   expiration_date: string | null;
   location: string | null;
+  category_id: number | null;
 }
 
 interface PharmacyPayload {
@@ -31,6 +32,26 @@ interface PharmacyPayload {
   low_stock_threshold: number;
   expiration_date: string | null;
   location: string | null;
+  category_id: number | null;
+}
+
+interface PharmacyCategory {
+  id: number;
+  name: string;
+  sizes: string[];
+}
+
+interface PharmacyMovement {
+  id: number;
+  pharmacy_item_id: number;
+  delta: number;
+  reason: string | null;
+  created_at: string;
+}
+
+interface PharmacyMovementPayload {
+  delta: number;
+  reason: string | null;
 }
 
 type PharmacyColumnKey =
@@ -41,7 +62,8 @@ type PharmacyColumnKey =
   | "quantity"
   | "low_stock_threshold"
   | "expiration"
-  | "location";
+  | "location"
+  | "category";
 
 const PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY = "gsp/pharmacy-column-visibility";
 
@@ -53,7 +75,8 @@ const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
   quantity: true,
   low_stock_threshold: true,
   expiration: true,
-  location: true
+  location: true,
+  category: false
 };
 
 const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
@@ -64,7 +87,8 @@ const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
   { key: "quantity", label: "Quantité" },
   { key: "low_stock_threshold", label: "Seuil faible" },
   { key: "expiration", label: "Expiration" },
-  { key: "location", label: "Localisation" }
+  { key: "location", label: "Localisation" },
+  { key: "category", label: "Catégorie" }
 ];
 
 export function PharmacyPage() {
@@ -74,6 +98,7 @@ export function PharmacyPage() {
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [movementItemId, setMovementItemId] = useState<number | null>(null);
 
   const [columnVisibility, setColumnVisibility] = useState<Record<PharmacyColumnKey, boolean>>(() => ({
     ...readPersistedValue<Record<PharmacyColumnKey, boolean>>(
@@ -116,6 +141,30 @@ export function PharmacyPage() {
     enabled: canView
   });
 
+  const { data: categories = [] } = useQuery({
+    queryKey: ["pharmacy-categories"],
+    queryFn: async () => {
+      const response = await api.get<PharmacyCategory[]>("/pharmacy/categories/");
+      return response.data;
+    },
+    enabled: canView
+  });
+
+  useEffect(() => {
+    if (movementItemId === null) {
+      return;
+    }
+    if (!items.some((item) => item.id === movementItemId)) {
+      setMovementItemId(null);
+    }
+  }, [items, movementItemId]);
+
+  const categoryNames = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories]);
+  const selectedMovementItem = useMemo(
+    () => (movementItemId === null ? null : items.find((item) => item.id === movementItemId) ?? null),
+    [items, movementItemId]
+  );
+
   const createItem = useMutation({
     mutationFn: async (payload: PharmacyPayload) => {
       await api.post("/pharmacy/", payload);
@@ -156,6 +205,57 @@ export function PharmacyPage() {
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
+  const recordMovement = useMutation({
+    mutationFn: async ({ itemId, payload }: { itemId: number; payload: PharmacyMovementPayload }) => {
+      await api.post(`/pharmacy/${itemId}/movements`, payload);
+    },
+    onSuccess: async (_, variables) => {
+      setMessage("Mouvement enregistré.");
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy"] });
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-movements", variables.itemId] });
+    },
+    onError: () => setError("Impossible d'enregistrer le mouvement."),
+    onSettled: () => setTimeout(() => setMessage(null), 4000)
+  });
+
+  const createCategory = useMutation({
+    mutationFn: async (payload: { name: string; sizes: string[] }) => {
+      await api.post("/pharmacy/categories/", payload);
+    },
+    onSuccess: async () => {
+      setMessage("Catégorie créée.");
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-categories"] });
+    },
+    onError: () => setError("Impossible de créer la catégorie."),
+    onSettled: () => setTimeout(() => setMessage(null), 4000)
+  });
+
+  const updateCategory = useMutation({
+    mutationFn: async ({ categoryId, payload }: { categoryId: number; payload: { sizes: string[] } }) => {
+      await api.put(`/pharmacy/categories/${categoryId}`, payload);
+    },
+    onSuccess: async () => {
+      setMessage("Catégorie mise à jour.");
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-categories"] });
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy"] });
+    },
+    onError: () => setError("Impossible de mettre à jour la catégorie."),
+    onSettled: () => setTimeout(() => setMessage(null), 4000)
+  });
+
+  const deleteCategory = useMutation({
+    mutationFn: async (categoryId: number) => {
+      await api.delete(`/pharmacy/categories/${categoryId}`);
+    },
+    onSuccess: async () => {
+      setMessage("Catégorie supprimée.");
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-categories"] });
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy"] });
+    },
+    onError: () => setError("Impossible de supprimer la catégorie."),
+    onSettled: () => setTimeout(() => setMessage(null), 4000)
+  });
+
   const apiBaseUrl = (api.defaults.baseURL ?? "").replace(/\/$/, "");
 
   const formValues = useMemo<PharmacyPayload>(() => {
@@ -168,7 +268,8 @@ export function PharmacyPage() {
         quantity: selected.quantity,
         low_stock_threshold: selected.low_stock_threshold,
         expiration_date: selected.expiration_date,
-        location: selected.location
+        location: selected.location,
+        category_id: selected.category_id
       };
     }
     return {
@@ -179,7 +280,8 @@ export function PharmacyPage() {
       quantity: 0,
       low_stock_threshold: DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
       expiration_date: "",
-      location: ""
+      location: "",
+      category_id: null
     };
   }, [formMode, selected]);
 
@@ -211,6 +313,7 @@ export function PharmacyPage() {
     event.preventDefault();
     const formData = new FormData(event.currentTarget);
     const rawThreshold = formData.get("low_stock_threshold");
+    const rawCategory = formData.get("category_id");
     const normalizedThreshold =
       rawThreshold === null || (typeof rawThreshold === "string" && rawThreshold.trim() === "")
         ? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD
@@ -225,7 +328,11 @@ export function PharmacyPage() {
         ? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD
         : normalizedThreshold,
       expiration_date: ((formData.get("expiration_date") as string) || "").trim() || null,
-      location: ((formData.get("location") as string) || "").trim() || null
+      location: ((formData.get("location") as string) || "").trim() || null,
+      category_id:
+        rawCategory === null || (typeof rawCategory === "string" && rawCategory.trim() === "")
+          ? null
+          : Number(rawCategory)
     };
     if (!payload.name) {
       setError("Le nom est obligatoire.");
@@ -298,6 +405,7 @@ export function PharmacyPage() {
                   ) : null}
                   {columnVisibility.expiration !== false ? <th className="px-4 py-3 text-left">Expiration</th> : null}
                   {columnVisibility.location !== false ? <th className="px-4 py-3 text-left">Localisation</th> : null}
+                  {columnVisibility.category !== false ? <th className="px-4 py-3 text-left">Catégorie</th> : null}
                   {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
                 </tr>
               </thead>
@@ -390,6 +498,11 @@ export function PharmacyPage() {
                       {columnVisibility.location !== false ? (
                         <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
                       ) : null}
+                      {columnVisibility.category !== false ? (
+                        <td className="px-4 py-3 text-slate-300">
+                          {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                        </td>
+                      ) : null}
                       {canEdit ? (
                         <td className="px-4 py-3 text-xs text-slate-200">
                           <div className="flex flex-wrap gap-2">
@@ -403,6 +516,16 @@ export function PharmacyPage() {
                               title={`Modifier la fiche de ${item.name}`}
                             >
                               Modifier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setMovementItemId(item.id);
+                              }}
+                              className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                              title={`Enregistrer un mouvement pour ${item.name}`}
+                            >
+                              Mouvement
                             </button>
                             <button
                               type="button"
@@ -493,6 +616,25 @@ export function PharmacyPage() {
                 />
               </div>
               <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-category">
+                  Catégorie
+                </label>
+                <select
+                  id="pharmacy-category"
+                  name="category_id"
+                  defaultValue={formValues.category_id ?? ""}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  title="Associez ce produit à une catégorie métier"
+                >
+                  <option value="">Aucune</option>
+                  {categories.map((category) => (
+                    <option key={category.id} value={category.id}>
+                      {category.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-quantity">
                   Quantité
                 </label>
@@ -581,6 +723,52 @@ export function PharmacyPage() {
                 ) : null}
               </div>
             </form>
+            <div className="mt-6 space-y-4">
+              <section className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+                <h4 className="text-sm font-semibold text-white">Mouvement de stock</h4>
+                <PharmacyMovementForm
+                  items={items}
+                  selectedItemId={movementItemId}
+                  onSelectItem={setMovementItemId}
+                  onSubmit={async (values) => {
+                    if (movementItemId === null) {
+                      return;
+                    }
+                    setError(null);
+                    await recordMovement.mutateAsync({ itemId: movementItemId, payload: values });
+                  }}
+                  isSubmitting={recordMovement.isPending}
+                />
+                <PharmacyMovementHistory item={selectedMovementItem} />
+              </section>
+              <section className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+                <h4 className="text-sm font-semibold text-white">Catégories</h4>
+                <p className="text-xs text-slate-400">
+                  Organisez vos références par familles pour faciliter les recherches et analyses.
+                </p>
+                <PharmacyCategoryManager
+                  categories={categories}
+                  onCreate={async (values) => {
+                    setError(null);
+                    await createCategory.mutateAsync(values);
+                  }}
+                  onDelete={async (categoryId) => {
+                    if (!window.confirm("Supprimer cette catégorie ?")) {
+                      return;
+                    }
+                    setError(null);
+                    await deleteCategory.mutateAsync(categoryId);
+                  }}
+                  onUpdate={async (categoryId, payload) => {
+                    setError(null);
+                    await updateCategory.mutateAsync({ categoryId, payload });
+                  }}
+                  isSubmitting={
+                    createCategory.isPending || updateCategory.isPending || deleteCategory.isPending
+                  }
+                />
+              </section>
+            </div>
           </aside>
         ) : null}
       </div>
@@ -588,6 +776,294 @@ export function PharmacyPage() {
       <PharmacyOrdersPanel canEdit={canEdit} />
     </section>
   );
+}
+
+function PharmacyMovementForm({
+  items,
+  selectedItemId,
+  onSelectItem,
+  onSubmit,
+  isSubmitting
+}: {
+  items: PharmacyItem[];
+  selectedItemId: number | null;
+  onSelectItem: (itemId: number | null) => void;
+  onSubmit: (payload: PharmacyMovementPayload) => Promise<void>;
+  isSubmitting: boolean;
+}) {
+  const [delta, setDelta] = useState(1);
+  const [reason, setReason] = useState("");
+
+  useEffect(() => {
+    setDelta(1);
+    setReason("");
+  }, [selectedItemId]);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (selectedItemId === null) {
+      return;
+    }
+    await onSubmit({ delta, reason: reason.trim() ? reason.trim() : null });
+    setDelta(1);
+    setReason("");
+  };
+
+  return (
+    <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
+      <div className="space-y-1">
+        <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-item">
+          Article concerné
+        </label>
+        <select
+          id="pharmacy-movement-item"
+          value={selectedItemId ?? ""}
+          onChange={(event) => {
+            const value = event.target.value ? Number(event.target.value) : null;
+            onSelectItem(value);
+          }}
+          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          title="Choisissez l'article à ajuster"
+        >
+          <option value="">Sélectionnez un article</option>
+          {items.map((item) => (
+            <option key={item.id} value={item.id}>
+              {item.name}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex gap-3">
+        <div className="flex-1 space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-delta">
+            Variation
+          </label>
+          <input
+            id="pharmacy-movement-delta"
+            type="number"
+            value={delta}
+            onChange={(event) => setDelta(Number(event.target.value))}
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Valeur positive ou négative à appliquer"
+          />
+        </div>
+        <div className="flex-1 space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-reason">
+            Motif
+          </label>
+          <input
+            id="pharmacy-movement-reason"
+            value={reason}
+            onChange={(event) => setReason(event.target.value)}
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            placeholder="Inventaire, casse..."
+            title="Précisez la raison du mouvement"
+          />
+        </div>
+      </div>
+      <button
+        type="submit"
+        disabled={selectedItemId === null || isSubmitting}
+        className="w-full rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+        title={selectedItemId === null ? "Sélectionnez un article" : "Valider ce mouvement"}
+      >
+        {isSubmitting ? "Enregistrement..." : "Valider le mouvement"}
+      </button>
+    </form>
+  );
+}
+
+function PharmacyMovementHistory({ item }: { item: PharmacyItem | null }) {
+  const { data: movements = [], isFetching } = useQuery({
+    queryKey: ["pharmacy-movements", item?.id ?? "none"],
+    queryFn: async () => {
+      if (!item) {
+        return [] as PharmacyMovement[];
+      }
+      const response = await api.get<PharmacyMovement[]>(`/pharmacy/${item.id}/movements`);
+      return response.data;
+    },
+    enabled: Boolean(item),
+    placeholderData: [] as PharmacyMovement[]
+  });
+
+  if (!item) {
+    return <p className="mt-3 text-xs text-slate-400">Sélectionnez un article pour consulter l'historique.</p>;
+  }
+
+  return (
+    <div className="mt-4 space-y-2">
+      <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Derniers mouvements</h5>
+      {isFetching ? <p className="text-xs text-slate-500">Chargement...</p> : null}
+      <ul className="space-y-2 text-xs text-slate-200">
+        {movements.length === 0 ? <li className="text-slate-500">Aucun mouvement enregistré.</li> : null}
+        {movements.slice(0, 6).map((movement) => (
+          <li key={movement.id} className="rounded border border-slate-800 bg-slate-900/70 p-2">
+            <div className="flex items-center justify-between">
+              <span
+                className={`font-semibold ${movement.delta >= 0 ? "text-emerald-300" : "text-red-300"}`}
+              >
+                {movement.delta >= 0 ? `+${movement.delta}` : movement.delta}
+              </span>
+              <span className="text-[10px] text-slate-400">{formatMovementDate(movement.created_at)}</span>
+            </div>
+            {movement.reason ? (
+              <p className="mt-1 text-[11px] text-slate-300">{movement.reason}</p>
+            ) : null}
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function PharmacyCategoryManager({
+  categories,
+  onCreate,
+  onDelete,
+  onUpdate,
+  isSubmitting
+}: {
+  categories: PharmacyCategory[];
+  onCreate: (values: { name: string; sizes: string[] }) => Promise<void>;
+  onDelete: (categoryId: number) => Promise<void>;
+  onUpdate: (categoryId: number, payload: { sizes: string[] }) => Promise<void>;
+  isSubmitting: boolean;
+}) {
+  const [name, setName] = useState("");
+  const [sizes, setSizes] = useState("");
+  const [editedSizes, setEditedSizes] = useState<Record<number, string>>({});
+
+  useEffect(() => {
+    setEditedSizes((previous) => {
+      const next: Record<number, string> = {};
+      for (const category of categories) {
+        next[category.id] = previous[category.id] ?? category.sizes.join(", ");
+      }
+      return next;
+    });
+  }, [categories]);
+
+  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmed = name.trim();
+    if (!trimmed) {
+      return;
+    }
+    const parsedSizes = parseSizesInput(sizes);
+    await onCreate({ name: trimmed, sizes: parsedSizes });
+    setName("");
+    setSizes("");
+  };
+
+  const handleSave = async (categoryId: number) => {
+    const rawValue = editedSizes[categoryId] ?? "";
+    const parsedSizes = parseSizesInput(rawValue);
+    await onUpdate(categoryId, { sizes: parsedSizes });
+    setEditedSizes((previous) => ({ ...previous, [categoryId]: parsedSizes.join(", ") }));
+  };
+
+  return (
+    <div className="mt-3 space-y-3">
+      <form className="space-y-2" onSubmit={handleSubmit}>
+        <div className="flex gap-2">
+          <input
+            value={name}
+            onChange={(event) => setName(event.target.value)}
+            placeholder="Nouvelle catégorie"
+            className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Nom de la catégorie"
+          />
+          <input
+            value={sizes}
+            onChange={(event) => setSizes(event.target.value)}
+            placeholder="Tailles ou formats"
+            className="w-56 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            title="Valeurs séparées par des virgules"
+          />
+        </div>
+        <button
+          type="submit"
+          disabled={isSubmitting}
+          className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+        >
+          {isSubmitting ? "Traitement..." : "Ajouter"}
+        </button>
+      </form>
+      <ul className="space-y-3 text-xs text-slate-100">
+        {categories.length === 0 ? (
+          <li className="text-slate-500">Aucune catégorie enregistrée.</li>
+        ) : null}
+        {categories.map((category) => (
+          <li key={category.id} className="rounded border border-slate-800 bg-slate-900/70 p-3">
+            <div className="flex items-center justify-between">
+              <span className="text-sm font-semibold text-white">{category.name}</span>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={() => void handleSave(category.id)}
+                  className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+                  disabled={isSubmitting}
+                >
+                  Enregistrer
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void onDelete(category.id)}
+                  className="rounded bg-red-600 px-2 py-1 text-[11px] font-semibold text-white hover:bg-red-500"
+                  disabled={isSubmitting}
+                >
+                  Supprimer
+                </button>
+              </div>
+            </div>
+            <label className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor={`category-sizes-${category.id}`}>
+              Tailles / formats
+            </label>
+            <input
+              id={`category-sizes-${category.id}`}
+              value={editedSizes[category.id] ?? category.sizes.join(", ")}
+              onChange={(event) =>
+                setEditedSizes((previous) => ({ ...previous, [category.id]: event.target.value }))
+              }
+              className="mt-1 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-[11px] text-slate-100 focus:border-indigo-500 focus:outline-none"
+              placeholder="Saisir des valeurs séparées par des virgules"
+              title="Modifiez la liste des tailles ou conditionnements"
+            />
+          </li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
+function parseSizesInput(value: string): string[] {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const part of value.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) {
+      continue;
+    }
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) {
+      continue;
+    }
+    seen.add(key);
+    result.push(trimmed);
+  }
+  return result;
+}
+
+function formatMovementDate(value: string) {
+  try {
+    return new Intl.DateTimeFormat("fr-FR", {
+      dateStyle: "short",
+      timeStyle: "short"
+    }).format(new Date(value));
+  } catch (error) {
+    return value;
+  }
 }
 
 function formatDate(value: string | null) {
