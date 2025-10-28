@@ -74,6 +74,18 @@ export function AppLayout() {
               ]
             },
             {
+              id: "habillement-purchase-orders",
+              label: "Bons de commande",
+              tooltip: "Créer et suivre les bons de commande",
+              links: [
+                {
+                  to: "/purchase-orders",
+                  label: "Bons de commande",
+                  tooltip: "Gérer les bons de commande d'habillement"
+                }
+              ]
+            },
+            {
               id: "habillement-ressources",
               label: "Ressources",
               tooltip: "Référentiels liés à l'habillement",

@@ -13,6 +13,7 @@ import { DotationsPage } from "../features/dotations/DotationsPage";
 import { PharmacyPage } from "../features/pharmacy/PharmacyPage";
 import { ModulePermissionsPage } from "../features/permissions/ModulePermissionsPage";
 import { AdminUsersPage } from "../features/users/AdminUsersPage";
+import { PurchaseOrdersPage } from "../features/inventory/PurchaseOrdersPage";
 
 export const router = createBrowserRouter([
   {
@@ -27,6 +28,7 @@ export const router = createBrowserRouter([
       { path: "", element: <Dashboard /> },
       { path: "barcode", element: <BarcodePage /> },
       { path: "reports", element: <ReportsPage /> },
+      { path: "purchase-orders", element: <PurchaseOrdersPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "suppliers", element: <SuppliersPage /> },
       { path: "collaborators", element: <CollaboratorsPage /> },
