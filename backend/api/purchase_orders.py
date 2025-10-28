@@ -1,7 +1,10 @@
 """Routes pour la gestion des bons de commande d'inventaire."""
 from __future__ import annotations
 
+import io
+
 from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -40,6 +43,26 @@ async def get_order(
         return services.get_purchase_order(order_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/{order_id}/pdf")
+async def download_order_pdf(
+    order_id: int,
+    user: models.User = Depends(get_current_user),
+) -> StreamingResponse:
+    if user.role not in {"admin", "user"}:
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    try:
+        order = services.get_purchase_order(order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    pdf_bytes = services.generate_purchase_order_pdf(order)
+    filename = f"bon_commande_{order.id}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.put("/{order_id}", response_model=models.PurchaseOrderDetail)

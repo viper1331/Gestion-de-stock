@@ -1,10 +1,16 @@
 """Services métier pour Gestion Stock Pro."""
 from __future__ import annotations
 
+import io
 import sqlite3
 from datetime import date, datetime, timedelta
 from pathlib import Path
-from typing import Iterable, Optional
+from textwrap import wrap
+from typing import Callable, Iterable, Optional
+
+from reportlab.lib.pagesizes import A4
+from reportlab.lib.units import mm
+from reportlab.pdfgen import canvas
 
 from backend.core import db, models, security
 
@@ -26,6 +32,14 @@ _PURCHASE_ORDER_STATUSES: set[str] = {
     "PARTIALLY_RECEIVED",
     "RECEIVED",
     "CANCELLED",
+}
+
+_PURCHASE_ORDER_STATUS_LABELS: dict[str, str] = {
+    "PENDING": "En attente",
+    "ORDERED": "Commandé",
+    "PARTIALLY_RECEIVED": "Partiellement reçu",
+    "RECEIVED": "Reçu",
+    "CANCELLED": "Annulé",
 }
 
 
@@ -1086,19 +1100,24 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
 
 def update_purchase_order(order_id: int, payload: models.PurchaseOrderUpdate) -> models.PurchaseOrderDetail:
     ensure_database_ready()
+    updates_raw = payload.dict(exclude_unset=True)
+    if not updates_raw:
+        return get_purchase_order(order_id)
     updates: dict[str, object] = {}
-    if payload.supplier_id is not None:
-        with db.get_stock_connection() as conn:
-            supplier_cur = conn.execute(
-                "SELECT 1 FROM suppliers WHERE id = ?", (payload.supplier_id,)
-            )
-            if supplier_cur.fetchone() is None:
-                raise ValueError("Fournisseur introuvable")
-        updates["supplier_id"] = payload.supplier_id
-    if payload.status is not None:
-        updates["status"] = _normalize_purchase_order_status(payload.status)
-    if payload.note is not None:
-        updates["note"] = payload.note
+    if "supplier_id" in updates_raw:
+        supplier_id = updates_raw["supplier_id"]
+        if supplier_id is not None:
+            with db.get_stock_connection() as conn:
+                supplier_cur = conn.execute(
+                    "SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,)
+                )
+                if supplier_cur.fetchone() is None:
+                    raise ValueError("Fournisseur introuvable")
+        updates["supplier_id"] = supplier_id
+    if "status" in updates_raw:
+        updates["status"] = _normalize_purchase_order_status(updates_raw["status"])
+    if "note" in updates_raw:
+        updates["note"] = updates_raw["note"]
     if not updates:
         return get_purchase_order(order_id)
     assignments = ", ".join(f"{column} = ?" for column in updates)
@@ -1111,6 +1130,158 @@ def update_purchase_order(order_id: int, payload: models.PurchaseOrderUpdate) ->
         conn.execute(f"UPDATE purchase_orders SET {assignments} WHERE id = ?", values)
         conn.commit()
     return get_purchase_order(order_id)
+
+
+def _render_purchase_order_pdf(
+    *,
+    title: str,
+    meta_lines: list[str],
+    note_lines: list[str],
+    items: list[tuple[str, int, int]],
+) -> bytes:
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    margin = 20 * mm
+
+    def start_page(suffix: str = "") -> float:
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(margin, height - margin, f"{title}{suffix}")
+        pdf.setFont("Helvetica", 10)
+        y_position = height - margin - 18
+        for meta in meta_lines:
+            pdf.drawString(margin, y_position, meta)
+            y_position -= 12
+        return y_position - 6
+
+    def draw_table_header(y_position: float) -> float:
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawString(margin, y_position, "Article")
+        pdf.drawRightString(width - margin - 60, y_position, "Commandé")
+        pdf.drawRightString(width - margin, y_position, "Réceptionné")
+        pdf.setFont("Helvetica", 10)
+        return y_position - 12
+
+    def draw_table_title(y_position: float, *, suffix: str = "") -> float:
+        pdf.setFont("Helvetica-Bold", 12)
+        pdf.drawString(margin, y_position, f"Lignes de commande{suffix}")
+        y_position -= 16
+        return draw_table_header(y_position)
+
+    def ensure_space(
+        y_position: float,
+        needed: float,
+        *,
+        on_new_page: Optional[Callable[[float], float]] = None,
+        suffix: str = " (suite)",
+    ) -> float:
+        if y_position <= margin + needed:
+            pdf.showPage()
+            y_new = start_page(suffix)
+            if on_new_page is not None:
+                y_new = on_new_page(y_new)
+            return y_new
+        return y_position
+
+    y = start_page()
+
+    def draw_note_heading(y_position: float) -> float:
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawString(margin, y_position, "Note")
+        y_position -= 12
+        pdf.setFont("Helvetica", 10)
+        return y_position
+
+    if note_lines:
+        y = ensure_space(y, 24)
+        y = draw_note_heading(y)
+        for line in note_lines:
+            y = ensure_space(y, 18, on_new_page=draw_note_heading)
+            pdf.drawString(margin, y, line)
+            y -= 12
+        y -= 6
+
+    table_new_page = lambda pos: draw_table_title(pos, suffix=" (suite)")
+
+    y = ensure_space(y, 60)
+    y = draw_table_title(y)
+    if not items:
+        y = ensure_space(y, 24, on_new_page=table_new_page)
+        pdf.drawString(margin, y, "Aucune ligne de commande enregistrée.")
+        y -= 12
+    else:
+        for name, ordered, received in items:
+            name_lines = wrap(name, 80) or ["-"]
+            for index, line in enumerate(name_lines):
+                y = ensure_space(y, 24, on_new_page=table_new_page)
+                pdf.drawString(margin, y, line)
+                if index == 0:
+                    pdf.drawRightString(width - margin - 60, y, str(ordered))
+                    pdf.drawRightString(width - margin, y, str(received))
+                y -= 12
+            y -= 4
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
+
+
+def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
+    status_label = _PURCHASE_ORDER_STATUS_LABELS.get(order.status, order.status)
+    created_at = order.created_at.strftime("%d/%m/%Y %H:%M")
+    supplier = order.supplier_name or "Aucun"
+    meta_lines = [
+        f"Bon de commande n° {order.id}",
+        f"Créé le : {created_at}",
+        f"Fournisseur : {supplier}",
+        f"Statut : {status_label}",
+    ]
+    if order.auto_created:
+        meta_lines.append("Création automatique : Oui")
+    note_lines = wrap(order.note or "", 90) if order.note else []
+    item_rows = [
+        (
+            line.item_name or f"Article #{line.item_id}",
+            line.quantity_ordered,
+            line.quantity_received,
+        )
+        for line in order.items
+    ]
+    return _render_purchase_order_pdf(
+        title="Bon de commande inventaire",
+        meta_lines=meta_lines,
+        note_lines=note_lines,
+        items=item_rows,
+    )
+
+
+def generate_pharmacy_purchase_order_pdf(
+    order: models.PharmacyPurchaseOrderDetail,
+) -> bytes:
+    status_label = _PURCHASE_ORDER_STATUS_LABELS.get(order.status, order.status)
+    created_at = order.created_at.strftime("%d/%m/%Y %H:%M")
+    supplier = order.supplier_name or "Aucun"
+    meta_lines = [
+        f"Bon de commande pharmacie n° {order.id}",
+        f"Créé le : {created_at}",
+        f"Fournisseur : {supplier}",
+        f"Statut : {status_label}",
+    ]
+    note_lines = wrap(order.note or "", 90) if order.note else []
+    item_rows = [
+        (
+            line.pharmacy_item_name or f"Article #{line.pharmacy_item_id}",
+            line.quantity_ordered,
+            line.quantity_received,
+        )
+        for line in order.items
+    ]
+    return _render_purchase_order_pdf(
+        title="Bon de commande pharmacie",
+        meta_lines=meta_lines,
+        note_lines=note_lines,
+        items=item_rows,
+    )
 
 
 def receive_purchase_order(
@@ -1937,19 +2108,24 @@ def update_pharmacy_purchase_order(
     order_id: int, payload: models.PharmacyPurchaseOrderUpdate
 ) -> models.PharmacyPurchaseOrderDetail:
     ensure_database_ready()
+    updates_raw = payload.dict(exclude_unset=True)
+    if not updates_raw:
+        return get_pharmacy_purchase_order(order_id)
     updates: dict[str, object] = {}
-    if payload.supplier_id is not None:
-        with db.get_stock_connection() as conn:
-            supplier_cur = conn.execute(
-                "SELECT 1 FROM suppliers WHERE id = ?", (payload.supplier_id,)
-            )
-            if supplier_cur.fetchone() is None:
-                raise ValueError("Fournisseur introuvable")
-        updates["supplier_id"] = payload.supplier_id
-    if payload.status is not None:
-        updates["status"] = _normalize_purchase_order_status(payload.status)
-    if payload.note is not None:
-        updates["note"] = payload.note
+    if "supplier_id" in updates_raw:
+        supplier_id = updates_raw["supplier_id"]
+        if supplier_id is not None:
+            with db.get_stock_connection() as conn:
+                supplier_cur = conn.execute(
+                    "SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,)
+                )
+                if supplier_cur.fetchone() is None:
+                    raise ValueError("Fournisseur introuvable")
+        updates["supplier_id"] = supplier_id
+    if "status" in updates_raw:
+        updates["status"] = _normalize_purchase_order_status(updates_raw["status"])
+    if "note" in updates_raw:
+        updates["note"] = updates_raw["note"]
     if not updates:
         return get_pharmacy_purchase_order(order_id)
     assignments = ", ".join(f"{column} = ?" for column in updates)
