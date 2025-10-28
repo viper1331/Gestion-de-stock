@@ -53,6 +53,7 @@ class StockAlertTests(unittest.TestCase):
         )
         with sqlite3.connect(gestion_stock.DB_PATH) as conn:
             conn.execute("DELETE FROM stock_alerts")
+            conn.execute("DELETE FROM reorder_suggestions")
             conn.commit()
 
     def tearDown(self) -> None:
@@ -134,6 +135,51 @@ class StockAlertTests(unittest.TestCase):
         self.assertIn("pharmacy", rows)
         self.assertIn("clothing", rows)
         self.assertIsNotNone(app.status.value)
+
+    def test_reorder_suggestions_accept_localized_modules(self) -> None:
+        clothing_item = gestion_stock.register_clothing_item(
+            name="Parka d'intervention",
+            barcode="HAB-001",
+            size="M",
+            category="Extérieur",
+            quantity=2,
+            reorder_point=5,
+            operator="tester",
+        )
+
+        gestion_stock.register_reorder_suggestion_event(
+            module="habillement",
+            entity_id=clothing_item.id,
+            item_name=clothing_item.name,
+            quantity=clothing_item.quantity,
+            threshold=5,
+        )
+
+        batch_info = gestion_stock.register_pharmacy_batch(
+            name="Antalgique X",
+            lot_number="LOT-001",
+            quantity=1,
+            expiration_date="2026-01-01",
+            barcode="PHAR-001",
+            category="Antalgique",
+        )
+
+        gestion_stock.register_reorder_suggestion_event(
+            module="pharmacie",
+            entity_id=batch_info["item_id"],
+            item_name="Antalgique X",
+            quantity=1,
+            threshold=4,
+            related_item_id=batch_info["item_id"],
+        )
+
+        clothing_suggestions = gestion_stock.fetch_reorder_suggestions(module="clothing")
+        pharmacy_suggestions = gestion_stock.fetch_reorder_suggestions(module="pharmacy")
+
+        self.assertEqual(len(clothing_suggestions), 1)
+        self.assertEqual(clothing_suggestions[0]["item_name"], clothing_item.name)
+        self.assertEqual(len(pharmacy_suggestions), 1)
+        self.assertEqual(pharmacy_suggestions[0]["item_name"], "Antalgique X")
 
 
 if __name__ == "__main__":  # pragma: no cover - compat exécution directe
