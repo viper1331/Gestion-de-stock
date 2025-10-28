@@ -109,30 +109,6 @@ export function AppLayout() {
                   module: "dotations"
                 }
               ]
-            },
-            {
-              id: "habillement-administration",
-              label: "Administration",
-              tooltip: "Paramétrer votre environnement d'habillement",
-              links: [
-                {
-                  to: "/settings",
-                  label: "Paramètres",
-                  tooltip: "Configurer les paramètres généraux"
-                },
-                {
-                  to: "/users",
-                  label: "Utilisateurs",
-                  tooltip: "Administrer les comptes utilisateurs",
-                  adminOnly: true
-                },
-                {
-                  to: "/permissions",
-                  label: "Permissions",
-                  tooltip: "Gérer les droits d'accès",
-                  adminOnly: true
-                }
-              ]
             }
           ]
         },
@@ -151,6 +127,37 @@ export function AppLayout() {
                   label: "Vue d'ensemble pharmacie",
                   tooltip: "Consulter le tableau de bord pharmacie",
                   module: "pharmacy"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          id: "administration",
+          label: "Administration",
+          tooltip: "Paramétrer votre environnement",
+          sections: [
+            {
+              id: "administration-parametres",
+              label: "Configuration",
+              tooltip: "Paramètres et gestion des accès",
+              links: [
+                {
+                  to: "/settings",
+                  label: "Paramètres",
+                  tooltip: "Configurer les paramètres généraux"
+                },
+                {
+                  to: "/users",
+                  label: "Utilisateurs",
+                  tooltip: "Administrer les comptes utilisateurs",
+                  adminOnly: true
+                },
+                {
+                  to: "/permissions",
+                  label: "Permissions",
+                  tooltip: "Gérer les droits d'accès",
+                  adminOnly: true
                 }
               ]
             }
@@ -190,7 +197,8 @@ export function AppLayout() {
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     habillement: true,
-    pharmacie: false
+    pharmacie: false,
+    administration: false
   });
 
   const toggleGroup = (groupId: string) => {
