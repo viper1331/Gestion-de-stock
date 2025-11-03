@@ -53,8 +53,40 @@ def backend_python_executable() -> str:
 
 def start_process(command: List[str], cwd: Path, name: str) -> Process:
     env = os.environ.copy()
-    print(f"\n➡️  Lancement de {name} : {' '.join(command)}")
-    return subprocess.Popen(command, cwd=str(cwd), env=env)
+
+    if not cwd.exists():
+        raise SystemExit(f"Répertoire de travail introuvable pour {name}: {cwd}")
+
+    executable = command[0]
+    resolved_executable = None
+    if not Path(executable).is_absolute() and os.path.sep not in executable:
+        resolved_executable = shutil_which(executable)
+        if resolved_executable:
+            command = [resolved_executable, *command[1:]]
+
+    printable_command = " ".join(command)
+    print(f"\n➡️  Lancement de {name} : {printable_command}")
+
+    try:
+        return subprocess.Popen(command, cwd=str(cwd), env=env)
+    except FileNotFoundError as exc:
+        executable = command[0]
+        resolved = resolved_executable or (
+            shutil_which(executable) if os.path.sep not in executable else None
+        )
+        if Path(executable).is_file():
+            message = f"Exécutable introuvable: {executable}"
+        elif resolved:
+            message = (
+                "Impossible de lancer la commande malgré la détection de l'exécutable "
+                f"({resolved}). Vérifiez les droits d'accès."
+            )
+        else:
+            message = (
+                f"Commande introuvable: {executable}. Assurez-vous que l'outil est installé "
+                "et accessible dans votre PATH."
+            )
+        raise SystemExit(message) from exc
 
 
 def terminate_process(name: str, process: Process) -> None:
