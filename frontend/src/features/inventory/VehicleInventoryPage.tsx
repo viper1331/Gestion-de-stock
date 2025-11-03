@@ -2,6 +2,7 @@ import {
   InventoryModuleDashboard,
   type InventoryModuleConfig
 } from "./InventoryModuleDashboard";
+import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 
 const VEHICLE_INVENTORY_CONFIG: InventoryModuleConfig = {
   title: "Inventaire véhicules",
@@ -12,9 +13,15 @@ const VEHICLE_INVENTORY_CONFIG: InventoryModuleConfig = {
   queryKeyPrefix: "vehicle-inventory",
   storageKeyPrefix: "vehicle-inventory",
   showPurchaseOrders: false,
-  searchPlaceholder: "Rechercher un véhicule par nom ou SKU"
+  searchPlaceholder: "Rechercher un véhicule par nom ou SKU",
+  supportsItemImages: true
 };
 
 export function VehicleInventoryPage() {
-  return <InventoryModuleDashboard config={VEHICLE_INVENTORY_CONFIG} />;
+  return (
+    <div className="space-y-6">
+      <InventoryModuleDashboard config={VEHICLE_INVENTORY_CONFIG} />
+      <VehiclePhotosPanel />
+    </div>
+  );
 }

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import {
   useMutation,
   useQuery,
@@ -25,6 +25,7 @@ interface Item {
   quantity: number;
   low_stock_threshold: number;
   supplier_id: number | null;
+  image_url: string | null;
 }
 
 interface Movement {
@@ -43,6 +44,12 @@ interface ItemFormValues {
   quantity: number;
   low_stock_threshold: number;
   supplier_id: number | null;
+}
+
+interface ItemFormSubmitPayload {
+  values: ItemFormValues;
+  imageFile: File | null;
+  removeImage: boolean;
 }
 
 interface CategoryFormValues {
@@ -65,6 +72,7 @@ export interface InventoryModuleConfig {
   storageKeyPrefix: string;
   showPurchaseOrders?: boolean;
   searchPlaceholder?: string;
+  supportsItemImages?: boolean;
 }
 
 export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
@@ -77,7 +85,8 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   queryKeyPrefix: "inventory",
   storageKeyPrefix: "inventory",
   showPurchaseOrders: true,
-  searchPlaceholder: "Rechercher par nom ou SKU"
+  searchPlaceholder: "Rechercher par nom ou SKU",
+  supportsItemImages: false
 };
 
 interface InventoryModuleDashboardProps {
@@ -85,6 +94,7 @@ interface InventoryModuleDashboardProps {
 }
 
 type InventoryColumnKey =
+  | "image"
   | "name"
   | "sku"
   | "quantity"
@@ -103,6 +113,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
+  const supportsItemImages = config.supportsItemImages === true;
   const columnStorageKey = `gsp/${config.storageKeyPrefix}/columns`;
   const columnVisibilityStorageKey = `gsp/${config.storageKeyPrefix}/column-visibility`;
   const searchPlaceholder = config.searchPlaceholder ?? "Rechercher par nom ou SKU";
@@ -157,7 +168,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
   const createItem = useMutation({
     mutationFn: async (payload: ItemFormValues) => {
-      await api.post(`${config.basePath}/`, payload);
+      const response = await api.post<Item>(`${config.basePath}/`, payload);
+      return response.data;
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["items"] });
@@ -169,7 +181,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
   const updateItem = useMutation({
     mutationFn: async ({ itemId, payload }: { itemId: number; payload: ItemFormValues }) => {
-      await api.put(`${config.basePath}/${itemId}`, payload);
+      const response = await api.put<Item>(`${config.basePath}/${itemId}`, payload);
+      return response.data;
     },
     onSuccess: async (_, variables) => {
       await queryClient.invalidateQueries({ queryKey: ["items"] });
@@ -251,7 +264,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["reports"] })
   });
 
-  const defaultColumnWidths: Record<string, number> = {
+  const baseColumnWidths: Record<InventoryColumnKey, number> = {
+    image: 140,
     name: 220,
     sku: 140,
     quantity: 100,
@@ -262,6 +276,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   };
 
   const defaultColumnVisibility: Record<InventoryColumnKey, boolean> = {
+    image: supportsItemImages,
     name: true,
     sku: true,
     quantity: true,
@@ -272,6 +287,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   };
 
   const [columnVisibility, setColumnVisibility] = useState<Record<InventoryColumnKey, boolean>>(() => ({
+    ...defaultColumnVisibility,
     ...readPersistedValue<Record<InventoryColumnKey, boolean>>(
       columnVisibilityStorageKey,
       defaultColumnVisibility
@@ -299,19 +315,25 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     persistValue(columnVisibilityStorageKey, next);
   };
 
-  const columnOptions: { key: InventoryColumnKey; label: string }[] = [
-    { key: "name", label: "Article" },
-    { key: "sku", label: "SKU" },
-    { key: "quantity", label: "Quantité" },
-    { key: "size", label: "Taille / Variante" },
-    { key: "category", label: "Catégorie" },
-    { key: "supplier", label: "Fournisseur" },
-    { key: "threshold", label: "Seuil" }
-  ];
+  const columnOptions: { key: InventoryColumnKey; label: string }[] = useMemo(() => {
+    const options: { key: InventoryColumnKey; label: string }[] = [
+      { key: "name", label: "Article" },
+      { key: "sku", label: "SKU" },
+      { key: "quantity", label: "Quantité" },
+      { key: "size", label: "Taille / Variante" },
+      { key: "category", label: "Catégorie" },
+      { key: "supplier", label: "Fournisseur" },
+      { key: "threshold", label: "Seuil" }
+    ];
+    if (supportsItemImages) {
+      return [{ key: "image", label: "Image" }, ...options];
+    }
+    return options;
+  }, [supportsItemImages]);
 
   const columnWidths = {
-    ...defaultColumnWidths,
-    ...readPersistedValue<Record<string, number>>(columnStorageKey, defaultColumnWidths)
+    ...baseColumnWidths,
+    ...readPersistedValue<Record<string, number>>(columnStorageKey, baseColumnWidths)
   };
 
   const saveWidth = (key: string, width: number) => {
@@ -385,15 +407,49 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     };
   }, [formMode, selectedItem]);
 
-  const handleSubmitItem = async (values: ItemFormValues) => {
+  const initialImageUrl = supportsItemImages && selectedItem ? selectedItem.image_url ?? null : null;
+
+  const handleSubmitItem = async ({ values, imageFile, removeImage }: ItemFormSubmitPayload) => {
     setMessage(null);
     setError(null);
-    if (formMode === "edit" && selectedItem) {
-      await updateItem.mutateAsync({ itemId: selectedItem.id, payload: values });
-      setSelectedItem(null);
-      setFormMode("create");
-    } else {
-      await createItem.mutateAsync(values);
+    try {
+      let savedItem: Item | null = null;
+      if (formMode === "edit" && selectedItem) {
+        savedItem = await updateItem.mutateAsync({ itemId: selectedItem.id, payload: values });
+        setSelectedItem(null);
+        setFormMode("create");
+      } else {
+        savedItem = await createItem.mutateAsync(values);
+      }
+
+      if (supportsItemImages && savedItem) {
+        try {
+          if (imageFile) {
+            const formData = new FormData();
+            formData.append("file", imageFile);
+            await api.post(`${config.basePath}/${savedItem.id}/image`, formData, {
+              headers: { "Content-Type": "multipart/form-data" }
+            });
+            setMessage((previous) =>
+              previous ? `${previous} Image enregistrée.` : "Image enregistrée."
+            );
+          } else if (removeImage) {
+            await api.delete(`${config.basePath}/${savedItem.id}/image`);
+            setMessage((previous) =>
+              previous ? `${previous} Image supprimée.` : "Image supprimée."
+            );
+          }
+        } catch (mediaError) {
+          console.error(mediaError);
+          setMessage(null);
+          setError("Impossible de mettre à jour l'image associée.");
+        } finally {
+          await queryClient.invalidateQueries({ queryKey: ["items"] });
+        }
+      }
+    } catch (submitError) {
+      console.error(submitError);
+      setError("Impossible d'enregistrer l'article.");
     }
   };
 
@@ -471,6 +527,13 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60">
                 <tr>
+                  {supportsItemImages && columnVisibility.image !== false ? (
+                    <ResizableHeader
+                      label="Image"
+                      width={columnWidths.image}
+                      onResize={(value) => saveWidth("image", value)}
+                    />
+                  ) : null}
                   {columnVisibility.name !== false ? (
                     <ResizableHeader
                       label="Article"
@@ -533,6 +596,19 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
                   return (
                     <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
+                      {supportsItemImages && columnVisibility.image !== false ? (
+                        <td className="px-4 py-3 text-sm text-slate-300">
+                          {item.image_url ? (
+                            <img
+                              src={item.image_url}
+                              alt={`Illustration de ${item.name}`}
+                              className="h-12 w-12 rounded border border-slate-700 object-cover"
+                            />
+                          ) : (
+                            <span className="text-xs text-slate-500">Aucune</span>
+                          )}
+                        </td>
+                      ) : null}
                       {columnVisibility.name !== false ? (
                         <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
                       ) : null}
@@ -654,6 +730,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 isSubmitting={createItem.isPending || updateItem.isPending}
                 onSubmit={handleSubmitItem}
                 onCancel={closeSidebar}
+                supportsItemImages={supportsItemImages}
+                initialImageUrl={initialImageUrl}
               />
             </div>
 
@@ -753,17 +831,27 @@ function ItemForm({
   mode,
   onSubmit,
   onCancel,
-  isSubmitting
+  isSubmitting,
+  supportsItemImages = false,
+  initialImageUrl = null
 }: {
   initialValues: ItemFormValues;
   categories: Category[];
   suppliers: Supplier[];
   mode: "create" | "edit";
-  onSubmit: (values: ItemFormValues) => Promise<void>;
+  onSubmit: (payload: ItemFormSubmitPayload) => Promise<void>;
   onCancel: () => void;
   isSubmitting: boolean;
+  supportsItemImages?: boolean;
+  initialImageUrl?: string | null;
 }) {
   const [values, setValues] = useState<ItemFormValues>(initialValues);
+  const [imageFile, setImageFile] = useState<File | null>(null);
+  const [removeImage, setRemoveImage] = useState(false);
+  const [preview, setPreview] = useState<{ url: string | null; isLocal: boolean }>({
+    url: initialImageUrl,
+    isLocal: false
+  });
   const selectedCategory = useMemo(
     () => categories.find((category) => category.id === values.category_id),
     [categories, values.category_id]
@@ -777,6 +865,78 @@ function ItemForm({
     setValues(initialValues);
   }, [initialValues]);
 
+  useEffect(() => {
+    if (!supportsItemImages) {
+      return;
+    }
+    setPreview((previous) => {
+      if (previous.isLocal && previous.url) {
+        URL.revokeObjectURL(previous.url);
+      }
+      return { url: initialImageUrl, isLocal: false };
+    });
+    setImageFile(null);
+    setRemoveImage(false);
+  }, [initialImageUrl, supportsItemImages]);
+
+  useEffect(() => {
+    if (!supportsItemImages) {
+      return undefined;
+    }
+    return () => {
+      if (preview.isLocal && preview.url) {
+        URL.revokeObjectURL(preview.url);
+      }
+    };
+  }, [preview, supportsItemImages]);
+
+  const handleImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (!supportsItemImages) {
+      return;
+    }
+    const file = event.target.files?.[0] ?? null;
+    setPreview((previous) => {
+      if (previous.isLocal && previous.url) {
+        URL.revokeObjectURL(previous.url);
+      }
+      if (!file) {
+        return { url: initialImageUrl, isLocal: false };
+      }
+      const objectUrl = URL.createObjectURL(file);
+      return { url: objectUrl, isLocal: true };
+    });
+    setImageFile(file);
+    setRemoveImage(false);
+  };
+
+  const handleRemoveImage = () => {
+    if (!supportsItemImages) {
+      return;
+    }
+    setPreview((previous) => {
+      if (previous.isLocal && previous.url) {
+        URL.revokeObjectURL(previous.url);
+      }
+      return { url: null, isLocal: false };
+    });
+    setImageFile(null);
+    setRemoveImage(Boolean(initialImageUrl));
+  };
+
+  const handleRestoreImage = () => {
+    if (!supportsItemImages) {
+      return;
+    }
+    setPreview((previous) => {
+      if (previous.isLocal && previous.url) {
+        URL.revokeObjectURL(previous.url);
+      }
+      return { url: initialImageUrl, isLocal: false };
+    });
+    setImageFile(null);
+    setRemoveImage(false);
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const payload = {
@@ -787,7 +947,7 @@ function ItemForm({
       supplier_id: values.supplier_id ?? null,
       size: values.size.trim()
     };
-    await onSubmit(payload);
+    await onSubmit({ values: payload, imageFile, removeImage });
     if (mode === "create") {
       setValues({
         name: "",
@@ -798,11 +958,72 @@ function ItemForm({
         low_stock_threshold: 0,
         supplier_id: null
       });
+      if (supportsItemImages) {
+        setPreview((previous) => {
+          if (previous.isLocal && previous.url) {
+            URL.revokeObjectURL(previous.url);
+          }
+          return { url: null, isLocal: false };
+        });
+        setImageFile(null);
+        setRemoveImage(false);
+      }
     }
   };
 
   return (
     <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
+      {supportsItemImages ? (
+        <div className="space-y-2">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="item-image">
+            Image du matériel
+          </label>
+          <div className="flex items-start gap-3">
+            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded border border-slate-700 bg-slate-950">
+              {preview.url ? (
+                <img
+                  src={preview.url}
+                  alt={values.name ? `Visuel actuel pour ${values.name}` : "Aperçu du matériel"}
+                  className="h-full w-full object-cover"
+                />
+              ) : (
+                <span className="px-2 text-center text-[11px] text-slate-500">Aucune image</span>
+              )}
+            </div>
+            <div className="flex flex-1 flex-col gap-2">
+              <input
+                id="item-image"
+                type="file"
+                accept="image/*"
+                onChange={handleImageChange}
+                className="w-full text-xs text-slate-200 file:mr-3 file:rounded-md file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-100 hover:file:bg-slate-700"
+                title="Sélectionnez une image illustrant le matériel"
+              />
+              <div className="flex flex-wrap gap-2">
+                {(preview.url || initialImageUrl) && !removeImage ? (
+                  <button
+                    type="button"
+                    onClick={handleRemoveImage}
+                    className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+                  >
+                    Supprimer l'image
+                  </button>
+                ) : null}
+                {removeImage && initialImageUrl ? (
+                  <button
+                    type="button"
+                    onClick={handleRestoreImage}
+                    className="rounded border border-slate-700 px-2 py-1 text-[11px] font-semibold text-slate-200 hover:bg-slate-800"
+                  >
+                    Annuler la suppression
+                  </button>
+                ) : null}
+              </div>
+              <p className="text-[11px] text-slate-500">Formats acceptés : JPG, PNG, WEBP ou GIF.</p>
+            </div>
+          </div>
+        </div>
+      ) : null}
       <div className="space-y-1">
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-name">
           Nom de l'article

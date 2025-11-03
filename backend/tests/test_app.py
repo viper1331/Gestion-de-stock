@@ -29,6 +29,7 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM pharmacy_items")
         conn.execute("DELETE FROM vehicle_movements")
         conn.execute("DELETE FROM vehicle_items")
+        conn.execute("DELETE FROM vehicle_photos")
         conn.execute("DELETE FROM vehicle_category_sizes")
         conn.execute("DELETE FROM vehicle_categories")
         conn.execute("DELETE FROM remise_movements")
