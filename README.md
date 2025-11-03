@@ -98,6 +98,7 @@ npm run tauri dev
 - Gestion des catégories et tailles normalisées (tri, suppression des doublons/cases) pour l'habillement.【F:backend/api/categories.py†L11-L41】【F:backend/tests/test_app.py†L549-L597】
 - Journal des mouvements (entrées/sorties) avec contrôle des droits et mise à jour du stock en temps réel.【F:backend/api/items.py†L44-L61】【F:backend/core/services.py†L540-L577】
 - Création automatique de bons de commande suggérés lorsqu'un article passe sous son seuil et dispose d'un fournisseur, consolidation des quantités sur un ordre existant.【F:backend/core/services.py†L81-L141】【F:backend/tests/test_app.py†L210-L287】
+- Modules spécialisés pour l'inventaire véhicules et l'inventaire remises partageant la logique commune (CRUD, catégories, mouvements) et protégés par les mêmes permissions granulaires.【F:backend/app.py†L5-L50】【F:backend/api/vehicle_inventory.py†L1-L112】【F:backend/api/remise_inventory.py†L1-L112】【F:backend/core/services.py†L23-L1132】【F:backend/tests/test_app.py†L1-L1204】
 
 ### Fournisseurs & achats
 - Module fournisseurs complet (CRUD, consultation, suppression) conditionné par les droits modulaires.【F:backend/api/suppliers.py†L13-L63】

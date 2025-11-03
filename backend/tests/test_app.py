@@ -27,6 +27,14 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM collaborators")
         conn.execute("DELETE FROM suppliers")
         conn.execute("DELETE FROM pharmacy_items")
+        conn.execute("DELETE FROM vehicle_movements")
+        conn.execute("DELETE FROM vehicle_items")
+        conn.execute("DELETE FROM vehicle_category_sizes")
+        conn.execute("DELETE FROM vehicle_categories")
+        conn.execute("DELETE FROM remise_movements")
+        conn.execute("DELETE FROM remise_items")
+        conn.execute("DELETE FROM remise_category_sizes")
+        conn.execute("DELETE FROM remise_categories")
         conn.execute("DELETE FROM movements")
         conn.execute("DELETE FROM items")
         conn.execute("DELETE FROM category_sizes")
@@ -1085,3 +1093,109 @@ def test_update_category_sizes() -> None:
     assert listing.status_code == 200
     categories = {entry["id"]: entry for entry in listing.json()}
     assert categories[category_id]["sizes"] == sorted(["39", "40", "41"], key=str.lower)
+
+
+def test_vehicle_inventory_crud_cycle() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Parc-{uuid4().hex[:6]}", "sizes": ["UTILITAIRE", "SUV"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    sku = f"VEH-{uuid4().hex[:6]}"
+    create_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Camion atelier",
+            "sku": sku,
+            "quantity": 2,
+            "low_stock_threshold": 1,
+            "category_id": category_id,
+            "size": "UTILITAIRE",
+        },
+        headers=admin_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    item_id = create_resp.json()["id"]
+
+    movement_resp = client.post(
+        f"/vehicle-inventory/{item_id}/movements",
+        json={"delta": 1, "reason": "Maintenance"},
+        headers=admin_headers,
+    )
+    assert movement_resp.status_code == 204, movement_resp.text
+
+    listing = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert listing.status_code == 200
+    assert any(entry["id"] == item_id and entry["quantity"] == 3 for entry in listing.json())
+
+    history = client.get(f"/vehicle-inventory/{item_id}/movements", headers=admin_headers)
+    assert history.status_code == 200
+    history_entries = history.json()
+    assert history_entries and history_entries[0]["delta"] == 1
+
+    delete_resp = client.delete(f"/vehicle-inventory/{item_id}", headers=admin_headers)
+    assert delete_resp.status_code == 204
+
+    category_delete = client.delete(
+        f"/vehicle-inventory/categories/{category_id}", headers=admin_headers
+    )
+    assert category_delete.status_code == 204
+
+
+def test_remise_inventory_crud_cycle() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Remise-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    sku = f"REM-{uuid4().hex[:6]}"
+    create_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot remis",
+            "sku": sku,
+            "quantity": 5,
+            "low_stock_threshold": 0,
+            "category_id": category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    item_id = create_resp.json()["id"]
+
+    movement_resp = client.post(
+        f"/remise-inventory/{item_id}/movements",
+        json={"delta": -2, "reason": "Sortie"},
+        headers=admin_headers,
+    )
+    assert movement_resp.status_code == 204, movement_resp.text
+
+    listing = client.get("/remise-inventory/", headers=admin_headers)
+    assert listing.status_code == 200
+    assert any(entry["id"] == item_id and entry["quantity"] == 3 for entry in listing.json())
+
+    history = client.get(f"/remise-inventory/{item_id}/movements", headers=admin_headers)
+    assert history.status_code == 200
+    entries = history.json()
+    assert entries and entries[0]["delta"] == -2
+
+    delete_resp = client.delete(f"/remise-inventory/{item_id}", headers=admin_headers)
+    assert delete_resp.status_code == 204
+
+    category_delete = client.delete(
+        f"/remise-inventory/categories/{category_id}", headers=admin_headers
+    )
+    assert category_delete.status_code == 204
