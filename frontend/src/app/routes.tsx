@@ -14,6 +14,8 @@ import { PharmacyPage } from "../features/pharmacy/PharmacyPage";
 import { ModulePermissionsPage } from "../features/permissions/ModulePermissionsPage";
 import { AdminUsersPage } from "../features/users/AdminUsersPage";
 import { PurchaseOrdersPage } from "../features/inventory/PurchaseOrdersPage";
+import { VehicleInventoryPage } from "../features/inventory/VehicleInventoryPage";
+import { RemiseInventoryPage } from "../features/inventory/RemiseInventoryPage";
 
 export const router = createBrowserRouter([
   {
@@ -26,6 +28,8 @@ export const router = createBrowserRouter([
     element: <AppLayout />,
     children: [
       { path: "", element: <Dashboard /> },
+      { path: "vehicle-inventory", element: <VehicleInventoryPage /> },
+      { path: "remise-inventory", element: <RemiseInventoryPage /> },
       { path: "barcode", element: <BarcodePage /> },
       { path: "reports", element: <ReportsPage /> },
       { path: "purchase-orders", element: <PurchaseOrdersPage /> },

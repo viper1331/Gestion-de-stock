@@ -17,6 +17,8 @@ from backend.api import (
     purchase_orders,
     permissions,
     users,
+    vehicle_inventory,
+    remise_inventory,
 )
 from backend.ws import camera, voice
 
@@ -42,6 +44,8 @@ app.include_router(dotations.router, prefix="/dotations", tags=["dotations"])
 app.include_router(pharmacy.router, prefix="/pharmacy", tags=["pharmacy"])
 app.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["purchase-orders"])
 app.include_router(pharmacy_orders.router, prefix="/pharmacy/orders", tags=["pharmacy-purchase-orders"])
+app.include_router(vehicle_inventory.router, prefix="/vehicle-inventory", tags=["vehicle-inventory"])
+app.include_router(remise_inventory.router, prefix="/remise-inventory", tags=["remise-inventory"])
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 

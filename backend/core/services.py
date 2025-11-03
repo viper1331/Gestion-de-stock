@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import sqlite3
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from textwrap import wrap
@@ -23,8 +24,60 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("suppliers", "Fournisseurs"),
     ("dotations", "Dotations"),
     ("pharmacy", "Pharmacie"),
+    ("vehicle_inventory", "Inventaire véhicules"),
+    ("inventory_remise", "Inventaire remises"),
 )
 _AVAILABLE_MODULE_KEYS: set[str] = {key for key, _ in _AVAILABLE_MODULE_DEFINITIONS}
+
+
+@dataclass(frozen=True)
+class _InventoryTables:
+    items: str
+    categories: str
+    category_sizes: str
+    movements: str
+
+
+@dataclass(frozen=True)
+class _InventoryModuleConfig:
+    tables: _InventoryTables
+    auto_purchase_orders: bool = False
+
+
+_INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
+    "default": _InventoryModuleConfig(
+        tables=_InventoryTables(
+            items="items",
+            categories="categories",
+            category_sizes="category_sizes",
+            movements="movements",
+        ),
+        auto_purchase_orders=True,
+    ),
+    "vehicle_inventory": _InventoryModuleConfig(
+        tables=_InventoryTables(
+            items="vehicle_items",
+            categories="vehicle_categories",
+            category_sizes="vehicle_category_sizes",
+            movements="vehicle_movements",
+        )
+    ),
+    "inventory_remise": _InventoryModuleConfig(
+        tables=_InventoryTables(
+            items="remise_items",
+            categories="remise_categories",
+            category_sizes="remise_category_sizes",
+            movements="remise_movements",
+        )
+    ),
+}
+
+
+def _get_inventory_config(module: str) -> _InventoryModuleConfig:
+    try:
+        return _INVENTORY_MODULE_CONFIGS[module]
+    except KeyError as exc:  # pragma: no cover - defensive programming
+        raise ValueError(f"Module d'inventaire inconnu: {module}") from exc
 
 _PURCHASE_ORDER_STATUSES: set[str] = {
     "PENDING",
@@ -287,6 +340,62 @@ def _apply_schema_migrations() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_pharmacy_movements_item ON pharmacy_movements(pharmacy_item_id);
+            CREATE TABLE IF NOT EXISTS vehicle_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS vehicle_category_sizes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+                name TEXT NOT NULL COLLATE NOCASE,
+                UNIQUE(category_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS vehicle_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                sku TEXT UNIQUE NOT NULL,
+                category_id INTEGER REFERENCES vehicle_categories(id) ON DELETE SET NULL,
+                size TEXT,
+                quantity INTEGER NOT NULL DEFAULT 0,
+                low_stock_threshold INTEGER NOT NULL DEFAULT 0,
+                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS vehicle_movements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id INTEGER NOT NULL REFERENCES vehicle_items(id) ON DELETE CASCADE,
+                delta INTEGER NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_vehicle_movements_item ON vehicle_movements(item_id);
+            CREATE TABLE IF NOT EXISTS remise_categories (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT UNIQUE NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS remise_category_sizes (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL REFERENCES remise_categories(id) ON DELETE CASCADE,
+                name TEXT NOT NULL COLLATE NOCASE,
+                UNIQUE(category_id, name)
+            );
+            CREATE TABLE IF NOT EXISTS remise_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                sku TEXT UNIQUE NOT NULL,
+                category_id INTEGER REFERENCES remise_categories(id) ON DELETE SET NULL,
+                size TEXT,
+                quantity INTEGER NOT NULL DEFAULT 0,
+                low_stock_threshold INTEGER NOT NULL DEFAULT 0,
+                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
+            );
+            CREATE TABLE IF NOT EXISTS remise_movements (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                item_id INTEGER NOT NULL REFERENCES remise_items(id) ON DELETE CASCADE,
+                delta INTEGER NOT NULL,
+                reason TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_remise_movements_item ON remise_movements(item_id);
             """
         )
 
@@ -364,6 +473,301 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
         """,
         (order_id, item_id, shortage),
     )
+
+
+def _build_inventory_item(row: sqlite3.Row) -> models.Item:
+    return models.Item(
+        id=row["id"],
+        name=row["name"],
+        sku=row["sku"],
+        category_id=row["category_id"],
+        size=row["size"],
+        quantity=row["quantity"],
+        low_stock_threshold=row["low_stock_threshold"],
+        supplier_id=row["supplier_id"],
+    )
+
+
+def _list_inventory_items_internal(
+    module: str, search: str | None = None
+) -> list[models.Item]:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    query = f"SELECT * FROM {config.tables.items}"
+    params: tuple[object, ...] = ()
+    if search:
+        query += " WHERE name LIKE ? OR sku LIKE ?"
+        like = f"%{search}%"
+        params = (like, like)
+    query += " ORDER BY name COLLATE NOCASE"
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(query, params)
+        return [_build_inventory_item(row) for row in cur.fetchall()]
+
+
+def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT * FROM {config.tables.items} WHERE id = ?",
+            (item_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        return _build_inventory_item(row)
+
+
+def _create_inventory_item_internal(
+    module: str, payload: models.ItemCreate
+) -> models.Item:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"""
+            INSERT INTO {config.tables.items} (name, sku, category_id, size, quantity, low_stock_threshold, supplier_id)
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload.name,
+                payload.sku,
+                payload.category_id,
+                payload.size,
+                payload.quantity,
+                payload.low_stock_threshold,
+                payload.supplier_id,
+            ),
+        )
+        item_id = cur.lastrowid
+        if config.auto_purchase_orders:
+            _maybe_create_auto_purchase_order(conn, item_id)
+        conn.commit()
+    return _get_inventory_item_internal(module, item_id)
+
+
+def _update_inventory_item_internal(
+    module: str, item_id: int, payload: models.ItemUpdate
+) -> models.Item:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    if not fields:
+        return _get_inventory_item_internal(module, item_id)
+    assignments = ", ".join(f"{col} = ?" for col in fields)
+    values = list(fields.values())
+    values.append(item_id)
+    should_check_low_stock = any(
+        key in fields for key in {"quantity", "low_stock_threshold", "supplier_id"}
+    )
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            f"UPDATE {config.tables.items} SET {assignments} WHERE id = ?",
+            values,
+        )
+        if config.auto_purchase_orders and should_check_low_stock:
+            _maybe_create_auto_purchase_order(conn, item_id)
+        conn.commit()
+    return _get_inventory_item_internal(module, item_id)
+
+
+def _delete_inventory_item_internal(module: str, item_id: int) -> None:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            f"DELETE FROM {config.tables.items} WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+
+
+def _list_inventory_categories_internal(module: str) -> list[models.Category]:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT id, name FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
+        )
+        rows = cur.fetchall()
+        if not rows:
+            return []
+        category_ids = [row["id"] for row in rows]
+        sizes_map: dict[int, list[str]] = {category_id: [] for category_id in category_ids}
+        if category_ids:
+            placeholders = ",".join("?" for _ in category_ids)
+            size_rows = conn.execute(
+                f"""
+                SELECT category_id, name
+                FROM {config.tables.category_sizes}
+                WHERE category_id IN ({placeholders})
+                ORDER BY name COLLATE NOCASE
+                """,
+                category_ids,
+            ).fetchall()
+            for size in size_rows:
+                sizes_map.setdefault(size["category_id"], []).append(size["name"])
+        return [
+            models.Category(
+                id=row["id"],
+                name=row["name"],
+                sizes=sizes_map.get(row["id"], []),
+            )
+            for row in rows
+        ]
+
+
+def _get_inventory_category_internal(
+    module: str, category_id: int
+) -> Optional[models.Category]:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT id, name FROM {config.tables.categories} WHERE id = ?",
+            (category_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            return None
+        size_rows = conn.execute(
+            f"SELECT name FROM {config.tables.category_sizes} WHERE category_id = ? ORDER BY name COLLATE NOCASE",
+            (category_id,),
+        ).fetchall()
+        return models.Category(
+            id=row["id"],
+            name=row["name"],
+            sizes=[size_row["name"] for size_row in size_rows],
+        )
+
+
+def _create_inventory_category_internal(
+    module: str, payload: models.CategoryCreate
+) -> models.Category:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    normalized_sizes = _normalize_sizes(payload.sizes)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"INSERT INTO {config.tables.categories} (name) VALUES (?)",
+            (payload.name,),
+        )
+        category_id = cur.lastrowid
+        if normalized_sizes:
+            conn.executemany(
+                f"INSERT INTO {config.tables.category_sizes} (category_id, name) VALUES (?, ?)",
+                ((category_id, size) for size in normalized_sizes),
+            )
+        conn.commit()
+    return models.Category(id=category_id, name=payload.name, sizes=normalized_sizes)
+
+
+def _update_inventory_category_internal(
+    module: str, category_id: int, payload: models.CategoryUpdate
+) -> models.Category:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT id FROM {config.tables.categories} WHERE id = ?",
+            (category_id,),
+        )
+        if cur.fetchone() is None:
+            raise ValueError("Catégorie introuvable")
+
+        updates: list[str] = []
+        values: list[object] = []
+        if payload.name is not None:
+            updates.append("name = ?")
+            values.append(payload.name)
+        if updates:
+            values.append(category_id)
+            conn.execute(
+                f"UPDATE {config.tables.categories} SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+
+        if payload.sizes is not None:
+            conn.execute(
+                f"DELETE FROM {config.tables.category_sizes} WHERE category_id = ?",
+                (category_id,),
+            )
+            normalized_sizes = _normalize_sizes(payload.sizes)
+            if normalized_sizes:
+                conn.executemany(
+                    f"INSERT INTO {config.tables.category_sizes} (category_id, name) VALUES (?, ?)",
+                    ((category_id, size) for size in normalized_sizes),
+                )
+        conn.commit()
+
+    updated = _get_inventory_category_internal(module, category_id)
+    if updated is None:  # pragma: no cover - deleted row in concurrent context
+        raise ValueError("Catégorie introuvable")
+    return updated
+
+
+def _delete_inventory_category_internal(module: str, category_id: int) -> None:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            f"DELETE FROM {config.tables.category_sizes} WHERE category_id = ?",
+            (category_id,),
+        )
+        conn.execute(
+            f"DELETE FROM {config.tables.categories} WHERE id = ?",
+            (category_id,),
+        )
+        conn.commit()
+
+
+def _record_inventory_movement_internal(
+    module: str, item_id: int, payload: models.MovementCreate
+) -> None:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT quantity FROM {config.tables.items} WHERE id = ?",
+            (item_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        conn.execute(
+            f"INSERT INTO {config.tables.movements} (item_id, delta, reason) VALUES (?, ?, ?)",
+            (item_id, payload.delta, payload.reason),
+        )
+        conn.execute(
+            f"UPDATE {config.tables.items} SET quantity = quantity + ? WHERE id = ?",
+            (payload.delta, item_id),
+        )
+        if config.auto_purchase_orders:
+            _maybe_create_auto_purchase_order(conn, item_id)
+        conn.commit()
+
+
+def _fetch_inventory_movements_internal(
+    module: str, item_id: int
+) -> list[models.Movement]:
+    ensure_database_ready()
+    config = _get_inventory_config(module)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT * FROM {config.tables.movements} WHERE item_id = ? ORDER BY created_at DESC",
+            (item_id,),
+        )
+        rows = cur.fetchall()
+        return [
+            models.Movement(
+                id=row["id"],
+                item_id=row["item_id"],
+                delta=row["delta"],
+                reason=row["reason"],
+                created_at=row["created_at"],
+            )
+            for row in rows
+        ]
 
 
 def seed_default_admin() -> None:
@@ -532,96 +936,63 @@ def authenticate(username: str, password: str) -> Optional[models.User]:
 
 
 def list_items(search: str | None = None) -> list[models.Item]:
-    ensure_database_ready()
-    query = "SELECT * FROM items"
-    params: tuple[object, ...] = ()
-    if search:
-        query += " WHERE name LIKE ? OR sku LIKE ?"
-        like = f"%{search}%"
-        params = (like, like)
-    query += " ORDER BY name COLLATE NOCASE"
-    with db.get_stock_connection() as conn:
-        cur = conn.execute(query, params)
-        rows = cur.fetchall()
-        return [
-            models.Item(
-                id=row["id"],
-                name=row["name"],
-                sku=row["sku"],
-                category_id=row["category_id"],
-                size=row["size"],
-                quantity=row["quantity"],
-                low_stock_threshold=row["low_stock_threshold"],
-                supplier_id=row["supplier_id"],
-            )
-            for row in rows
-        ]
+    return _list_inventory_items_internal("default", search)
 
 
 def create_item(payload: models.ItemCreate) -> models.Item:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO items (name, sku, category_id, size, quantity, low_stock_threshold, supplier_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload.name,
-                payload.sku,
-                payload.category_id,
-                payload.size,
-                payload.quantity,
-                payload.low_stock_threshold,
-                payload.supplier_id,
-            ),
-        )
-        item_id = cur.lastrowid
-        _maybe_create_auto_purchase_order(conn, item_id)
-        conn.commit()
-        return get_item(item_id)
+    return _create_inventory_item_internal("default", payload)
 
 
 def get_item(item_id: int) -> models.Item:
-    with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT * FROM items WHERE id = ?", (item_id,))
-        row = cur.fetchone()
-        if not row:
-            raise ValueError("Article introuvable")
-        return models.Item(
-            id=row["id"],
-            name=row["name"],
-                sku=row["sku"],
-                category_id=row["category_id"],
-                size=row["size"],
-                quantity=row["quantity"],
-                low_stock_threshold=row["low_stock_threshold"],
-                supplier_id=row["supplier_id"],
-        )
+    return _get_inventory_item_internal("default", item_id)
 
 
 def update_item(item_id: int, payload: models.ItemUpdate) -> models.Item:
-    ensure_database_ready()
-    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
-    if not fields:
-        return get_item(item_id)
-    assignments = ", ".join(f"{col} = ?" for col in fields)
-    values = list(fields.values())
-    values.append(item_id)
-    should_check_low_stock = any(key in fields for key in {"quantity", "low_stock_threshold", "supplier_id"})
-    with db.get_stock_connection() as conn:
-        conn.execute(f"UPDATE items SET {assignments} WHERE id = ?", values)
-        if should_check_low_stock:
-            _maybe_create_auto_purchase_order(conn, item_id)
-        conn.commit()
-    return get_item(item_id)
+    return _update_inventory_item_internal("default", item_id, payload)
 
 
 def delete_item(item_id: int) -> None:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        conn.execute("DELETE FROM items WHERE id = ?", (item_id,))
-        conn.commit()
+    _delete_inventory_item_internal("default", item_id)
+
+
+def list_vehicle_items(search: str | None = None) -> list[models.Item]:
+    return _list_inventory_items_internal("vehicle_inventory", search)
+
+
+def create_vehicle_item(payload: models.ItemCreate) -> models.Item:
+    return _create_inventory_item_internal("vehicle_inventory", payload)
+
+
+def get_vehicle_item(item_id: int) -> models.Item:
+    return _get_inventory_item_internal("vehicle_inventory", item_id)
+
+
+def update_vehicle_item(item_id: int, payload: models.ItemUpdate) -> models.Item:
+    return _update_inventory_item_internal("vehicle_inventory", item_id, payload)
+
+
+def delete_vehicle_item(item_id: int) -> None:
+    _delete_inventory_item_internal("vehicle_inventory", item_id)
+
+
+def list_remise_items(search: str | None = None) -> list[models.Item]:
+    return _list_inventory_items_internal("inventory_remise", search)
+
+
+def create_remise_item(payload: models.ItemCreate) -> models.Item:
+    return _create_inventory_item_internal("inventory_remise", payload)
+
+
+def get_remise_item(item_id: int) -> models.Item:
+    return _get_inventory_item_internal("inventory_remise", item_id)
+
+
+def update_remise_item(item_id: int, payload: models.ItemUpdate) -> models.Item:
+    return _update_inventory_item_internal("inventory_remise", item_id, payload)
+
+
+def delete_remise_item(item_id: int) -> None:
+    _delete_inventory_item_internal("inventory_remise", item_id)
 
 
 def _normalize_barcode(barcode: str | None) -> str | None:
@@ -678,150 +1049,87 @@ def list_low_stock(threshold: int) -> list[models.LowStockReport]:
 
 
 def list_categories() -> list[models.Category]:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT id, name FROM categories ORDER BY name COLLATE NOCASE")
-        rows = cur.fetchall()
-        if not rows:
-            return []
-
-        category_ids = [row["id"] for row in rows]
-        sizes_map: dict[int, list[str]] = {category_id: [] for category_id in category_ids}
-        placeholders = ",".join("?" for _ in category_ids)
-        size_rows = conn.execute(
-            f"SELECT category_id, name FROM category_sizes WHERE category_id IN ({placeholders}) ORDER BY name COLLATE NOCASE",
-            category_ids,
-        ).fetchall()
-        for size in size_rows:
-            sizes_map.setdefault(size["category_id"], []).append(size["name"])
-
-        return [
-            models.Category(
-                id=row["id"],
-                name=row["name"],
-                sizes=sizes_map.get(row["id"], []),
-            )
-            for row in rows
-        ]
+    return _list_inventory_categories_internal("default")
 
 
 def get_category(category_id: int) -> Optional[models.Category]:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT id, name FROM categories WHERE id = ?", (category_id,))
-        row = cur.fetchone()
-        if row is None:
-            return None
-        size_rows = conn.execute(
-            "SELECT name FROM category_sizes WHERE category_id = ? ORDER BY name COLLATE NOCASE",
-            (category_id,),
-        ).fetchall()
-        return models.Category(
-            id=row["id"],
-            name=row["name"],
-            sizes=[size_row["name"] for size_row in size_rows],
-        )
+    return _get_inventory_category_internal("default", category_id)
 
 
 def create_category(payload: models.CategoryCreate) -> models.Category:
-    ensure_database_ready()
-    normalized_sizes = _normalize_sizes(payload.sizes)
-    with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            "INSERT INTO categories (name) VALUES (?)",
-            (payload.name,),
-        )
-        category_id = cur.lastrowid
-        if normalized_sizes:
-            conn.executemany(
-                "INSERT INTO category_sizes (category_id, name) VALUES (?, ?)",
-                ((category_id, size) for size in normalized_sizes),
-            )
-        conn.commit()
-        return models.Category(id=category_id, name=payload.name, sizes=normalized_sizes)
+    return _create_inventory_category_internal("default", payload)
 
 
 def delete_category(category_id: int) -> None:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        conn.execute("DELETE FROM category_sizes WHERE category_id = ?", (category_id,))
-        conn.execute("DELETE FROM categories WHERE id = ?", (category_id,))
-        conn.commit()
+    _delete_inventory_category_internal("default", category_id)
 
 
 def update_category(category_id: int, payload: models.CategoryUpdate) -> models.Category:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT id FROM categories WHERE id = ?", (category_id,))
-        if cur.fetchone() is None:
-            raise ValueError("Catégorie introuvable")
-
-        updates: list[str] = []
-        values: list[object] = []
-        if payload.name is not None:
-            updates.append("name = ?")
-            values.append(payload.name)
-        if updates:
-            values.append(category_id)
-            conn.execute(
-                f"UPDATE categories SET {', '.join(updates)} WHERE id = ?",
-                values,
-            )
-
-        if payload.sizes is not None:
-            conn.execute("DELETE FROM category_sizes WHERE category_id = ?", (category_id,))
-            normalized_sizes = _normalize_sizes(payload.sizes)
-            if normalized_sizes:
-                conn.executemany(
-                    "INSERT INTO category_sizes (category_id, name) VALUES (?, ?)",
-                    ((category_id, size) for size in normalized_sizes),
-                )
-        conn.commit()
-
-    updated = get_category(category_id)
-    if updated is None:  # pragma: no cover - deleted row in concurrent context
-        raise ValueError("Catégorie introuvable")
-    return updated
+    return _update_inventory_category_internal("default", category_id, payload)
 
 
 def record_movement(item_id: int, payload: models.MovementCreate) -> None:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT quantity FROM items WHERE id = ?", (item_id,))
-        row = cur.fetchone()
-        if row is None:
-            raise ValueError("Article introuvable")
-
-        conn.execute(
-            "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
-            (item_id, payload.delta, payload.reason),
-        )
-        conn.execute(
-            "UPDATE items SET quantity = quantity + ? WHERE id = ?",
-            (payload.delta, item_id),
-        )
-        _maybe_create_auto_purchase_order(conn, item_id)
-        conn.commit()
+    _record_inventory_movement_internal("default", item_id, payload)
 
 
 def fetch_movements(item_id: int) -> list[models.Movement]:
-    ensure_database_ready()
-    with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            "SELECT * FROM movements WHERE item_id = ? ORDER BY created_at DESC",
-            (item_id,),
-        )
-        rows = cur.fetchall()
-        return [
-            models.Movement(
-                id=row["id"],
-                item_id=row["item_id"],
-                delta=row["delta"],
-                reason=row["reason"],
-                created_at=row["created_at"],
-            )
-            for row in rows
-        ]
+    return _fetch_inventory_movements_internal("default", item_id)
+
+
+def list_vehicle_categories() -> list[models.Category]:
+    return _list_inventory_categories_internal("vehicle_inventory")
+
+
+def get_vehicle_category(category_id: int) -> Optional[models.Category]:
+    return _get_inventory_category_internal("vehicle_inventory", category_id)
+
+
+def create_vehicle_category(payload: models.CategoryCreate) -> models.Category:
+    return _create_inventory_category_internal("vehicle_inventory", payload)
+
+
+def update_vehicle_category(category_id: int, payload: models.CategoryUpdate) -> models.Category:
+    return _update_inventory_category_internal("vehicle_inventory", category_id, payload)
+
+
+def delete_vehicle_category(category_id: int) -> None:
+    _delete_inventory_category_internal("vehicle_inventory", category_id)
+
+
+def record_vehicle_movement(item_id: int, payload: models.MovementCreate) -> None:
+    _record_inventory_movement_internal("vehicle_inventory", item_id, payload)
+
+
+def fetch_vehicle_movements(item_id: int) -> list[models.Movement]:
+    return _fetch_inventory_movements_internal("vehicle_inventory", item_id)
+
+
+def list_remise_categories() -> list[models.Category]:
+    return _list_inventory_categories_internal("inventory_remise")
+
+
+def get_remise_category(category_id: int) -> Optional[models.Category]:
+    return _get_inventory_category_internal("inventory_remise", category_id)
+
+
+def create_remise_category(payload: models.CategoryCreate) -> models.Category:
+    return _create_inventory_category_internal("inventory_remise", payload)
+
+
+def update_remise_category(category_id: int, payload: models.CategoryUpdate) -> models.Category:
+    return _update_inventory_category_internal("inventory_remise", category_id, payload)
+
+
+def delete_remise_category(category_id: int) -> None:
+    _delete_inventory_category_internal("inventory_remise", category_id)
+
+
+def record_remise_movement(item_id: int, payload: models.MovementCreate) -> None:
+    _record_inventory_movement_internal("inventory_remise", item_id, payload)
+
+
+def fetch_remise_movements(item_id: int) -> list[models.Movement]:
+    return _fetch_inventory_movements_internal("inventory_remise", item_id)
 
 
 def export_items_to_csv(path: Path) -> Path:
