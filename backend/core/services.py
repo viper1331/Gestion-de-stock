@@ -7,13 +7,20 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from textwrap import wrap
-from typing import Callable, Iterable, Optional
+from typing import BinaryIO, Callable, Iterable, Optional
+from uuid import uuid4
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.pdfgen import canvas
 
 from backend.core import db, models, security
+from backend.core.storage import (
+    MEDIA_ROOT,
+    VEHICLE_ITEM_MEDIA_DIR,
+    VEHICLE_PHOTO_MEDIA_DIR,
+    relative_to_media,
+)
 
 # Initialisation des bases de données au chargement du module
 _db_initialized = False
@@ -71,6 +78,62 @@ _INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
         )
     ),
 }
+
+_MEDIA_URL_PREFIX = "/media"
+_ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
+
+
+def _build_media_url(path: str | None) -> str | None:
+    if not path:
+        return None
+    return f"{_MEDIA_URL_PREFIX}/{path}"
+
+
+def _sanitize_image_suffix(filename: str | None) -> str:
+    if not filename:
+        return ".png"
+    suffix = Path(filename).suffix.lower()
+    if suffix in _ALLOWED_IMAGE_SUFFIXES:
+        return suffix
+    return ".png"
+
+
+def _store_media_file(directory: Path, stream: BinaryIO, filename: str | None) -> str:
+    directory.mkdir(parents=True, exist_ok=True)
+    suffix = _sanitize_image_suffix(filename)
+    target = directory / f"{uuid4().hex}{suffix}"
+    stream.seek(0)
+    with open(target, "wb") as buffer:
+        while True:
+            chunk = stream.read(1024 * 1024)
+            if not chunk:
+                break
+            buffer.write(chunk)
+    return relative_to_media(target)
+
+
+def _delete_media_file(relative_path: str | None) -> None:
+    if not relative_path:
+        return
+    target = MEDIA_ROOT / Path(relative_path)
+    try:
+        target.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def _coerce_datetime(value: object) -> datetime:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            pass
+    try:
+        return datetime.fromtimestamp(float(value))
+    except (TypeError, ValueError):
+        return datetime.now()
 
 
 def _get_inventory_config(module: str) -> _InventoryModuleConfig:
@@ -358,7 +421,8 @@ def _apply_schema_migrations() -> None:
                 size TEXT,
                 quantity INTEGER NOT NULL DEFAULT 0,
                 low_stock_threshold INTEGER NOT NULL DEFAULT 0,
-                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
+                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                image_path TEXT
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -368,6 +432,11 @@ def _apply_schema_migrations() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_vehicle_movements_item ON vehicle_movements(item_id);
+            CREATE TABLE IF NOT EXISTS vehicle_photos (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
             CREATE TABLE IF NOT EXISTS remise_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL
@@ -398,6 +467,11 @@ def _apply_schema_migrations() -> None:
             CREATE INDEX IF NOT EXISTS idx_remise_movements_item ON remise_movements(item_id);
             """
         )
+
+        vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
+        vehicle_item_columns = {row["name"] for row in vehicle_item_info}
+        if "image_path" not in vehicle_item_columns:
+            conn.execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
 
         pharmacy_category_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_category_columns = {row["name"] for row in pharmacy_category_info}
@@ -476,6 +550,9 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
 
 
 def _build_inventory_item(row: sqlite3.Row) -> models.Item:
+    image_url = None
+    if "image_path" in row.keys():
+        image_url = _build_media_url(row["image_path"])
     return models.Item(
         id=row["id"],
         name=row["name"],
@@ -485,6 +562,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         quantity=row["quantity"],
         low_stock_threshold=row["low_stock_threshold"],
         supplier_id=row["supplier_id"],
+        image_url=image_url,
     )
 
 
@@ -552,6 +630,7 @@ def _update_inventory_item_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    fields.pop("image_url", None)
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)
@@ -575,6 +654,14 @@ def _delete_inventory_item_internal(module: str, item_id: int) -> None:
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        if module == "vehicle_inventory":
+            cur = conn.execute(
+                f"SELECT image_path FROM {config.tables.items} WHERE id = ?",
+                (item_id,),
+            )
+            row = cur.fetchone()
+            if row and row["image_path"]:
+                _delete_media_file(row["image_path"])
         conn.execute(
             f"DELETE FROM {config.tables.items} WHERE id = ?",
             (item_id,),
@@ -977,6 +1064,113 @@ def delete_vehicle_item(item_id: int) -> None:
 
 def list_remise_items(search: str | None = None) -> list[models.Item]:
     return _list_inventory_items_internal("inventory_remise", search)
+
+
+def attach_vehicle_item_image(item_id: int, stream: BinaryIO, filename: str | None) -> models.Item:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT image_path FROM {config.tables.items} WHERE id = ?",
+            (item_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        previous_path = row["image_path"]
+        stored_path = _store_media_file(VEHICLE_ITEM_MEDIA_DIR, stream, filename)
+        conn.execute(
+            f"UPDATE {config.tables.items} SET image_path = ? WHERE id = ?",
+            (stored_path, item_id),
+        )
+        conn.commit()
+    if previous_path and previous_path != stored_path:
+        _delete_media_file(previous_path)
+    return _get_inventory_item_internal("vehicle_inventory", item_id)
+
+
+def remove_vehicle_item_image(item_id: int) -> models.Item:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT image_path FROM {config.tables.items} WHERE id = ?",
+            (item_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        previous_path = row["image_path"]
+        conn.execute(
+            f"UPDATE {config.tables.items} SET image_path = NULL WHERE id = ?",
+            (item_id,),
+        )
+        conn.commit()
+    if previous_path:
+        _delete_media_file(previous_path)
+    return _get_inventory_item_internal("vehicle_inventory", item_id)
+
+
+def list_vehicle_photos() -> list[models.VehiclePhoto]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "SELECT id, file_path, uploaded_at FROM vehicle_photos ORDER BY uploaded_at DESC"
+        )
+        rows = cur.fetchall()
+    return [
+        models.VehiclePhoto(
+            id=row["id"],
+            image_url=_build_media_url(row["file_path"]),
+            uploaded_at=_coerce_datetime(row["uploaded_at"]),
+        )
+        for row in rows
+    ]
+
+
+def add_vehicle_photo(stream: BinaryIO, filename: str | None) -> models.VehiclePhoto:
+    ensure_database_ready()
+    stored_path = _store_media_file(VEHICLE_PHOTO_MEDIA_DIR, stream, filename)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO vehicle_photos (file_path) VALUES (?)",
+            (stored_path,),
+        )
+        photo_id = cur.lastrowid
+        conn.commit()
+    return get_vehicle_photo(photo_id)
+
+
+def get_vehicle_photo(photo_id: int) -> models.VehiclePhoto:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "SELECT id, file_path, uploaded_at FROM vehicle_photos WHERE id = ?",
+            (photo_id,),
+        )
+        row = cur.fetchone()
+    if row is None:
+        raise ValueError("Photo introuvable")
+    return models.VehiclePhoto(
+        id=row["id"],
+        image_url=_build_media_url(row["file_path"]),
+        uploaded_at=_coerce_datetime(row["uploaded_at"]),
+    )
+
+
+def delete_vehicle_photo(photo_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "SELECT file_path FROM vehicle_photos WHERE id = ?",
+            (photo_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Photo introuvable")
+        conn.execute("DELETE FROM vehicle_photos WHERE id = ?", (photo_id,))
+        conn.commit()
+    _delete_media_file(row["file_path"])
 
 
 def create_remise_item(payload: models.ItemCreate) -> models.Item:

@@ -7,3 +7,4 @@ Pillow
 httpx
 pytest
 reportlab
+python-multipart

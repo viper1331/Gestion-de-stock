@@ -74,6 +74,7 @@ class Item(BaseModel):
     quantity: int
     low_stock_threshold: int = 0
     supplier_id: int | None = None
+    image_url: str | None = None
 
 
 class ItemCreate(BaseModel):
@@ -94,6 +95,13 @@ class ItemUpdate(BaseModel):
     quantity: Optional[int] = None
     low_stock_threshold: Optional[int] = None
     supplier_id: Optional[int] = None
+    image_url: Optional[str] = None
+
+
+class VehiclePhoto(BaseModel):
+    id: int
+    image_url: str
+    uploaded_at: datetime
 
 
 class Movement(BaseModel):
