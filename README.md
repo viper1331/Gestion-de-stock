@@ -73,6 +73,7 @@ npm run tauri dev
 - `python scripts/dev.py` : lance simultanément le backend FastAPI (uvicorn) et le frontend Vite. Options : `--no-frontend` pour ne démarrer que l'API et `--port` pour changer le port du backend.
 - `python scripts/run_backend.py` : crée/active `.venv`, installe les dépendances, exécute `pytest` puis lance FastAPI (`--host`/`--port`, `--skip-install`, `--skip-tests`).
 - `python scripts/run_frontend.py` : exécute `npm install` puis lance Vite (`--host`/`--open`).
+- `python scripts/update_repo.py` : récupère les dernières modifications Git, installe automatiquement les dépendances modifiées et laisse tourner les serveurs déjà lancés.
 - `pwsh scripts/dev.ps1` : lance FastAPI en mode reload et Vite en parallèle.
 - `pwsh scripts/build_all.ps1` : exécute les tests backend, build la SPA et package l'app Tauri.
 
