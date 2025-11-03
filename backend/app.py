@@ -1,6 +1,7 @@
 """Application FastAPI principale pour Gestion Stock Pro."""
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.staticfiles import StaticFiles
 
 from backend.api import (
     auth,
@@ -20,6 +21,7 @@ from backend.api import (
     vehicle_inventory,
     remise_inventory,
 )
+from backend.core.storage import MEDIA_ROOT
 from backend.ws import camera, voice
 
 app = FastAPI(title="Gestion Stock Pro API", version="2.0.0")
@@ -48,6 +50,8 @@ app.include_router(vehicle_inventory.router, prefix="/vehicle-inventory", tags=[
 app.include_router(remise_inventory.router, prefix="/remise-inventory", tags=["remise-inventory"])
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 app.include_router(users.router, prefix="/users", tags=["users"])
+
+app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
 app.include_router(camera.router, prefix="/ws", tags=["ws-camera"])
 app.include_router(voice.router, prefix="/ws", tags=["ws-voice"])

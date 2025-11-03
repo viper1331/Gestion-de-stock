@@ -1,7 +1,7 @@
 """Routes pour la gestion de l'inventaire véhicules."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -52,6 +52,35 @@ async def delete_vehicle_item(
 ) -> None:
     _require_permission(user, action="edit")
     services.delete_vehicle_item(item_id)
+
+
+@router.post("/{item_id}/image", response_model=models.Item)
+async def upload_vehicle_item_image(
+    item_id: int,
+    file: UploadFile = File(...),
+    user: models.User = Depends(get_current_user),
+) -> models.Item:
+    _require_permission(user, action="edit")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        await file.close()
+        raise HTTPException(status_code=400, detail="Seules les images sont autorisées.")
+    try:
+        return services.attach_vehicle_item_image(item_id, file.file, file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+
+@router.delete("/{item_id}/image", response_model=models.Item)
+async def remove_vehicle_item_image(
+    item_id: int, user: models.User = Depends(get_current_user)
+) -> models.Item:
+    _require_permission(user, action="edit")
+    try:
+        return services.remove_vehicle_item_image(item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/{item_id}/movements", status_code=204)
@@ -110,3 +139,34 @@ async def delete_vehicle_category(
 ) -> None:
     _require_permission(user, action="edit")
     services.delete_vehicle_category(category_id)
+
+
+@router.get("/photos/", response_model=list[models.VehiclePhoto])
+async def list_vehicle_photos(user: models.User = Depends(get_current_user)) -> list[models.VehiclePhoto]:
+    _require_permission(user, action="view")
+    return services.list_vehicle_photos()
+
+
+@router.post("/photos/", response_model=models.VehiclePhoto, status_code=201)
+async def upload_vehicle_photo(
+    file: UploadFile = File(...), user: models.User = Depends(get_current_user)
+) -> models.VehiclePhoto:
+    _require_permission(user, action="edit")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        await file.close()
+        raise HTTPException(status_code=400, detail="Seules les images sont autorisées.")
+    try:
+        return services.add_vehicle_photo(file.file, file.filename)
+    finally:
+        await file.close()
+
+
+@router.delete("/photos/{photo_id}", status_code=204)
+async def delete_vehicle_photo(
+    photo_id: int, user: models.User = Depends(get_current_user)
+) -> None:
+    _require_permission(user, action="edit")
+    try:
+        services.delete_vehicle_photo(photo_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
