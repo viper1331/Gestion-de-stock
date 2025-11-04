@@ -1,4 +1,13 @@
-import { ChangeEvent, DragEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  DragEvent,
+  FormEvent,
+  MouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 
@@ -6,6 +15,7 @@ import vanIllustration from "../../assets/vehicles/vehicle-van.svg";
 import pickupIllustration from "../../assets/vehicles/vehicle-pickup.svg";
 import ambulanceIllustration from "../../assets/vehicles/vehicle-ambulance.svg";
 import { api } from "../../lib/api";
+import { resolveMediaUrl } from "../../lib/media";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 
 interface VehicleCategory {
@@ -712,6 +722,8 @@ interface ItemCardProps {
 function ItemCard({ item, onRemove, onFeedback }: ItemCardProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const imageUrl = resolveMediaUrl(item.image_url);
+  const hasImage = Boolean(imageUrl);
 
   const uploadImage = useMutation({
     mutationFn: async (file: File) => {
@@ -798,9 +810,9 @@ function ItemCard({ item, onRemove, onFeedback }: ItemCardProps) {
       />
       <div className="flex items-center gap-3">
         <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
-          {item.image_url ? (
+          {hasImage ? (
             <img
-              src={item.image_url}
+              src={imageUrl ?? undefined}
               alt={`Illustration de ${item.name}`}
               className="h-full w-full object-cover"
             />
@@ -823,9 +835,9 @@ function ItemCard({ item, onRemove, onFeedback }: ItemCardProps) {
           disabled={isUpdatingImage}
           className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-70 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
         >
-          {item.image_url ? "Changer l'image" : "Ajouter une image"}
+          {hasImage ? "Changer l'image" : "Ajouter une image"}
         </button>
-        {item.image_url ? (
+        {hasImage ? (
           <button
             type="button"
             onClick={handleRemoveImage}
