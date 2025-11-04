@@ -53,6 +53,7 @@ class Category(BaseModel):
     id: int
     name: str
     sizes: list[str] = Field(default_factory=list)
+    image_url: Optional[str] = None
 
 
 class CategoryCreate(BaseModel):

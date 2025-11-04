@@ -17,6 +17,7 @@ from reportlab.pdfgen import canvas
 from backend.core import db, models, security
 from backend.core.storage import (
     MEDIA_ROOT,
+    VEHICLE_CATEGORY_MEDIA_DIR,
     VEHICLE_ITEM_MEDIA_DIR,
     VEHICLE_PHOTO_MEDIA_DIR,
     relative_to_media,
@@ -405,7 +406,8 @@ def _apply_schema_migrations() -> None:
             CREATE INDEX IF NOT EXISTS idx_pharmacy_movements_item ON pharmacy_movements(pharmacy_item_id);
             CREATE TABLE IF NOT EXISTS vehicle_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL
+                name TEXT UNIQUE NOT NULL,
+                image_path TEXT
             );
             CREATE TABLE IF NOT EXISTS vehicle_category_sizes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -472,6 +474,11 @@ def _apply_schema_migrations() -> None:
         vehicle_item_columns = {row["name"] for row in vehicle_item_info}
         if "image_path" not in vehicle_item_columns:
             conn.execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
+
+        vehicle_category_info = conn.execute("PRAGMA table_info(vehicle_categories)").fetchall()
+        vehicle_category_columns = {row["name"] for row in vehicle_category_info}
+        if "image_path" not in vehicle_category_columns:
+            conn.execute("ALTER TABLE vehicle_categories ADD COLUMN image_path TEXT")
 
         pharmacy_category_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_category_columns = {row["name"] for row in pharmacy_category_info}
@@ -673,8 +680,11 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        select_columns = "id, name"
+        if module == "vehicle_inventory":
+            select_columns += ", image_path"
         cur = conn.execute(
-            f"SELECT id, name FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
+            f"SELECT {select_columns} FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
         )
         rows = cur.fetchall()
         if not rows:
@@ -699,6 +709,9 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
                 id=row["id"],
                 name=row["name"],
                 sizes=sizes_map.get(row["id"], []),
+                image_url=_build_media_url(row["image_path"])
+                if "image_path" in row.keys()
+                else None,
             )
             for row in rows
         ]
@@ -710,8 +723,11 @@ def _get_inventory_category_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        select_columns = "id, name"
+        if module == "vehicle_inventory":
+            select_columns += ", image_path"
         cur = conn.execute(
-            f"SELECT id, name FROM {config.tables.categories} WHERE id = ?",
+            f"SELECT {select_columns} FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
         )
         row = cur.fetchone()
@@ -725,6 +741,9 @@ def _get_inventory_category_internal(
             id=row["id"],
             name=row["name"],
             sizes=[size_row["name"] for size_row in size_rows],
+            image_url=_build_media_url(row["image_path"])
+            if "image_path" in row.keys()
+            else None,
         )
 
 
@@ -746,7 +765,12 @@ def _create_inventory_category_internal(
                 ((category_id, size) for size in normalized_sizes),
             )
         conn.commit()
-    return models.Category(id=category_id, name=payload.name, sizes=normalized_sizes)
+    return models.Category(
+        id=category_id,
+        name=payload.name,
+        sizes=normalized_sizes,
+        image_url=None,
+    )
 
 
 def _update_inventory_category_internal(
@@ -797,6 +821,15 @@ def _delete_inventory_category_internal(module: str, category_id: int) -> None:
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        previous_path: str | None = None
+        if module == "vehicle_inventory":
+            cur = conn.execute(
+                f"SELECT image_path FROM {config.tables.categories} WHERE id = ?",
+                (category_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                previous_path = row["image_path"]
         conn.execute(
             f"DELETE FROM {config.tables.category_sizes} WHERE category_id = ?",
             (category_id,),
@@ -806,6 +839,8 @@ def _delete_inventory_category_internal(module: str, category_id: int) -> None:
             (category_id,),
         )
         conn.commit()
+    if previous_path:
+        _delete_media_file(previous_path)
 
 
 def _record_inventory_movement_internal(
@@ -1109,6 +1144,63 @@ def remove_vehicle_item_image(item_id: int) -> models.Item:
     if previous_path:
         _delete_media_file(previous_path)
     return _get_inventory_item_internal("vehicle_inventory", item_id)
+
+
+def attach_vehicle_category_image(
+    category_id: int, stream: BinaryIO, filename: str | None
+) -> models.Category:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT image_path FROM {config.tables.categories} WHERE id = ?",
+            (category_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Catégorie introuvable")
+        previous_path = row["image_path"]
+        stored_path = _store_media_file(VEHICLE_CATEGORY_MEDIA_DIR, stream, filename)
+        conn.execute(
+            f"UPDATE {config.tables.categories} SET image_path = ? WHERE id = ?",
+            (stored_path, category_id),
+        )
+        conn.commit()
+    if previous_path and previous_path != stored_path:
+        _delete_media_file(previous_path)
+    updated = _get_inventory_category_internal("vehicle_inventory", category_id)
+    if updated is None:  # pragma: no cover - deleted row in concurrent context
+        raise ValueError("Catégorie introuvable")
+    return updated
+
+
+def remove_vehicle_category_image(category_id: int) -> models.Category:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT image_path FROM {config.tables.categories} WHERE id = ?",
+            (category_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Catégorie introuvable")
+        previous_path = row["image_path"]
+        if not previous_path:
+            updated = _get_inventory_category_internal("vehicle_inventory", category_id)
+            if updated is None:  # pragma: no cover - deleted row in concurrent context
+                raise ValueError("Catégorie introuvable")
+            return updated
+        conn.execute(
+            f"UPDATE {config.tables.categories} SET image_path = NULL WHERE id = ?",
+            (category_id,),
+        )
+        conn.commit()
+    _delete_media_file(previous_path)
+    updated = _get_inventory_category_internal("vehicle_inventory", category_id)
+    if updated is None:  # pragma: no cover - deleted row in concurrent context
+        raise ValueError("Catégorie introuvable")
+    return updated
 
 
 def list_vehicle_photos() -> list[models.VehiclePhoto]:
