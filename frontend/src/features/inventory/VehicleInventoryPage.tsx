@@ -22,6 +22,7 @@ interface VehicleCategory {
   id: number;
   name: string;
   sizes: string[];
+  image_url: string | null;
 }
 
 interface VehicleItem {
@@ -38,6 +39,11 @@ interface VehicleItem {
 interface VehicleFormValues {
   name: string;
   sizes: string[];
+}
+
+interface UploadVehicleImagePayload {
+  categoryId: number;
+  file: File;
 }
 
 interface UpdateItemPayload {
@@ -66,6 +72,8 @@ export function VehicleInventoryPage() {
   const [isCreatingVehicle, setIsCreatingVehicle] = useState(false);
   const [vehicleName, setVehicleName] = useState("");
   const [vehicleViewsInput, setVehicleViewsInput] = useState("");
+  const [vehicleImageFile, setVehicleImageFile] = useState<File | null>(null);
+  const vehicleImageInputRef = useRef<HTMLInputElement | null>(null);
 
   const {
     data: vehicles = [],
@@ -78,6 +86,14 @@ export function VehicleInventoryPage() {
       return response.data;
     }
   });
+
+  const vehicleFallbackMap = useMemo(() => {
+    const map = new Map<number, string>();
+    vehicles.forEach((vehicle, index) => {
+      map.set(vehicle.id, VEHICLE_ILLUSTRATIONS[index % VEHICLE_ILLUSTRATIONS.length]);
+    });
+    return map;
+  }, [vehicles]);
 
   const {
     data: items = [],
@@ -126,19 +142,29 @@ export function VehicleInventoryPage() {
       });
       return response.data;
     },
-    onSuccess: (createdVehicle) => {
-      setFeedback({
-        type: "success",
-        text: `Le véhicule "${createdVehicle.name}" a été créé.`
-      });
-      setVehicleName("");
-      setVehicleViewsInput("");
-      setIsCreatingVehicle(false);
-      setSelectedVehicleId(createdVehicle.id);
-      setSelectedView(null);
-    },
     onError: () => {
       setFeedback({ type: "error", text: "Impossible de créer ce véhicule." });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
+    }
+  });
+
+  const uploadVehicleImage = useMutation({
+    mutationFn: async ({ categoryId, file }: UploadVehicleImagePayload) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api.post<VehicleCategory>(
+        `/vehicle-inventory/categories/${categoryId}/image`,
+        formData,
+        {
+          headers: { "Content-Type": "multipart/form-data" }
+        }
+      );
+      return response.data;
+    },
+    onError: () => {
+      setFeedback({ type: "error", text: "Impossible de téléverser la photo du véhicule." });
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
@@ -149,6 +175,13 @@ export function VehicleInventoryPage() {
     () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
     [vehicles, selectedVehicleId]
   );
+
+  const selectedVehicleFallback = useMemo(() => {
+    if (!selectedVehicle) {
+      return undefined;
+    }
+    return vehicleFallbackMap.get(selectedVehicle.id);
+  }, [selectedVehicle, vehicleFallbackMap]);
 
   const vehicleViews = useMemo(() => getVehicleViews(selectedVehicle), [selectedVehicle]);
 
@@ -209,7 +242,20 @@ export function VehicleInventoryPage() {
     isLoadingVehicles ||
     isLoadingItems ||
     updateItemLocation.isPending ||
-    createVehicle.isPending;
+    createVehicle.isPending ||
+    uploadVehicleImage.isPending;
+
+  const clearVehicleImageSelection = () => {
+    setVehicleImageFile(null);
+    if (vehicleImageInputRef.current) {
+      vehicleImageInputRef.current.value = "";
+    }
+  };
+
+  const handleVehicleImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setVehicleImageFile(file);
+  };
 
   const handleCreateVehicle = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -222,9 +268,29 @@ export function VehicleInventoryPage() {
     const parsedViews = normalizeVehicleViewsInput(vehicleViewsInput);
 
     try {
-      await createVehicle.mutateAsync({ name: trimmedName, sizes: parsedViews });
+      const createdVehicle = await createVehicle.mutateAsync({
+        name: trimmedName,
+        sizes: parsedViews
+      });
+      let finalVehicle = createdVehicle;
+      if (vehicleImageFile) {
+        finalVehicle = await uploadVehicleImage.mutateAsync({
+          categoryId: createdVehicle.id,
+          file: vehicleImageFile
+        });
+      }
+      setFeedback({
+        type: "success",
+        text: `Le véhicule "${finalVehicle.name}" a été créé.`
+      });
+      setVehicleName("");
+      setVehicleViewsInput("");
+      clearVehicleImageSelection();
+      setIsCreatingVehicle(false);
+      setSelectedVehicleId(finalVehicle.id);
+      setSelectedView(null);
     } catch {
-      // handled in onError
+      // handled in mutation callbacks
     }
   };
 
@@ -278,6 +344,25 @@ export function VehicleInventoryPage() {
                     />
                   </label>
                 </div>
+                <label className="block space-y-1" htmlFor="vehicle-image">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Photo du véhicule (optionnel)
+                  </span>
+                  <input
+                    id="vehicle-image"
+                    ref={vehicleImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    onChange={handleVehicleImageChange}
+                    disabled={createVehicle.isPending || uploadVehicleImage.isPending}
+                    className="block w-full text-xs text-slate-600 file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-300 dark:text-slate-200 dark:file:bg-slate-700 dark:file:text-slate-100 dark:hover:file:bg-slate-600"
+                  />
+                  {vehicleImageFile ? (
+                    <span className="block text-xs text-slate-500 dark:text-slate-400">
+                      {vehicleImageFile.name}
+                    </span>
+                  ) : null}
+                </label>
                 <p className="text-xs text-slate-500 dark:text-slate-400">
                   Saisissez les différentes vues séparées par des virgules. Si aucun nom n'est renseigné, la vue "{DEFAULT_VIEW_LABEL}" sera utilisée.
                 </p>
@@ -288,18 +373,21 @@ export function VehicleInventoryPage() {
                       setIsCreatingVehicle(false);
                       setVehicleName("");
                       setVehicleViewsInput("");
+                      clearVehicleImageSelection();
                     }}
                     className="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
-                    disabled={createVehicle.isPending}
+                    disabled={createVehicle.isPending || uploadVehicleImage.isPending}
                   >
                     Annuler
                   </button>
                   <button
                     type="submit"
                     className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                    disabled={createVehicle.isPending}
+                    disabled={createVehicle.isPending || uploadVehicleImage.isPending}
                   >
-                    {createVehicle.isPending ? "Création..." : "Créer le véhicule"}
+                    {createVehicle.isPending || uploadVehicleImage.isPending
+                      ? "Création..."
+                      : "Créer le véhicule"}
                   </button>
                 </div>
               </form>
@@ -308,7 +396,16 @@ export function VehicleInventoryPage() {
           <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
             <button
               type="button"
-              onClick={() => setIsCreatingVehicle((previous) => !previous)}
+              onClick={() =>
+                setIsCreatingVehicle((previous) => {
+                  if (previous) {
+                    setVehicleName("");
+                    setVehicleViewsInput("");
+                    clearVehicleImageSelection();
+                  }
+                  return !previous;
+                })
+              }
               className="inline-flex items-center gap-2 rounded-full border border-indigo-200 px-4 py-2 text-sm font-medium text-indigo-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-indigo-500/40 dark:text-indigo-200 dark:hover:border-indigo-400 dark:hover:text-white"
             >
               <span aria-hidden>＋</span>
@@ -352,11 +449,13 @@ export function VehicleInventoryPage() {
 
       {!selectedVehicle && (
         <section className="grid gap-6 lg:grid-cols-3">
-          {vehicles.map((vehicle, index) => (
+          {vehicles.map((vehicle) => (
             <VehicleCard
               key={vehicle.id}
               vehicle={vehicle}
-              illustration={VEHICLE_ILLUSTRATIONS[index % VEHICLE_ILLUSTRATIONS.length]}
+              fallbackIllustration={
+                vehicleFallbackMap.get(vehicle.id) ?? VEHICLE_ILLUSTRATIONS[0]
+              }
               onClick={() => setSelectedVehicleId(vehicle.id)}
             />
           ))}
@@ -374,7 +473,7 @@ export function VehicleInventoryPage() {
           <VehicleHeader
             vehicle={selectedVehicle}
             itemsCount={vehicleItems.length}
-            illustration={VEHICLE_ILLUSTRATIONS[selectedVehicle.id % VEHICLE_ILLUSTRATIONS.length]}
+            fallbackIllustration={selectedVehicleFallback}
           />
 
           <VehicleViewSelector
@@ -443,11 +542,12 @@ export function VehicleInventoryPage() {
 
 interface VehicleCardProps {
   vehicle: VehicleCategory;
-  illustration: string;
+  fallbackIllustration: string;
   onClick: () => void;
 }
 
-function VehicleCard({ vehicle, illustration, onClick }: VehicleCardProps) {
+function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProps) {
+  const imageSource = vehicle.image_url ?? fallbackIllustration;
   return (
     <button
       type="button"
@@ -456,8 +556,8 @@ function VehicleCard({ vehicle, illustration, onClick }: VehicleCardProps) {
     >
       <div className="relative h-44 w-full bg-slate-50 dark:bg-slate-800">
         <img
-          src={illustration}
-          alt="Illustration du véhicule"
+          src={imageSource}
+          alt={`Illustration du véhicule ${vehicle.name}`}
           className="absolute inset-0 h-full w-full object-cover object-center"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900/30 via-transparent" />
@@ -487,15 +587,16 @@ function VehicleCard({ vehicle, illustration, onClick }: VehicleCardProps) {
 interface VehicleHeaderProps {
   vehicle: VehicleCategory;
   itemsCount: number;
-  illustration: string;
+  fallbackIllustration?: string;
 }
 
-function VehicleHeader({ vehicle, itemsCount, illustration }: VehicleHeaderProps) {
+function VehicleHeader({ vehicle, itemsCount, fallbackIllustration }: VehicleHeaderProps) {
+  const imageSource = vehicle.image_url ?? fallbackIllustration ?? VEHICLE_ILLUSTRATIONS[0];
   return (
     <div className="flex flex-col gap-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900 md:flex-row md:items-center md:justify-between">
       <div className="flex items-center gap-4">
         <div className="hidden h-20 w-36 overflow-hidden rounded-xl bg-slate-100 shadow-inner dark:bg-slate-800 md:block">
-          <img src={illustration} alt="Vue du véhicule" className="h-full w-full object-cover" />
+          <img src={imageSource} alt="Vue du véhicule" className="h-full w-full object-cover" />
         </div>
         <div>
           <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">

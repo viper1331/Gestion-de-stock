@@ -1129,7 +1129,27 @@ def test_vehicle_inventory_crud_cycle() -> None:
         headers=admin_headers,
     )
     assert category_resp.status_code == 201, category_resp.text
-    category_id = category_resp.json()["id"]
+    created_category = category_resp.json()
+    assert created_category["image_url"] is None
+    category_id = created_category["id"]
+
+    upload_resp = client.post(
+        f"/vehicle-inventory/categories/{category_id}/image",
+        headers=admin_headers,
+        files={"file": ("vehicule.png", b"demo", "image/png")},
+    )
+    assert upload_resp.status_code == 200, upload_resp.text
+    category_with_image = upload_resp.json()
+    assert category_with_image["id"] == category_id
+    assert category_with_image["image_url"].startswith("/media/")
+
+    remove_image_resp = client.delete(
+        f"/vehicle-inventory/categories/{category_id}/image",
+        headers=admin_headers,
+    )
+    assert remove_image_resp.status_code == 200, remove_image_resp.text
+    category_without_image = remove_image_resp.json()
+    assert category_without_image["image_url"] is None
 
     sku = f"VEH-{uuid4().hex[:6]}"
     create_resp = client.post(
