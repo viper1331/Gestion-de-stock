@@ -21,6 +21,7 @@ interface VehicleItem {
   category_id: number | null;
   size: string | null;
   quantity: number;
+  remise_item_id: number | null;
   image_url: string | null;
 }
 
@@ -691,10 +692,10 @@ function DroppableLibrary({
             onFeedback={onItemFeedback}
           />
         ))}
-        {items.length === 0 && (
-          <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            Aucun matériel disponible. Utilisez le module d'inventaire général pour créer de nouveaux
-            éléments.
+          {items.length === 0 && (
+            <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre
+            disponibles ici.
           </p>
         )}
       </div>

@@ -422,7 +422,8 @@ def _apply_schema_migrations() -> None:
                 quantity INTEGER NOT NULL DEFAULT 0,
                 low_stock_threshold INTEGER NOT NULL DEFAULT 0,
                 supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
-                image_path TEXT
+                image_path TEXT,
+                remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -432,6 +433,7 @@ def _apply_schema_migrations() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_vehicle_movements_item ON vehicle_movements(item_id);
+            CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id);
             CREATE TABLE IF NOT EXISTS vehicle_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path TEXT NOT NULL,
@@ -472,6 +474,20 @@ def _apply_schema_migrations() -> None:
         vehicle_item_columns = {row["name"] for row in vehicle_item_info}
         if "image_path" not in vehicle_item_columns:
             conn.execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
+        if "remise_item_id" not in vehicle_item_columns:
+            conn.execute(
+                "ALTER TABLE vehicle_items ADD COLUMN remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL"
+            )
+            conn.execute(
+                """
+                UPDATE vehicle_items
+                SET remise_item_id = (
+                    SELECT id FROM remise_items WHERE remise_items.sku = vehicle_items.sku
+                )
+                WHERE remise_item_id IS NULL
+                """
+            )
+        conn.execute("CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)")
 
         pharmacy_category_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_category_columns = {row["name"] for row in pharmacy_category_info}
@@ -553,15 +569,28 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     image_url = None
     if "image_path" in row.keys():
         image_url = _build_media_url(row["image_path"])
+    name = row["name"]
+    sku = row["sku"]
+    supplier_id = row["supplier_id"]
+    if "remise_name" in row.keys() and row["remise_name"]:
+        name = row["remise_name"]
+    if "remise_sku" in row.keys() and row["remise_sku"]:
+        sku = row["remise_sku"]
+    if "remise_supplier_id" in row.keys() and row["remise_supplier_id"] is not None:
+        supplier_id = row["remise_supplier_id"]
+    remise_item_id = None
+    if "remise_item_id" in row.keys():
+        remise_item_id = row["remise_item_id"]
     return models.Item(
         id=row["id"],
-        name=row["name"],
-        sku=row["sku"],
+        name=name,
+        sku=sku,
         category_id=row["category_id"],
         size=row["size"],
         quantity=row["quantity"],
         low_stock_threshold=row["low_stock_threshold"],
-        supplier_id=row["supplier_id"],
+        supplier_id=supplier_id,
+        remise_item_id=remise_item_id,
         image_url=image_url,
     )
 
@@ -571,13 +600,25 @@ def _list_inventory_items_internal(
 ) -> list[models.Item]:
     ensure_database_ready()
     config = _get_inventory_config(module)
-    query = f"SELECT * FROM {config.tables.items}"
     params: tuple[object, ...] = ()
-    if search:
-        query += " WHERE name LIKE ? OR sku LIKE ?"
-        like = f"%{search}%"
-        params = (like, like)
-    query += " ORDER BY name COLLATE NOCASE"
+    if module == "vehicle_inventory":
+        query = (
+            "SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id "
+            "FROM vehicle_items AS vi "
+            "LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id"
+        )
+        if search:
+            query += " WHERE COALESCE(ri.name, vi.name) LIKE ? OR COALESCE(ri.sku, vi.sku) LIKE ?"
+            like = f"%{search}%"
+            params = (like, like)
+        query += " ORDER BY COALESCE(ri.name, vi.name) COLLATE NOCASE"
+    else:
+        query = f"SELECT * FROM {config.tables.items}"
+        if search:
+            query += " WHERE name LIKE ? OR sku LIKE ?"
+            like = f"%{search}%"
+            params = (like, like)
+        query += " ORDER BY name COLLATE NOCASE"
     with db.get_stock_connection() as conn:
         cur = conn.execute(query, params)
         return [_build_inventory_item(row) for row in cur.fetchall()]
@@ -586,10 +627,21 @@ def _list_inventory_items_internal(
 def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            f"SELECT * FROM {config.tables.items} WHERE id = ?",
-            (item_id,),
-        )
+        if module == "vehicle_inventory":
+            cur = conn.execute(
+                """
+                SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id
+                FROM vehicle_items AS vi
+                LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
+                WHERE vi.id = ?
+                """,
+                (item_id,),
+            )
+        else:
+            cur = conn.execute(
+                f"SELECT * FROM {config.tables.items} WHERE id = ?",
+                (item_id,),
+            )
         row = cur.fetchone()
         if row is None:
             raise ValueError("Article introuvable")
@@ -602,21 +654,50 @@ def _create_inventory_item_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            f"""
-            INSERT INTO {config.tables.items} (name, sku, category_id, size, quantity, low_stock_threshold, supplier_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload.name,
-                payload.sku,
-                payload.category_id,
-                payload.size,
-                payload.quantity,
-                payload.low_stock_threshold,
-                payload.supplier_id,
-            ),
-        )
+        if module == "vehicle_inventory":
+            if payload.remise_item_id is None:
+                raise ValueError("Un article de remise doit être sélectionné.")
+            source = conn.execute(
+                "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
+                (payload.remise_item_id,),
+            ).fetchone()
+            if source is None:
+                raise ValueError("Article de remise introuvable")
+            supplier_id = payload.supplier_id
+            if supplier_id is None:
+                supplier_id = source["supplier_id"]
+            cur = conn.execute(
+                """
+                INSERT INTO vehicle_items (name, sku, category_id, size, quantity, low_stock_threshold, supplier_id, remise_item_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    source["name"],
+                    source["sku"],
+                    payload.category_id,
+                    payload.size,
+                    payload.quantity,
+                    payload.low_stock_threshold,
+                    supplier_id,
+                    payload.remise_item_id,
+                ),
+            )
+        else:
+            cur = conn.execute(
+                f"""
+                INSERT INTO {config.tables.items} (name, sku, category_id, size, quantity, low_stock_threshold, supplier_id)
+                VALUES (?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    payload.name,
+                    payload.sku,
+                    payload.category_id,
+                    payload.size,
+                    payload.quantity,
+                    payload.low_stock_threshold,
+                    payload.supplier_id,
+                ),
+            )
         item_id = cur.lastrowid
         if config.auto_purchase_orders:
             _maybe_create_auto_purchase_order(conn, item_id)
@@ -631,6 +712,25 @@ def _update_inventory_item_internal(
     config = _get_inventory_config(module)
     fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
     fields.pop("image_url", None)
+    if module == "vehicle_inventory":
+        # Vehicle inventory items mirror remise inventory metadata.
+        fields.pop("name", None)
+        fields.pop("sku", None)
+        if "remise_item_id" in fields:
+            remise_item_id = fields["remise_item_id"]
+            if remise_item_id is None:
+                raise ValueError("Un article de remise doit être sélectionné.")
+            with db.get_stock_connection() as conn:
+                source = conn.execute(
+                    "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
+                    (remise_item_id,),
+                ).fetchone()
+            if source is None:
+                raise ValueError("Article de remise introuvable")
+            fields["name"] = source["name"]
+            fields["sku"] = source["sku"]
+            if fields.get("supplier_id") is None:
+                fields["supplier_id"] = source["supplier_id"]
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)
