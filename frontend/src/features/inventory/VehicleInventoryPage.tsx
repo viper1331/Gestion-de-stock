@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, DragEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 
@@ -6,6 +6,7 @@ import vanIllustration from "../../assets/vehicles/vehicle-van.svg";
 import pickupIllustration from "../../assets/vehicles/vehicle-pickup.svg";
 import ambulanceIllustration from "../../assets/vehicles/vehicle-ambulance.svg";
 import { api } from "../../lib/api";
+import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 
 interface VehicleCategory {
   id: number;
@@ -20,6 +21,7 @@ interface VehicleItem {
   category_id: number | null;
   size: string | null;
   quantity: number;
+  image_url: string | null;
 }
 
 interface VehicleFormValues {
@@ -41,16 +43,13 @@ const VEHICLE_ILLUSTRATIONS = [
 
 const DEFAULT_VIEW_LABEL = "Vue principale";
 
+type Feedback = { type: "success" | "error"; text: string };
+
 export function VehicleInventoryPage() {
   const queryClient = useQueryClient();
   const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
   const [selectedView, setSelectedView] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
-    null
-  );
-  const [isCreatingVehicle, setIsCreatingVehicle] = useState(false);
-  const [vehicleName, setVehicleName] = useState("");
-  const [vehicleViews, setVehicleViews] = useState("");
+  const [feedback, setFeedback] = useState<Feedback | null>(null);
 
   const {
     data: vehicles = [],
@@ -100,6 +99,9 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const pushFeedback = (entry: Feedback) => {
+    setFeedback(entry);
+  };
   const createVehicle = useMutation({
     mutationFn: async ({ name, sizes }: VehicleFormValues) => {
       const response = await api.post<VehicleCategory>("/vehicle-inventory/categories/", {
@@ -384,6 +386,7 @@ export function VehicleInventoryPage() {
                   size: null
                 })
               }
+              onItemFeedback={pushFeedback}
             />
 
             <aside className="space-y-6">
@@ -392,6 +395,7 @@ export function VehicleInventoryPage() {
                 description="Faites glisser un équipement vers la vue courante pour le déplacer."
                 emptyMessage="Aucun matériel n'est stocké dans les autres vues pour ce véhicule."
                 items={itemsInOtherViews}
+                onItemFeedback={pushFeedback}
               />
 
               <VehicleItemsPanel
@@ -399,6 +403,7 @@ export function VehicleInventoryPage() {
                 description="Ces éléments sont liés au véhicule mais pas à une vue précise."
                 emptyMessage="Tout le matériel est déjà affecté à une vue."
                 items={itemsWaitingAssignment}
+                onItemFeedback={pushFeedback}
               />
 
               <DroppableLibrary
@@ -409,9 +414,11 @@ export function VehicleInventoryPage() {
                 onRemoveFromVehicle={(itemId) =>
                   updateItemLocation.mutate({ itemId, categoryId: null, size: null })
                 }
+                onItemFeedback={pushFeedback}
               />
             </aside>
           </div>
+          <VehiclePhotosPanel />
         </section>
       )}
     </div>
@@ -528,6 +535,7 @@ interface VehicleCompartmentProps {
   items: VehicleItem[];
   onDropItem: (itemId: number) => void;
   onRemoveItem: (itemId: number) => void;
+  onItemFeedback: (feedback: Feedback) => void;
 }
 
 function VehicleCompartment({
@@ -535,7 +543,8 @@ function VehicleCompartment({
   description,
   items,
   onDropItem,
-  onRemoveItem
+  onRemoveItem,
+  onItemFeedback
 }: VehicleCompartmentProps) {
   const [isHovering, setIsHovering] = useState(false);
 
@@ -569,7 +578,12 @@ function VehicleCompartment({
         </div>
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {items.map((item) => (
-            <ItemCard key={item.id} item={item} onRemove={() => onRemoveItem(item.id)} />
+            <ItemCard
+              key={item.id}
+              item={item}
+              onRemove={() => onRemoveItem(item.id)}
+              onFeedback={onItemFeedback}
+            />
           ))}
           {items.length === 0 && (
             <p className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
@@ -587,16 +601,23 @@ interface VehicleItemsPanelProps {
   description: string;
   emptyMessage: string;
   items: VehicleItem[];
+  onItemFeedback?: (feedback: Feedback) => void;
 }
 
-function VehicleItemsPanel({ title, description, emptyMessage, items }: VehicleItemsPanelProps) {
+function VehicleItemsPanel({
+  title,
+  description,
+  emptyMessage,
+  items,
+  onItemFeedback
+}: VehicleItemsPanelProps) {
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
       <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
       <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{description}</p>
       <div className="mt-4 space-y-3">
         {items.map((item) => (
-          <ItemCard key={item.id} item={item} />
+          <ItemCard key={item.id} item={item} onFeedback={onItemFeedback} />
         ))}
         {items.length === 0 && (
           <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
@@ -612,9 +633,15 @@ interface DroppableLibraryProps {
   items: VehicleItem[];
   onDropItem: (itemId: number) => void;
   onRemoveFromVehicle: (itemId: number) => void;
+  onItemFeedback: (feedback: Feedback) => void;
 }
 
-function DroppableLibrary({ items, onDropItem, onRemoveFromVehicle }: DroppableLibraryProps) {
+function DroppableLibrary({
+  items,
+  onDropItem,
+  onRemoveFromVehicle,
+  onItemFeedback
+}: DroppableLibraryProps) {
   const [isHovering, setIsHovering] = useState(false);
 
   return (
@@ -656,6 +683,7 @@ function DroppableLibrary({ items, onDropItem, onRemoveFromVehicle }: DroppableL
             key={item.id}
             item={item}
             onRemove={() => onRemoveFromVehicle(item.id)}
+            onFeedback={onItemFeedback}
           />
         ))}
         {items.length === 0 && (
@@ -672,12 +700,80 @@ function DroppableLibrary({ items, onDropItem, onRemoveFromVehicle }: DroppableL
 interface ItemCardProps {
   item: VehicleItem;
   onRemove?: () => void;
+  onFeedback?: (feedback: Feedback) => void;
 }
 
-function ItemCard({ item, onRemove }: ItemCardProps) {
+function ItemCard({ item, onRemove, onFeedback }: ItemCardProps) {
+  const queryClient = useQueryClient();
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+
+  const uploadImage = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      await api.post(`/vehicle-inventory/${item.id}/image`, formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+    },
+    onSuccess: async () => {
+      onFeedback?.({ type: "success", text: "Image du matériel mise à jour." });
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+    },
+    onError: () => {
+      onFeedback?.({ type: "error", text: "Impossible d'enregistrer l'image du matériel." });
+    }
+  });
+
+  const removeImage = useMutation({
+    mutationFn: async () => {
+      await api.delete(`/vehicle-inventory/${item.id}/image`);
+    },
+    onSuccess: async () => {
+      onFeedback?.({ type: "success", text: "Image du matériel supprimée." });
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+    },
+    onError: () => {
+      onFeedback?.({ type: "error", text: "Impossible de supprimer l'image du matériel." });
+    }
+  });
+
+  const isUpdatingImage = uploadImage.isPending || removeImage.isPending;
+
+  const openFileDialog = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    fileInputRef.current?.click();
+  };
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      onFeedback?.({ type: "error", text: "Seules les images sont autorisées." });
+      event.target.value = "";
+      return;
+    }
+    uploadImage.mutate(file);
+    event.target.value = "";
+  };
+
+  const handleRemoveImage = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    removeImage.mutate();
+  };
+
+  const handleRemoveItem = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    onRemove?.();
+  };
+
   return (
     <div
-      className="flex items-center justify-between gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600"
+      className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600"
       draggable
       onDragStart={(event) => {
         event.dataTransfer.setData(
@@ -687,25 +783,70 @@ function ItemCard({ item, onRemove }: ItemCardProps) {
         event.dataTransfer.effectAllowed = "move";
       }}
     >
-      <div>
-        <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.name}</p>
-        <p className="text-xs text-slate-500 dark:text-slate-400">SKU : {item.sku}</p>
-        <p className="text-xs text-slate-500 dark:text-slate-400">Qté : {item.quantity}</p>
+      <input
+        ref={fileInputRef}
+        type="file"
+        accept="image/*"
+        className="sr-only"
+        onChange={handleFileChange}
+      />
+      <div className="flex items-center gap-3">
+        <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-lg border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
+          {item.image_url ? (
+            <img
+              src={item.image_url}
+              alt={`Illustration de ${item.name}`}
+              className="h-full w-full object-cover"
+            />
+          ) : (
+            <span className="px-2 text-center text-[11px] text-slate-500 dark:text-slate-400">
+              Aucune image
+            </span>
+          )}
+        </div>
+        <div>
+          <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.name}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">SKU : {item.sku}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">Qté : {item.quantity}</p>
+        </div>
       </div>
-      {onRemove && (
+      <div className="flex flex-wrap items-center gap-2">
         <button
           type="button"
-          onClick={onRemove}
-          className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+          onClick={openFileDialog}
+          disabled={isUpdatingImage}
+          className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-70 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
         >
-          Retirer
+          {item.image_url ? "Changer l'image" : "Ajouter une image"}
         </button>
-      )}
+        {item.image_url ? (
+          <button
+            type="button"
+            onClick={handleRemoveImage}
+            disabled={isUpdatingImage}
+            className="rounded-full border border-rose-300 px-3 py-1 text-xs font-medium text-rose-600 transition hover:border-rose-400 hover:text-rose-700 disabled:cursor-not-allowed disabled:opacity-70 dark:border-rose-500/70 dark:text-rose-200 dark:hover:border-rose-400 dark:hover:text-rose-100"
+          >
+            Supprimer l'image
+          </button>
+        ) : null}
+        {onRemove ? (
+          <button
+            type="button"
+            onClick={handleRemoveItem}
+            className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+          >
+            Retirer
+          </button>
+        ) : null}
+        {isUpdatingImage ? (
+          <span className="text-[11px] text-slate-500 dark:text-slate-400">Enregistrement…</span>
+        ) : null}
+      </div>
     </div>
   );
 }
 
-function readDraggedItemId(event: React.DragEvent<HTMLDivElement>): number | null {
+function readDraggedItemId(event: DragEvent<HTMLDivElement>): number | null {
   const rawData = event.dataTransfer.getData("application/json");
   if (!rawData) {
     return null;
