@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 
@@ -22,6 +22,11 @@ interface VehicleItem {
   quantity: number;
 }
 
+interface VehicleFormValues {
+  name: string;
+  sizes: string[];
+}
+
 interface UpdateItemPayload {
   itemId: number;
   categoryId: number | null;
@@ -43,6 +48,9 @@ export function VehicleInventoryPage() {
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
     null
   );
+  const [isCreatingVehicle, setIsCreatingVehicle] = useState(false);
+  const [vehicleName, setVehicleName] = useState("");
+  const [vehicleViews, setVehicleViews] = useState("");
 
   const {
     data: vehicles = [],
@@ -89,6 +97,33 @@ export function VehicleInventoryPage() {
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+    }
+  });
+
+  const createVehicle = useMutation({
+    mutationFn: async ({ name, sizes }: VehicleFormValues) => {
+      const response = await api.post<VehicleCategory>("/vehicle-inventory/categories/", {
+        name,
+        sizes
+      });
+      return response.data;
+    },
+    onSuccess: (createdVehicle) => {
+      setFeedback({
+        type: "success",
+        text: `Le véhicule "${createdVehicle.name}" a été créé.`
+      });
+      setVehicleName("");
+      setVehicleViews("");
+      setIsCreatingVehicle(false);
+      setSelectedVehicleId(createdVehicle.id);
+      setSelectedView(null);
+    },
+    onError: () => {
+      setFeedback({ type: "error", text: "Impossible de créer ce véhicule." });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
     }
   });
 
@@ -152,31 +187,126 @@ export function VehicleInventoryPage() {
     [items]
   );
 
-  const isLoading = isLoadingVehicles || isLoadingItems || updateItemLocation.isPending;
+  const isLoading =
+    isLoadingVehicles ||
+    isLoadingItems ||
+    updateItemLocation.isPending ||
+    createVehicle.isPending;
+
+  const handleCreateVehicle = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const trimmedName = vehicleName.trim();
+    if (!trimmedName) {
+      setFeedback({ type: "error", text: "Veuillez indiquer un nom de véhicule." });
+      return;
+    }
+
+    const parsedViews = normalizeVehicleViewsInput(vehicleViews);
+
+    try {
+      await createVehicle.mutateAsync({ name: trimmedName, sizes: parsedViews });
+    } catch {
+      // handled in onError
+    }
+  };
 
   return (
     <div className="space-y-6">
       <header className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-        <div className="flex flex-col gap-4 md:flex-row md:items-center md:justify-between">
-          <div>
-            <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
-              Inventaire véhicules
-            </h1>
-            <p className="mt-1 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
-              Visualisez chaque véhicule sous forme de vue interactive et organisez son matériel
-              coffre par coffre grâce au glisser-déposer.
-            </p>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div className="space-y-2">
+            <div>
+              <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                Inventaire véhicules
+              </h1>
+              <p className="mt-1 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
+                Visualisez chaque véhicule sous forme de vue interactive et organisez son matériel
+                coffre par coffre grâce au glisser-déposer.
+              </p>
+            </div>
+            {isCreatingVehicle ? (
+              <form
+                onSubmit={handleCreateVehicle}
+                className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
+              >
+                <div className="flex flex-col gap-2 sm:flex-row">
+                  <label className="flex-1 space-y-1" htmlFor="vehicle-name">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                      Nom du véhicule
+                    </span>
+                    <input
+                      id="vehicle-name"
+                      type="text"
+                      value={vehicleName}
+                      onChange={(event) => setVehicleName(event.target.value)}
+                      placeholder="Ex. VSAV 1"
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                      disabled={createVehicle.isPending}
+                      required
+                    />
+                  </label>
+                  <label className="flex-1 space-y-1" htmlFor="vehicle-views">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                      Vues (optionnel)
+                    </span>
+                    <input
+                      id="vehicle-views"
+                      type="text"
+                      value={vehicleViews}
+                      onChange={(event) => setVehicleViews(event.target.value)}
+                      placeholder="Vue principale, Coffre gauche, Coffre droit"
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                      disabled={createVehicle.isPending}
+                    />
+                  </label>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Saisissez les différentes vues séparées par des virgules. Si aucun nom n'est renseigné, la vue "{DEFAULT_VIEW_LABEL}" sera utilisée.
+                </p>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsCreatingVehicle(false);
+                      setVehicleName("");
+                      setVehicleViews("");
+                    }}
+                    className="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                    disabled={createVehicle.isPending}
+                  >
+                    Annuler
+                  </button>
+                  <button
+                    type="submit"
+                    className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    disabled={createVehicle.isPending}
+                  >
+                    {createVehicle.isPending ? "Création..." : "Créer le véhicule"}
+                  </button>
+                </div>
+              </form>
+            ) : null}
           </div>
-          {selectedVehicle && (
+          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
             <button
               type="button"
-              onClick={() => setSelectedVehicleId(null)}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+              onClick={() => setIsCreatingVehicle((previous) => !previous)}
+              className="inline-flex items-center gap-2 rounded-full border border-indigo-200 px-4 py-2 text-sm font-medium text-indigo-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-indigo-500/40 dark:text-indigo-200 dark:hover:border-indigo-400 dark:hover:text-white"
             >
-              <span aria-hidden>←</span>
-              Retour aux véhicules
+              <span aria-hidden>＋</span>
+              {isCreatingVehicle ? "Fermer le formulaire" : "Nouveau véhicule"}
             </button>
-          )}
+            {selectedVehicle && (
+              <button
+                type="button"
+                onClick={() => setSelectedVehicleId(null)}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+              >
+                <span aria-hidden>←</span>
+                Retour aux véhicules
+              </button>
+            )}
+          </div>
         </div>
         {feedback && (
           <p
@@ -591,6 +721,17 @@ function readDraggedItemId(event: React.DragEvent<HTMLDivElement>): number | nul
   }
 
   return null;
+}
+
+function normalizeVehicleViewsInput(rawInput: string): string[] {
+  const entries = rawInput
+    .split(/[,\n]/)
+    .map((entry) => entry.trim())
+    .filter((entry) => entry.length > 0);
+
+  const uniqueEntries = Array.from(new Set(entries));
+
+  return uniqueEntries.length > 0 ? uniqueEntries : [DEFAULT_VIEW_LABEL];
 }
 
 function getVehicleViews(vehicle: VehicleCategory | null): string[] {
