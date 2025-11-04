@@ -49,7 +49,12 @@ export function VehicleInventoryPage() {
   const queryClient = useQueryClient();
   const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
   const [selectedView, setSelectedView] = useState<string | null>(null);
-  const [feedback, setFeedback] = useState<Feedback | null>(null);
+  const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
+    null
+  );
+  const [isCreatingVehicle, setIsCreatingVehicle] = useState(false);
+  const [vehicleName, setVehicleName] = useState("");
+  const [vehicleViewsInput, setVehicleViewsInput] = useState("");
 
   const {
     data: vehicles = [],
@@ -116,7 +121,7 @@ export function VehicleInventoryPage() {
         text: `Le véhicule "${createdVehicle.name}" a été créé.`
       });
       setVehicleName("");
-      setVehicleViews("");
+      setVehicleViewsInput("");
       setIsCreatingVehicle(false);
       setSelectedVehicleId(createdVehicle.id);
       setSelectedView(null);
@@ -203,7 +208,7 @@ export function VehicleInventoryPage() {
       return;
     }
 
-    const parsedViews = normalizeVehicleViewsInput(vehicleViews);
+    const parsedViews = normalizeVehicleViewsInput(vehicleViewsInput);
 
     try {
       await createVehicle.mutateAsync({ name: trimmedName, sizes: parsedViews });
@@ -254,8 +259,8 @@ export function VehicleInventoryPage() {
                     <input
                       id="vehicle-views"
                       type="text"
-                      value={vehicleViews}
-                      onChange={(event) => setVehicleViews(event.target.value)}
+                      value={vehicleViewsInput}
+                      onChange={(event) => setVehicleViewsInput(event.target.value)}
                       placeholder="Vue principale, Coffre gauche, Coffre droit"
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
                       disabled={createVehicle.isPending}
@@ -271,7 +276,7 @@ export function VehicleInventoryPage() {
                     onClick={() => {
                       setIsCreatingVehicle(false);
                       setVehicleName("");
-                      setVehicleViews("");
+                      setVehicleViewsInput("");
                     }}
                     className="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
                     disabled={createVehicle.isPending}
