@@ -18,3 +18,89 @@ body {
 .dark body {
   @apply bg-slate-950 text-slate-100;
 }
+
+/* Light theme overrides for components that default to dark styles */
+html:not(.dark) .bg-slate-950 {
+  background-color: #f1f5f9;
+}
+
+html:not(.dark) .bg-slate-950\/60 {
+  background-color: #f1f5f999;
+}
+
+html:not(.dark) .bg-slate-900 {
+  background-color: #ffffff;
+}
+
+html:not(.dark) .bg-slate-900\/70 {
+  background-color: #ffffffb3;
+}
+
+html:not(.dark) .bg-slate-900\/60 {
+  background-color: #ffffff99;
+}
+
+html:not(.dark) .bg-slate-900\/40 {
+  background-color: #ffffff66;
+}
+
+html:not(.dark) .bg-slate-800 {
+  background-color: #e2e8f0;
+}
+
+html:not(.dark) .bg-slate-700 {
+  background-color: #cbd5f5;
+}
+
+html:not(.dark) .hover\:bg-slate-900:hover {
+  background-color: #f1f5f9;
+}
+
+html:not(.dark) .hover\:bg-slate-800:hover {
+  background-color: #e2e8f0;
+}
+
+html:not(.dark) .hover\:bg-slate-700:hover {
+  background-color: #cbd5f5;
+}
+
+html:not(.dark) .border-slate-800 {
+  border-color: #e2e8f0;
+}
+
+html:not(.dark) .border-slate-700 {
+  border-color: #cbd5f5;
+}
+
+html:not(.dark) .border-slate-500 {
+  border-color: #94a3b8;
+}
+
+html:not(.dark) .divide-slate-900 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #e2e8f0;
+}
+
+html:not(.dark) .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
+  border-color: #cbd5f5;
+}
+
+html:not(.dark) .text-slate-50,
+html:not(.dark) .text-slate-100 {
+  color: #0f172a;
+}
+
+html:not(.dark) .text-slate-200 {
+  color: #1e293b;
+}
+
+html:not(.dark) .text-slate-300 {
+  color: #334155;
+}
+
+html:not(.dark) .text-slate-400 {
+  color: #475569;
+}
+
+html:not(.dark) .text-slate-500 {
+  color: #64748b;
+}
