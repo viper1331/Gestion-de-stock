@@ -1100,6 +1100,29 @@ def test_vehicle_inventory_crud_cycle() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
 
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Remise-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_sku = f"REM-{uuid4().hex[:6]}"
+    remise_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot remis",
+            "sku": remise_sku,
+            "quantity": 5,
+            "low_stock_threshold": 1,
+            "category_id": remise_category_id,
+        },
+        headers=admin_headers,
+    )
+    assert remise_item_resp.status_code == 201, remise_item_resp.text
+    remise_item_id = remise_item_resp.json()["id"]
+
     category_resp = client.post(
         "/vehicle-inventory/categories/",
         json={"name": f"Parc-{uuid4().hex[:6]}", "sizes": ["UTILITAIRE", "SUV"]},
@@ -1118,11 +1141,13 @@ def test_vehicle_inventory_crud_cycle() -> None:
             "low_stock_threshold": 1,
             "category_id": category_id,
             "size": "UTILITAIRE",
+            "remise_item_id": remise_item_id,
         },
         headers=admin_headers,
     )
     assert create_resp.status_code == 201, create_resp.text
     item_id = create_resp.json()["id"]
+    assert create_resp.json()["remise_item_id"] == remise_item_id
 
     movement_resp = client.post(
         f"/vehicle-inventory/{item_id}/movements",
