@@ -74,25 +74,6 @@ export function AppLayout() {
               ]
             },
             {
-              id: "habillement-special",
-              label: "Inventaires spécialisés",
-              tooltip: "Inventaires dédiés aux véhicules et remises",
-              links: [
-                {
-                  to: "/vehicle-inventory",
-                  label: "Inventaire véhicules",
-                  tooltip: "Gérer le parc véhicules",
-                  module: "vehicle_inventory"
-                },
-                {
-                  to: "/remise-inventory",
-                  label: "Inventaire remises",
-                  tooltip: "Suivre les stocks mis en remise",
-                  module: "inventory_remise"
-                }
-              ]
-            },
-            {
               id: "habillement-purchase-orders",
               label: "Bons de commande",
               tooltip: "Créer et suivre les bons de commande",
@@ -126,6 +107,32 @@ export function AppLayout() {
                   label: "Dotations",
                   tooltip: "Attribuer les dotations d'habillement",
                   module: "dotations"
+                }
+              ]
+            }
+          ]
+        },
+        {
+          id: "inventaires-specialises",
+          label: "Inventaires spécialisés",
+          tooltip: "Accéder aux inventaires véhicules et remises",
+          sections: [
+            {
+              id: "inventaires-dedies",
+              label: "Inventaires dédiés",
+              tooltip: "Inventaires dédiés aux véhicules et remises",
+              links: [
+                {
+                  to: "/vehicle-inventory",
+                  label: "Inventaire véhicules",
+                  tooltip: "Gérer le parc véhicules",
+                  module: "vehicle_inventory"
+                },
+                {
+                  to: "/remise-inventory",
+                  label: "Inventaire remises",
+                  tooltip: "Suivre les stocks mis en remise",
+                  module: "inventory_remise"
                 }
               ]
             }
@@ -216,6 +223,7 @@ export function AppLayout() {
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
     habillement: true,
+    "inventaires-specialises": false,
     pharmacie: false,
     administration: false
   });
