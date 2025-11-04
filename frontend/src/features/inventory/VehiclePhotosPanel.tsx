@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 
 import { api } from "../../lib/api";
+import { resolveMediaUrl } from "../../lib/media";
 
 interface VehiclePhoto {
   id: number;
@@ -213,7 +214,7 @@ export function VehiclePhotosPanel() {
               className="overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm dark:border-slate-700 dark:bg-slate-950"
             >
               <img
-                src={photo.image_url}
+                src={resolveMediaUrl(photo.image_url) ?? undefined}
                 alt="Photo du véhicule"
                 className="h-48 w-full object-cover"
               />
