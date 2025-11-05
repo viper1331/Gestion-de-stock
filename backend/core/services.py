@@ -17,6 +17,7 @@ from reportlab.pdfgen import canvas
 from backend.core import db, models, security
 from backend.core.storage import (
     MEDIA_ROOT,
+    VEHICLE_CATEGORY_MEDIA_DIR,
     VEHICLE_ITEM_MEDIA_DIR,
     VEHICLE_PHOTO_MEDIA_DIR,
     relative_to_media,
@@ -407,7 +408,8 @@ def _apply_schema_migrations() -> None:
             CREATE INDEX IF NOT EXISTS idx_pharmacy_movements_item ON pharmacy_movements(pharmacy_item_id);
             CREATE TABLE IF NOT EXISTS vehicle_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
-                name TEXT UNIQUE NOT NULL
+                name TEXT UNIQUE NOT NULL,
+                image_path TEXT
             );
             CREATE TABLE IF NOT EXISTS vehicle_category_sizes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -436,6 +438,7 @@ def _apply_schema_migrations() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_vehicle_movements_item ON vehicle_movements(item_id);
+            CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id);
             CREATE TABLE IF NOT EXISTS vehicle_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path TEXT NOT NULL,
@@ -572,13 +575,14 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     position_y = row["position_y"] if "position_y" in row.keys() else None
     return models.Item(
         id=row["id"],
-        name=row["name"],
-        sku=row["sku"],
+        name=name,
+        sku=sku,
         category_id=row["category_id"],
         size=row["size"],
         quantity=row["quantity"],
         low_stock_threshold=row["low_stock_threshold"],
-        supplier_id=row["supplier_id"],
+        supplier_id=supplier_id,
+        remise_item_id=remise_item_id,
         image_url=image_url,
         position_x=position_x,
         position_y=position_y,
@@ -590,13 +594,25 @@ def _list_inventory_items_internal(
 ) -> list[models.Item]:
     ensure_database_ready()
     config = _get_inventory_config(module)
-    query = f"SELECT * FROM {config.tables.items}"
     params: tuple[object, ...] = ()
-    if search:
-        query += " WHERE name LIKE ? OR sku LIKE ?"
-        like = f"%{search}%"
-        params = (like, like)
-    query += " ORDER BY name COLLATE NOCASE"
+    if module == "vehicle_inventory":
+        query = (
+            "SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id "
+            "FROM vehicle_items AS vi "
+            "LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id"
+        )
+        if search:
+            query += " WHERE COALESCE(ri.name, vi.name) LIKE ? OR COALESCE(ri.sku, vi.sku) LIKE ?"
+            like = f"%{search}%"
+            params = (like, like)
+        query += " ORDER BY COALESCE(ri.name, vi.name) COLLATE NOCASE"
+    else:
+        query = f"SELECT * FROM {config.tables.items}"
+        if search:
+            query += " WHERE name LIKE ? OR sku LIKE ?"
+            like = f"%{search}%"
+            params = (like, like)
+        query += " ORDER BY name COLLATE NOCASE"
     with db.get_stock_connection() as conn:
         cur = conn.execute(query, params)
         return [_build_inventory_item(row) for row in cur.fetchall()]
@@ -605,10 +621,21 @@ def _list_inventory_items_internal(
 def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            f"SELECT * FROM {config.tables.items} WHERE id = ?",
-            (item_id,),
-        )
+        if module == "vehicle_inventory":
+            cur = conn.execute(
+                """
+                SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id
+                FROM vehicle_items AS vi
+                LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
+                WHERE vi.id = ?
+                """,
+                (item_id,),
+            )
+        else:
+            cur = conn.execute(
+                f"SELECT * FROM {config.tables.items} WHERE id = ?",
+                (item_id,),
+            )
         row = cur.fetchone()
         if row is None:
             raise ValueError("Article introuvable")
@@ -661,6 +688,25 @@ def _update_inventory_item_internal(
     config = _get_inventory_config(module)
     fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
     fields.pop("image_url", None)
+    if module == "vehicle_inventory":
+        # Vehicle inventory items mirror remise inventory metadata.
+        fields.pop("name", None)
+        fields.pop("sku", None)
+        if "remise_item_id" in fields:
+            remise_item_id = fields["remise_item_id"]
+            if remise_item_id is None:
+                raise ValueError("Un article de remise doit être sélectionné.")
+            with db.get_stock_connection() as conn:
+                source = conn.execute(
+                    "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
+                    (remise_item_id,),
+                ).fetchone()
+            if source is None:
+                raise ValueError("Article de remise introuvable")
+            fields["name"] = source["name"]
+            fields["sku"] = source["sku"]
+            if fields.get("supplier_id") is None:
+                fields["supplier_id"] = source["supplier_id"]
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)
@@ -703,8 +749,11 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        select_columns = "id, name"
+        if module == "vehicle_inventory":
+            select_columns += ", image_path"
         cur = conn.execute(
-            f"SELECT id, name FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
+            f"SELECT {select_columns} FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
         )
         rows = cur.fetchall()
         if not rows:
@@ -780,8 +829,11 @@ def _get_inventory_category_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        select_columns = "id, name"
+        if module == "vehicle_inventory":
+            select_columns += ", image_path"
         cur = conn.execute(
-            f"SELECT id, name FROM {config.tables.categories} WHERE id = ?",
+            f"SELECT {select_columns} FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
         )
         row = cur.fetchone()
@@ -911,6 +963,15 @@ def _delete_inventory_category_internal(module: str, category_id: int) -> None:
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        previous_path: str | None = None
+        if module == "vehicle_inventory":
+            cur = conn.execute(
+                f"SELECT image_path FROM {config.tables.categories} WHERE id = ?",
+                (category_id,),
+            )
+            row = cur.fetchone()
+            if row:
+                previous_path = row["image_path"]
         conn.execute(
             f"DELETE FROM {config.tables.category_sizes} WHERE category_id = ?",
             (category_id,),
@@ -920,6 +981,8 @@ def _delete_inventory_category_internal(module: str, category_id: int) -> None:
             (category_id,),
         )
         conn.commit()
+    if previous_path:
+        _delete_media_file(previous_path)
 
 
 def _record_inventory_movement_internal(
@@ -1223,6 +1286,63 @@ def remove_vehicle_item_image(item_id: int) -> models.Item:
     if previous_path:
         _delete_media_file(previous_path)
     return _get_inventory_item_internal("vehicle_inventory", item_id)
+
+
+def attach_vehicle_category_image(
+    category_id: int, stream: BinaryIO, filename: str | None
+) -> models.Category:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT image_path FROM {config.tables.categories} WHERE id = ?",
+            (category_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Catégorie introuvable")
+        previous_path = row["image_path"]
+        stored_path = _store_media_file(VEHICLE_CATEGORY_MEDIA_DIR, stream, filename)
+        conn.execute(
+            f"UPDATE {config.tables.categories} SET image_path = ? WHERE id = ?",
+            (stored_path, category_id),
+        )
+        conn.commit()
+    if previous_path and previous_path != stored_path:
+        _delete_media_file(previous_path)
+    updated = _get_inventory_category_internal("vehicle_inventory", category_id)
+    if updated is None:  # pragma: no cover - deleted row in concurrent context
+        raise ValueError("Catégorie introuvable")
+    return updated
+
+
+def remove_vehicle_category_image(category_id: int) -> models.Category:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"SELECT image_path FROM {config.tables.categories} WHERE id = ?",
+            (category_id,),
+        )
+        row = cur.fetchone()
+        if row is None:
+            raise ValueError("Catégorie introuvable")
+        previous_path = row["image_path"]
+        if not previous_path:
+            updated = _get_inventory_category_internal("vehicle_inventory", category_id)
+            if updated is None:  # pragma: no cover - deleted row in concurrent context
+                raise ValueError("Catégorie introuvable")
+            return updated
+        conn.execute(
+            f"UPDATE {config.tables.categories} SET image_path = NULL WHERE id = ?",
+            (category_id,),
+        )
+        conn.commit()
+    _delete_media_file(previous_path)
+    updated = _get_inventory_category_internal("vehicle_inventory", category_id)
+    if updated is None:  # pragma: no cover - deleted row in concurrent context
+        raise ValueError("Catégorie introuvable")
+    return updated
 
 
 def list_vehicle_photos() -> list[models.VehiclePhoto]:

@@ -30,7 +30,14 @@ async def create_vehicle_item(
     payload: models.ItemCreate, user: models.User = Depends(get_current_user)
 ) -> models.Item:
     _require_permission(user, action="edit")
-    return services.create_vehicle_item(payload)
+    try:
+        return services.create_vehicle_item(payload)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 400
+        if "introuvable" in detail.lower():
+            status_code = 404
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.put("/{item_id}", response_model=models.Item)
@@ -43,7 +50,11 @@ async def update_vehicle_item(
     try:
         return services.update_vehicle_item(item_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = 400
+        if "introuvable" in detail.lower():
+            status_code = 404
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.delete("/{item_id}", status_code=204)
@@ -118,6 +129,35 @@ async def create_vehicle_category(
 ) -> models.Category:
     _require_permission(user, action="edit")
     return services.create_vehicle_category(payload)
+
+
+@router.post("/categories/{category_id}/image", response_model=models.Category)
+async def upload_vehicle_category_image(
+    category_id: int,
+    file: UploadFile = File(...),
+    user: models.User = Depends(get_current_user),
+) -> models.Category:
+    _require_permission(user, action="edit")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        await file.close()
+        raise HTTPException(status_code=400, detail="Seules les images sont autorisées.")
+    try:
+        return services.attach_vehicle_category_image(category_id, file.file, file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+
+@router.delete("/categories/{category_id}/image", response_model=models.Category)
+async def remove_vehicle_category_image(
+    category_id: int, user: models.User = Depends(get_current_user)
+) -> models.Category:
+    _require_permission(user, action="edit")
+    try:
+        return services.remove_vehicle_category_image(category_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.put("/categories/{category_id}", response_model=models.Category)

@@ -7,6 +7,7 @@ import {
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { api } from "../../lib/api";
+import { resolveMediaUrl } from "../../lib/media";
 import { persistValue, readPersistedValue } from "../../lib/persist";
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
 
@@ -25,6 +26,7 @@ interface Item {
   quantity: number;
   low_stock_threshold: number;
   supplier_id: number | null;
+  remise_item_id: number | null;
   image_url: string | null;
 }
 
@@ -407,7 +409,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     };
   }, [formMode, selectedItem]);
 
-  const initialImageUrl = supportsItemImages && selectedItem ? selectedItem.image_url ?? null : null;
+  const initialImageUrl =
+    supportsItemImages && selectedItem ? resolveMediaUrl(selectedItem.image_url) : null;
 
   const handleSubmitItem = async ({ values, imageFile, removeImage }: ItemFormSubmitPayload) => {
     setMessage(null);
@@ -593,14 +596,16 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                   const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
                   const selectionTone =
                     selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
+                  const imageUrl = resolveMediaUrl(item.image_url);
+                  const hasImage = Boolean(imageUrl);
 
                   return (
                     <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
                       {supportsItemImages && columnVisibility.image !== false ? (
                         <td className="px-4 py-3 text-sm text-slate-300">
-                          {item.image_url ? (
+                          {hasImage ? (
                             <img
-                              src={item.image_url}
+                              src={imageUrl ?? undefined}
                               alt={`Illustration de ${item.name}`}
                               className="h-12 w-12 rounded border border-slate-700 object-cover"
                             />
