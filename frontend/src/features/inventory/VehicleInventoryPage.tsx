@@ -8,6 +8,7 @@ import {
   useRef,
   useState
 } from "react";
+import { isAxiosError } from "axios";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 
@@ -40,6 +41,7 @@ interface VehicleItem {
   size: string | null;
   quantity: number;
   remise_item_id: number | null;
+  remise_quantity: number | null;
   image_url: string | null;
   position_x: number | null;
   position_y: number | null;
@@ -86,6 +88,8 @@ const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
 type DraggedItemData = {
   itemId: number;
+  categoryId?: number | null;
+  remiseItemId?: number | null;
   offsetX?: number;
   offsetY?: number;
   elementWidth?: number;
@@ -183,6 +187,64 @@ export function VehicleInventoryPage() {
     },
     onError: () => {
       setFeedback({ type: "error", text: "Impossible d'enregistrer la position." });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+    }
+  });
+
+  const assignItemToVehicle = useMutation({
+    mutationFn: async ({
+      itemId,
+      categoryId,
+      size,
+      position
+    }: {
+      itemId: number;
+      categoryId: number;
+      size: string;
+      position: { x: number; y: number };
+    }) => {
+      const template = items.find((entry) => entry.id === itemId);
+      if (!template) {
+        throw new Error("Matériel introuvable.");
+      }
+      if (template.remise_item_id == null) {
+        throw new Error("Ce matériel n'est pas lié à l'inventaire remises.");
+      }
+      if ((template.remise_quantity ?? 0) <= 0) {
+        throw new Error("Stock insuffisant en remise.");
+      }
+      const response = await api.post<VehicleItem>("/vehicle-inventory/", {
+        name: template.name,
+        sku: template.sku,
+        category_id: categoryId,
+        size,
+        quantity: 1,
+        position_x: position.x,
+        position_y: position.y,
+        remise_item_id: template.remise_item_id
+      });
+      return response.data;
+    },
+    onSuccess: (_, variables) => {
+      const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
+      setFeedback({
+        type: "success",
+        text: vehicleName
+          ? `Un exemplaire a été affecté à ${vehicleName}.`
+          : "Le matériel a été affecté au véhicule."
+      });
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.data?.detail) {
+        setFeedback({ type: "error", text: error.response.data.detail });
+        return;
+      }
+      setFeedback({
+        type: "error",
+        text: "Impossible d'affecter ce matériel au véhicule."
+      });
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
@@ -408,6 +470,7 @@ export function VehicleInventoryPage() {
     isLoadingVehicles ||
     isLoadingItems ||
     updateItemLocation.isPending ||
+    assignItemToVehicle.isPending ||
     createVehicle.isPending ||
     uploadVehicleImage.isPending;
 
@@ -777,16 +840,26 @@ export function VehicleInventoryPage() {
               items={itemsForSelectedView}
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
-              onDropItem={(itemId, position, options) =>
+              onDropItem={(itemId, position, options) => {
+                const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                if (options?.sourceCategoryId === null) {
+                  assignItemToVehicle.mutate({
+                    itemId,
+                    categoryId: selectedVehicle.id,
+                    size: targetView,
+                    position
+                  });
+                  return;
+                }
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
-                  size: normalizedSelectedView ?? DEFAULT_VIEW_LABEL,
+                  size: targetView,
                   position,
                   quantity: options?.quantity ?? undefined,
                   successMessage: options?.isReposition ? "Position enregistrée." : undefined
-                })
-              }
+                });
+              }}
               onRemoveItem={(itemId) =>
                 updateItemLocation.mutate({
                   itemId,
@@ -1012,7 +1085,12 @@ interface VehicleCompartmentProps {
   onDropItem: (
     itemId: number,
     position: { x: number; y: number },
-    options?: { isReposition?: boolean; quantity?: number | null }
+    options?: {
+      isReposition?: boolean;
+      quantity?: number | null;
+      sourceCategoryId?: number | null;
+      remiseItemId?: number | null;
+    }
   ) => void;
   onRemoveItem: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
@@ -1102,10 +1180,16 @@ function VehicleCompartment({
       x: clamp(centerX / rect.width, 0, 1),
       y: clamp(centerY / rect.height, 0, 1)
     };
+    const sourceCategoryId =
+      data.categoryId === undefined ? undefined : data.categoryId;
+    const isFromLibrary = sourceCategoryId === null;
     const isReposition = items.some((item) => item.id === data.itemId);
     onDropItem(data.itemId, position, {
       isReposition,
-      quantity: isReposition ? undefined : 1
+      quantity: !isFromLibrary && !isReposition ? 1 : undefined,
+      sourceCategoryId: sourceCategoryId ?? null,
+      remiseItemId:
+        data.remiseItemId === undefined ? undefined : data.remiseItemId ?? null
     });
   };
 
@@ -1331,6 +1415,8 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
           "application/json",
           JSON.stringify({
             itemId: item.id,
+            categoryId: item.category_id,
+            remiseItemId: item.remise_item_id,
             offsetX: event.clientX - rect.left,
             offsetY: event.clientY - rect.top,
             elementWidth: rect.width,
@@ -1431,7 +1517,7 @@ function DroppableLibrary({
         event.preventDefault();
         setIsHovering(false);
         const data = readDraggedItemData(event);
-        if (data) {
+        if (data && data.categoryId !== null && data.categoryId !== undefined) {
           onDropItem(data.itemId);
         }
       }}
@@ -1485,6 +1571,11 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
 
   const imageUrl = resolveMediaUrl(item.image_url);
   const hasImage = Boolean(imageUrl);
+
+  const quantityLabel =
+    item.category_id === null
+      ? `Stock remise : ${item.remise_quantity ?? 0}`
+      : `Qté : ${item.quantity}`;
 
   useEffect(() => {
     if (isEditingPosition) {
@@ -1615,6 +1706,8 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
           "application/json",
           JSON.stringify({
             itemId: item.id,
+            categoryId: item.category_id,
+            remiseItemId: item.remise_item_id,
             offsetX: event.clientX - rect.left,
             offsetY: event.clientY - rect.top,
             elementWidth: rect.width,
@@ -1648,7 +1741,7 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
         <div>
           <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.name}</p>
           <p className="text-xs text-slate-500 dark:text-slate-400">SKU : {item.sku}</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">Qté : {item.quantity}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">{quantityLabel}</p>
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -1769,6 +1862,18 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
     if (typeof parsed.itemId === "number") {
       return {
         itemId: parsed.itemId,
+        categoryId:
+          typeof parsed.categoryId === "number"
+            ? parsed.categoryId
+            : parsed.categoryId === null
+              ? null
+              : undefined,
+        remiseItemId:
+          typeof parsed.remiseItemId === "number"
+            ? parsed.remiseItemId
+            : parsed.remiseItemId === null
+              ? null
+              : undefined,
         offsetX: typeof parsed.offsetX === "number" ? parsed.offsetX : undefined,
         offsetY: typeof parsed.offsetY === "number" ? parsed.offsetY : undefined,
         elementWidth: typeof parsed.elementWidth === "number" ? parsed.elementWidth : undefined,

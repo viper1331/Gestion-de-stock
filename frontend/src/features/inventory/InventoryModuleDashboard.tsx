@@ -27,6 +27,7 @@ interface Item {
   low_stock_threshold: number;
   supplier_id: number | null;
   remise_item_id: number | null;
+  remise_quantity?: number | null;
   image_url: string | null;
 }
 
