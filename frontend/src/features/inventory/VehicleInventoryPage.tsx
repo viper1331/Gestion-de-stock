@@ -1112,6 +1112,7 @@ function VehicleCompartment({
   isUpdatingBackground
 }: VehicleCompartmentProps) {
   const [isHovering, setIsHovering] = useState(false);
+  const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
   const boardRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const queryClient = useQueryClient();
