@@ -11,9 +11,17 @@ from backend.core import models, services
 
 router = APIRouter()
 
+MODULE_KEY = "clothing"
+
+
+def _require_permission(user: models.User, *, action: str) -> None:
+    if not services.has_module_access(user, MODULE_KEY, action=action):
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
 
 @router.get("/", response_model=list[models.PurchaseOrderDetail])
 async def list_orders(user: models.User = Depends(get_current_user)) -> list[models.PurchaseOrderDetail]:
+    _require_permission(user, action="view")
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.list_purchase_orders()
@@ -24,6 +32,7 @@ async def create_order(
     payload: models.PurchaseOrderCreate,
     user: models.User = Depends(get_current_user),
 ) -> models.PurchaseOrderDetail:
+    _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
@@ -37,6 +46,7 @@ async def get_order(
     order_id: int,
     user: models.User = Depends(get_current_user),
 ) -> models.PurchaseOrderDetail:
+    _require_permission(user, action="view")
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
@@ -50,6 +60,7 @@ async def download_order_pdf(
     order_id: int,
     user: models.User = Depends(get_current_user),
 ) -> StreamingResponse:
+    _require_permission(user, action="view")
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
@@ -71,6 +82,7 @@ async def update_order(
     payload: models.PurchaseOrderUpdate,
     user: models.User = Depends(get_current_user),
 ) -> models.PurchaseOrderDetail:
+    _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
@@ -87,6 +99,7 @@ async def receive_order(
     payload: models.PurchaseOrderReceivePayload,
     user: models.User = Depends(get_current_user),
 ) -> models.PurchaseOrderDetail:
+    _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:

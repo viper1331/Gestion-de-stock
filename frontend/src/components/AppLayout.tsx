@@ -59,17 +59,20 @@ export function AppLayout() {
                 {
                   to: "/",
                   label: "Vue d'ensemble",
-                  tooltip: "Consulter le tableau de bord habillement"
+                  tooltip: "Consulter le tableau de bord habillement",
+                  module: "clothing"
                 },
                 {
                   to: "/barcode",
                   label: "Codes-barres",
-                  tooltip: "Générer et scanner les codes-barres d'habillement"
+                  tooltip: "Générer et scanner les codes-barres d'habillement",
+                  module: "clothing"
                 },
                 {
                   to: "/reports",
                   label: "Rapports",
-                  tooltip: "Analyser les rapports d'habillement"
+                  tooltip: "Analyser les rapports d'habillement",
+                  module: "clothing"
                 }
               ]
             },
@@ -81,7 +84,8 @@ export function AppLayout() {
                 {
                   to: "/purchase-orders",
                   label: "Bons de commande",
-                  tooltip: "Gérer les bons de commande d'habillement"
+                  tooltip: "Gérer les bons de commande d'habillement",
+                  module: "clothing"
                 }
               ]
             },

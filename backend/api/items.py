@@ -8,14 +8,26 @@ from backend.core import models, services
 
 router = APIRouter()
 
+MODULE_KEY = "clothing"
+
+
+def _require_permission(user: models.User, *, action: str) -> None:
+    if not services.has_module_access(user, MODULE_KEY, action=action):
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
 
 @router.get("/", response_model=list[models.Item])
-async def list_items(search: str | None = Query(default=None, description="Filtre nom/SKU")) -> list[models.Item]:
+async def list_items(
+    search: str | None = Query(default=None, description="Filtre nom/SKU"),
+    user: models.User = Depends(get_current_user),
+) -> list[models.Item]:
+    _require_permission(user, action="view")
     return services.list_items(search)
 
 
 @router.post("/", response_model=models.Item, status_code=201)
 async def create_item(payload: models.ItemCreate, user: models.User = Depends(get_current_user)) -> models.Item:
+    _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.create_item(payload)
@@ -23,6 +35,7 @@ async def create_item(payload: models.ItemCreate, user: models.User = Depends(ge
 
 @router.put("/{item_id}", response_model=models.Item)
 async def update_item(item_id: int, payload: models.ItemUpdate, user: models.User = Depends(get_current_user)) -> models.Item:
+    _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
@@ -33,6 +46,7 @@ async def update_item(item_id: int, payload: models.ItemUpdate, user: models.Use
 
 @router.delete("/{item_id}", status_code=204)
 async def delete_item(item_id: int, user: models.User = Depends(get_current_user)) -> None:
+    _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     services.delete_item(item_id)
@@ -40,6 +54,7 @@ async def delete_item(item_id: int, user: models.User = Depends(get_current_user
 
 @router.post("/{item_id}/movements", status_code=204)
 async def record_movement(item_id: int, payload: models.MovementCreate, user: models.User = Depends(get_current_user)) -> None:
+    _require_permission(user, action="edit")
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
@@ -50,6 +65,7 @@ async def record_movement(item_id: int, payload: models.MovementCreate, user: mo
 
 @router.get("/{item_id}/movements", response_model=list[models.Movement])
 async def fetch_movements(item_id: int, user: models.User = Depends(get_current_user)) -> list[models.Movement]:
+    _require_permission(user, action="view")
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.fetch_movements(item_id)
