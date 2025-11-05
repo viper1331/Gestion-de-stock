@@ -667,7 +667,7 @@ interface VehicleCardProps {
 }
 
 function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProps) {
-  const imageSource = vehicle.image_url ?? fallbackIllustration;
+  const imageSource = resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration;
   return (
     <button
       type="button"
@@ -711,7 +711,8 @@ interface VehicleHeaderProps {
 }
 
 function VehicleHeader({ vehicle, itemsCount, fallbackIllustration }: VehicleHeaderProps) {
-  const imageSource = vehicle.image_url ?? fallbackIllustration ?? VEHICLE_ILLUSTRATIONS[0];
+  const imageSource =
+    resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration ?? VEHICLE_ILLUSTRATIONS[0];
   return (
     <div className="flex flex-col gap-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900 md:flex-row md:items-center md:justify-between">
       <div className="flex items-center gap-4">
