@@ -29,6 +29,7 @@ _db_initialized = False
 _AUTO_PO_CLOSED_STATUSES = ("CANCELLED", "RECEIVED")
 
 _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
+    ("clothing", "Habillement"),
     ("suppliers", "Fournisseurs"),
     ("dotations", "Dotations"),
     ("pharmacy", "Pharmacie"),
@@ -36,6 +37,11 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("inventory_remise", "Inventaire remises"),
 )
 _AVAILABLE_MODULE_KEYS: set[str] = {key for key, _ in _AVAILABLE_MODULE_DEFINITIONS}
+
+_MODULE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
+    "suppliers": ("clothing",),
+    "dotations": ("clothing",),
+}
 
 
 @dataclass(frozen=True)
@@ -3382,13 +3388,35 @@ def delete_module_permission_for_user(user_id: int, module: str) -> None:
         conn.commit()
 
 
+def _iter_module_dependencies(module: str) -> list[str]:
+    seen: set[str] = set()
+    stack = list(_MODULE_DEPENDENCIES.get(module, ()))
+    resolved: list[str] = []
+    while stack:
+        current = stack.pop()
+        if current in seen:
+            continue
+        seen.add(current)
+        resolved.append(current)
+        stack.extend(_MODULE_DEPENDENCIES.get(current, ()))
+    return resolved
+
+
 def has_module_access(user: models.User, module: str, *, action: str = "view") -> bool:
     ensure_database_ready()
     if user.role == "admin":
         return True
-    permission = get_module_permission_for_user(user.id, module)
-    if permission is None:
-        return False
-    if action == "edit":
-        return permission.can_edit
-    return permission.can_view
+    required_modules = [module, *_iter_module_dependencies(module)]
+    for required in required_modules:
+        permission = get_module_permission_for_user(user.id, required)
+        if permission is None:
+            return False
+        if required == module:
+            if action == "edit":
+                if not permission.can_edit:
+                    return False
+            elif not permission.can_view:
+                return False
+        elif not permission.can_view:
+            return False
+    return True

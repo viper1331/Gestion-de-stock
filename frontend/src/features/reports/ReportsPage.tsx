@@ -2,6 +2,8 @@ import { FormEvent, useEffect, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
+import { useAuth } from "../auth/useAuth";
+import { useModulePermissions } from "../permissions/useModulePermissions";
 
 interface LowStockItem {
   item: {
@@ -15,6 +17,10 @@ interface LowStockItem {
 }
 
 export function ReportsPage() {
+  const { user } = useAuth();
+  const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
+  const canView = user?.role === "admin" || modulePermissions.canAccess("clothing");
+
   const queryClient = useQueryClient();
   const [threshold, setThreshold] = useState(1);
   const [debouncedThreshold, setDebouncedThreshold] = useState(1);
@@ -32,8 +38,33 @@ export function ReportsPage() {
     queryFn: async () => {
       const response = await api.get<LowStockItem[]>("/reports/low-stock", { params: { threshold: debouncedThreshold } });
       return response.data;
-    }
+    },
+    enabled: canView
   });
+
+  if (modulePermissions.isLoading && user?.role !== "admin") {
+    return (
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h2 className="text-2xl font-semibold text-white">Rapports habillement</h2>
+          <p className="text-sm text-slate-400">Analyse des stocks et des seuils de sécurité.</p>
+        </header>
+        <p className="text-sm text-slate-400">Vérification des permissions...</p>
+      </section>
+    );
+  }
+
+  if (!canView) {
+    return (
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h2 className="text-2xl font-semibold text-white">Rapports habillement</h2>
+          <p className="text-sm text-slate-400">Analyse des stocks et des seuils de sécurité.</p>
+        </header>
+        <p className="text-sm text-red-400">Accès refusé.</p>
+      </section>
+    );
+  }
 
   const handleExport = async (event: FormEvent) => {
     event.preventDefault();

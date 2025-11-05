@@ -465,6 +465,18 @@ def test_module_permissions_control_supplier_access() -> None:
     )
     assert grant_view.status_code == 200, grant_view.text
 
+    grant_clothing = client.put(
+        "/permissions/modules",
+        json={
+            "user_id": worker_id,
+            "module": "clothing",
+            "can_view": True,
+            "can_edit": False,
+        },
+        headers=admin_headers,
+    )
+    assert grant_clothing.status_code == 200, grant_clothing.text
+
     empty_list = client.get("/suppliers/", headers=worker_headers)
     assert empty_list.status_code == 200
     assert empty_list.json() == []

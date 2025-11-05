@@ -1,8 +1,15 @@
 import { FormEvent, useEffect, useState } from "react";
 
 import { api } from "../../lib/api";
+import { useAuth } from "../auth/useAuth";
+import { useModulePermissions } from "../permissions/useModulePermissions";
 
 export function BarcodePage() {
+  const { user } = useAuth();
+  const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
+  const canView = user?.role === "admin" || modulePermissions.canAccess("clothing");
+  const canEdit = user?.role === "admin" || modulePermissions.canAccess("clothing", "edit");
+
   const [sku, setSku] = useState("SKU-001");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -20,6 +27,9 @@ export function BarcodePage() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (!canEdit) {
+      return;
+    }
     setIsGenerating(true);
     setMessage(null);
     setError(null);
@@ -39,6 +49,9 @@ export function BarcodePage() {
   };
 
   const handleDelete = async () => {
+    if (!canEdit) {
+      return;
+    }
     setIsDeleting(true);
     setMessage(null);
     setError(null);
@@ -55,6 +68,30 @@ export function BarcodePage() {
       setIsDeleting(false);
     }
   };
+
+  if (modulePermissions.isLoading && user?.role !== "admin") {
+    return (
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h2 className="text-2xl font-semibold text-white">Codes-barres</h2>
+          <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
+        </header>
+        <p className="text-sm text-slate-400">Vérification des permissions...</p>
+      </section>
+    );
+  }
+
+  if (!canView) {
+    return (
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h2 className="text-2xl font-semibold text-white">Codes-barres</h2>
+          <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
+        </header>
+        <p className="text-sm text-red-400">Accès refusé.</p>
+      </section>
+    );
+  }
 
   return (
     <section className="space-y-6">
@@ -74,7 +111,7 @@ export function BarcodePage() {
         </label>
         <button
           type="submit"
-          disabled={isGenerating}
+          disabled={isGenerating || !canEdit}
           className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
           title="Lancer la génération du code-barres"
         >
@@ -84,7 +121,7 @@ export function BarcodePage() {
           <button
             type="button"
             onClick={handleDelete}
-            disabled={isDeleting}
+            disabled={isDeleting || !canEdit}
             className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-70"
             title="Supprimer le fichier généré sur le serveur"
           >

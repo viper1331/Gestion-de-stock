@@ -12,14 +12,25 @@ from backend.core import models, services
 
 router = APIRouter()
 
+MODULE_KEY = "clothing"
+
+
+def _require_permission(user: models.User, *, action: str) -> None:
+    if not services.has_module_access(user, MODULE_KEY, action=action):
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
 
 @router.get("/low-stock", response_model=list[models.LowStockReport])
-async def low_stock(threshold: int = 0, _: models.User = Depends(get_current_user)) -> list[models.LowStockReport]:
+async def low_stock(
+    threshold: int = 0, user: models.User = Depends(get_current_user)
+) -> list[models.LowStockReport]:
+    _require_permission(user, action="view")
     return services.list_low_stock(threshold)
 
 
 @router.get("/export/csv")
-async def export_csv(_: models.User = Depends(get_current_user)) -> FileResponse:
+async def export_csv(user: models.User = Depends(get_current_user)) -> FileResponse:
+    _require_permission(user, action="view")
     with NamedTemporaryFile(delete=False, suffix=".csv") as tmp:
         path = Path(tmp.name)
     services.export_items_to_csv(path)
