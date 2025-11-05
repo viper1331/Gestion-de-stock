@@ -12,7 +12,12 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   queryKeyPrefix: "remise-inventory",
   storageKeyPrefix: "remise-inventory",
   showPurchaseOrders: false,
-  searchPlaceholder: "Rechercher une remise par nom ou SKU"
+  searchPlaceholder: "Rechercher une remise par nom ou SKU",
+  itemNoun: {
+    singular: "matériel",
+    plural: "matériels",
+    gender: "masculine"
+  }
 };
 
 export function RemiseInventoryPage() {

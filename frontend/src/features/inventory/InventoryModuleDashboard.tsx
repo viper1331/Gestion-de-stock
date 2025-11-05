@@ -54,6 +54,30 @@ interface ItemFormSubmitPayload {
   removeImage: boolean;
 }
 
+type FrenchGender = "masculine" | "feminine";
+
+export interface InventoryItemNounConfig {
+  singular: string;
+  plural?: string;
+  gender: FrenchGender;
+}
+
+interface InventoryItemNounForms {
+  singular: string;
+  plural: string;
+  gender: FrenchGender;
+  startsWithVowel: boolean;
+  singularCapitalized: string;
+  definite: string;
+  definiteCapitalized: string;
+  de: string;
+  demonstrative: string;
+  demonstrativeCapitalized: string;
+  newLabel: string;
+  indefinite: string;
+  indefiniteCapitalized: string;
+}
+
 interface CategoryFormValues {
   name: string;
   sizes: string[];
@@ -75,6 +99,7 @@ export interface InventoryModuleConfig {
   showPurchaseOrders?: boolean;
   searchPlaceholder?: string;
   supportsItemImages?: boolean;
+  itemNoun?: InventoryItemNounConfig;
 }
 
 export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
@@ -116,6 +141,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   const [error, setError] = useState<string | null>(null);
 
   const supportsItemImages = config.supportsItemImages === true;
+  const itemNoun = useMemo(
+    () => createInventoryItemNounForms(config.itemNoun),
+    [config.itemNoun]
+  );
   const columnStorageKey = `gsp/${config.storageKeyPrefix}/columns`;
   const columnVisibilityStorageKey = `gsp/${config.storageKeyPrefix}/column-visibility`;
   const searchPlaceholder = config.searchPlaceholder ?? "Rechercher par nom ou SKU";
@@ -175,9 +204,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["items"] });
-      setMessage("Article créé avec succès.");
+      setMessage(`${capitalizeFirst(itemNoun.definite)} créé avec succès.`);
     },
-    onError: () => setError("Impossible de créer l'article."),
+    onError: () => setError(`Impossible de créer ${itemNoun.definite}.`),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["reports"] })
   });
 
@@ -191,9 +220,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       await queryClient.invalidateQueries({
         queryKey: ["movements", config.queryKeyPrefix, variables.itemId]
       });
-      setMessage("Article mis à jour.");
+      setMessage(`${capitalizeFirst(itemNoun.definite)} mis à jour.`);
     },
-    onError: () => setError("La mise à jour a échoué."),
+    onError: () => setError(`Impossible de modifier ${itemNoun.definite}.`),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["reports"] })
   });
 
@@ -202,11 +231,11 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       await api.delete(`${config.basePath}/${itemId}`);
     },
     onSuccess: async () => {
-      setMessage("Article supprimé.");
+      setMessage(`${capitalizeFirst(itemNoun.definite)} supprimé.`);
       closeSidebar();
       await queryClient.invalidateQueries({ queryKey: ["items"] });
     },
-    onError: () => setError("Suppression impossible."),
+    onError: () => setError(`Impossible de supprimer ${itemNoun.definite}.`),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["reports"] })
   });
 
@@ -319,7 +348,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
   const columnOptions: { key: InventoryColumnKey; label: string }[] = useMemo(() => {
     const options: { key: InventoryColumnKey; label: string }[] = [
-      { key: "name", label: "Article" },
+      { key: "name", label: itemNoun.singularCapitalized },
       { key: "sku", label: "SKU" },
       { key: "quantity", label: "Quantité" },
       { key: "size", label: "Taille / Variante" },
@@ -331,7 +360,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       return [{ key: "image", label: "Image" }, ...options];
     }
     return options;
-  }, [supportsItemImages]);
+  }, [itemNoun.singularCapitalized, supportsItemImages]);
 
   const columnWidths = {
     ...baseColumnWidths,
@@ -452,12 +481,12 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       }
     } catch (submitError) {
       console.error(submitError);
-      setError("Impossible d'enregistrer l'article.");
+      setError(`Impossible d'enregistrer ${itemNoun.definite}.`);
     }
   };
 
   const handleDeleteItem = async (itemId: number) => {
-    if (window.confirm("Supprimer définitivement cet article ?")) {
+    if (window.confirm(`Supprimer définitivement ${itemNoun.demonstrative}?`)) {
       setMessage(null);
       setError(null);
       await deleteItem.mutateAsync(itemId);
@@ -513,9 +542,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 openSidebar();
               }}
               className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-              title="Créer un nouvel article dans l'inventaire"
+              title={`${itemNoun.newLabel} dans l'inventaire`}
             >
-              Nouvel article
+              {itemNoun.newLabel}
             </button>
           </div>
         </div>
@@ -539,7 +568,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                   ) : null}
                   {columnVisibility.name !== false ? (
                     <ResizableHeader
-                      label="Article"
+                      label={itemNoun.singularCapitalized}
                       width={columnWidths.name}
                       onResize={(value) => saveWidth("name", value)}
                     />
@@ -622,16 +651,16 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                       ) : null}
                       {columnVisibility.quantity !== false ? (
                         <td
-                          className={`px-4 py-3 text-sm font-semibold ${
-                            isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
-                          }`}
-                          title={
-                            isOutOfStock
-                              ? "Cet article est en rupture de stock"
-                              : isLowStock
-                                ? "Stock faible"
-                                : undefined
-                          }
+                      className={`px-4 py-3 text-sm font-semibold ${
+                        isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                      }`}
+                      title={
+                        isOutOfStock
+                          ? `${itemNoun.demonstrativeCapitalized} est en rupture de stock`
+                          : isLowStock
+                            ? "Stock faible"
+                            : undefined
+                      }
                         >
                           {item.quantity}
                           {isOutOfStock ? (
@@ -715,7 +744,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
             <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-white">
-                  {formMode === "edit" ? "Modifier l'article" : "Nouvel article"}
+                  {formMode === "edit" ? `Modifier ${itemNoun.definite}` : itemNoun.newLabel}
                 </h3>
                 <button
                   type="button"
@@ -737,6 +766,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 onCancel={closeSidebar}
                 supportsItemImages={supportsItemImages}
                 initialImageUrl={initialImageUrl}
+                itemNoun={itemNoun}
               />
             </div>
 
@@ -753,6 +783,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                   await recordMovement.mutateAsync({ itemId: selectedItem.id, ...values });
                 }}
                 isSubmitting={recordMovement.isPending}
+                itemNoun={itemNoun}
               />
               <MovementHistory item={selectedItem} config={config} />
             </div>
@@ -838,7 +869,8 @@ function ItemForm({
   onCancel,
   isSubmitting,
   supportsItemImages = false,
-  initialImageUrl = null
+  initialImageUrl = null,
+  itemNoun
 }: {
   initialValues: ItemFormValues;
   categories: Category[];
@@ -849,6 +881,7 @@ function ItemForm({
   isSubmitting: boolean;
   supportsItemImages?: boolean;
   initialImageUrl?: string | null;
+  itemNoun: InventoryItemNounForms;
 }) {
   const [values, setValues] = useState<ItemFormValues>(initialValues);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -981,14 +1014,14 @@ function ItemForm({
       {supportsItemImages ? (
         <div className="space-y-2">
           <label className="text-xs font-semibold text-slate-300" htmlFor="item-image">
-            Image du matériel
+            Image {itemNoun.de}
           </label>
           <div className="flex items-start gap-3">
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded border border-slate-700 bg-slate-950">
               {preview.url ? (
                 <img
                   src={preview.url}
-                  alt={values.name ? `Visuel actuel pour ${values.name}` : "Aperçu du matériel"}
+                  alt={values.name ? `Visuel actuel pour ${values.name}` : `Aperçu ${itemNoun.de}`}
                   className="h-full w-full object-cover"
                 />
               ) : (
@@ -1002,7 +1035,7 @@ function ItemForm({
                 accept="image/*"
                 onChange={handleImageChange}
                 className="w-full text-xs text-slate-200 file:mr-3 file:rounded-md file:border-0 file:bg-slate-800 file:px-3 file:py-1.5 file:text-xs file:font-semibold file:text-slate-100 hover:file:bg-slate-700"
-                title="Sélectionnez une image illustrant le matériel"
+                title={`Sélectionnez une image illustrant ${itemNoun.de}`}
               />
               <div className="flex flex-wrap gap-2">
                 {(preview.url || initialImageUrl) && !removeImage ? (
@@ -1031,7 +1064,7 @@ function ItemForm({
       ) : null}
       <div className="space-y-1">
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-name">
-          Nom de l'article
+          Nom {itemNoun.de}
         </label>
         <input
           id="item-name"
@@ -1039,7 +1072,7 @@ function ItemForm({
           onChange={(event) => setValues((prev) => ({ ...prev, name: event.target.value }))}
           required
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-          title="Saisissez le nom complet de l'article"
+          title={`Saisissez le nom complet ${itemNoun.de}`}
         />
       </div>
       <div className="space-y-1">
@@ -1122,7 +1155,7 @@ function ItemForm({
             }))
           }
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-          title="Associez l'article à une catégorie métier"
+          title={`Associez ${itemNoun.definite} à une catégorie métier`}
         >
           <option value="">Aucune</option>
           {categories.map((category) => (
@@ -1146,7 +1179,7 @@ function ItemForm({
             }))
           }
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-          title="Associez l'article à un fournisseur pour activer les commandes"
+          title={`Associez ${itemNoun.definite} à un fournisseur pour activer les commandes`}
         >
           <option value="">Aucun</option>
           {suppliers.map((supplier) => (
@@ -1171,7 +1204,11 @@ function ItemForm({
           type="submit"
           disabled={isSubmitting}
           className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-          title={mode === "edit" ? "Enregistrer les modifications de l'article" : "Ajouter l'article au stock"}
+          title={
+            mode === "edit"
+              ? `Enregistrer les modifications ${itemNoun.de}`
+              : `Ajouter ${itemNoun.definite} au stock`
+          }
         >
           {isSubmitting ? "Enregistrement..." : mode === "edit" ? "Mettre à jour" : "Créer"}
         </button>
@@ -1183,11 +1220,13 @@ function ItemForm({
 function MovementForm({
   item,
   onSubmit,
-  isSubmitting
+  isSubmitting,
+  itemNoun
 }: {
   item: Item | null;
   onSubmit: (values: { delta: number; reason: string }) => Promise<void>;
   isSubmitting: boolean;
+  itemNoun: InventoryItemNounForms;
 }) {
   const [delta, setDelta] = useState(1);
   const [reason, setReason] = useState("");
@@ -1212,7 +1251,7 @@ function MovementForm({
       <p className="text-xs text-slate-400">
         {item
           ? `Ajuster le stock de "${item.name}" (quantité actuelle : ${item.quantity}).`
-          : "Sélectionnez un article pour appliquer un mouvement."}
+          : `Sélectionnez ${itemNoun.indefinite} pour appliquer un mouvement.`}
       </p>
       <div className="flex gap-3">
         <div className="flex-1 space-y-1">
@@ -1246,7 +1285,7 @@ function MovementForm({
         type="submit"
         disabled={!item || isSubmitting}
         className="w-full rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-        title={item ? "Valider ce mouvement de stock" : "Sélectionnez d'abord un article"}
+        title={item ? "Valider ce mouvement de stock" : `Sélectionnez d'abord ${itemNoun.indefinite}`}
       >
         {isSubmitting ? "Enregistrement..." : "Valider le mouvement"}
       </button>
@@ -1432,6 +1471,72 @@ function CategoryManager({
       </ul>
     </div>
   );
+}
+
+function createInventoryItemNounForms(
+  config?: InventoryItemNounConfig
+): InventoryItemNounForms {
+  const singular = (config?.singular ?? "article").trim() || "article";
+  const plural = (config?.plural ?? `${singular}s`).trim() || `${singular}s`;
+  const gender: FrenchGender = config?.gender ?? "masculine";
+  const firstChar = singular.charAt(0).toLowerCase();
+  const startsWithVowel = Boolean(firstChar) && "aeiouyh".includes(firstChar);
+
+  const definite = startsWithVowel
+    ? `l'${singular}`
+    : gender === "feminine"
+      ? `la ${singular}`
+      : `le ${singular}`;
+  const definiteCapitalized = capitalizeFirst(definite);
+
+  const de = startsWithVowel
+    ? `de l'${singular}`
+    : gender === "feminine"
+      ? `de la ${singular}`
+      : `du ${singular}`;
+
+  const indefinite = gender === "feminine" ? `une ${singular}` : `un ${singular}`;
+  const indefiniteCapitalized = capitalizeFirst(indefinite);
+
+  const demonstrativeBase = gender === "feminine" ? "cette" : startsWithVowel ? "cet" : "ce";
+  const demonstrative = `${demonstrativeBase} ${singular}`;
+  const demonstrativeCapitalized = capitalizeFirst(demonstrative);
+
+  const newLabel =
+    gender === "feminine"
+      ? `Nouvelle ${singular}`
+      : startsWithVowel
+        ? `Nouvel ${singular}`
+        : `Nouveau ${singular}`;
+
+  return {
+    singular,
+    plural,
+    gender,
+    startsWithVowel,
+    singularCapitalized: capitalizeFirst(singular),
+    definite,
+    definiteCapitalized,
+    de,
+    demonstrative,
+    demonstrativeCapitalized,
+    newLabel,
+    indefinite,
+    indefiniteCapitalized
+  };
+}
+
+function capitalizeFirst(text: string): string {
+  if (!text) {
+    return text;
+  }
+  if (text.startsWith("l'")) {
+    return `L'${text.slice(2)}`;
+  }
+  if (text.startsWith("d'")) {
+    return `D'${text.slice(2)}`;
+  }
+  return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
 function getInventoryAlerts(item: Item) {
