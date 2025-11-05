@@ -901,9 +901,11 @@ function VehicleCompartment({
     onBackgroundChange(null);
   };
 
-  const boardStyle = viewConfig?.background_url
+  const backgroundImageUrl = resolveMediaUrl(viewConfig?.background_url);
+
+  const boardStyle = backgroundImageUrl
     ? {
-        backgroundImage: `url(${viewConfig.background_url})`,
+        backgroundImage: `url(${backgroundImageUrl})`,
         backgroundSize: "cover",
         backgroundPosition: "center"
       }
@@ -946,7 +948,7 @@ function VehicleCompartment({
             <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
               {selectedBackground ? (
                 <img
-                  src={selectedBackground.image_url}
+                  src={resolveMediaUrl(selectedBackground.image_url) ?? undefined}
                   alt="Photo de fond sélectionnée"
                   className="h-36 w-full object-cover"
                 />
@@ -977,26 +979,33 @@ function VehicleCompartment({
             </div>
 
             <div className="grid gap-2 sm:grid-cols-3">
-              {availablePhotos.map((photo) => (
-                <button
-                  key={photo.id}
-                  type="button"
-                  onClick={() => handleSelectBackground(photo.id)}
-                  disabled={isProcessingBackground}
-                  className={clsx(
-                    "relative overflow-hidden rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
-                    selectedBackgroundId === photo.id
-                      ? "border-blue-500 ring-2 ring-blue-200"
-                      : "border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-500"
-                  )}
-                >
-                  <span className="sr-only">Sélectionner cette photo comme fond</span>
-                  <img src={photo.image_url} alt={`Photo du véhicule ${photo.id}`} className="h-20 w-full object-cover" />
-                  {selectedBackgroundId === photo.id ? (
-                    <div className="absolute inset-0 bg-blue-500/20" aria-hidden />
-                  ) : null}
-                </button>
-              ))}
+              {availablePhotos.map((photo) => {
+                const photoUrl = resolveMediaUrl(photo.image_url);
+                return (
+                  <button
+                    key={photo.id}
+                    type="button"
+                    onClick={() => handleSelectBackground(photo.id)}
+                    disabled={isProcessingBackground}
+                    className={clsx(
+                      "relative overflow-hidden rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+                      selectedBackgroundId === photo.id
+                        ? "border-blue-500 ring-2 ring-blue-200"
+                        : "border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-500"
+                    )}
+                  >
+                    <span className="sr-only">Sélectionner cette photo comme fond</span>
+                    <img
+                      src={photoUrl ?? undefined}
+                      alt={`Photo du véhicule ${photo.id}`}
+                      className="h-20 w-full object-cover"
+                    />
+                    {selectedBackgroundId === photo.id ? (
+                      <div className="absolute inset-0 bg-blue-500/20" aria-hidden />
+                    ) : null}
+                  </button>
+                );
+              })}
               {availablePhotos.length === 0 && (
                 <p className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                   Ajoutez une photo pour personnaliser cette vue.
