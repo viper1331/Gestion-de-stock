@@ -60,6 +60,7 @@ class Category(BaseModel):
     name: str
     sizes: list[str] = Field(default_factory=list)
     view_configs: list[VehicleViewConfig] | None = None
+    image_url: str | None = None
 
 
 class CategoryCreate(BaseModel):
@@ -97,6 +98,7 @@ class ItemCreate(BaseModel):
     supplier_id: Optional[int] = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
+    remise_item_id: Optional[int] = None
 
 
 class ItemUpdate(BaseModel):
@@ -108,6 +110,7 @@ class ItemUpdate(BaseModel):
     low_stock_threshold: Optional[int] = None
     supplier_id: Optional[int] = None
     image_url: Optional[str] = None
+    remise_item_id: Optional[int] = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
 
