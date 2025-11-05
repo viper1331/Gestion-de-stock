@@ -50,6 +50,7 @@ export function VehiclePhotosPanel() {
     onSuccess: async () => {
       setMessage("Photo supprimée.");
       await queryClient.invalidateQueries({ queryKey: ["vehicle-photos"] });
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
     },
     onError: () => {
       setMessage(null);

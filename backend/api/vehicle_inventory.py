@@ -181,6 +181,22 @@ async def delete_vehicle_category(
     services.delete_vehicle_category(category_id)
 
 
+@router.put(
+    "/categories/{category_id}/views/background",
+    response_model=models.VehicleViewConfig,
+)
+async def update_vehicle_view_background_endpoint(
+    category_id: int,
+    payload: models.VehicleViewBackgroundUpdate,
+    user: models.User = Depends(get_current_user),
+) -> models.VehicleViewConfig:
+    _require_permission(user, action="edit")
+    try:
+        return services.update_vehicle_view_background(category_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
 @router.get("/photos/", response_model=list[models.VehiclePhoto])
 async def list_vehicle_photos(user: models.User = Depends(get_current_user)) -> list[models.VehiclePhoto]:
     _require_permission(user, action="view")
