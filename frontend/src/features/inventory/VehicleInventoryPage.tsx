@@ -1146,8 +1146,9 @@ function VehicleCompartment({
   const boardStyle = backgroundImageUrl
     ? {
         backgroundImage: `url(${backgroundImageUrl})`,
-        backgroundSize: "cover",
-        backgroundPosition: "center"
+        backgroundSize: "contain",
+        backgroundPosition: "center",
+        backgroundRepeat: "no-repeat"
       }
     : {
         backgroundImage:
