@@ -28,6 +28,7 @@ interface VehicleCategory {
   id: number;
   name: string;
   sizes: string[];
+  image_url: string | null;
   view_configs?: VehicleViewConfig[] | null;
 }
 
@@ -1215,6 +1216,9 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
     x: Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100)),
     y: Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100))
   }));
+
+  const imageUrl = resolveMediaUrl(item.image_url);
+  const hasImage = Boolean(imageUrl);
 
   useEffect(() => {
     if (isEditingPosition) {
