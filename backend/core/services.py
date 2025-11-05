@@ -428,7 +428,8 @@ def _apply_schema_migrations() -> None:
                 supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
                 image_path TEXT,
                 position_x REAL,
-                position_y REAL
+                position_y REAL,
+                remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -438,7 +439,6 @@ def _apply_schema_migrations() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_vehicle_movements_item ON vehicle_movements(item_id);
-            CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id);
             CREATE TABLE IF NOT EXISTS vehicle_photos (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path TEXT NOT NULL,
@@ -490,6 +490,15 @@ def _apply_schema_migrations() -> None:
             conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_x REAL")
         if "position_y" not in vehicle_item_columns:
             conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_y REAL")
+        if "remise_item_id" not in vehicle_item_columns:
+            conn.execute(
+                "ALTER TABLE vehicle_items ADD COLUMN remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL"
+            )
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)"
+        )
+
+        _sync_vehicle_inventory_with_remise(conn)
 
         pharmacy_category_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_category_columns = {row["name"] for row in pharmacy_category_info}
@@ -567,12 +576,89 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
     )
 
 
+def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row) -> None:
+    remise_item_id = source["id"]
+    existing = conn.execute(
+        "SELECT id, supplier_id FROM vehicle_items WHERE remise_item_id = ?",
+        (remise_item_id,),
+    ).fetchone()
+    if existing is None:
+        conn.execute(
+            """
+            INSERT INTO vehicle_items (
+                name,
+                sku,
+                category_id,
+                size,
+                quantity,
+                low_stock_threshold,
+                supplier_id,
+                position_x,
+                position_y,
+                remise_item_id
+            )
+            VALUES (?, ?, NULL, NULL, 0, 0, ?, NULL, NULL, ?)
+            """,
+            (source["name"], source["sku"], source["supplier_id"], remise_item_id),
+        )
+        return
+
+    assignments = ["name = ?", "sku = ?"]
+    params: list[object] = [source["name"], source["sku"]]
+    supplier_id = source["supplier_id"]
+    if supplier_id is not None:
+        assignments.append("supplier_id = ?")
+        params.append(supplier_id)
+    params.append(existing["id"])
+    conn.execute(
+        f"UPDATE vehicle_items SET {', '.join(assignments)} WHERE id = ?",
+        params,
+    )
+
+
+def _sync_vehicle_inventory_with_remise(conn: sqlite3.Connection) -> None:
+    remise_rows = conn.execute(
+        "SELECT id, name, sku, supplier_id FROM remise_items"
+    ).fetchall()
+    seen_ids: list[int] = []
+    for row in remise_rows:
+        _sync_vehicle_item_from_remise(conn, row)
+        seen_ids.append(row["id"])
+    if seen_ids:
+        placeholders = ", ".join("?" for _ in seen_ids)
+        conn.execute(
+            f"DELETE FROM vehicle_items WHERE remise_item_id IS NOT NULL AND remise_item_id NOT IN ({placeholders})",
+            seen_ids,
+        )
+    else:
+        conn.execute("DELETE FROM vehicle_items WHERE remise_item_id IS NOT NULL")
+
+
+def _sync_single_vehicle_item(remise_item_id: int) -> None:
+    with db.get_stock_connection() as conn:
+        source = conn.execute(
+            "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
+            (remise_item_id,),
+        ).fetchone()
+        if source is None:
+            conn.execute("DELETE FROM vehicle_items WHERE remise_item_id = ?", (remise_item_id,))
+        else:
+            _sync_vehicle_item_from_remise(conn, source)
+        conn.commit()
+
+
 def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     image_url = None
     if "image_path" in row.keys():
         image_url = _build_media_url(row["image_path"])
     position_x = row["position_x"] if "position_x" in row.keys() else None
     position_y = row["position_y"] if "position_y" in row.keys() else None
+    name = row["remise_name"] if "remise_name" in row.keys() and row["remise_name"] else row["name"]
+    sku = row["remise_sku"] if "remise_sku" in row.keys() and row["remise_sku"] else row["sku"]
+    supplier_id = row["supplier_id"] if "supplier_id" in row.keys() else None
+    if supplier_id is None and "remise_supplier_id" in row.keys():
+        supplier_id = row["remise_supplier_id"]
+    remise_item_id = row["remise_item_id"] if "remise_item_id" in row.keys() else None
     return models.Item(
         id=row["id"],
         name=name,
@@ -648,6 +734,58 @@ def _create_inventory_item_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        name = payload.name
+        sku = payload.sku
+        supplier_id = payload.supplier_id
+        remise_item_id: int | None = None
+        if module == "vehicle_inventory":
+            remise_item_id = payload.remise_item_id
+            if remise_item_id is None:
+                raise ValueError("Un article de remise doit être sélectionné.")
+            source = conn.execute(
+                "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
+                (remise_item_id,),
+            ).fetchone()
+            if source is None:
+                raise ValueError("Article de remise introuvable")
+            name = source["name"]
+            sku = source["sku"]
+            if supplier_id is None:
+                supplier_id = source["supplier_id"]
+            existing = conn.execute(
+                f"SELECT id FROM {config.tables.items} WHERE remise_item_id = ?",
+                (remise_item_id,),
+            ).fetchone()
+            if existing is not None:
+                conn.execute(
+                    f"""
+                    UPDATE {config.tables.items}
+                    SET name = ?,
+                        sku = ?,
+                        category_id = ?,
+                        size = ?,
+                        quantity = ?,
+                        low_stock_threshold = ?,
+                        supplier_id = ?,
+                        position_x = ?,
+                        position_y = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        name,
+                        sku,
+                        payload.category_id,
+                        payload.size,
+                        payload.quantity,
+                        payload.low_stock_threshold,
+                        supplier_id,
+                        payload.position_x,
+                        payload.position_y,
+                        existing["id"],
+                    ),
+                )
+                conn.commit()
+                return _get_inventory_item_internal(module, existing["id"])
         columns = [
             "name",
             "sku",
@@ -658,15 +796,17 @@ def _create_inventory_item_internal(
             "supplier_id",
         ]
         values: list[object | None] = [
-            payload.name,
-            payload.sku,
+            name,
+            sku,
             payload.category_id,
             payload.size,
             payload.quantity,
             payload.low_stock_threshold,
-            payload.supplier_id,
+            supplier_id,
         ]
         if module == "vehicle_inventory":
+            columns.append("remise_item_id")
+            values.append(remise_item_id)
             columns.extend(["position_x", "position_y"])
             values.extend([payload.position_x, payload.position_y])
         placeholders = ",".join("?" for _ in columns)
@@ -866,11 +1006,15 @@ def _get_inventory_category_internal(
                     view_configs.append(
                         models.VehicleViewConfig(name=_normalize_view_name(view_name))
                     )
+        image_url = None
+        if "image_path" in row.keys():
+            image_url = _build_media_url(row["image_path"])
         return models.Category(
             id=row["id"],
             name=row["name"],
             sizes=sizes,
             view_configs=view_configs,
+            image_url=image_url,
         )
 
 
@@ -1408,7 +1552,9 @@ def delete_vehicle_photo(photo_id: int) -> None:
 
 
 def create_remise_item(payload: models.ItemCreate) -> models.Item:
-    return _create_inventory_item_internal("inventory_remise", payload)
+    created = _create_inventory_item_internal("inventory_remise", payload)
+    _sync_single_vehicle_item(created.id)
+    return created
 
 
 def get_remise_item(item_id: int) -> models.Item:
@@ -1416,11 +1562,14 @@ def get_remise_item(item_id: int) -> models.Item:
 
 
 def update_remise_item(item_id: int, payload: models.ItemUpdate) -> models.Item:
-    return _update_inventory_item_internal("inventory_remise", item_id, payload)
+    updated = _update_inventory_item_internal("inventory_remise", item_id, payload)
+    _sync_single_vehicle_item(updated.id)
+    return updated
 
 
 def delete_remise_item(item_id: int) -> None:
     _delete_inventory_item_internal("inventory_remise", item_id)
+    _sync_single_vehicle_item(item_id)
 
 
 def update_vehicle_view_background(
