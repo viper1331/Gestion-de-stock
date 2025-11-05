@@ -584,11 +584,11 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
 
 def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row) -> None:
     remise_item_id = source["id"]
-    existing = conn.execute(
-        "SELECT id, supplier_id FROM vehicle_items WHERE remise_item_id = ?",
+    existing_rows = conn.execute(
+        "SELECT id, category_id FROM vehicle_items WHERE remise_item_id = ?",
         (remise_item_id,),
-    ).fetchone()
-    if existing is None:
+    ).fetchall()
+    if not existing_rows:
         conn.execute(
             """
             INSERT INTO vehicle_items (
@@ -609,17 +609,46 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
         )
         return
 
-    assignments = ["name = ?", "sku = ?"]
-    params: list[object] = [source["name"], source["sku"]]
+    assignments = ["name = ?"]
+    params: list[object] = [source["name"]]
     supplier_id = source["supplier_id"]
     if supplier_id is not None:
         assignments.append("supplier_id = ?")
         params.append(supplier_id)
-    params.append(existing["id"])
+    params.append(remise_item_id)
     conn.execute(
-        f"UPDATE vehicle_items SET {', '.join(assignments)} WHERE id = ?",
+        f"UPDATE vehicle_items SET {', '.join(assignments)} WHERE remise_item_id = ?",
         params,
     )
+
+    conn.execute(
+        "UPDATE vehicle_items SET sku = ? WHERE remise_item_id = ? AND category_id IS NULL",
+        (source["sku"], remise_item_id),
+    )
+
+    template_row = conn.execute(
+        "SELECT id FROM vehicle_items WHERE remise_item_id = ? AND category_id IS NULL",
+        (remise_item_id,),
+    ).fetchone()
+    if template_row is None:
+        conn.execute(
+            """
+            INSERT INTO vehicle_items (
+                name,
+                sku,
+                category_id,
+                size,
+                quantity,
+                low_stock_threshold,
+                supplier_id,
+                position_x,
+                position_y,
+                remise_item_id
+            )
+            VALUES (?, ?, NULL, NULL, 0, 0, ?, NULL, NULL, ?)
+            """,
+            (source["name"], source["sku"], source["supplier_id"], remise_item_id),
+        )
 
 
 def _sync_vehicle_inventory_with_remise(conn: sqlite3.Connection) -> None:
@@ -665,6 +694,9 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     if supplier_id is None and "remise_supplier_id" in row.keys():
         supplier_id = row["remise_supplier_id"]
     remise_item_id = row["remise_item_id"] if "remise_item_id" in row.keys() else None
+    remise_quantity = None
+    if "remise_quantity" in row.keys():
+        remise_quantity = row["remise_quantity"]
     return models.Item(
         id=row["id"],
         name=name,
@@ -675,6 +707,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         low_stock_threshold=row["low_stock_threshold"],
         supplier_id=supplier_id,
         remise_item_id=remise_item_id,
+        remise_quantity=remise_quantity,
         image_url=image_url,
         position_x=position_x,
         position_y=position_y,
@@ -689,7 +722,11 @@ def _list_inventory_items_internal(
     params: tuple[object, ...] = ()
     if module == "vehicle_inventory":
         query = (
-            "SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id "
+            "SELECT vi.*, "
+            "ri.name AS remise_name, "
+            "ri.sku AS remise_sku, "
+            "ri.supplier_id AS remise_supplier_id, "
+            "ri.quantity AS remise_quantity "
             "FROM vehicle_items AS vi "
             "LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id"
         )
@@ -716,7 +753,8 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
         if module == "vehicle_inventory":
             cur = conn.execute(
                 """
-                SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id
+                SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id,
+                       ri.quantity AS remise_quantity
                 FROM vehicle_items AS vi
                 LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
                 WHERE vi.id = ?
@@ -762,6 +800,7 @@ def _create_inventory_item_internal(
     with db.get_stock_connection() as conn:
         name = payload.name
         sku = payload.sku
+        insert_sku = sku
         supplier_id = payload.supplier_id
         remise_item_id: int | None = None
         if module == "vehicle_inventory":
@@ -776,13 +815,21 @@ def _create_inventory_item_internal(
                 raise ValueError("Article de remise introuvable")
             name = source["name"]
             sku = source["sku"]
+            insert_sku = sku
             if supplier_id is None:
                 supplier_id = source["supplier_id"]
-            existing = conn.execute(
-                f"SELECT id, quantity FROM {config.tables.items} WHERE remise_item_id = ?",
+            template_row = conn.execute(
+                f"""
+                SELECT id, quantity
+                FROM {config.tables.items}
+                WHERE remise_item_id = ? AND category_id IS NULL
+                ORDER BY id
+                LIMIT 1
+                """,
                 (remise_item_id,),
             ).fetchone()
-            if existing is not None:
+            if payload.category_id is None and template_row is not None:
+                existing = template_row
                 delta_vehicle = payload.quantity - existing["quantity"]
                 if delta_vehicle:
                     _update_remise_quantity(conn, remise_item_id, -delta_vehicle)
@@ -815,6 +862,8 @@ def _create_inventory_item_internal(
                 )
                 conn.commit()
                 return _get_inventory_item_internal(module, existing["id"])
+            if payload.category_id is not None:
+                insert_sku = f"{sku}-{uuid4().hex[:6]}"
             _update_remise_quantity(conn, remise_item_id, -payload.quantity)
         columns = [
             "name",
@@ -827,7 +876,7 @@ def _create_inventory_item_internal(
         ]
         values: list[object | None] = [
             name,
-            sku,
+            insert_sku,
             payload.category_id,
             payload.size,
             payload.quantity,

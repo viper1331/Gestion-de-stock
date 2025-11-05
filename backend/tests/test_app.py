@@ -1344,6 +1344,107 @@ def test_vehicle_inventory_updates_adjust_remise_stock() -> None:
         headers=admin_headers,
     )
     assert cleanup_remise_category.status_code == 204
+
+
+def test_vehicle_inventory_allows_multiple_assignments_from_remise_stock() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Stock-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Pack de cônes",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 2,
+            "low_stock_threshold": 0,
+            "category_id": remise_category_id,
+        },
+        headers=admin_headers,
+    )
+    assert remise_item_resp.status_code == 201, remise_item_resp.text
+    remise_item = remise_item_resp.json()
+    remise_item_id = remise_item["id"]
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Véhicule-{uuid4().hex[:6]}", "sizes": []},
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    payload = {
+        "name": remise_item["name"],
+        "sku": remise_item["sku"],
+        "quantity": 1,
+        "category_id": vehicle_category_id,
+        "size": "VUE PRINCIPALE",
+        "position_x": 0.1,
+        "position_y": 0.2,
+        "remise_item_id": remise_item_id,
+    }
+
+    first_assign = client.post(
+        "/vehicle-inventory/",
+        json=payload,
+        headers=admin_headers,
+    )
+    assert first_assign.status_code == 201, first_assign.text
+
+    remise_after_first = services.get_remise_item(remise_item_id)
+    assert remise_after_first.quantity == 1
+
+    second_assign = client.post(
+        "/vehicle-inventory/",
+        json=payload,
+        headers=admin_headers,
+    )
+    assert second_assign.status_code == 201, second_assign.text
+
+    remise_after_second = services.get_remise_item(remise_item_id)
+    assert remise_after_second.quantity == 0
+
+    items_listing = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert items_listing.status_code == 200
+    data = items_listing.json()
+    assigned = [entry for entry in data if entry["category_id"] == vehicle_category_id]
+    available = [entry for entry in data if entry["category_id"] is None]
+    assert len(assigned) == 2
+    assert any(entry["remise_item_id"] == remise_item_id for entry in available)
+    template_entry = next(entry for entry in available if entry["remise_item_id"] == remise_item_id)
+    assert template_entry["remise_quantity"] == 0
+
+    exhausted_assign = client.post(
+        "/vehicle-inventory/",
+        json=payload,
+        headers=admin_headers,
+    )
+    assert exhausted_assign.status_code == 400
+    assert "Stock insuffisant" in exhausted_assign.json()["detail"]
+
+    cleanup_vehicle = client.delete(
+        f"/vehicle-inventory/categories/{vehicle_category_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_vehicle.status_code == 204
+    cleanup_remise_item = client.delete(
+        f"/remise-inventory/{remise_item_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_item.status_code == 204
+    cleanup_remise_category = client.delete(
+        f"/remise-inventory/categories/{remise_category_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_category.status_code == 204
 def test_vehicle_view_background_configuration() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

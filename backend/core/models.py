@@ -83,6 +83,7 @@ class Item(BaseModel):
     low_stock_threshold: int = 0
     supplier_id: int | None = None
     remise_item_id: int | None = None
+    remise_quantity: int | None = None
     image_url: str | None = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
