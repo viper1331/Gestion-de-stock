@@ -1,4 +1,13 @@
-import { ChangeEvent, DragEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
+import {
+  ChangeEvent,
+  DragEvent,
+  FormEvent,
+  MouseEvent,
+  useEffect,
+  useMemo,
+  useRef,
+  useState
+} from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 
@@ -8,10 +17,17 @@ import ambulanceIllustration from "../../assets/vehicles/vehicle-ambulance.svg";
 import { api } from "../../lib/api";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 
+interface VehicleViewConfig {
+  name: string;
+  background_photo_id: number | null;
+  background_url: string | null;
+}
+
 interface VehicleCategory {
   id: number;
   name: string;
   sizes: string[];
+  view_configs?: VehicleViewConfig[] | null;
 }
 
 interface VehicleItem {
@@ -22,6 +38,14 @@ interface VehicleItem {
   size: string | null;
   quantity: number;
   image_url: string | null;
+  position_x: number | null;
+  position_y: number | null;
+}
+
+interface VehiclePhoto {
+  id: number;
+  image_url: string;
+  uploaded_at: string;
 }
 
 interface VehicleFormValues {
@@ -33,6 +57,8 @@ interface UpdateItemPayload {
   itemId: number;
   categoryId: number | null;
   size: string | null;
+  position?: { x: number; y: number } | null;
+  successMessage?: string;
 }
 
 const VEHICLE_ILLUSTRATIONS = [
@@ -41,7 +67,15 @@ const VEHICLE_ILLUSTRATIONS = [
   ambulanceIllustration
 ];
 
-const DEFAULT_VIEW_LABEL = "Vue principale";
+const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
+
+type DraggedItemData = {
+  itemId: number;
+  offsetX?: number;
+  offsetY?: number;
+  elementWidth?: number;
+  elementHeight?: number;
+};
 
 type Feedback = { type: "success" | "error"; text: string };
 
@@ -80,14 +114,34 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const { data: vehiclePhotos = [] } = useQuery({
+    queryKey: ["vehicle-photos"],
+    queryFn: async () => {
+      const response = await api.get<VehiclePhoto[]>("/vehicle-inventory/photos/");
+      return response.data;
+    }
+  });
+
   const updateItemLocation = useMutation({
-    mutationFn: async ({ itemId, categoryId, size }: UpdateItemPayload) => {
-      await api.put(`/vehicle-inventory/${itemId}`, {
+    mutationFn: async ({ itemId, categoryId, size, position }: UpdateItemPayload) => {
+      const payload: Record<string, unknown> = {
         category_id: categoryId,
         size
-      });
+      };
+      if (position) {
+        payload.position_x = position.x;
+        payload.position_y = position.y;
+      } else if (position === null) {
+        payload.position_x = null;
+        payload.position_y = null;
+      }
+      await api.put(`/vehicle-inventory/${itemId}`, payload);
     },
     onSuccess: (_, variables) => {
+      if (variables.successMessage) {
+        setFeedback({ type: "success", text: variables.successMessage });
+        return;
+      }
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
       setFeedback({
         type: "success",
@@ -101,6 +155,42 @@ export function VehicleInventoryPage() {
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+    }
+  });
+
+  const updateViewBackground = useMutation({
+    mutationFn: async ({
+      categoryId,
+      name,
+      photoId
+    }: {
+      categoryId: number;
+      name: string;
+      photoId: number | null;
+    }) => {
+      const response = await api.put<VehicleViewConfig>(
+        `/vehicle-inventory/categories/${categoryId}/views/background`,
+        {
+          name,
+          photo_id: photoId
+        }
+      );
+      return response.data;
+    },
+    onSuccess: async (_, variables) => {
+      setFeedback({
+        type: "success",
+        text: variables.photoId
+          ? "Photo de fond enregistrée."
+          : "Photo de fond retirée."
+      });
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
+    },
+    onError: () => {
+      setFeedback({
+        type: "error",
+        text: "Impossible de mettre à jour la photo de fond."
+      });
     }
   });
 
@@ -141,6 +231,22 @@ export function VehicleInventoryPage() {
 
   const vehicleViews = useMemo(() => getVehicleViews(selectedVehicle), [selectedVehicle]);
 
+  const normalizedSelectedView = useMemo(
+    () => (selectedView ? normalizeViewName(selectedView) : null),
+    [selectedView]
+  );
+
+  const selectedViewConfig = useMemo(() => {
+    if (!selectedVehicle?.view_configs || !normalizedSelectedView) {
+      return null;
+    }
+    return (
+      selectedVehicle.view_configs.find(
+        (view) => normalizeViewName(view.name) === normalizedSelectedView
+      ) ?? null
+    );
+  }, [selectedVehicle?.view_configs, normalizedSelectedView]);
+
   useEffect(() => {
     if (!selectedVehicle) {
       setSelectedView(null);
@@ -162,12 +268,12 @@ export function VehicleInventoryPage() {
   const itemsForSelectedView = useMemo(
     () =>
       vehicleItems.filter((item) => {
-        if (!selectedView) {
+        if (!normalizedSelectedView) {
           return false;
         }
-        return normalizeViewName(item.size) === selectedView;
+        return normalizeViewName(item.size) === normalizedSelectedView;
       }),
-    [vehicleItems, selectedView]
+    [vehicleItems, normalizedSelectedView]
   );
 
   const itemsWaitingAssignment = useMemo(
@@ -181,12 +287,12 @@ export function VehicleInventoryPage() {
         if (!item.size) {
           return false;
         }
-        if (!selectedView) {
+        if (!normalizedSelectedView) {
           return false;
         }
-        return normalizeViewName(item.size) !== selectedView;
+        return normalizeViewName(item.size) !== normalizedSelectedView;
       }),
-    [vehicleItems, selectedView]
+    [vehicleItems, normalizedSelectedView]
   );
 
   const availableItems = useMemo(
@@ -374,24 +480,37 @@ export function VehicleInventoryPage() {
 
           <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
             <VehicleCompartment
-              title={selectedView}
+              title={selectedView ?? DEFAULT_VIEW_LABEL}
               description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
               items={itemsForSelectedView}
-              onDropItem={(itemId) =>
+              viewConfig={selectedViewConfig}
+              availablePhotos={vehiclePhotos}
+              onDropItem={(itemId, position, options) =>
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
-                  size: selectedView
+                  size: normalizedSelectedView ?? DEFAULT_VIEW_LABEL,
+                  position,
+                  successMessage: options?.isReposition ? "Position enregistrée." : undefined
                 })
               }
               onRemoveItem={(itemId) =>
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
-                  size: null
+                  size: null,
+                  position: null
                 })
               }
               onItemFeedback={pushFeedback}
+              onBackgroundChange={(photoId) =>
+                updateViewBackground.mutate({
+                  categoryId: selectedVehicle.id,
+                  name: normalizedSelectedView ?? DEFAULT_VIEW_LABEL,
+                  photoId
+                })
+              }
+              isUpdatingBackground={updateViewBackground.isPending}
             />
 
             <aside className="space-y-6">
@@ -414,10 +533,20 @@ export function VehicleInventoryPage() {
               <DroppableLibrary
                 items={availableItems}
                 onDropItem={(itemId) =>
-                  updateItemLocation.mutate({ itemId, categoryId: selectedVehicle.id, size: selectedView })
+                  updateItemLocation.mutate({
+                    itemId,
+                    categoryId: null,
+                    size: null,
+                    position: null
+                  })
                 }
                 onRemoveFromVehicle={(itemId) =>
-                  updateItemLocation.mutate({ itemId, categoryId: null, size: null })
+                  updateItemLocation.mutate({
+                    itemId,
+                    categoryId: null,
+                    size: null,
+                    position: null
+                  })
                 }
                 onItemFeedback={pushFeedback}
               />
@@ -538,49 +667,275 @@ interface VehicleCompartmentProps {
   title: string;
   description: string;
   items: VehicleItem[];
-  onDropItem: (itemId: number) => void;
+  viewConfig: VehicleViewConfig | null;
+  availablePhotos: VehiclePhoto[];
+  onDropItem: (
+    itemId: number,
+    position: { x: number; y: number },
+    options?: { isReposition?: boolean }
+  ) => void;
   onRemoveItem: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
+  onBackgroundChange: (photoId: number | null) => void;
+  isUpdatingBackground: boolean;
 }
 
 function VehicleCompartment({
   title,
   description,
   items,
+  viewConfig,
+  availablePhotos,
   onDropItem,
   onRemoveItem,
-  onItemFeedback
+  onItemFeedback,
+  onBackgroundChange,
+  isUpdatingBackground
 }: VehicleCompartmentProps) {
   const [isHovering, setIsHovering] = useState(false);
+  const boardRef = useRef<HTMLDivElement | null>(null);
+  const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const queryClient = useQueryClient();
+
+  const uploadBackground = useMutation({
+    mutationFn: async (file: File) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api.post<VehiclePhoto>("/vehicle-inventory/photos/", formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      return response.data;
+    },
+    onSuccess: async (photo) => {
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-photos"] });
+      onBackgroundChange(photo.id);
+      onItemFeedback({ type: "success", text: "Photo importée et appliquée." });
+    },
+    onError: () => {
+      onItemFeedback({ type: "error", text: "Impossible d'importer la photo." });
+    }
+  });
+
+  const selectedBackgroundId = viewConfig?.background_photo_id ?? null;
+  const selectedBackground = selectedBackgroundId
+    ? availablePhotos.find((photo) => photo.id === selectedBackgroundId) ?? null
+    : null;
+  const isProcessingBackground = isUpdatingBackground || uploadBackground.isPending;
+
+  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    event.dataTransfer.dropEffect = "move";
+    setIsHovering(true);
+  };
+
+  const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    if (!boardRef.current) {
+      return;
+    }
+    const nextTarget = event.relatedTarget as Node | null;
+    if (nextTarget && boardRef.current.contains(nextTarget)) {
+      return;
+    }
+    setIsHovering(false);
+  };
+
+  const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    setIsHovering(false);
+    const data = readDraggedItemData(event);
+    if (!data) {
+      return;
+    }
+    const rect = boardRef.current?.getBoundingClientRect();
+    if (!rect) {
+      return;
+    }
+    const elementWidth = data.elementWidth ?? 0;
+    const elementHeight = data.elementHeight ?? 0;
+    const offsetX = data.offsetX ?? elementWidth / 2;
+    const offsetY = data.offsetY ?? elementHeight / 2;
+    const pointerX = event.clientX - rect.left;
+    const pointerY = event.clientY - rect.top;
+    const centerX = pointerX - offsetX + elementWidth / 2;
+    const centerY = pointerY - offsetY + elementHeight / 2;
+    const position = {
+      x: clamp(centerX / rect.width, 0, 1),
+      y: clamp(centerY / rect.height, 0, 1)
+    };
+    const isReposition = items.some((item) => item.id === data.itemId);
+    onDropItem(data.itemId, position, { isReposition });
+  };
+
+  const handleBackgroundUploadChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      onItemFeedback({ type: "error", text: "Seules les images sont autorisées." });
+      event.target.value = "";
+      return;
+    }
+    uploadBackground.mutate(file);
+    event.target.value = "";
+  };
+
+  const handleOpenBackgroundUpload = () => {
+    fileInputRef.current?.click();
+  };
+
+  const handleSelectBackground = (photoId: number) => {
+    if (photoId === selectedBackgroundId) {
+      return;
+    }
+    onBackgroundChange(photoId);
+  };
+
+  const handleClearBackground = () => {
+    if (!selectedBackgroundId) {
+      return;
+    }
+    onBackgroundChange(null);
+  };
+
+  const boardStyle = viewConfig?.background_url
+    ? {
+        backgroundImage: `url(${viewConfig.background_url})`,
+        backgroundSize: "cover",
+        backgroundPosition: "center"
+      }
+    : {
+        backgroundImage:
+          "linear-gradient(135deg, rgba(148,163,184,0.15) 25%, transparent 25%), linear-gradient(-135deg, rgba(148,163,184,0.15) 25%, transparent 25%), linear-gradient(135deg, transparent 75%, rgba(148,163,184,0.15) 75%), linear-gradient(-135deg, transparent 75%, rgba(148,163,184,0.15) 75%)",
+        backgroundSize: "32px 32px",
+        backgroundPosition: "0 0, 16px 0, 16px -16px, 0px 16px",
+        backgroundColor: "rgba(148,163,184,0.08)"
+      };
 
   return (
     <div>
       <div
         className={clsx(
-          "flex h-full flex-col gap-4 rounded-2xl border-2 border-dashed bg-white p-6 text-slate-600 shadow-sm transition dark:bg-slate-900",
+          "flex h-full flex-col gap-6 rounded-2xl border-2 border-dashed bg-white p-6 text-slate-600 shadow-sm transition dark:bg-slate-900",
           isHovering
-            ? "border-blue-400 bg-blue-50/60 text-blue-700 dark:border-blue-500 dark:bg-blue-950/50 dark:text-blue-200"
+            ? "border-blue-400 bg-blue-50/60 text-blue-700 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-200"
             : "border-slate-300 dark:border-slate-700"
         )}
-        onDragOver={(event) => {
-          event.preventDefault();
-          event.dataTransfer.dropEffect = "move";
-          setIsHovering(true);
-        }}
-        onDragLeave={() => setIsHovering(false)}
-        onDrop={(event) => {
-          event.preventDefault();
-          setIsHovering(false);
-          const itemId = readDraggedItemId(event);
-          if (itemId !== null) {
-            onDropItem(itemId);
-          }
-        }}
       >
-        <div>
-          <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
-          <p className="text-sm text-slate-500 dark:text-slate-400">{description}</p>
+        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+          <div>
+            <h3 className="text-lg font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+            <p className="text-sm text-slate-500 dark:text-slate-400">{description}</p>
+          </div>
+          <div className="flex w-full flex-col gap-3 text-xs md:w-80">
+            <div className="flex items-center justify-between">
+              <span className="font-semibold text-slate-600 dark:text-slate-300">Photo de fond</span>
+              <button
+                type="button"
+                onClick={handleClearBackground}
+                disabled={isProcessingBackground || !selectedBackgroundId}
+                className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+              >
+                Retirer
+              </button>
+            </div>
+
+            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
+              {selectedBackground ? (
+                <img
+                  src={selectedBackground.image_url}
+                  alt="Photo de fond sélectionnée"
+                  className="h-36 w-full object-cover"
+                />
+              ) : (
+                <div className="flex h-36 items-center justify-center px-4 text-center text-[11px] text-slate-500 dark:text-slate-400">
+                  Aucune photo sélectionnée pour cette vue.
+                </div>
+              )}
+            </div>
+
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              className="hidden"
+              onChange={handleBackgroundUploadChange}
+            />
+
+            <div className="flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={handleOpenBackgroundUpload}
+                disabled={isProcessingBackground}
+                className="rounded-full border border-dashed border-blue-400 px-4 py-1.5 text-[11px] font-semibold text-blue-600 transition hover:border-blue-500 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-500 dark:text-blue-300 dark:hover:border-blue-400 dark:hover:text-blue-200"
+              >
+                {uploadBackground.isPending ? "Téléversement en cours..." : "Importer une photo"}
+              </button>
+            </div>
+
+            <div className="grid gap-2 sm:grid-cols-3">
+              {availablePhotos.map((photo) => (
+                <button
+                  key={photo.id}
+                  type="button"
+                  onClick={() => handleSelectBackground(photo.id)}
+                  disabled={isProcessingBackground}
+                  className={clsx(
+                    "relative overflow-hidden rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+                    selectedBackgroundId === photo.id
+                      ? "border-blue-500 ring-2 ring-blue-200"
+                      : "border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-500"
+                  )}
+                >
+                  <span className="sr-only">Sélectionner cette photo comme fond</span>
+                  <img src={photo.image_url} alt={`Photo du véhicule ${photo.id}`} className="h-20 w-full object-cover" />
+                  {selectedBackgroundId === photo.id ? (
+                    <div className="absolute inset-0 bg-blue-500/20" aria-hidden />
+                  ) : null}
+                </button>
+              ))}
+              {availablePhotos.length === 0 && (
+                <p className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  Ajoutez une photo pour personnaliser cette vue.
+                </p>
+              )}
+            </div>
+
+            <span className="text-[11px] text-slate-500 dark:text-slate-400">
+              {availablePhotos.length > 0
+                ? "Cliquez sur une miniature pour l'utiliser comme fond et positionnez précisément votre matériel."
+                : "Importez une photo de l'intérieur du véhicule pour définir un fond personnalisé."}
+            </span>
+          </div>
         </div>
+
+        <div
+          ref={boardRef}
+          className={clsx(
+            "relative min-h-[320px] w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 transition dark:border-slate-700 dark:bg-slate-800",
+            isHovering &&
+              "border-blue-400 ring-4 ring-blue-200/60 dark:border-blue-500 dark:ring-blue-900/50"
+          )}
+          style={boardStyle}
+          onDragOver={handleDragOver}
+          onDragLeave={handleDragLeave}
+          onDrop={handleDrop}
+        >
+          <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-slate-900/5 via-transparent to-white/10 dark:from-slate-950/20 dark:to-slate-900/10" />
+          {items.map((item) => (
+            <VehicleItemMarker key={item.id} item={item} />
+          ))}
+          {items.length === 0 && (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-center text-sm font-medium text-slate-600 dark:text-slate-300">
+              Glissez un équipement sur la photo pour enregistrer son emplacement.
+            </div>
+          )}
+        </div>
+
+        <p className="text-xs text-slate-500 dark:text-slate-400">
+          Faites glisser un matériel depuis la bibliothèque vers la zone ci-dessus pour l'affecter et le positionner. Vous pouvez déplacer les marqueurs existants pour affiner l'emplacement.
+        </p>
+
         <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
           {items.map((item) => (
             <ItemCard
@@ -588,6 +943,7 @@ function VehicleCompartment({
               item={item}
               onRemove={() => onRemoveItem(item.id)}
               onFeedback={onItemFeedback}
+              onUpdatePosition={(position) => onDropItem(item.id, position, { isReposition: true })}
             />
           ))}
           {items.length === 0 && (
@@ -598,6 +954,46 @@ function VehicleCompartment({
         </div>
       </div>
     </div>
+  );
+}
+
+interface VehicleItemMarkerProps {
+  item: VehicleItem;
+}
+
+function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
+  const positionX = clamp(item.position_x ?? 0.5, 0, 1);
+  const positionY = clamp(item.position_y ?? 0.5, 0, 1);
+
+  return (
+    <button
+      type="button"
+      className="group absolute -translate-x-1/2 -translate-y-1/2 cursor-move rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-105 dark:bg-slate-900/80 dark:text-slate-200"
+      style={{ left: `${positionX * 100}%`, top: `${positionY * 100}%` }}
+      draggable
+      onDragStart={(event) => {
+        const rect = event.currentTarget.getBoundingClientRect();
+        event.dataTransfer.setData(
+          "application/json",
+          JSON.stringify({
+            itemId: item.id,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+            elementWidth: rect.width,
+            elementHeight: rect.height
+          })
+        );
+        event.dataTransfer.effectAllowed = "move";
+      }}
+      title={`${item.name} (Qté : ${item.quantity})`}
+    >
+      <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
+        {item.name}
+      </span>
+      <span className="block text-[10px] text-slate-500 dark:text-slate-300">
+        Qté : {item.quantity}
+      </span>
+    </button>
   );
 }
 
@@ -665,9 +1061,9 @@ function DroppableLibrary({
       onDrop={(event) => {
         event.preventDefault();
         setIsHovering(false);
-        const itemId = readDraggedItemId(event);
-        if (itemId !== null) {
-          onDropItem(itemId);
+        const data = readDraggedItemData(event);
+        if (data) {
+          onDropItem(data.itemId);
         }
       }}
     >
@@ -706,11 +1102,27 @@ interface ItemCardProps {
   item: VehicleItem;
   onRemove?: () => void;
   onFeedback?: (feedback: Feedback) => void;
+  onUpdatePosition?: (position: { x: number; y: number }) => void;
 }
 
-function ItemCard({ item, onRemove, onFeedback }: ItemCardProps) {
+function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [isEditingPosition, setIsEditingPosition] = useState(false);
+  const [draftPosition, setDraftPosition] = useState(() => ({
+    x: Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100)),
+    y: Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100))
+  }));
+
+  useEffect(() => {
+    if (isEditingPosition) {
+      return;
+    }
+    setDraftPosition({
+      x: Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100)),
+      y: Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100))
+    });
+  }, [item.position_x, item.position_y, isEditingPosition]);
 
   const uploadImage = useMutation({
     mutationFn: async (file: File) => {
@@ -776,14 +1188,66 @@ function ItemCard({ item, onRemove, onFeedback }: ItemCardProps) {
     onRemove?.();
   };
 
+  const canEditPosition = Boolean(onUpdatePosition);
+  const currentPositionX = Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100));
+  const currentPositionY = Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100));
+
+  const handleTogglePositionEditor = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!canEditPosition) {
+      return;
+    }
+    setIsEditingPosition((previous) => !previous);
+  };
+
+  const handlePositionSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!onUpdatePosition) {
+      setIsEditingPosition(false);
+      return;
+    }
+    onUpdatePosition({ x: draftPosition.x / 100, y: draftPosition.y / 100 });
+    setIsEditingPosition(false);
+  };
+
+  const handlePositionCancel = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsEditingPosition(false);
+    setDraftPosition({ x: currentPositionX, y: currentPositionY });
+  };
+
+  const handlePositionInputChange = (axis: "x" | "y") => (event: ChangeEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    const rawValue = Number(event.target.value);
+    const sanitized = Number.isNaN(rawValue) ? 0 : rawValue;
+    setDraftPosition((previous) => ({
+      ...previous,
+      [axis]: clamp(sanitized, 0, 100)
+    }));
+  };
+
   return (
     <div
       className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600"
-      draggable
+      draggable={!isEditingPosition}
       onDragStart={(event) => {
+        if (isEditingPosition) {
+          event.preventDefault();
+          return;
+        }
+        const rect = event.currentTarget.getBoundingClientRect();
         event.dataTransfer.setData(
           "application/json",
-          JSON.stringify({ itemId: item.id })
+          JSON.stringify({
+            itemId: item.id,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
+            elementWidth: rect.width,
+            elementHeight: rect.height
+          })
         );
         event.dataTransfer.effectAllowed = "move";
       }}
@@ -847,20 +1311,97 @@ function ItemCard({ item, onRemove, onFeedback }: ItemCardProps) {
           <span className="text-[11px] text-slate-500 dark:text-slate-400">Enregistrement…</span>
         ) : null}
       </div>
+      {canEditPosition ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600 dark:border-slate-600/70 dark:bg-slate-800/40 dark:text-slate-200">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-slate-600 dark:text-slate-200">
+              Position : X {currentPositionX}% · Y {currentPositionY}%
+            </span>
+            <button
+              type="button"
+              onClick={handleTogglePositionEditor}
+              className="rounded-full border border-slate-300 px-3 py-1 font-medium transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-500 dark:hover:border-slate-400"
+            >
+              {isEditingPosition ? "Fermer" : "Ajuster"}
+            </button>
+          </div>
+          {isEditingPosition ? (
+            <form className="mt-3 space-y-3" onSubmit={handlePositionSubmit}>
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-200">
+                    Axe horizontal (X)
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={draftPosition.x}
+                    onChange={handlePositionInputChange("x")}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">Pourcentage de la largeur</span>
+                </label>
+                <label className="flex flex-col gap-1">
+                  <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-200">
+                    Axe vertical (Y)
+                  </span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    step={1}
+                    value={draftPosition.y}
+                    onChange={handlePositionInputChange("y")}
+                    className="rounded-md border border-slate-300 bg-white px-3 py-2 text-xs text-slate-700 focus:border-blue-500 focus:outline-none dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100"
+                  />
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">Pourcentage de la hauteur</span>
+                </label>
+              </div>
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={handlePositionCancel}
+                  className="rounded-full border border-slate-300 px-3 py-1 font-medium transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-500 dark:hover:border-slate-400"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full border border-blue-500 bg-blue-500 px-3 py-1 font-semibold text-white transition hover:bg-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </form>
+          ) : (
+            <p className="mt-2 text-[10px] text-slate-500 dark:text-slate-400">
+              Cliquez sur « Ajuster » pour saisir des coordonnées précises (0 à 100&nbsp;%).
+            </p>
+          )}
+        </div>
+      ) : null}
     </div>
   );
 }
 
-function readDraggedItemId(event: DragEvent<HTMLDivElement>): number | null {
+function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | null {
   const rawData = event.dataTransfer.getData("application/json");
   if (!rawData) {
     return null;
   }
 
   try {
-    const parsed = JSON.parse(rawData) as { itemId?: unknown };
+    const parsed = JSON.parse(rawData) as Partial<DraggedItemData>;
     if (typeof parsed.itemId === "number") {
-      return parsed.itemId;
+      return {
+        itemId: parsed.itemId,
+        offsetX: typeof parsed.offsetX === "number" ? parsed.offsetX : undefined,
+        offsetY: typeof parsed.offsetY === "number" ? parsed.offsetY : undefined,
+        elementWidth: typeof parsed.elementWidth === "number" ? parsed.elementWidth : undefined,
+        elementHeight: typeof parsed.elementHeight === "number" ? parsed.elementHeight : undefined
+      };
     }
   } catch {
     return null;
@@ -873,7 +1414,8 @@ function normalizeVehicleViewsInput(rawInput: string): string[] {
   const entries = rawInput
     .split(/[,\n]/)
     .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+    .filter((entry) => entry.length > 0)
+    .map((entry) => normalizeViewName(entry));
 
   const uniqueEntries = Array.from(new Set(entries));
 
@@ -885,16 +1427,27 @@ function getVehicleViews(vehicle: VehicleCategory | null): string[] {
     return [DEFAULT_VIEW_LABEL];
   }
 
+  if (vehicle.view_configs && vehicle.view_configs.length > 0) {
+    const normalized = vehicle.view_configs
+      .map((config) => normalizeViewName(config.name))
+      .filter((entry, index, array) => array.indexOf(entry) === index);
+    return normalized.length > 0 ? normalized : [DEFAULT_VIEW_LABEL];
+  }
+
   const sanitized = vehicle.sizes
-    .map((entry) => entry.trim())
-    .filter((entry) => entry.length > 0);
+    .map((entry) => normalizeViewName(entry))
+    .filter((entry, index, array) => array.indexOf(entry) === index);
 
   return sanitized.length > 0 ? sanitized : [DEFAULT_VIEW_LABEL];
 }
 
 function normalizeViewName(view: string | null): string {
   if (view && view.trim().length > 0) {
-    return view.trim();
+    return view.trim().toUpperCase();
   }
   return DEFAULT_VIEW_LABEL;
+}
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.min(Math.max(value, min), max);
 }

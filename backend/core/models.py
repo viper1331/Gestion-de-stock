@@ -49,10 +49,17 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class VehicleViewConfig(BaseModel):
+    name: str
+    background_photo_id: int | None = None
+    background_url: str | None = None
+
+
 class Category(BaseModel):
     id: int
     name: str
     sizes: list[str] = Field(default_factory=list)
+    view_configs: list[VehicleViewConfig] | None = None
 
 
 class CategoryCreate(BaseModel):
@@ -75,6 +82,8 @@ class Item(BaseModel):
     low_stock_threshold: int = 0
     supplier_id: int | None = None
     image_url: str | None = None
+    position_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    position_y: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ItemCreate(BaseModel):
@@ -85,6 +94,8 @@ class ItemCreate(BaseModel):
     quantity: int = 0
     low_stock_threshold: int = 0
     supplier_id: Optional[int] = None
+    position_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    position_y: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class ItemUpdate(BaseModel):
@@ -96,12 +107,19 @@ class ItemUpdate(BaseModel):
     low_stock_threshold: Optional[int] = None
     supplier_id: Optional[int] = None
     image_url: Optional[str] = None
+    position_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    position_y: float | None = Field(default=None, ge=0.0, le=1.0)
 
 
 class VehiclePhoto(BaseModel):
     id: int
     image_url: str
     uploaded_at: datetime
+
+
+class VehicleViewBackgroundUpdate(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    photo_id: int | None = Field(default=None, ge=1)
 
 
 class Movement(BaseModel):

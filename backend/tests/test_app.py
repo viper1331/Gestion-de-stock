@@ -1,6 +1,7 @@
 from pathlib import Path
 import sys
 
+import io
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -30,6 +31,7 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM vehicle_movements")
         conn.execute("DELETE FROM vehicle_items")
         conn.execute("DELETE FROM vehicle_photos")
+        conn.execute("DELETE FROM vehicle_view_settings")
         conn.execute("DELETE FROM vehicle_category_sizes")
         conn.execute("DELETE FROM vehicle_categories")
         conn.execute("DELETE FROM remise_movements")
@@ -1147,6 +1149,90 @@ def test_vehicle_inventory_crud_cycle() -> None:
         f"/vehicle-inventory/categories/{category_id}", headers=admin_headers
     )
     assert category_delete.status_code == 204
+
+
+def test_vehicle_view_background_configuration() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Fourgon-{uuid4().hex[:6]}", "sizes": ["CABINE"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    photo = services.add_vehicle_photo(io.BytesIO(b"bg"), "fond.png")
+
+    assign_resp = client.put(
+        f"/vehicle-inventory/categories/{category_id}/views/background",
+        json={"name": "cabine", "photo_id": photo.id},
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 200, assign_resp.text
+    assigned = assign_resp.json()
+    assert assigned["background_photo_id"] == photo.id
+    assert assigned["name"] == "CABINE"
+    assert assigned["background_url"]
+
+    categories = client.get("/vehicle-inventory/categories/", headers=admin_headers)
+    assert categories.status_code == 200
+    category_data = next(entry for entry in categories.json() if entry["id"] == category_id)
+    view_configs = category_data["view_configs"]
+    assert view_configs and view_configs[0]["background_photo_id"] == photo.id
+
+    clear_resp = client.put(
+        f"/vehicle-inventory/categories/{category_id}/views/background",
+        json={"name": "CABINE", "photo_id": None},
+        headers=admin_headers,
+    )
+    assert clear_resp.status_code == 200, clear_resp.text
+    assert clear_resp.json()["background_photo_id"] is None
+
+    refreshed = client.get("/vehicle-inventory/categories/", headers=admin_headers)
+    refreshed_category = next(
+        entry for entry in refreshed.json() if entry["id"] == category_id
+    )
+    refreshed_view = refreshed_category["view_configs"][0]
+    assert refreshed_view["background_photo_id"] is None
+
+    default_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Simple-{uuid4().hex[:6]}", "sizes": []},
+        headers=admin_headers,
+    )
+    assert default_category_resp.status_code == 201, default_category_resp.text
+    default_category_id = default_category_resp.json()["id"]
+
+    default_photo = services.add_vehicle_photo(io.BytesIO(b"default"), "default.png")
+
+    default_assign = client.put(
+        f"/vehicle-inventory/categories/{default_category_id}/views/background",
+        json={"name": "Vue principale", "photo_id": default_photo.id},
+        headers=admin_headers,
+    )
+    assert default_assign.status_code == 200, default_assign.text
+    default_data = default_assign.json()
+    assert default_data["name"] == "VUE PRINCIPALE"
+    assert default_data["background_photo_id"] == default_photo.id
+
+    default_category = client.get(
+        "/vehicle-inventory/categories/", headers=admin_headers
+    ).json()
+    default_entry = next(entry for entry in default_category if entry["id"] == default_category_id)
+    default_config = default_entry["view_configs"][0]
+    assert default_config["name"] == "VUE PRINCIPALE"
+    assert default_config["background_photo_id"] == default_photo.id
+
+    cleanup_resp = client.delete(
+        f"/vehicle-inventory/categories/{category_id}", headers=admin_headers
+    )
+    assert cleanup_resp.status_code == 204
+    cleanup_default = client.delete(
+        f"/vehicle-inventory/categories/{default_category_id}", headers=admin_headers
+    )
+    assert cleanup_default.status_code == 204
 
 
 def test_remise_inventory_crud_cycle() -> None:

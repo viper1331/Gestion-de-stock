@@ -79,6 +79,8 @@ _INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
     ),
 }
 
+DEFAULT_VEHICLE_VIEW_NAME = "VUE PRINCIPALE"
+
 _MEDIA_URL_PREFIX = "/media"
 _ALLOWED_IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png", ".webp", ".gif"}
 
@@ -422,7 +424,9 @@ def _apply_schema_migrations() -> None:
                 quantity INTEGER NOT NULL DEFAULT 0,
                 low_stock_threshold INTEGER NOT NULL DEFAULT 0,
                 supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
-                image_path TEXT
+                image_path TEXT,
+                position_x REAL,
+                position_y REAL
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -436,6 +440,13 @@ def _apply_schema_migrations() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 file_path TEXT NOT NULL,
                 uploaded_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS vehicle_view_settings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                category_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+                name TEXT NOT NULL COLLATE NOCASE,
+                background_photo_id INTEGER REFERENCES vehicle_photos(id) ON DELETE SET NULL,
+                UNIQUE(category_id, name)
             );
             CREATE TABLE IF NOT EXISTS remise_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -472,6 +483,10 @@ def _apply_schema_migrations() -> None:
         vehicle_item_columns = {row["name"] for row in vehicle_item_info}
         if "image_path" not in vehicle_item_columns:
             conn.execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
+        if "position_x" not in vehicle_item_columns:
+            conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_x REAL")
+        if "position_y" not in vehicle_item_columns:
+            conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_y REAL")
 
         pharmacy_category_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_category_columns = {row["name"] for row in pharmacy_category_info}
@@ -553,6 +568,8 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     image_url = None
     if "image_path" in row.keys():
         image_url = _build_media_url(row["image_path"])
+    position_x = row["position_x"] if "position_x" in row.keys() else None
+    position_y = row["position_y"] if "position_y" in row.keys() else None
     return models.Item(
         id=row["id"],
         name=row["name"],
@@ -563,6 +580,8 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         low_stock_threshold=row["low_stock_threshold"],
         supplier_id=row["supplier_id"],
         image_url=image_url,
+        position_x=position_x,
+        position_y=position_y,
     )
 
 
@@ -602,20 +621,31 @@ def _create_inventory_item_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        columns = [
+            "name",
+            "sku",
+            "category_id",
+            "size",
+            "quantity",
+            "low_stock_threshold",
+            "supplier_id",
+        ]
+        values: list[object | None] = [
+            payload.name,
+            payload.sku,
+            payload.category_id,
+            payload.size,
+            payload.quantity,
+            payload.low_stock_threshold,
+            payload.supplier_id,
+        ]
+        if module == "vehicle_inventory":
+            columns.extend(["position_x", "position_y"])
+            values.extend([payload.position_x, payload.position_y])
+        placeholders = ",".join("?" for _ in columns)
         cur = conn.execute(
-            f"""
-            INSERT INTO {config.tables.items} (name, sku, category_id, size, quantity, low_stock_threshold, supplier_id)
-            VALUES (?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                payload.name,
-                payload.sku,
-                payload.category_id,
-                payload.size,
-                payload.quantity,
-                payload.low_stock_threshold,
-                payload.supplier_id,
-            ),
+            f"INSERT INTO {config.tables.items} ({', '.join(columns)}) VALUES ({placeholders})",
+            values,
         )
         item_id = cur.lastrowid
         if config.auto_purchase_orders:
@@ -693,15 +723,55 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
                 category_ids,
             ).fetchall()
             for size in size_rows:
-                sizes_map.setdefault(size["category_id"], []).append(size["name"])
-        return [
-            models.Category(
-                id=row["id"],
-                name=row["name"],
-                sizes=sizes_map.get(row["id"], []),
+                value = size["name"]
+                if module == "vehicle_inventory":
+                    value = _normalize_view_name(value)
+                sizes_map.setdefault(size["category_id"], []).append(value)
+
+        view_configs_map: dict[int, list[models.VehicleViewConfig]] | None = None
+        if module == "vehicle_inventory":
+            view_configs_map = {category_id: [] for category_id in category_ids}
+            settings_map = _collect_vehicle_view_settings(conn, category_ids)
+            for category_id in category_ids:
+                view_names = sizes_map.get(category_id, [])
+                if not view_names:
+                    view_names = [DEFAULT_VEHICLE_VIEW_NAME]
+                configs: list[models.VehicleViewConfig] = []
+                stored_settings = settings_map.get(category_id, {})
+                for view_name in view_names:
+                    key = _view_settings_key(view_name)
+                    stored = stored_settings.get(key)
+                    if stored is not None:
+                        configs.append(
+                            models.VehicleViewConfig(
+                                name=_normalize_view_name(view_name),
+                                background_photo_id=stored.background_photo_id,
+                                background_url=stored.background_url,
+                            )
+                        )
+                    else:
+                        configs.append(
+                            models.VehicleViewConfig(name=_normalize_view_name(view_name))
+                        )
+                view_configs_map[category_id] = configs
+
+        categories: list[models.Category] = []
+        for row in rows:
+            category_id = row["id"]
+            sizes = sizes_map.get(category_id, [])
+            if module != "vehicle_inventory":
+                category_view_configs = None
+            else:
+                category_view_configs = view_configs_map.get(category_id, []) if view_configs_map else []
+            categories.append(
+                models.Category(
+                    id=category_id,
+                    name=row["name"],
+                    sizes=sizes,
+                    view_configs=category_view_configs,
+                )
             )
-            for row in rows
-        ]
+        return categories
 
 
 def _get_inventory_category_internal(
@@ -721,10 +791,34 @@ def _get_inventory_category_internal(
             f"SELECT name FROM {config.tables.category_sizes} WHERE category_id = ? ORDER BY name COLLATE NOCASE",
             (category_id,),
         ).fetchall()
+        sizes = [size_row["name"] for size_row in size_rows]
+        view_configs: list[models.VehicleViewConfig] | None = None
+        if module == "vehicle_inventory":
+            sizes = [_normalize_view_name(name) for name in sizes]
+            view_names = sizes if sizes else [DEFAULT_VEHICLE_VIEW_NAME]
+            settings_map = _collect_vehicle_view_settings(conn, [category_id])
+            stored_settings = settings_map.get(category_id, {})
+            view_configs = []
+            for view_name in view_names:
+                key = _view_settings_key(view_name)
+                stored = stored_settings.get(key)
+                if stored is not None:
+                    view_configs.append(
+                        models.VehicleViewConfig(
+                            name=_normalize_view_name(view_name),
+                            background_photo_id=stored.background_photo_id,
+                            background_url=stored.background_url,
+                        )
+                    )
+                else:
+                    view_configs.append(
+                        models.VehicleViewConfig(name=_normalize_view_name(view_name))
+                    )
         return models.Category(
             id=row["id"],
             name=row["name"],
-            sizes=[size_row["name"] for size_row in size_rows],
+            sizes=sizes,
+            view_configs=view_configs,
         )
 
 
@@ -746,7 +840,10 @@ def _create_inventory_category_internal(
                 ((category_id, size) for size in normalized_sizes),
             )
         conn.commit()
-    return models.Category(id=category_id, name=payload.name, sizes=normalized_sizes)
+    created = _get_inventory_category_internal(module, category_id)
+    if created is None:  # pragma: no cover - defensive programming
+        raise ValueError("Catégorie introuvable")
+    return created
 
 
 def _update_inventory_category_internal(
@@ -785,6 +882,23 @@ def _update_inventory_category_internal(
                     f"INSERT INTO {config.tables.category_sizes} (category_id, name) VALUES (?, ?)",
                     ((category_id, size) for size in normalized_sizes),
                 )
+            if module == "vehicle_inventory":
+                keep_names = normalized_sizes if normalized_sizes else [DEFAULT_VEHICLE_VIEW_NAME]
+                normalized_keep = [_normalize_view_name(name) for name in keep_names]
+                if normalized_keep:
+                    placeholders = ",".join("?" for _ in normalized_keep)
+                    conn.execute(
+                        f"""
+                        DELETE FROM vehicle_view_settings
+                        WHERE category_id = ? AND name NOT IN ({placeholders})
+                        """,
+                        (category_id, *normalized_keep),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM vehicle_view_settings WHERE category_id = ?",
+                        (category_id,),
+                    )
         conn.commit()
 
     updated = _get_inventory_category_internal(module, category_id)
@@ -1189,6 +1303,44 @@ def delete_remise_item(item_id: int) -> None:
     _delete_inventory_item_internal("inventory_remise", item_id)
 
 
+def update_vehicle_view_background(
+    category_id: int, payload: models.VehicleViewBackgroundUpdate
+) -> models.VehicleViewConfig:
+    ensure_database_ready()
+    normalized_name = _normalize_view_name(payload.name)
+    with db.get_stock_connection() as conn:
+        category_row = conn.execute(
+            "SELECT id FROM vehicle_categories WHERE id = ?",
+            (category_id,),
+        ).fetchone()
+        if category_row is None:
+            raise ValueError("Véhicule introuvable")
+        view_exists = conn.execute(
+            "SELECT 1 FROM vehicle_category_sizes WHERE category_id = ? AND name = ?",
+            (category_id, normalized_name),
+        ).fetchone()
+        if view_exists is None and normalized_name != DEFAULT_VEHICLE_VIEW_NAME:
+            raise ValueError("Vue introuvable")
+        if payload.photo_id is not None:
+            photo_row = conn.execute(
+                "SELECT id FROM vehicle_photos WHERE id = ?",
+                (payload.photo_id,),
+            ).fetchone()
+            if photo_row is None:
+                raise ValueError("Photo introuvable")
+        conn.execute(
+            """
+            INSERT INTO vehicle_view_settings (category_id, name, background_photo_id)
+            VALUES (?, ?, ?)
+            ON CONFLICT(category_id, name)
+            DO UPDATE SET background_photo_id = excluded.background_photo_id
+            """,
+            (category_id, normalized_name, payload.photo_id),
+        )
+        conn.commit()
+    return _get_vehicle_view_config(category_id, normalized_name)
+
+
 def _normalize_barcode(barcode: str | None) -> str | None:
     if barcode is None:
         return None
@@ -1209,6 +1361,71 @@ def _normalize_sizes(sizes: Iterable[str]) -> list[str]:
         if key not in unique:
             unique[key] = normalized
     return sorted(unique.values(), key=str.lower)
+
+
+def _normalize_view_name(name: str) -> str:
+    trimmed = name.strip()
+    if not trimmed:
+        raise ValueError("Le nom de la vue est obligatoire")
+    return trimmed.upper()
+
+
+def _view_settings_key(name: str) -> str:
+    return _normalize_view_name(name).casefold()
+
+
+def _build_vehicle_view_config(
+    name: str, background_photo_id: int | None, file_path: str | None
+) -> models.VehicleViewConfig:
+    normalized = _normalize_view_name(name)
+    return models.VehicleViewConfig(
+        name=normalized,
+        background_photo_id=background_photo_id,
+        background_url=_build_media_url(file_path) if background_photo_id else None,
+    )
+
+
+def _collect_vehicle_view_settings(
+    conn: sqlite3.Connection, category_ids: list[int]
+) -> dict[int, dict[str, models.VehicleViewConfig]]:
+    if not category_ids:
+        return {}
+    placeholders = ",".join("?" for _ in category_ids)
+    rows = conn.execute(
+        f"""
+        SELECT vvs.category_id, vvs.name, vvs.background_photo_id, vp.file_path
+        FROM vehicle_view_settings AS vvs
+        LEFT JOIN vehicle_photos AS vp ON vp.id = vvs.background_photo_id
+        WHERE vvs.category_id IN ({placeholders})
+        """,
+        category_ids,
+    ).fetchall()
+    settings: dict[int, dict[str, models.VehicleViewConfig]] = {}
+    for row in rows:
+        config = _build_vehicle_view_config(
+            row["name"], row["background_photo_id"], row["file_path"]
+        )
+        settings.setdefault(row["category_id"], {})[_view_settings_key(config.name)] = config
+    return settings
+
+
+def _get_vehicle_view_config(
+    category_id: int, name: str
+) -> models.VehicleViewConfig:
+    normalized = _normalize_view_name(name)
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT vvs.name, vvs.background_photo_id, vp.file_path
+            FROM vehicle_view_settings AS vvs
+            LEFT JOIN vehicle_photos AS vp ON vp.id = vvs.background_photo_id
+            WHERE vvs.category_id = ? AND vvs.name = ?
+            """,
+            (category_id, normalized),
+        ).fetchone()
+    if row is None:
+        return models.VehicleViewConfig(name=normalized)
+    return _build_vehicle_view_config(row["name"], row["background_photo_id"], row["file_path"])
 
 
 def list_low_stock(threshold: int) -> list[models.LowStockReport]:
