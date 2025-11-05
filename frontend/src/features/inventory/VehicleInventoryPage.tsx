@@ -61,6 +61,12 @@ interface UploadVehicleImagePayload {
   file: File;
 }
 
+interface UpdateVehiclePayload {
+  categoryId: number;
+  name: string;
+  sizes: string[];
+}
+
 interface UpdateItemPayload {
   itemId: number;
   categoryId: number | null;
@@ -99,6 +105,9 @@ export function VehicleInventoryPage() {
   const [vehicleViewsInput, setVehicleViewsInput] = useState("");
   const [vehicleImageFile, setVehicleImageFile] = useState<File | null>(null);
   const vehicleImageInputRef = useRef<HTMLInputElement | null>(null);
+  const [isEditingVehicle, setIsEditingVehicle] = useState(false);
+  const [editedVehicleName, setEditedVehicleName] = useState("");
+  const [editedVehicleViewsInput, setEditedVehicleViewsInput] = useState("");
 
   const {
     data: vehicles = [],
@@ -252,6 +261,54 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const updateVehicle = useMutation({
+    mutationFn: async ({ categoryId, name, sizes }: UpdateVehiclePayload) => {
+      const response = await api.put<VehicleCategory>(
+        `/vehicle-inventory/categories/${categoryId}`,
+        {
+          name,
+          sizes
+        }
+      );
+      return response.data;
+    },
+    onSuccess: () => {
+      setFeedback({ type: "success", text: "Véhicule mis à jour." });
+      setIsEditingVehicle(false);
+      setEditedVehicleName("");
+      setEditedVehicleViewsInput("");
+    },
+    onError: () => {
+      setFeedback({ type: "error", text: "Impossible de mettre à jour ce véhicule." });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
+    }
+  });
+
+  const deleteVehicle = useMutation({
+    mutationFn: async (categoryId: number) => {
+      await api.delete(`/vehicle-inventory/categories/${categoryId}`);
+    },
+    onSuccess: () => {
+      setFeedback({ type: "success", text: "Véhicule supprimé." });
+      setSelectedVehicleId(null);
+      setSelectedView(null);
+      setIsEditingVehicle(false);
+      setEditedVehicleName("");
+      setEditedVehicleViewsInput("");
+    },
+    onError: () => {
+      setFeedback({ type: "error", text: "Impossible de supprimer ce véhicule." });
+    },
+    onSettled: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-items"] })
+      ]);
+    }
+  });
+
   const selectedVehicle = useMemo(
     () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
     [vehicles, selectedVehicleId]
@@ -265,6 +322,14 @@ export function VehicleInventoryPage() {
   }, [selectedVehicle, vehicleFallbackMap]);
 
   const vehicleViews = useMemo(() => getVehicleViews(selectedVehicle), [selectedVehicle]);
+
+  useEffect(() => {
+    if (selectedVehicleId === null) {
+      setIsEditingVehicle(false);
+      setEditedVehicleName("");
+      setEditedVehicleViewsInput("");
+    }
+  }, [selectedVehicleId]);
 
   const normalizedSelectedView = useMemo(
     () => (selectedView ? normalizeViewName(selectedView) : null),
@@ -389,6 +454,65 @@ export function VehicleInventoryPage() {
     } catch {
       // handled in mutation callbacks
     }
+  };
+
+  const handleToggleVehicleEdition = () => {
+    if (!selectedVehicle || updateVehicle.isPending || deleteVehicle.isPending) {
+      return;
+    }
+    if (isEditingVehicle) {
+      setIsEditingVehicle(false);
+      setEditedVehicleName("");
+      setEditedVehicleViewsInput("");
+      return;
+    }
+    setEditedVehicleName(selectedVehicle.name);
+    setEditedVehicleViewsInput(getVehicleViews(selectedVehicle).join(", "));
+    setIsEditingVehicle(true);
+  };
+
+  const handleCancelVehicleEdition = () => {
+    if (updateVehicle.isPending) {
+      return;
+    }
+    setIsEditingVehicle(false);
+    setEditedVehicleName("");
+    setEditedVehicleViewsInput("");
+  };
+
+  const handleUpdateVehicle = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (!selectedVehicle) {
+      return;
+    }
+    const trimmedName = editedVehicleName.trim();
+    if (!trimmedName) {
+      setFeedback({ type: "error", text: "Veuillez indiquer un nom de véhicule." });
+      return;
+    }
+    const parsedViews = normalizeVehicleViewsInput(editedVehicleViewsInput);
+    try {
+      await updateVehicle.mutateAsync({
+        categoryId: selectedVehicle.id,
+        name: trimmedName,
+        sizes: parsedViews
+      });
+    } catch {
+      // feedback handled in mutation callbacks
+    }
+  };
+
+  const handleDeleteVehicle = () => {
+    if (!selectedVehicle || deleteVehicle.isPending || updateVehicle.isPending) {
+      return;
+    }
+    const confirmation = window.confirm(
+      `Voulez-vous vraiment supprimer le véhicule "${selectedVehicle.name}" ? Cette action est irréversible.`
+    );
+    if (!confirmation) {
+      return;
+    }
+    deleteVehicle.mutate(selectedVehicle.id);
   };
 
   return (
@@ -571,7 +695,70 @@ export function VehicleInventoryPage() {
             vehicle={selectedVehicle}
             itemsCount={vehicleItems.length}
             fallbackIllustration={selectedVehicleFallback}
+            onEdit={handleToggleVehicleEdition}
+            onDelete={handleDeleteVehicle}
+            isEditing={isEditingVehicle}
+            isUpdating={updateVehicle.isPending}
+            isDeleting={deleteVehicle.isPending}
           />
+
+          {isEditingVehicle ? (
+            <form
+              onSubmit={handleUpdateVehicle}
+              className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
+            >
+              <div className="flex flex-col gap-2 sm:flex-row">
+                <label className="flex-1 space-y-1" htmlFor="edit-vehicle-name">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Nom du véhicule
+                  </span>
+                  <input
+                    id="edit-vehicle-name"
+                    type="text"
+                    value={editedVehicleName}
+                    onChange={(event) => setEditedVehicleName(event.target.value)}
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                    disabled={updateVehicle.isPending || deleteVehicle.isPending}
+                    required
+                  />
+                </label>
+                <label className="flex-1 space-y-1" htmlFor="edit-vehicle-views">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Vues
+                  </span>
+                  <input
+                    id="edit-vehicle-views"
+                    type="text"
+                    value={editedVehicleViewsInput}
+                    onChange={(event) => setEditedVehicleViewsInput(event.target.value)}
+                    placeholder="Vue principale, Coffre gauche, Coffre droit"
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                    disabled={updateVehicle.isPending || deleteVehicle.isPending}
+                  />
+                </label>
+              </div>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Séparez les différentes vues par des virgules ou des retours à la ligne. La vue "{DEFAULT_VIEW_LABEL}" sera utilisée par défaut si aucune vue n'est fournie.
+              </p>
+              <div className="flex gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelVehicleEdition}
+                  className="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                  disabled={updateVehicle.isPending}
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  disabled={updateVehicle.isPending || deleteVehicle.isPending}
+                >
+                  {updateVehicle.isPending ? "Enregistrement..." : "Enregistrer les modifications"}
+                </button>
+              </div>
+            </form>
+          ) : null}
 
           <VehicleViewSelector
             views={vehicleViews}
@@ -708,32 +895,73 @@ interface VehicleHeaderProps {
   vehicle: VehicleCategory;
   itemsCount: number;
   fallbackIllustration?: string;
+  onEdit: () => void;
+  onDelete: () => void;
+  isEditing: boolean;
+  isUpdating: boolean;
+  isDeleting: boolean;
 }
 
-function VehicleHeader({ vehicle, itemsCount, fallbackIllustration }: VehicleHeaderProps) {
+function VehicleHeader({
+  vehicle,
+  itemsCount,
+  fallbackIllustration,
+  onEdit,
+  onDelete,
+  isEditing,
+  isUpdating,
+  isDeleting
+}: VehicleHeaderProps) {
   const imageSource =
     resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration ?? VEHICLE_ILLUSTRATIONS[0];
   return (
-    <div className="flex flex-col gap-6 rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900 md:flex-row md:items-center md:justify-between">
-      <div className="flex items-center gap-4">
-        <div className="hidden h-20 w-36 overflow-hidden rounded-xl bg-slate-100 shadow-inner dark:bg-slate-800 md:block">
-          <img src={imageSource} alt="Vue du véhicule" className="h-full w-full object-cover" />
+    <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
+        <div className="flex items-center gap-4">
+          <div className="hidden h-20 w-36 overflow-hidden rounded-xl bg-slate-100 shadow-inner dark:bg-slate-800 md:block">
+            <img src={imageSource} alt="Vue du véhicule" className="h-full w-full object-cover" />
+          </div>
+          <div className="space-y-3">
+            <div>
+              <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
+                {vehicle.name}
+              </h2>
+              <p className="text-sm text-slate-600 dark:text-slate-300">
+                {itemsCount} matériel{itemsCount > 1 ? "s" : ""} associé{itemsCount > 1 ? "s" : ""}.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                onClick={onEdit}
+                disabled={isUpdating || isDeleting}
+                className={clsx(
+                  "inline-flex items-center justify-center rounded-md border px-3 py-2 text-xs font-semibold transition disabled:cursor-not-allowed disabled:opacity-60",
+                  isEditing
+                    ? "border-indigo-300 bg-indigo-50 text-indigo-600 hover:bg-indigo-100 dark:border-indigo-400/60 dark:bg-indigo-500/10 dark:text-indigo-200 dark:hover:bg-indigo-500/20"
+                    : "border-slate-300 text-slate-600 hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+                )}
+              >
+                {isEditing ? "Fermer l'édition" : "Modifier"}
+              </button>
+              <button
+                type="button"
+                onClick={onDelete}
+                disabled={isDeleting || isUpdating}
+                className="inline-flex items-center justify-center rounded-md border border-rose-300 px-3 py-2 text-xs font-semibold text-rose-600 transition hover:bg-rose-50 dark:border-rose-400/60 dark:text-rose-300 dark:hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {isDeleting ? "Suppression..." : "Supprimer"}
+              </button>
+            </div>
+          </div>
         </div>
-        <div>
-          <h2 className="text-xl font-semibold text-slate-900 dark:text-slate-100">
-            {vehicle.name}
-          </h2>
-          <p className="text-sm text-slate-600 dark:text-slate-300">
-            {itemsCount} matériel{itemsCount > 1 ? "s" : ""} associé{itemsCount > 1 ? "s" : ""}.
-          </p>
+        <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
+          {getVehicleViews(vehicle).map((view) => (
+            <span key={view} className="rounded-full bg-slate-100 px-3 py-1 dark:bg-slate-800">
+              {view}
+            </span>
+          ))}
         </div>
-      </div>
-      <div className="flex flex-wrap items-center gap-3 text-sm text-slate-500 dark:text-slate-400">
-        {getVehicleViews(vehicle).map((view) => (
-          <span key={view} className="rounded-full bg-slate-100 px-3 py-1 dark:bg-slate-800">
-            {view}
-          </span>
-        ))}
       </div>
     </div>
   );
