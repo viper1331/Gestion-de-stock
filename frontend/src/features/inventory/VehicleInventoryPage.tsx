@@ -66,6 +66,7 @@ interface UpdateItemPayload {
   categoryId: number | null;
   size: string | null;
   position?: { x: number; y: number } | null;
+  quantity?: number;
   successMessage?: string;
 }
 
@@ -141,7 +142,7 @@ export function VehicleInventoryPage() {
   });
 
   const updateItemLocation = useMutation({
-    mutationFn: async ({ itemId, categoryId, size, position }: UpdateItemPayload) => {
+    mutationFn: async ({ itemId, categoryId, size, position, quantity }: UpdateItemPayload) => {
       const payload: Record<string, unknown> = {
         category_id: categoryId,
         size
@@ -152,6 +153,9 @@ export function VehicleInventoryPage() {
       } else if (position === null) {
         payload.position_x = null;
         payload.position_y = null;
+      }
+      if (typeof quantity === "number") {
+        payload.quantity = quantity;
       }
       await api.put(`/vehicle-inventory/${itemId}`, payload);
     },
@@ -592,6 +596,7 @@ export function VehicleInventoryPage() {
                   categoryId: selectedVehicle.id,
                   size: normalizedSelectedView ?? DEFAULT_VIEW_LABEL,
                   position,
+                  quantity: options?.quantity ?? undefined,
                   successMessage: options?.isReposition ? "Position enregistrée." : undefined
                 })
               }
@@ -600,7 +605,8 @@ export function VehicleInventoryPage() {
                   itemId,
                   categoryId: selectedVehicle.id,
                   size: null,
-                  position: null
+                  position: null,
+                  quantity: 0
                 })
               }
               onItemFeedback={pushFeedback}
@@ -638,7 +644,8 @@ export function VehicleInventoryPage() {
                     itemId,
                     categoryId: null,
                     size: null,
-                    position: null
+                    position: null,
+                    quantity: 0
                   })
                 }
                 onRemoveFromVehicle={(itemId) =>
@@ -646,7 +653,8 @@ export function VehicleInventoryPage() {
                     itemId,
                     categoryId: null,
                     size: null,
-                    position: null
+                    position: null,
+                    quantity: 0
                   })
                 }
                 onItemFeedback={pushFeedback}
@@ -776,7 +784,7 @@ interface VehicleCompartmentProps {
   onDropItem: (
     itemId: number,
     position: { x: number; y: number },
-    options?: { isReposition?: boolean }
+    options?: { isReposition?: boolean; quantity?: number | null }
   ) => void;
   onRemoveItem: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
@@ -867,7 +875,10 @@ function VehicleCompartment({
       y: clamp(centerY / rect.height, 0, 1)
     };
     const isReposition = items.some((item) => item.id === data.itemId);
-    onDropItem(data.itemId, position, { isReposition });
+    onDropItem(data.itemId, position, {
+      isReposition,
+      quantity: isReposition ? undefined : 1
+    });
   };
 
   const handleBackgroundUploadChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -1077,6 +1088,8 @@ interface VehicleItemMarkerProps {
 function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
   const positionX = clamp(item.position_x ?? 0.5, 0, 1);
   const positionY = clamp(item.position_y ?? 0.5, 0, 1);
+  const imageUrl = resolveMediaUrl(item.image_url);
+  const hasImage = Boolean(imageUrl);
 
   return (
     <button
@@ -1100,12 +1113,27 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
       }}
       title={`${item.name} (Qté : ${item.quantity})`}
     >
-      <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
-        {item.name}
-      </span>
-      <span className="block text-[10px] text-slate-500 dark:text-slate-300">
-        Qté : {item.quantity}
-      </span>
+      <div className="flex items-center gap-2">
+        {hasImage ? (
+          <img
+            src={imageUrl ?? undefined}
+            alt={`Illustration de ${item.name}`}
+            className="h-10 w-10 rounded-md border border-white/60 object-cover shadow-sm"
+          />
+        ) : (
+          <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+            N/A
+          </div>
+        )}
+        <div className="text-left">
+          <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
+            {item.name}
+          </span>
+          <span className="block text-[10px] text-slate-500 dark:text-slate-300">
+            Qté : {item.quantity}
+          </span>
+        </div>
+      </div>
     </button>
   );
 }
