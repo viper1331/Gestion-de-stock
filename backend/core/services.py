@@ -728,6 +728,26 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
         return _build_inventory_item(row)
 
 
+def _update_remise_quantity(
+    conn: sqlite3.Connection, remise_item_id: int, delta: int
+) -> None:
+    if delta == 0:
+        return
+    row = conn.execute(
+        "SELECT quantity FROM remise_items WHERE id = ?",
+        (remise_item_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Article de remise introuvable")
+    updated = row["quantity"] + delta
+    if updated < 0:
+        raise ValueError("Stock insuffisant en remise pour cette affectation.")
+    conn.execute(
+        "UPDATE remise_items SET quantity = ? WHERE id = ?",
+        (updated, remise_item_id),
+    )
+
+
 def _create_inventory_item_internal(
     module: str, payload: models.ItemCreate
 ) -> models.Item:
@@ -753,10 +773,13 @@ def _create_inventory_item_internal(
             if supplier_id is None:
                 supplier_id = source["supplier_id"]
             existing = conn.execute(
-                f"SELECT id FROM {config.tables.items} WHERE remise_item_id = ?",
+                f"SELECT id, quantity FROM {config.tables.items} WHERE remise_item_id = ?",
                 (remise_item_id,),
             ).fetchone()
             if existing is not None:
+                delta_vehicle = payload.quantity - existing["quantity"]
+                if delta_vehicle:
+                    _update_remise_quantity(conn, remise_item_id, -delta_vehicle)
                 conn.execute(
                     f"""
                     UPDATE {config.tables.items}
@@ -786,6 +809,7 @@ def _create_inventory_item_internal(
                 )
                 conn.commit()
                 return _get_inventory_item_internal(module, existing["id"])
+            _update_remise_quantity(conn, remise_item_id, -payload.quantity)
         columns = [
             "name",
             "sku",
@@ -828,34 +852,57 @@ def _update_inventory_item_internal(
     config = _get_inventory_config(module)
     fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
     fields.pop("image_url", None)
+    if not fields:
+        return _get_inventory_item_internal(module, item_id)
     if module == "vehicle_inventory":
         # Vehicle inventory items mirror remise inventory metadata.
         fields.pop("name", None)
         fields.pop("sku", None)
-        if "remise_item_id" in fields:
-            remise_item_id = fields["remise_item_id"]
-            if remise_item_id is None:
-                raise ValueError("Un article de remise doit être sélectionné.")
-            with db.get_stock_connection() as conn:
+    with db.get_stock_connection() as conn:
+        current_row: sqlite3.Row | None = None
+        if module == "vehicle_inventory":
+            current_row = conn.execute(
+                f"SELECT quantity, remise_item_id FROM {config.tables.items} WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if current_row is None:
+                raise ValueError("Article introuvable")
+            current_quantity = current_row["quantity"]
+            current_remise_item_id = current_row["remise_item_id"]
+            if "remise_item_id" in fields:
+                remise_item_id = fields["remise_item_id"]
+                if remise_item_id is None:
+                    raise ValueError("Un article de remise doit être sélectionné.")
                 source = conn.execute(
                     "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
                     (remise_item_id,),
                 ).fetchone()
-            if source is None:
-                raise ValueError("Article de remise introuvable")
-            fields["name"] = source["name"]
-            fields["sku"] = source["sku"]
-            if fields.get("supplier_id") is None:
-                fields["supplier_id"] = source["supplier_id"]
-    if not fields:
-        return _get_inventory_item_internal(module, item_id)
-    assignments = ", ".join(f"{col} = ?" for col in fields)
-    values = list(fields.values())
-    values.append(item_id)
-    should_check_low_stock = any(
-        key in fields for key in {"quantity", "low_stock_threshold", "supplier_id"}
-    )
-    with db.get_stock_connection() as conn:
+                if source is None:
+                    raise ValueError("Article de remise introuvable")
+                fields["name"] = source["name"]
+                fields["sku"] = source["sku"]
+                if fields.get("supplier_id") is None:
+                    fields["supplier_id"] = source["supplier_id"]
+            target_remise_item_id = fields.get("remise_item_id", current_remise_item_id)
+            if target_remise_item_id is None:
+                raise ValueError("Un article de remise doit être sélectionné.")
+            target_quantity = fields.get("quantity", current_quantity)
+            if target_remise_item_id == current_remise_item_id:
+                delta = current_quantity - target_quantity
+                if delta:
+                    _update_remise_quantity(conn, target_remise_item_id, delta)
+            else:
+                if current_remise_item_id is not None and current_quantity:
+                    _update_remise_quantity(conn, current_remise_item_id, current_quantity)
+                _update_remise_quantity(conn, target_remise_item_id, -target_quantity)
+        if not fields:
+            return _get_inventory_item_internal(module, item_id)
+        assignments = ", ".join(f"{col} = ?" for col in fields)
+        values = list(fields.values())
+        values.append(item_id)
+        should_check_low_stock = any(
+            key in fields for key in {"quantity", "low_stock_threshold", "supplier_id"}
+        )
         conn.execute(
             f"UPDATE {config.tables.items} SET {assignments} WHERE id = ?",
             values,
