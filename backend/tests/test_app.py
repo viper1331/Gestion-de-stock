@@ -1170,6 +1170,8 @@ def test_vehicle_inventory_crud_cycle() -> None:
     assert create_resp.status_code == 201, create_resp.text
     item_id = create_resp.json()["id"]
     assert create_resp.json()["remise_item_id"] == remise_item_id
+    remise_after_create = services.get_remise_item(remise_item_id)
+    assert remise_after_create.quantity == 3
 
     movement_resp = client.post(
         f"/vehicle-inventory/{item_id}/movements",
@@ -1186,6 +1188,8 @@ def test_vehicle_inventory_crud_cycle() -> None:
     assert history.status_code == 200
     history_entries = history.json()
     assert history_entries and history_entries[0]["delta"] == 1
+    remise_after_movement = services.get_remise_item(remise_item_id)
+    assert remise_after_movement.quantity == 3
 
     delete_resp = client.delete(f"/vehicle-inventory/{item_id}", headers=admin_headers)
     assert delete_resp.status_code == 204
@@ -1196,6 +1200,138 @@ def test_vehicle_inventory_crud_cycle() -> None:
     assert category_delete.status_code == 204
 
 
+def test_vehicle_inventory_updates_adjust_remise_stock() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Depot-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_a_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot A",
+            "sku": f"REM-A-{uuid4().hex[:6]}",
+            "quantity": 10,
+            "low_stock_threshold": 1,
+            "category_id": remise_category_id,
+        },
+        headers=admin_headers,
+    )
+    assert remise_a_resp.status_code == 201, remise_a_resp.text
+    remise_a_id = remise_a_resp.json()["id"]
+
+    remise_b_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot B",
+            "sku": f"REM-B-{uuid4().hex[:6]}",
+            "quantity": 5,
+            "low_stock_threshold": 1,
+            "category_id": remise_category_id,
+        },
+        headers=admin_headers,
+    )
+    assert remise_b_resp.status_code == 201, remise_b_resp.text
+    remise_b_id = remise_b_resp.json()["id"]
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Vehicules-{uuid4().hex[:6]}", "sizes": ["FOURGON"]},
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    vehicle_item_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Camion 1",
+            "sku": f"VEH-{uuid4().hex[:6]}",
+            "quantity": 2,
+            "low_stock_threshold": 1,
+            "category_id": vehicle_category_id,
+            "remise_item_id": remise_a_id,
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_item_resp.status_code == 201, vehicle_item_resp.text
+    vehicle_item_id = vehicle_item_resp.json()["id"]
+
+    remise_a_after_create = services.get_remise_item(remise_a_id)
+    assert remise_a_after_create.quantity == 8
+
+    increase_resp = client.put(
+        f"/vehicle-inventory/{vehicle_item_id}",
+        json={"quantity": 5},
+        headers=admin_headers,
+    )
+    assert increase_resp.status_code == 200, increase_resp.text
+    remise_a_after_increase = services.get_remise_item(remise_a_id)
+    assert remise_a_after_increase.quantity == 5
+
+    decrease_resp = client.put(
+        f"/vehicle-inventory/{vehicle_item_id}",
+        json={"quantity": 1},
+        headers=admin_headers,
+    )
+    assert decrease_resp.status_code == 200, decrease_resp.text
+    remise_a_after_decrease = services.get_remise_item(remise_a_id)
+    assert remise_a_after_decrease.quantity == 9
+
+    for item in services.list_vehicle_items():
+        if item.remise_item_id == remise_b_id and item.id != vehicle_item_id:
+            delete_existing = client.delete(
+                f"/vehicle-inventory/{item.id}",
+                headers=admin_headers,
+            )
+            assert delete_existing.status_code == 204
+
+    reassign_resp = client.put(
+        f"/vehicle-inventory/{vehicle_item_id}",
+        json={"remise_item_id": remise_b_id},
+        headers=admin_headers,
+    )
+    assert reassign_resp.status_code == 200, reassign_resp.text
+    remise_a_final = services.get_remise_item(remise_a_id)
+    remise_b_final = services.get_remise_item(remise_b_id)
+    assert remise_a_final.quantity == 10
+    assert remise_b_final.quantity == 4
+
+    delete_vehicle_resp = client.delete(
+        f"/vehicle-inventory/{vehicle_item_id}",
+        headers=admin_headers,
+    )
+    assert delete_vehicle_resp.status_code == 204
+
+    cleanup_vehicle_category = client.delete(
+        f"/vehicle-inventory/categories/{vehicle_category_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_vehicle_category.status_code == 204
+
+    cleanup_remise_a = client.delete(
+        f"/remise-inventory/{remise_a_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_a.status_code == 204
+
+    cleanup_remise_b = client.delete(
+        f"/remise-inventory/{remise_b_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_b.status_code == 204
+
+    cleanup_remise_category = client.delete(
+        f"/remise-inventory/categories/{remise_category_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_category.status_code == 204
 def test_vehicle_view_background_configuration() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
