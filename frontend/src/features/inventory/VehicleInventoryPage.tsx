@@ -109,6 +109,7 @@ export function VehicleInventoryPage() {
   const [isEditingVehicle, setIsEditingVehicle] = useState(false);
   const [editedVehicleName, setEditedVehicleName] = useState("");
   const [editedVehicleViewsInput, setEditedVehicleViewsInput] = useState("");
+  const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
 
   const {
     data: vehicles = [],
@@ -1175,89 +1176,107 @@ function VehicleCompartment({
           <div className="flex w-full flex-col gap-3 text-xs md:w-80">
             <div className="flex items-center justify-between">
               <span className="font-semibold text-slate-600 dark:text-slate-300">Photo de fond</span>
-              <button
-                type="button"
-                onClick={handleClearBackground}
-                disabled={isProcessingBackground || !selectedBackgroundId}
-                className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
-              >
-                Retirer
-              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsBackgroundPanelVisible((current) => !current)}
+                  aria-expanded={isBackgroundPanelVisible}
+                  className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                >
+                  {isBackgroundPanelVisible ? "Masquer" : "Afficher"}
+                </button>
+                <button
+                  type="button"
+                  onClick={handleClearBackground}
+                  disabled={isProcessingBackground || !selectedBackgroundId}
+                  className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                >
+                  Retirer
+                </button>
+              </div>
             </div>
 
-            <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
-              {selectedBackground ? (
-                <img
-                  src={resolveMediaUrl(selectedBackground.image_url) ?? undefined}
-                  alt="Photo de fond sélectionnée"
-                  className="h-36 w-full object-cover"
-                />
-              ) : (
-                <div className="flex h-36 items-center justify-center px-4 text-center text-[11px] text-slate-500 dark:text-slate-400">
-                  Aucune photo sélectionnée pour cette vue.
-                </div>
-              )}
-            </div>
-
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/*"
-              className="hidden"
-              onChange={handleBackgroundUploadChange}
-            />
-
-            <div className="flex flex-wrap gap-2">
-              <button
-                type="button"
-                onClick={handleOpenBackgroundUpload}
-                disabled={isProcessingBackground}
-                className="rounded-full border border-dashed border-blue-400 px-4 py-1.5 text-[11px] font-semibold text-blue-600 transition hover:border-blue-500 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-500 dark:text-blue-300 dark:hover:border-blue-400 dark:hover:text-blue-200"
-              >
-                {uploadBackground.isPending ? "Téléversement en cours..." : "Importer une photo"}
-              </button>
-            </div>
-
-            <div className="grid gap-2 sm:grid-cols-3">
-              {availablePhotos.map((photo) => {
-                const photoUrl = resolveMediaUrl(photo.image_url);
-                return (
-                  <button
-                    key={photo.id}
-                    type="button"
-                    onClick={() => handleSelectBackground(photo.id)}
-                    disabled={isProcessingBackground}
-                    className={clsx(
-                      "relative overflow-hidden rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
-                      selectedBackgroundId === photo.id
-                        ? "border-blue-500 ring-2 ring-blue-200"
-                        : "border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-500"
-                    )}
-                  >
-                    <span className="sr-only">Sélectionner cette photo comme fond</span>
+            {isBackgroundPanelVisible ? (
+              <>
+                <div className="overflow-hidden rounded-xl border border-slate-200 bg-slate-100 dark:border-slate-700 dark:bg-slate-800">
+                  {selectedBackground ? (
                     <img
-                      src={photoUrl ?? undefined}
-                      alt={`Photo du véhicule ${photo.id}`}
-                      className="h-20 w-full object-cover"
+                      src={resolveMediaUrl(selectedBackground.image_url) ?? undefined}
+                      alt="Photo de fond sélectionnée"
+                      className="h-36 w-full object-cover"
                     />
-                    {selectedBackgroundId === photo.id ? (
-                      <div className="absolute inset-0 bg-blue-500/20" aria-hidden />
-                    ) : null}
-                  </button>
-                );
-              })}
-              {availablePhotos.length === 0 && (
-                <p className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                  Ajoutez une photo pour personnaliser cette vue.
-                </p>
-              )}
-            </div>
+                  ) : (
+                    <div className="flex h-36 items-center justify-center px-4 text-center text-[11px] text-slate-500 dark:text-slate-400">
+                      Aucune photo sélectionnée pour cette vue.
+                    </div>
+                  )}
+                </div>
 
-            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-              {availablePhotos.length > 0
-                ? "Cliquez sur une miniature pour l'utiliser comme fond et positionnez précisément votre matériel."
-                : "Importez une photo de l'intérieur du véhicule pour définir un fond personnalisé."}
-            </span>
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept="image/*"
+                  className="hidden"
+                  onChange={handleBackgroundUploadChange}
+                />
+
+                <div className="flex flex-wrap gap-2">
+                  <button
+                    type="button"
+                    onClick={handleOpenBackgroundUpload}
+                    disabled={isProcessingBackground}
+                    className="rounded-full border border-dashed border-blue-400 px-4 py-1.5 text-[11px] font-semibold text-blue-600 transition hover:border-blue-500 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-500 dark:text-blue-300 dark:hover:border-blue-400 dark:hover:text-blue-200"
+                  >
+                    {uploadBackground.isPending ? "Téléversement en cours..." : "Importer une photo"}
+                  </button>
+                </div>
+
+                <div className="grid gap-2 sm:grid-cols-3">
+                  {availablePhotos.map((photo) => {
+                    const photoUrl = resolveMediaUrl(photo.image_url);
+                    return (
+                      <button
+                        key={photo.id}
+                        type="button"
+                        onClick={() => handleSelectBackground(photo.id)}
+                        disabled={isProcessingBackground}
+                        className={clsx(
+                          "relative overflow-hidden rounded-lg border transition focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+                          selectedBackgroundId === photo.id
+                            ? "border-blue-500 ring-2 ring-blue-200"
+                            : "border-slate-200 hover:border-slate-300 dark:border-slate-700 dark:hover:border-slate-500"
+                        )}
+                      >
+                        <span className="sr-only">Sélectionner cette photo comme fond</span>
+                        <img
+                          src={photoUrl ?? undefined}
+                          alt={`Photo du véhicule ${photo.id}`}
+                          className="h-20 w-full object-cover"
+                        />
+                        {selectedBackgroundId === photo.id ? (
+                          <div className="absolute inset-0 bg-blue-500/20" aria-hidden />
+                        ) : null}
+                      </button>
+                    );
+                  })}
+                  {availablePhotos.length === 0 && (
+                    <p className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-[11px] text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                      Ajoutez une photo pour personnaliser cette vue.
+                    </p>
+                  )}
+                </div>
+
+                <span className="text-[11px] text-slate-500 dark:text-slate-400">
+                  {availablePhotos.length > 0
+                    ? "Cliquez sur une miniature pour l'utiliser comme fond et positionnez précisément votre matériel."
+                    : "Importez une photo de l'intérieur du véhicule pour définir un fond personnalisé."}
+                </span>
+              </>
+            ) : (
+              <div className="rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[11px] text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                Cette section est masquée. Cliquez sur « Afficher » pour la rouvrir.
+              </div>
+            )}
           </div>
         </div>
 
