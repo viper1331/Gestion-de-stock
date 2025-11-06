@@ -376,6 +376,41 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const exportInventoryPdf = useMutation({
+    mutationFn: async () => {
+      const response = await api.get("/vehicle-inventory/export/pdf", {
+        responseType: "arraybuffer"
+      });
+      return response.data as ArrayBuffer;
+    },
+    onSuccess: (data) => {
+      const blob = new Blob([data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(
+        now.getDate()
+      ).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      link.href = url;
+      link.download = `inventaire_vehicules_${timestamp}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setFeedback({ type: "success", text: "L'inventaire des véhicules a été exporté." });
+    },
+    onError: (error) => {
+      let message = "Une erreur est survenue lors de l'export du PDF.";
+      if (isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim().length > 0) {
+          message = detail;
+        }
+      }
+      setFeedback({ type: "error", text: message });
+    }
+  });
+
   const selectedVehicle = useMemo(
     () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
     [vehicles, selectedVehicleId]
@@ -683,6 +718,14 @@ export function VehicleInventoryPage() {
             ) : null}
           </div>
           <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+            <button
+              type="button"
+              onClick={() => exportInventoryPdf.mutate()}
+              disabled={exportInventoryPdf.isPending}
+              className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+            >
+              {exportInventoryPdf.isPending ? "Export en cours…" : "Exporter en PDF"}
+            </button>
             <button
               type="button"
               onClick={() =>

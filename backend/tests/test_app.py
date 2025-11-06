@@ -11,7 +11,7 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from backend.app import app
-from backend.core import db, security, services
+from backend.core import db, models, security, services
 
 client = TestClient(app)
 
@@ -77,6 +77,14 @@ def _login_headers(username: str, password: str) -> dict[str, str]:
     assert response.status_code == 200, response.text
     token = response.json()["access_token"]
     return {"Authorization": f"Bearer {token}"}
+
+
+_TRANSPARENT_PIXEL = (
+    b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
+    b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
+    b"\x00\x00\x00\rIDATx\xda"
+    b"c\xfc\xff\x9f\xa1\x1e\x00\x07\x82\x02\x7f=\x07\xd0\xdd\x00\x00\x00\x00IEND\xaeB`\x82"
+)
 
 
 def test_seed_admin_recreates_missing_user() -> None:
@@ -1639,6 +1647,69 @@ def test_vehicle_view_background_configuration() -> None:
         f"/vehicle-inventory/categories/{default_category_id}", headers=admin_headers
     )
     assert cleanup_default.status_code == 204
+
+
+def test_vehicle_inventory_pdf_export() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Zone-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Sac secours",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 4,
+            "low_stock_threshold": 1,
+            "category_id": remise_category_id,
+        },
+        headers=admin_headers,
+    )
+    assert remise_item_resp.status_code == 201, remise_item_resp.text
+    remise_item_id = remise_item_resp.json()["id"]
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Lot-{uuid4().hex[:6]}", "sizes": ["CABINE"]},
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    photo = services.add_vehicle_photo(io.BytesIO(_TRANSPARENT_PIXEL), "fond.png")
+    services.update_vehicle_view_background(
+        vehicle_category_id,
+        models.VehicleViewBackgroundUpdate(name="cabine", photo_id=photo.id),
+    )
+
+    assign_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Sac secours",
+            "sku": f"VEH-{uuid4().hex[:6]}",
+            "quantity": 2,
+            "low_stock_threshold": 0,
+            "category_id": vehicle_category_id,
+            "size": "cabine",
+            "remise_item_id": remise_item_id,
+        },
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+
+    export_resp = client.get("/vehicle-inventory/export/pdf", headers=admin_headers)
+    assert export_resp.status_code == 200, export_resp.text
+    assert export_resp.headers["content-type"] == "application/pdf"
+    payload = export_resp.content
+    assert payload.startswith(b"%PDF")
+    assert len(payload) > 200
 
 
 def test_remise_inventory_crud_cycle() -> None:
