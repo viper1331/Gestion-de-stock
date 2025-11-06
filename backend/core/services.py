@@ -10,8 +10,10 @@ from textwrap import wrap
 from typing import BinaryIO, Callable, Iterable, Optional
 from uuid import uuid4
 
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from backend.core import db, models, security
@@ -2410,6 +2412,375 @@ def generate_pharmacy_purchase_order_pdf(
         note_lines=note_lines,
         items=item_rows,
     )
+
+
+def generate_vehicle_inventory_pdf() -> bytes:
+    """Export the complete vehicle inventory as a PDF document."""
+
+    ensure_database_ready()
+    categories = list_vehicle_categories()
+    items = list_vehicle_items()
+    generated_at = datetime.now()
+    timestamp_label = generated_at.strftime("Généré le %d/%m/%Y %H:%M")
+
+    with db.get_stock_connection() as conn:
+        photo_rows = conn.execute(
+            "SELECT id, file_path FROM vehicle_photos"
+        ).fetchall()
+    photo_paths: dict[int, Path] = {}
+    for row in photo_rows:
+        file_path = row["file_path"]
+        if not file_path:
+            continue
+        photo_paths[row["id"]] = MEDIA_ROOT / Path(file_path)
+
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    page_width, page_height = A4
+    margin = 36
+    bottom_margin = 40
+    image_max_height = 260
+
+    if not categories:
+        pdf.setFont("Helvetica-Bold", 18)
+        pdf.drawString(margin, page_height - margin, "Inventaire véhicules")
+        pdf.setFont("Helvetica", 12)
+        pdf.drawString(
+            margin,
+            page_height - margin - 26,
+            "Aucun véhicule n'est enregistré dans l'inventaire.",
+        )
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(margin, bottom_margin, timestamp_label)
+        pdf.save()
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    items_by_category: dict[int, dict[str | None, list[models.Item]]] = {}
+    for item in items:
+        if item.category_id is None:
+            continue
+        normalized_view = _normalize_view_name(item.size) if item.size else None
+        category_bucket = items_by_category.setdefault(item.category_id, {})
+        category_bucket.setdefault(normalized_view, []).append(item)
+
+    for bucket in items_by_category.values():
+        for entries in bucket.values():
+            entries.sort(key=lambda entry: entry.name.casefold())
+
+    is_first_page = True
+
+    for category in categories:
+        category_items = items_by_category.get(category.id, {})
+        view_configs = list(category.view_configs or [])
+        if not view_configs:
+            view_configs = [models.VehicleViewConfig(name=DEFAULT_VEHICLE_VIEW_NAME)]
+
+        seen_view_keys: set[str] = set()
+        view_sections: list[tuple[models.VehicleViewConfig, str | None, list[models.Item], bool]] = []
+
+        for config in view_configs:
+            normalized_key = _normalize_view_name(config.name)
+            seen_view_keys.add(normalized_key)
+            view_sections.append((config, normalized_key, category_items.get(normalized_key, []), False))
+
+        extra_keys = sorted(
+            key
+            for key in category_items.keys()
+            if key is not None and key not in seen_view_keys
+        )
+        for key in extra_keys:
+            view_sections.append(
+                (
+                    models.VehicleViewConfig(name=key),
+                    key,
+                    category_items.get(key, []),
+                    False,
+                )
+            )
+
+        unassigned_items = category_items.get(None, [])
+        if unassigned_items:
+            view_sections.append(
+                (
+                    models.VehicleViewConfig(name="MATÉRIEL NON AFFECTÉ"),
+                    None,
+                    unassigned_items,
+                    True,
+                )
+            )
+
+        if not view_sections:
+            view_sections.append(
+                (
+                    models.VehicleViewConfig(name=DEFAULT_VEHICLE_VIEW_NAME),
+                    _normalize_view_name(DEFAULT_VEHICLE_VIEW_NAME),
+                    [],
+                    False,
+                )
+            )
+
+        for view_config, view_key, view_items, skip_background in view_sections:
+            view_title = view_config.name.strip() or DEFAULT_VEHICLE_VIEW_NAME
+            view_title_display = view_title.title()
+            section_title = (
+                "Matériel en attente d'affectation"
+                if skip_background and view_key is None
+                else "Matériel associé"
+            )
+
+            def start_view_page(*, continued: bool) -> float:
+                nonlocal is_first_page
+                if not is_first_page:
+                    pdf.showPage()
+                else:
+                    is_first_page = False
+                pdf.setFont("Helvetica-Bold", 18)
+                pdf.drawString(margin, page_height - margin, category.name)
+                pdf.setFont("Helvetica", 12)
+                subtitle = f"Vue : {view_title_display}"
+                if continued:
+                    subtitle += " (suite)"
+                pdf.drawString(margin, page_height - margin - 22, subtitle)
+                pdf.setFont("Helvetica", 9)
+                pdf.drawRightString(page_width - margin, page_height - margin, timestamp_label)
+                pdf.setLineWidth(0.5)
+                pdf.line(
+                    margin,
+                    page_height - margin - 28,
+                    page_width - margin,
+                    page_height - margin - 28,
+                )
+                return page_height - margin - 52
+
+            y_position = start_view_page(continued=False)
+
+            def _clamp(value: float, lower: float, upper: float) -> float:
+                return max(lower, min(upper, value))
+
+            def _wrap_bubble_lines(item: models.Item) -> list[str]:
+                base_lines = wrap(item.name, 28) or ["-"]
+                details = [f"Qté : {item.quantity}"]
+                if item.sku:
+                    details.append(f"Réf. : {item.sku}")
+                return base_lines + details
+
+            def _draw_item_bubble(
+                pointer_x: float,
+                pointer_y: float,
+                item_lines: list[str],
+                *,
+                bounds: tuple[float, float, float, float],
+            ) -> None:
+                pdf.saveState()
+                pdf.setFont("Helvetica", 9)
+                bubble_padding = 6
+                line_height = 12
+                text_widths = [
+                    pdf.stringWidth(line, "Helvetica", 9) for line in item_lines
+                ] or [0.0]
+                bubble_width = max(text_widths) + 2 * bubble_padding
+                bubble_height = line_height * len(item_lines) + 2 * bubble_padding
+                anchor_side = "left" if pointer_x > (page_width / 2) else "right"
+                bubble_offset = 28
+                if anchor_side == "left":
+                    bubble_x = pointer_x - bubble_offset - bubble_width
+                else:
+                    bubble_x = pointer_x + bubble_offset
+                bubble_x = _clamp(bubble_x, margin, page_width - margin - bubble_width)
+                min_y = bounds[1]
+                max_y = max(min_y, bounds[1] + bounds[3] - bubble_height)
+                bubble_y = _clamp(pointer_y - bubble_height / 2, min_y, max_y)
+                if anchor_side == "left":
+                    anchor_x = bubble_x + bubble_width
+                else:
+                    anchor_x = bubble_x
+                anchor_y = _clamp(pointer_y, bubble_y + 8, bubble_y + bubble_height - 8)
+
+                bubble_border = colors.HexColor("#1E40AF")
+                pdf.setLineWidth(1.2)
+                pdf.setStrokeColor(bubble_border)
+                pdf.setFillColor(colors.white)
+                pdf.roundRect(
+                    bubble_x,
+                    bubble_y,
+                    bubble_width,
+                    bubble_height,
+                    8,
+                    stroke=1,
+                    fill=1,
+                )
+                pdf.setFillColor(bubble_border)
+                pdf.circle(pointer_x, pointer_y, 4, stroke=0, fill=1)
+                pdf.setFillColor(colors.white)
+                pdf.circle(pointer_x, pointer_y, 2, stroke=0, fill=1)
+                pdf.setStrokeColor(bubble_border)
+                pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
+                pdf.setFillColor(colors.black)
+                pdf.setFont("Helvetica", 9)
+                text_y = bubble_y + bubble_height - bubble_padding - line_height + 4
+                for line in item_lines:
+                    pdf.drawString(bubble_x + bubble_padding, text_y, line)
+                    text_y -= line_height
+                pdf.restoreState()
+
+            quantity_column_x = page_width - margin - 90
+            reference_column_x = page_width - margin
+            line_height = 12
+
+            located_items: list[models.Item] = []
+            table_items: list[models.Item] = []
+
+            background_drawn = False
+            drawn_width = 0.0
+            drawn_height = 0.0
+            image_x = margin
+            image_y = y_position
+
+            if skip_background:
+                pdf.setFont("Helvetica", 10)
+                pdf.drawString(
+                    margin,
+                    y_position,
+                    "Liste des matériels non affectés à une vue spécifique.",
+                )
+                y_position -= 18
+                table_items = list(view_items)
+            else:
+                background_path = None
+                if view_config.background_photo_id is not None:
+                    background_path = photo_paths.get(view_config.background_photo_id)
+
+                image_reader: ImageReader | None = None
+                background_message: str | None = None
+                if background_path and background_path.exists():
+                    try:
+                        image_reader = ImageReader(str(background_path))
+                    except Exception:  # pragma: no cover - corrupted image fallback
+                        background_message = "La photo de fond n'a pas pu être chargée."
+                else:
+                    background_message = "Aucune photo n'est disponible pour cette vue."
+
+                if image_reader is not None:
+                    image_width, image_height = image_reader.getSize()
+                    available_width = page_width - 2 * margin
+                    scale = min(
+                        available_width / image_width,
+                        image_max_height / image_height,
+                        1.0,
+                    )
+                    drawn_width = image_width * scale
+                    drawn_height = image_height * scale
+                    image_x = margin + (available_width - drawn_width) / 2
+                    image_y = y_position - drawn_height
+                    pdf.drawImage(
+                        image_reader,
+                        image_x,
+                        image_y,
+                        width=drawn_width,
+                        height=drawn_height,
+                        preserveAspectRatio=False,
+                        mask="auto",
+                    )
+                    background_drawn = True
+
+                    for item in view_items:
+                        if (
+                            item.position_x is not None
+                            and item.position_y is not None
+                        ):
+                            located_items.append(item)
+                        else:
+                            table_items.append(item)
+
+                    bounds = (image_x, image_y, drawn_width, drawn_height)
+                    for item in located_items:
+                        pointer_x = image_x + _clamp(item.position_x, 0.0, 1.0) * drawn_width
+                        pointer_y = image_y + drawn_height * (
+                            1.0 - _clamp(item.position_y, 0.0, 1.0)
+                        )
+                        _draw_item_bubble(
+                            pointer_x,
+                            pointer_y,
+                            _wrap_bubble_lines(item),
+                            bounds=bounds,
+                        )
+
+                    y_position = image_y - 18
+                else:
+                    pdf.setFont("Helvetica-Oblique", 10)
+                    pdf.drawString(margin, y_position, background_message or "")
+                    pdf.setFont("Helvetica", 10)
+                    y_position -= 18
+                    table_items = list(view_items)
+
+            def draw_table_header(y_pos: float, *, suffix: str = "") -> float:
+                pdf.setFont("Helvetica-Bold", 12)
+                pdf.drawString(margin, y_pos, f"{section_title}{suffix}")
+                y_pos -= 16
+                pdf.setFont("Helvetica-Bold", 10)
+                pdf.drawString(margin, y_pos, "Désignation")
+                pdf.drawRightString(quantity_column_x, y_pos, "Quantité")
+                pdf.drawRightString(reference_column_x, y_pos, "Référence")
+                pdf.setFont("Helvetica", 10)
+                return y_pos - 14
+
+            def ensure_space(
+                y_pos: float,
+                required: float,
+                *,
+                continued_header: bool = True,
+            ) -> float:
+                if y_pos <= bottom_margin + required:
+                    y_new = start_view_page(continued=True)
+                    if continued_header:
+                        y_new = draw_table_header(y_new, suffix=" (suite)")
+                    return y_new
+                return y_pos
+
+            if table_items:
+                y_position = draw_table_header(y_position)
+                for item in table_items:
+                    wrapped_name = wrap(item.name, 70) or ["-"]
+                    required_height = line_height * len(wrapped_name) + 4
+                    y_position = ensure_space(y_position, required_height)
+                    for index, line in enumerate(wrapped_name):
+                        pdf.drawString(margin, y_position, line)
+                        if index == 0:
+                            pdf.drawRightString(
+                                quantity_column_x, y_position, str(item.quantity)
+                            )
+                            pdf.drawRightString(
+                                reference_column_x,
+                                y_position,
+                                item.sku or "-",
+                            )
+                        y_position -= line_height
+                    y_position -= 4
+            elif background_drawn and located_items:
+                y_position = ensure_space(y_position, 20, continued_header=False)
+                pdf.setFont("Helvetica-Oblique", 10)
+                pdf.drawString(
+                    margin,
+                    y_position,
+                    "Tous les matériels sont indiqués sur le schéma ci-dessus.",
+                )
+                pdf.setFont("Helvetica", 10)
+                y_position -= 14
+            else:
+                y_position = ensure_space(y_position, 20, continued_header=False)
+                pdf.setFont("Helvetica-Oblique", 10)
+                pdf.drawString(
+                    margin,
+                    y_position,
+                    "Aucun matériel n'est attribué à cette vue.",
+                )
+                pdf.setFont("Helvetica", 10)
+                y_position -= 14
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def receive_purchase_order(
