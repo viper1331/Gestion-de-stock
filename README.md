@@ -69,6 +69,21 @@ npm install
 npm run tauri dev
 ```
 
+## Commandes de lancement simplifiées
+Si vous souhaitez démarrer rapidement les deux parties sans répéter toutes les étapes manuelles ci-dessus, deux scripts sont
+disponibles à la racine du projet :
+
+```bash
+# Lance le backend FastAPI (crée l'environnement virtuel si besoin)
+./run_backend.sh
+
+# Lance le frontend Vite
+./run_frontend.sh
+```
+
+Chaque script accepte des variables d'environnement (par ex. `HOST`, `PORT`, `RELOAD`, `SKIP_INSTALL`) pour ajuster le
+comportement, mais un simple appel suffit pour lancer les serveurs avec les paramètres par défaut.
+
 ## Scripts utiles
 - `python scripts/dev.py` : lance simultanément le backend FastAPI (uvicorn) et le frontend Vite. Options : `--no-frontend` pour ne démarrer que l'API et `--port` pour changer le port du backend.
 - `python scripts/run_backend.py` : crée/active `.venv`, installe les dépendances, exécute `pytest` puis lance FastAPI (`--host`/`--port`, `--skip-install`, `--skip-tests`).
