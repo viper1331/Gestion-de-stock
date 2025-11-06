@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
+from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
 
 from backend.core import db, models, security
@@ -2410,6 +2411,261 @@ def generate_pharmacy_purchase_order_pdf(
         note_lines=note_lines,
         items=item_rows,
     )
+
+
+def generate_vehicle_inventory_pdf() -> bytes:
+    """Export the complete vehicle inventory as a PDF document."""
+
+    ensure_database_ready()
+    categories = list_vehicle_categories()
+    items = list_vehicle_items()
+    generated_at = datetime.now()
+    timestamp_label = generated_at.strftime("Généré le %d/%m/%Y %H:%M")
+
+    with db.get_stock_connection() as conn:
+        photo_rows = conn.execute(
+            "SELECT id, file_path FROM vehicle_photos"
+        ).fetchall()
+    photo_paths: dict[int, Path] = {}
+    for row in photo_rows:
+        file_path = row["file_path"]
+        if not file_path:
+            continue
+        photo_paths[row["id"]] = MEDIA_ROOT / Path(file_path)
+
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    page_width, page_height = A4
+    margin = 36
+    bottom_margin = 40
+    image_max_height = 260
+
+    if not categories:
+        pdf.setFont("Helvetica-Bold", 18)
+        pdf.drawString(margin, page_height - margin, "Inventaire véhicules")
+        pdf.setFont("Helvetica", 12)
+        pdf.drawString(
+            margin,
+            page_height - margin - 26,
+            "Aucun véhicule n'est enregistré dans l'inventaire.",
+        )
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(margin, bottom_margin, timestamp_label)
+        pdf.save()
+        buffer.seek(0)
+        return buffer.getvalue()
+
+    items_by_category: dict[int, dict[str | None, list[models.Item]]] = {}
+    for item in items:
+        if item.category_id is None:
+            continue
+        normalized_view = _normalize_view_name(item.size) if item.size else None
+        category_bucket = items_by_category.setdefault(item.category_id, {})
+        category_bucket.setdefault(normalized_view, []).append(item)
+
+    for bucket in items_by_category.values():
+        for entries in bucket.values():
+            entries.sort(key=lambda entry: entry.name.casefold())
+
+    is_first_page = True
+
+    for category in categories:
+        category_items = items_by_category.get(category.id, {})
+        view_configs = list(category.view_configs or [])
+        if not view_configs:
+            view_configs = [models.VehicleViewConfig(name=DEFAULT_VEHICLE_VIEW_NAME)]
+
+        seen_view_keys: set[str] = set()
+        view_sections: list[tuple[models.VehicleViewConfig, str | None, list[models.Item], bool]] = []
+
+        for config in view_configs:
+            normalized_key = _normalize_view_name(config.name)
+            seen_view_keys.add(normalized_key)
+            view_sections.append((config, normalized_key, category_items.get(normalized_key, []), False))
+
+        extra_keys = sorted(
+            key
+            for key in category_items.keys()
+            if key is not None and key not in seen_view_keys
+        )
+        for key in extra_keys:
+            view_sections.append(
+                (
+                    models.VehicleViewConfig(name=key),
+                    key,
+                    category_items.get(key, []),
+                    False,
+                )
+            )
+
+        unassigned_items = category_items.get(None, [])
+        if unassigned_items:
+            view_sections.append(
+                (
+                    models.VehicleViewConfig(name="MATÉRIEL NON AFFECTÉ"),
+                    None,
+                    unassigned_items,
+                    True,
+                )
+            )
+
+        if not view_sections:
+            view_sections.append(
+                (
+                    models.VehicleViewConfig(name=DEFAULT_VEHICLE_VIEW_NAME),
+                    _normalize_view_name(DEFAULT_VEHICLE_VIEW_NAME),
+                    [],
+                    False,
+                )
+            )
+
+        for view_config, view_key, view_items, skip_background in view_sections:
+            view_title = view_config.name.strip() or DEFAULT_VEHICLE_VIEW_NAME
+            view_title_display = view_title.title()
+            section_title = (
+                "Matériel en attente d'affectation"
+                if skip_background and view_key is None
+                else "Matériel associé"
+            )
+
+            def start_view_page(*, continued: bool) -> float:
+                nonlocal is_first_page
+                if not is_first_page:
+                    pdf.showPage()
+                else:
+                    is_first_page = False
+                pdf.setFont("Helvetica-Bold", 18)
+                pdf.drawString(margin, page_height - margin, category.name)
+                pdf.setFont("Helvetica", 12)
+                subtitle = f"Vue : {view_title_display}"
+                if continued:
+                    subtitle += " (suite)"
+                pdf.drawString(margin, page_height - margin - 22, subtitle)
+                pdf.setFont("Helvetica", 9)
+                pdf.drawRightString(page_width - margin, page_height - margin, timestamp_label)
+                pdf.setLineWidth(0.5)
+                pdf.line(
+                    margin,
+                    page_height - margin - 28,
+                    page_width - margin,
+                    page_height - margin - 28,
+                )
+                return page_height - margin - 52
+
+            y_position = start_view_page(continued=False)
+
+            if skip_background:
+                pdf.setFont("Helvetica", 10)
+                pdf.drawString(
+                    margin,
+                    y_position,
+                    "Liste des matériels non affectés à une vue spécifique.",
+                )
+                y_position -= 18
+            else:
+                background_path = None
+                if view_config.background_photo_id is not None:
+                    background_path = photo_paths.get(view_config.background_photo_id)
+
+                image_reader: ImageReader | None = None
+                background_message: str | None = None
+                if background_path and background_path.exists():
+                    try:
+                        image_reader = ImageReader(str(background_path))
+                    except Exception:  # pragma: no cover - corrupted image fallback
+                        background_message = "La photo de fond n'a pas pu être chargée."
+                else:
+                    background_message = "Aucune photo n'est disponible pour cette vue."
+
+                if image_reader is not None:
+                    image_width, image_height = image_reader.getSize()
+                    available_width = page_width - 2 * margin
+                    scale = min(
+                        available_width / image_width,
+                        image_max_height / image_height,
+                        1.0,
+                    )
+                    drawn_width = image_width * scale
+                    drawn_height = image_height * scale
+                    image_x = margin + (available_width - drawn_width) / 2
+                    image_y = y_position - drawn_height
+                    pdf.drawImage(
+                        image_reader,
+                        image_x,
+                        image_y,
+                        width=drawn_width,
+                        height=drawn_height,
+                        preserveAspectRatio=False,
+                        mask="auto",
+                    )
+                    y_position = image_y - 18
+                elif background_message:
+                    pdf.setFont("Helvetica-Oblique", 10)
+                    pdf.drawString(margin, y_position, background_message)
+                    pdf.setFont("Helvetica", 10)
+                    y_position -= 18
+
+            quantity_column_x = page_width - margin - 90
+            reference_column_x = page_width - margin
+            line_height = 12
+
+            def draw_table_header(y_pos: float, *, suffix: str = "") -> float:
+                pdf.setFont("Helvetica-Bold", 12)
+                pdf.drawString(margin, y_pos, f"{section_title}{suffix}")
+                y_pos -= 16
+                pdf.setFont("Helvetica-Bold", 10)
+                pdf.drawString(margin, y_pos, "Désignation")
+                pdf.drawRightString(quantity_column_x, y_pos, "Quantité")
+                pdf.drawRightString(reference_column_x, y_pos, "Référence")
+                pdf.setFont("Helvetica", 10)
+                return y_pos - 14
+
+            def ensure_space(
+                y_pos: float,
+                required: float,
+                *,
+                continued_header: bool = True,
+            ) -> float:
+                if y_pos <= bottom_margin + required:
+                    y_new = start_view_page(continued=True)
+                    if continued_header:
+                        y_new = draw_table_header(y_new, suffix=" (suite)")
+                    return y_new
+                return y_pos
+
+            y_position = draw_table_header(y_position)
+
+            if not view_items:
+                y_position = ensure_space(y_position, 20, continued_header=False)
+                pdf.setFont("Helvetica-Oblique", 10)
+                pdf.drawString(
+                    margin,
+                    y_position,
+                    "Aucun matériel n'est attribué à cette vue.",
+                )
+                pdf.setFont("Helvetica", 10)
+                y_position -= 14
+                continue
+
+            for item in view_items:
+                wrapped_name = wrap(item.name, 70) or ["-"]
+                required_height = line_height * len(wrapped_name) + 4
+                y_position = ensure_space(y_position, required_height)
+                for index, line in enumerate(wrapped_name):
+                    pdf.drawString(margin, y_position, line)
+                    if index == 0:
+                        pdf.drawRightString(quantity_column_x, y_position, str(item.quantity))
+                        pdf.drawRightString(
+                            reference_column_x,
+                            y_position,
+                            item.sku or "-",
+                        )
+                    y_position -= line_height
+                y_position -= 4
+
+    pdf.save()
+    buffer.seek(0)
+    return buffer.getvalue()
 
 
 def receive_purchase_order(
