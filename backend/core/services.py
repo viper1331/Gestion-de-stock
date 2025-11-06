@@ -10,6 +10,7 @@ from textwrap import wrap
 from typing import BinaryIO, Callable, Iterable, Optional
 from uuid import uuid4
 
+from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
@@ -2598,6 +2599,88 @@ def generate_vehicle_inventory_pdf() -> bytes:
 
             y_position = start_view_page(continued=False)
 
+            def _clamp(value: float, lower: float, upper: float) -> float:
+                return max(lower, min(upper, value))
+
+            def _wrap_bubble_lines(item: models.Item) -> list[str]:
+                base_lines = wrap(item.name, 28) or ["-"]
+                details = [f"Qté : {item.quantity}"]
+                if item.sku:
+                    details.append(f"Réf. : {item.sku}")
+                return base_lines + details
+
+            def _draw_item_bubble(
+                pointer_x: float,
+                pointer_y: float,
+                item_lines: list[str],
+                *,
+                bounds: tuple[float, float, float, float],
+            ) -> None:
+                pdf.saveState()
+                pdf.setFont("Helvetica", 9)
+                bubble_padding = 6
+                line_height = 12
+                text_widths = [
+                    pdf.stringWidth(line, "Helvetica", 9) for line in item_lines
+                ] or [0.0]
+                bubble_width = max(text_widths) + 2 * bubble_padding
+                bubble_height = line_height * len(item_lines) + 2 * bubble_padding
+                anchor_side = "left" if pointer_x > (page_width / 2) else "right"
+                bubble_offset = 28
+                if anchor_side == "left":
+                    bubble_x = pointer_x - bubble_offset - bubble_width
+                else:
+                    bubble_x = pointer_x + bubble_offset
+                bubble_x = _clamp(bubble_x, margin, page_width - margin - bubble_width)
+                min_y = bounds[1]
+                max_y = max(min_y, bounds[1] + bounds[3] - bubble_height)
+                bubble_y = _clamp(pointer_y - bubble_height / 2, min_y, max_y)
+                if anchor_side == "left":
+                    anchor_x = bubble_x + bubble_width
+                else:
+                    anchor_x = bubble_x
+                anchor_y = _clamp(pointer_y, bubble_y + 8, bubble_y + bubble_height - 8)
+
+                bubble_border = colors.HexColor("#1E40AF")
+                pdf.setLineWidth(1.2)
+                pdf.setStrokeColor(bubble_border)
+                pdf.setFillColor(colors.white)
+                pdf.roundRect(
+                    bubble_x,
+                    bubble_y,
+                    bubble_width,
+                    bubble_height,
+                    8,
+                    stroke=1,
+                    fill=1,
+                )
+                pdf.setFillColor(bubble_border)
+                pdf.circle(pointer_x, pointer_y, 4, stroke=0, fill=1)
+                pdf.setFillColor(colors.white)
+                pdf.circle(pointer_x, pointer_y, 2, stroke=0, fill=1)
+                pdf.setStrokeColor(bubble_border)
+                pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
+                pdf.setFillColor(colors.black)
+                pdf.setFont("Helvetica", 9)
+                text_y = bubble_y + bubble_height - bubble_padding - line_height + 4
+                for line in item_lines:
+                    pdf.drawString(bubble_x + bubble_padding, text_y, line)
+                    text_y -= line_height
+                pdf.restoreState()
+
+            quantity_column_x = page_width - margin - 90
+            reference_column_x = page_width - margin
+            line_height = 12
+
+            located_items: list[models.Item] = []
+            table_items: list[models.Item] = []
+
+            background_drawn = False
+            drawn_width = 0.0
+            drawn_height = 0.0
+            image_x = margin
+            image_y = y_position
+
             if skip_background:
                 pdf.setFont("Helvetica", 10)
                 pdf.drawString(
@@ -2606,6 +2689,7 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     "Liste des matériels non affectés à une vue spécifique.",
                 )
                 y_position -= 18
+                table_items = list(view_items)
             else:
                 background_path = None
                 if view_config.background_photo_id is not None:
@@ -2642,16 +2726,37 @@ def generate_vehicle_inventory_pdf() -> bytes:
                         preserveAspectRatio=False,
                         mask="auto",
                     )
+                    background_drawn = True
+
+                    for item in view_items:
+                        if (
+                            item.position_x is not None
+                            and item.position_y is not None
+                        ):
+                            located_items.append(item)
+                        else:
+                            table_items.append(item)
+
+                    bounds = (image_x, image_y, drawn_width, drawn_height)
+                    for item in located_items:
+                        pointer_x = image_x + _clamp(item.position_x, 0.0, 1.0) * drawn_width
+                        pointer_y = image_y + drawn_height * (
+                            1.0 - _clamp(item.position_y, 0.0, 1.0)
+                        )
+                        _draw_item_bubble(
+                            pointer_x,
+                            pointer_y,
+                            _wrap_bubble_lines(item),
+                            bounds=bounds,
+                        )
+
                     y_position = image_y - 18
-                elif background_message:
+                else:
                     pdf.setFont("Helvetica-Oblique", 10)
-                    pdf.drawString(margin, y_position, background_message)
+                    pdf.drawString(margin, y_position, background_message or "")
                     pdf.setFont("Helvetica", 10)
                     y_position -= 18
-
-            quantity_column_x = page_width - margin - 90
-            reference_column_x = page_width - margin
-            line_height = 12
+                    table_items = list(view_items)
 
             def draw_table_header(y_pos: float, *, suffix: str = "") -> float:
                 pdf.setFont("Helvetica-Bold", 12)
@@ -2677,9 +2782,36 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     return y_new
                 return y_pos
 
-            y_position = draw_table_header(y_position)
-
-            if not view_items:
+            if table_items:
+                y_position = draw_table_header(y_position)
+                for item in table_items:
+                    wrapped_name = wrap(item.name, 70) or ["-"]
+                    required_height = line_height * len(wrapped_name) + 4
+                    y_position = ensure_space(y_position, required_height)
+                    for index, line in enumerate(wrapped_name):
+                        pdf.drawString(margin, y_position, line)
+                        if index == 0:
+                            pdf.drawRightString(
+                                quantity_column_x, y_position, str(item.quantity)
+                            )
+                            pdf.drawRightString(
+                                reference_column_x,
+                                y_position,
+                                item.sku or "-",
+                            )
+                        y_position -= line_height
+                    y_position -= 4
+            elif background_drawn and located_items:
+                y_position = ensure_space(y_position, 20, continued_header=False)
+                pdf.setFont("Helvetica-Oblique", 10)
+                pdf.drawString(
+                    margin,
+                    y_position,
+                    "Tous les matériels sont indiqués sur le schéma ci-dessus.",
+                )
+                pdf.setFont("Helvetica", 10)
+                y_position -= 14
+            else:
                 y_position = ensure_space(y_position, 20, continued_header=False)
                 pdf.setFont("Helvetica-Oblique", 10)
                 pdf.drawString(
@@ -2689,23 +2821,6 @@ def generate_vehicle_inventory_pdf() -> bytes:
                 )
                 pdf.setFont("Helvetica", 10)
                 y_position -= 14
-                continue
-
-            for item in view_items:
-                wrapped_name = wrap(item.name, 70) or ["-"]
-                required_height = line_height * len(wrapped_name) + 4
-                y_position = ensure_space(y_position, required_height)
-                for index, line in enumerate(wrapped_name):
-                    pdf.drawString(margin, y_position, line)
-                    if index == 0:
-                        pdf.drawRightString(quantity_column_x, y_position, str(item.quantity))
-                        pdf.drawRightString(
-                            reference_column_x,
-                            y_position,
-                            item.sku or "-",
-                        )
-                    y_position -= line_height
-                y_position -= 4
 
     pdf.save()
     buffer.seek(0)
