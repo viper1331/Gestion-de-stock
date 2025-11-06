@@ -582,32 +582,70 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
     )
 
 
+def _prepare_vehicle_item_sku(
+    conn: sqlite3.Connection, sku: Optional[str], remise_item_id: int
+) -> tuple[Optional[str], bool]:
+    """Return the SKU to use for a remise item and relink existing items when needed."""
+
+    if not sku:
+        return None, False
+
+    row = conn.execute(
+        "SELECT id, remise_item_id FROM vehicle_items WHERE sku = ?",
+        (sku,),
+    ).fetchone()
+    if row is None:
+        return sku, False
+
+    existing_remise_id = row["remise_item_id"]
+    if existing_remise_id == remise_item_id:
+        return sku, False
+
+    if existing_remise_id is None:
+        conn.execute(
+            "UPDATE vehicle_items SET remise_item_id = ? WHERE id = ?",
+            (remise_item_id, row["id"]),
+        )
+        return sku, True
+
+    # Another remise item already owns this SKU; fall back to a NULL SKU to avoid conflicts.
+    return None, False
+
+
 def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row) -> None:
     remise_item_id = source["id"]
+    sku_value, sku_relinked = _prepare_vehicle_item_sku(conn, source["sku"], remise_item_id)
+
     existing_rows = conn.execute(
         "SELECT id, category_id FROM vehicle_items WHERE remise_item_id = ?",
         (remise_item_id,),
     ).fetchall()
     if not existing_rows:
-        conn.execute(
-            """
-            INSERT INTO vehicle_items (
-                name,
-                sku,
-                category_id,
-                size,
-                quantity,
-                low_stock_threshold,
-                supplier_id,
-                position_x,
-                position_y,
-                remise_item_id
+        if sku_relinked:
+            existing_rows = conn.execute(
+                "SELECT id, category_id FROM vehicle_items WHERE remise_item_id = ?",
+                (remise_item_id,),
+            ).fetchall()
+        if not existing_rows:
+            conn.execute(
+                """
+                INSERT INTO vehicle_items (
+                    name,
+                    sku,
+                    category_id,
+                    size,
+                    quantity,
+                    low_stock_threshold,
+                    supplier_id,
+                    position_x,
+                    position_y,
+                    remise_item_id
+                )
+                VALUES (?, ?, NULL, NULL, 0, 0, ?, NULL, NULL, ?)
+                """,
+                (source["name"], sku_value, source["supplier_id"], remise_item_id),
             )
-            VALUES (?, ?, NULL, NULL, 0, 0, ?, NULL, NULL, ?)
-            """,
-            (source["name"], source["sku"], source["supplier_id"], remise_item_id),
-        )
-        return
+            return
 
     assignments = ["name = ?"]
     params: list[object] = [source["name"]]
@@ -623,7 +661,7 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
 
     conn.execute(
         "UPDATE vehicle_items SET sku = ? WHERE remise_item_id = ? AND category_id IS NULL",
-        (source["sku"], remise_item_id),
+        (sku_value, remise_item_id),
     )
 
     template_row = conn.execute(
@@ -647,7 +685,7 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
             )
             VALUES (?, ?, NULL, NULL, 0, 0, ?, NULL, NULL, ?)
             """,
-            (source["name"], source["sku"], source["supplier_id"], remise_item_id),
+            (source["name"], sku_value, source["supplier_id"], remise_item_id),
         )
 
 
