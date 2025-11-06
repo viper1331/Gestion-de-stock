@@ -113,6 +113,8 @@ export function VehicleInventoryPage() {
   const [isEditingVehicle, setIsEditingVehicle] = useState(false);
   const [editedVehicleName, setEditedVehicleName] = useState("");
   const [editedVehicleViewsInput, setEditedVehicleViewsInput] = useState("");
+  const [editedVehicleImageFile, setEditedVehicleImageFile] = useState<File | null>(null);
+  const editedVehicleImageInputRef = useRef<HTMLInputElement | null>(null);
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
 
   const {
@@ -339,12 +341,6 @@ export function VehicleInventoryPage() {
       );
       return response.data;
     },
-    onSuccess: () => {
-      setFeedback({ type: "success", text: "Véhicule mis à jour." });
-      setIsEditingVehicle(false);
-      setEditedVehicleName("");
-      setEditedVehicleViewsInput("");
-    },
     onError: () => {
       setFeedback({ type: "error", text: "Impossible de mettre à jour ce véhicule." });
     },
@@ -517,9 +513,21 @@ export function VehicleInventoryPage() {
     }
   };
 
+  const clearEditedVehicleImageSelection = () => {
+    setEditedVehicleImageFile(null);
+    if (editedVehicleImageInputRef.current) {
+      editedVehicleImageInputRef.current.value = "";
+    }
+  };
+
   const handleVehicleImageChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0] ?? null;
     setVehicleImageFile(file);
+  };
+
+  const handleEditedVehicleImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0] ?? null;
+    setEditedVehicleImageFile(file);
   };
 
   const handleCreateVehicle = async (event: FormEvent<HTMLFormElement>) => {
@@ -560,27 +568,39 @@ export function VehicleInventoryPage() {
   };
 
   const handleToggleVehicleEdition = () => {
-    if (!selectedVehicle || updateVehicle.isPending || deleteVehicle.isPending) {
+    if (
+      !selectedVehicle ||
+      updateVehicle.isPending ||
+      deleteVehicle.isPending ||
+      uploadVehicleImage.isPending
+    ) {
       return;
     }
     if (isEditingVehicle) {
       setIsEditingVehicle(false);
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
+      clearEditedVehicleImageSelection();
       return;
     }
     setEditedVehicleName(selectedVehicle.name);
     setEditedVehicleViewsInput(getVehicleViews(selectedVehicle).join(", "));
+    clearEditedVehicleImageSelection();
     setIsEditingVehicle(true);
   };
 
   const handleCancelVehicleEdition = () => {
-    if (updateVehicle.isPending) {
+    if (
+      updateVehicle.isPending ||
+      uploadVehicleImage.isPending ||
+      deleteVehicle.isPending
+    ) {
       return;
     }
     setIsEditingVehicle(false);
     setEditedVehicleName("");
     setEditedVehicleViewsInput("");
+    clearEditedVehicleImageSelection();
   };
 
   const handleUpdateVehicle = async (event: FormEvent<HTMLFormElement>) => {
@@ -600,6 +620,17 @@ export function VehicleInventoryPage() {
         name: trimmedName,
         sizes: parsedViews
       });
+      if (editedVehicleImageFile) {
+        await uploadVehicleImage.mutateAsync({
+          categoryId: selectedVehicle.id,
+          file: editedVehicleImageFile
+        });
+      }
+      setFeedback({ type: "success", text: "Véhicule mis à jour." });
+      setIsEditingVehicle(false);
+      setEditedVehicleName("");
+      setEditedVehicleViewsInput("");
+      clearEditedVehicleImageSelection();
     } catch {
       // feedback handled in mutation callbacks
     }
@@ -829,7 +860,11 @@ export function VehicleInventoryPage() {
                     value={editedVehicleName}
                     onChange={(event) => setEditedVehicleName(event.target.value)}
                     className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
-                    disabled={updateVehicle.isPending || deleteVehicle.isPending}
+                    disabled={
+                      updateVehicle.isPending ||
+                      deleteVehicle.isPending ||
+                      uploadVehicleImage.isPending
+                    }
                     required
                   />
                 </label>
@@ -844,26 +879,69 @@ export function VehicleInventoryPage() {
                     onChange={(event) => setEditedVehicleViewsInput(event.target.value)}
                     placeholder="Vue principale, Coffre gauche, Coffre droit"
                     className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
-                    disabled={updateVehicle.isPending || deleteVehicle.isPending}
+                    disabled={
+                      updateVehicle.isPending ||
+                      deleteVehicle.isPending ||
+                      uploadVehicleImage.isPending
+                    }
                   />
                 </label>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Séparez les différentes vues par des virgules ou des retours à la ligne. La vue "{DEFAULT_VIEW_LABEL}" sera utilisée par défaut si aucune vue n'est fournie.
               </p>
+              <label className="block space-y-1" htmlFor="edit-vehicle-image">
+                <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                  Photo du véhicule (optionnel)
+                </span>
+                <input
+                  id="edit-vehicle-image"
+                  ref={editedVehicleImageInputRef}
+                  type="file"
+                  accept="image/*"
+                  onChange={handleEditedVehicleImageChange}
+                  disabled={
+                    updateVehicle.isPending ||
+                    deleteVehicle.isPending ||
+                    uploadVehicleImage.isPending
+                  }
+                  className="block w-full text-xs text-slate-600 file:mr-4 file:cursor-pointer file:rounded-md file:border-0 file:bg-slate-200 file:px-3 file:py-2 file:text-sm file:font-semibold file:text-slate-700 hover:file:bg-slate-300 dark:text-slate-200 dark:file:bg-slate-700 dark:file:text-slate-100 dark:hover:file:bg-slate-600"
+                />
+                {editedVehicleImageFile ? (
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    {editedVehicleImageFile.name}
+                  </span>
+                ) : selectedVehicle?.image_url ? (
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    Aucune nouvelle photo sélectionnée. La photo actuelle sera conservée.
+                  </span>
+                ) : (
+                  <span className="block text-xs text-slate-500 dark:text-slate-400">
+                    Aucune photo n'est définie pour le moment.
+                  </span>
+                )}
+              </label>
               <div className="flex gap-2">
                 <button
                   type="button"
                   onClick={handleCancelVehicleEdition}
                   className="inline-flex items-center justify-center rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                  disabled={updateVehicle.isPending}
+                  disabled={
+                    updateVehicle.isPending ||
+                    uploadVehicleImage.isPending ||
+                    deleteVehicle.isPending
+                  }
                 >
                   Annuler
                 </button>
                 <button
                   type="submit"
                   className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                  disabled={updateVehicle.isPending || deleteVehicle.isPending}
+                  disabled={
+                    updateVehicle.isPending ||
+                    deleteVehicle.isPending ||
+                    uploadVehicleImage.isPending
+                  }
                 >
                   {updateVehicle.isPending ? "Enregistrement..." : "Enregistrer les modifications"}
                 </button>
@@ -979,7 +1057,13 @@ interface VehicleCardProps {
 }
 
 function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProps) {
-  const imageSource = resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration;
+  const [hasImageError, setHasImageError] = useState(false);
+  const resolvedImageUrl = resolveMediaUrl(vehicle.image_url);
+  useEffect(() => {
+    setHasImageError(false);
+  }, [resolvedImageUrl]);
+  const imageSource =
+    !hasImageError && resolvedImageUrl ? resolvedImageUrl : fallbackIllustration;
   return (
     <button
       type="button"
@@ -990,6 +1074,7 @@ function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProp
         <img
           src={imageSource}
           alt={`Illustration du véhicule ${vehicle.name}`}
+          onError={() => setHasImageError(true)}
           className="absolute inset-0 h-full w-full object-cover object-center"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900/30 via-transparent" />
@@ -1037,14 +1122,26 @@ function VehicleHeader({
   isUpdating,
   isDeleting
 }: VehicleHeaderProps) {
+  const [hasImageError, setHasImageError] = useState(false);
+  const resolvedImageUrl = resolveMediaUrl(vehicle.image_url);
+  useEffect(() => {
+    setHasImageError(false);
+  }, [resolvedImageUrl]);
   const imageSource =
-    resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration ?? VEHICLE_ILLUSTRATIONS[0];
+    !hasImageError && resolvedImageUrl
+      ? resolvedImageUrl
+      : fallbackIllustration ?? VEHICLE_ILLUSTRATIONS[0];
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
       <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-4">
           <div className="hidden h-20 w-36 overflow-hidden rounded-xl bg-slate-100 shadow-inner dark:bg-slate-800 md:block">
-            <img src={imageSource} alt="Vue du véhicule" className="h-full w-full object-cover" />
+            <img
+              src={imageSource}
+              alt="Vue du véhicule"
+              onError={() => setHasImageError(true)}
+              className="h-full w-full object-cover"
+            />
           </div>
           <div className="space-y-3">
             <div>
