@@ -1059,6 +1059,9 @@ interface VehicleCardProps {
 function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProps) {
   const [hasImageError, setHasImageError] = useState(false);
   const resolvedImageUrl = resolveMediaUrl(vehicle.image_url);
+  useEffect(() => {
+    setHasImageError(false);
+  }, [resolvedImageUrl]);
   const imageSource =
     !hasImageError && resolvedImageUrl ? resolvedImageUrl : fallbackIllustration;
   return (
@@ -1121,6 +1124,9 @@ function VehicleHeader({
 }: VehicleHeaderProps) {
   const [hasImageError, setHasImageError] = useState(false);
   const resolvedImageUrl = resolveMediaUrl(vehicle.image_url);
+  useEffect(() => {
+    setHasImageError(false);
+  }, [resolvedImageUrl]);
   const imageSource =
     !hasImageError && resolvedImageUrl
       ? resolvedImageUrl
