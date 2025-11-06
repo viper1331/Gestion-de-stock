@@ -1453,6 +1453,118 @@ def test_vehicle_inventory_allows_multiple_assignments_from_remise_stock() -> No
         headers=admin_headers,
     )
     assert cleanup_remise_category.status_code == 204
+
+
+def test_vehicle_inventory_restack_when_removed_from_vehicle() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Depot-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Sac de secours",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 3,
+            "low_stock_threshold": 0,
+            "category_id": remise_category_id,
+        },
+        headers=admin_headers,
+    )
+    assert remise_item_resp.status_code == 201, remise_item_resp.text
+    remise_item_id = remise_item_resp.json()["id"]
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Vehicule-{uuid4().hex[:6]}", "sizes": ["CABINE"]},
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    assign_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Sac de secours",
+            "sku": "REM-STACK",
+            "quantity": 1,
+            "category_id": vehicle_category_id,
+            "size": "CABINE",
+            "position_x": 0.2,
+            "position_y": 0.3,
+            "remise_item_id": remise_item_id,
+        },
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+    vehicle_item_id = assign_resp.json()["id"]
+
+    before_remove = services.list_vehicle_items()
+    template_candidates = [
+        entry
+        for entry in before_remove
+        if entry.remise_item_id == remise_item_id and entry.category_id is None
+    ]
+    assert len(template_candidates) == 1
+    template_id = template_candidates[0].id
+    assert any(entry.id == vehicle_item_id for entry in before_remove)
+
+    remove_resp = client.put(
+        f"/vehicle-inventory/{vehicle_item_id}",
+        json={
+            "category_id": None,
+            "size": None,
+            "position_x": None,
+            "position_y": None,
+            "quantity": 0,
+        },
+        headers=admin_headers,
+    )
+    assert remove_resp.status_code == 200, remove_resp.text
+    removed_payload = remove_resp.json()
+    assert removed_payload["id"] == template_id
+    assert removed_payload["category_id"] is None
+
+    after_remove = services.list_vehicle_items()
+    matching_entries = [
+        entry for entry in after_remove if entry.remise_item_id == remise_item_id
+    ]
+    assert matching_entries and matching_entries[0].id == template_id
+    assert matching_entries[0].category_id is None
+
+    remise_after_remove = services.get_remise_item(remise_item_id)
+    assert remise_after_remove.quantity == 3
+
+    cleanup_template = client.delete(
+        f"/vehicle-inventory/{template_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_template.status_code == 204
+
+    cleanup_vehicle = client.delete(
+        f"/vehicle-inventory/categories/{vehicle_category_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_vehicle.status_code == 204
+
+    cleanup_remise_item = client.delete(
+        f"/remise-inventory/{remise_item_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_item.status_code == 204
+
+    cleanup_remise_category = client.delete(
+        f"/remise-inventory/categories/{remise_category_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_category.status_code == 204
 def test_vehicle_view_background_configuration() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

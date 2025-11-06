@@ -832,6 +832,33 @@ def _update_remise_quantity(
     )
 
 
+def _restack_vehicle_item_template(
+    conn: sqlite3.Connection,
+    item_id: int,
+    remise_item_id: int,
+    image_path: str | None,
+) -> int | None:
+    template_row = conn.execute(
+        """
+        SELECT id
+        FROM vehicle_items
+        WHERE remise_item_id = ? AND category_id IS NULL
+        ORDER BY id
+        LIMIT 1
+        """,
+        (remise_item_id,),
+    ).fetchone()
+    if template_row is None:
+        return None
+    template_id = template_row["id"]
+    if template_id == item_id:
+        return template_id
+    if image_path:
+        _delete_media_file(image_path)
+    conn.execute("DELETE FROM vehicle_items WHERE id = ?", (item_id,))
+    return template_id
+
+
 def _create_inventory_item_internal(
     module: str, payload: models.ItemCreate
 ) -> models.Item:
@@ -953,17 +980,20 @@ def _update_inventory_item_internal(
         # Vehicle inventory items mirror remise inventory metadata.
         fields.pop("name", None)
         fields.pop("sku", None)
+    result_item_id = item_id
+    should_restack_to_template = False
     with db.get_stock_connection() as conn:
         current_row: sqlite3.Row | None = None
         if module == "vehicle_inventory":
             current_row = conn.execute(
-                f"SELECT quantity, remise_item_id FROM {config.tables.items} WHERE id = ?",
+                f"SELECT quantity, remise_item_id, category_id, image_path FROM {config.tables.items} WHERE id = ?",
                 (item_id,),
             ).fetchone()
             if current_row is None:
                 raise ValueError("Article introuvable")
             current_quantity = current_row["quantity"]
             current_remise_item_id = current_row["remise_item_id"]
+            current_category_id = current_row["category_id"]
             if "remise_item_id" in fields:
                 remise_item_id = fields["remise_item_id"]
                 if remise_item_id is None:
@@ -982,6 +1012,11 @@ def _update_inventory_item_internal(
             if target_remise_item_id is None:
                 raise ValueError("Un article de remise doit être sélectionné.")
             target_quantity = fields.get("quantity", current_quantity)
+            should_restack_to_template = (
+                "category_id" in fields
+                and fields["category_id"] is None
+                and current_category_id is not None
+            )
             if target_remise_item_id == current_remise_item_id:
                 delta = current_quantity - target_quantity
                 if delta:
@@ -1004,8 +1039,17 @@ def _update_inventory_item_internal(
         )
         if config.auto_purchase_orders and should_check_low_stock:
             _maybe_create_auto_purchase_order(conn, item_id)
+        if module == "vehicle_inventory" and should_restack_to_template and current_row is not None:
+            template_id = _restack_vehicle_item_template(
+                conn,
+                item_id,
+                target_remise_item_id,
+                current_row["image_path"],
+            )
+            if template_id is not None:
+                result_item_id = template_id
         conn.commit()
-    return _get_inventory_item_internal(module, item_id)
+    return _get_inventory_item_internal(module, result_item_id)
 
 
 def _delete_inventory_item_internal(module: str, item_id: int) -> None:
