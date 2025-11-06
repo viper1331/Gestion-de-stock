@@ -2,12 +2,13 @@
 from __future__ import annotations
 
 import io
+import json
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from textwrap import wrap
-from typing import BinaryIO, Callable, Iterable, Optional
+from typing import Any, BinaryIO, Callable, Iterable, Optional
 from uuid import uuid4
 
 from reportlab.lib import colors
@@ -69,6 +70,14 @@ _INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
             movements="movements",
         ),
         auto_purchase_orders=True,
+    ),
+    "pharmacy": _InventoryModuleConfig(
+        tables=_InventoryTables(
+            items="pharmacy_items",
+            categories="pharmacy_categories",
+            category_sizes="pharmacy_category_sizes",
+            movements="pharmacy_movements",
+        )
     ),
     "vehicle_inventory": _InventoryModuleConfig(
         tables=_InventoryTables(
@@ -152,6 +161,100 @@ def _get_inventory_config(module: str) -> _InventoryModuleConfig:
         return _INVENTORY_MODULE_CONFIGS[module]
     except KeyError as exc:  # pragma: no cover - defensive programming
         raise ValueError(f"Module d'inventaire inconnu: {module}") from exc
+
+
+_INVENTORY_SNAPSHOT_DIR = db.DATA_DIR / "inventory_snapshots"
+_INVENTORY_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+
+
+def _inventory_snapshot_path(module: str) -> Path:
+    return _INVENTORY_SNAPSHOT_DIR / f"{module}_snapshot.json"
+
+
+def _fetch_table_rows(conn: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
+    info_rows = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    order_clause = "ORDER BY id" if any(row["name"] == "id" for row in info_rows) else ""
+    cur = conn.execute(f"SELECT * FROM {table} {order_clause}")
+    return [dict(row) for row in cur.fetchall()]
+
+
+def _persist_inventory_module(conn: sqlite3.Connection, module: str) -> None:
+    config = _get_inventory_config(module)
+    snapshot = {
+        "categories": _fetch_table_rows(conn, config.tables.categories),
+        "category_sizes": _fetch_table_rows(conn, config.tables.category_sizes),
+        "items": _fetch_table_rows(conn, config.tables.items),
+        "movements": _fetch_table_rows(conn, config.tables.movements),
+    }
+    path = _inventory_snapshot_path(module)
+    tmp_path = path.with_suffix(".tmp")
+    with open(tmp_path, "w", encoding="utf-8") as buffer:
+        json.dump(snapshot, buffer, ensure_ascii=False, indent=2)
+    tmp_path.replace(path)
+
+
+def _inventory_modules_to_persist(module: str) -> tuple[str, ...]:
+    modules: list[str] = [module]
+    if module == "vehicle_inventory":
+        modules.append("inventory_remise")
+    return tuple(dict.fromkeys(modules))
+
+
+def _persist_after_commit(conn: sqlite3.Connection, *modules: str) -> None:
+    conn.commit()
+    seen: set[str] = set()
+    for module in modules:
+        if not module or module in seen:
+            continue
+        seen.add(module)
+        try:
+            _persist_inventory_module(conn, module)
+        except ValueError:
+            continue
+
+
+def _restore_inventory_module(conn: sqlite3.Connection, module: str) -> None:
+    path = _inventory_snapshot_path(module)
+    if not path.exists():
+        return
+    config = _get_inventory_config(module)
+    cur = conn.execute(f"SELECT COUNT(*) AS count FROM {config.tables.items}")
+    row = cur.fetchone()
+    if row and row["count"]:
+        return
+    try:
+        snapshot = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):  # pragma: no cover - invalid snapshot ignored
+        return
+
+    def restore_table(table_name: str, rows: list[dict[str, Any]]) -> None:
+        conn.execute(f"DELETE FROM {table_name}")
+        if not rows:
+            return
+        info_rows = conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+        columns = [info_row["name"] for info_row in info_rows]
+        placeholders = ", ".join("?" for _ in columns)
+        values = [tuple(row.get(column) for column in columns) for row in rows]
+        conn.executemany(
+            f"INSERT INTO {table_name} ({', '.join(columns)}) VALUES ({placeholders})",
+            values,
+        )
+
+    restore_table(config.tables.categories, snapshot.get("categories", []))
+    restore_table(config.tables.category_sizes, snapshot.get("category_sizes", []))
+    restore_table(config.tables.items, snapshot.get("items", []))
+    restore_table(config.tables.movements, snapshot.get("movements", []))
+
+
+def _restore_inventory_snapshots() -> None:
+    with db.get_stock_connection() as conn:
+        for module in ("default", "inventory_remise", "vehicle_inventory", "pharmacy"):
+            try:
+                _restore_inventory_module(conn, module)
+            except ValueError:  # pragma: no cover - skip unknown module
+                continue
+        conn.commit()
+
 
 _PURCHASE_ORDER_STATUSES: set[str] = {
     "PENDING",
@@ -271,6 +374,7 @@ def ensure_database_ready() -> None:
     if not _db_initialized:
         db.init_databases()
         _apply_schema_migrations()
+        _restore_inventory_snapshots()
         seed_default_admin()
         _db_initialized = True
 
@@ -518,7 +622,7 @@ def _apply_schema_migrations() -> None:
                 """
             )
 
-        conn.commit()
+        _persist_after_commit(conn, "vehicle_inventory")
 
 
 def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) -> None:
@@ -719,7 +823,7 @@ def _sync_single_vehicle_item(remise_item_id: int) -> None:
             conn.execute("DELETE FROM vehicle_items WHERE remise_item_id = ?", (remise_item_id,))
         else:
             _sync_vehicle_item_from_remise(conn, source)
-        conn.commit()
+        _persist_after_commit(conn, "vehicle_inventory")
 
 
 def _build_inventory_item(row: sqlite3.Row) -> models.Item:
@@ -927,7 +1031,7 @@ def _create_inventory_item_internal(
                         existing["id"],
                     ),
                 )
-                conn.commit()
+                _persist_after_commit(conn, *_inventory_modules_to_persist(module))
                 return _get_inventory_item_internal(module, existing["id"])
             if payload.category_id is not None:
                 insert_sku = f"{sku}-{uuid4().hex[:6]}"
@@ -963,7 +1067,7 @@ def _create_inventory_item_internal(
         item_id = cur.lastrowid
         if config.auto_purchase_orders:
             _maybe_create_auto_purchase_order(conn, item_id)
-        conn.commit()
+        _persist_after_commit(conn, *_inventory_modules_to_persist(module))
     return _get_inventory_item_internal(module, item_id)
 
 
@@ -1048,7 +1152,7 @@ def _update_inventory_item_internal(
             )
             if template_id is not None:
                 result_item_id = template_id
-        conn.commit()
+        _persist_after_commit(conn, *_inventory_modules_to_persist(module))
     return _get_inventory_item_internal(module, result_item_id)
 
 
@@ -1068,7 +1172,7 @@ def _delete_inventory_item_internal(module: str, item_id: int) -> None:
             f"DELETE FROM {config.tables.items} WHERE id = ?",
             (item_id,),
         )
-        conn.commit()
+        _persist_after_commit(conn, *_inventory_modules_to_persist(module))
 
 
 def _list_inventory_categories_internal(module: str) -> list[models.Category]:
@@ -1221,7 +1325,7 @@ def _create_inventory_category_internal(
                 f"INSERT INTO {config.tables.category_sizes} (category_id, name) VALUES (?, ?)",
                 ((category_id, size) for size in normalized_sizes),
             )
-        conn.commit()
+        _persist_after_commit(conn, *_inventory_modules_to_persist(module))
     created = _get_inventory_category_internal(module, category_id)
     if created is None:  # pragma: no cover - defensive programming
         raise ValueError("Catégorie introuvable")
@@ -1281,7 +1385,7 @@ def _update_inventory_category_internal(
                         "DELETE FROM vehicle_view_settings WHERE category_id = ?",
                         (category_id,),
                     )
-        conn.commit()
+        _persist_after_commit(conn, *_inventory_modules_to_persist(module))
 
     updated = _get_inventory_category_internal(module, category_id)
     if updated is None:  # pragma: no cover - deleted row in concurrent context
@@ -1310,7 +1414,7 @@ def _delete_inventory_category_internal(module: str, category_id: int) -> None:
             f"DELETE FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
         )
-        conn.commit()
+        _persist_after_commit(conn, *_inventory_modules_to_persist(module))
     if previous_path:
         _delete_media_file(previous_path)
 
@@ -1338,7 +1442,7 @@ def _record_inventory_movement_internal(
         )
         if config.auto_purchase_orders:
             _maybe_create_auto_purchase_order(conn, item_id)
-        conn.commit()
+        _persist_after_commit(conn, *_inventory_modules_to_persist(module))
 
 
 def _fetch_inventory_movements_internal(
@@ -1590,7 +1694,7 @@ def attach_vehicle_item_image(item_id: int, stream: BinaryIO, filename: str | No
             f"UPDATE {config.tables.items} SET image_path = ? WHERE id = ?",
             (stored_path, item_id),
         )
-        conn.commit()
+        _persist_after_commit(conn, "vehicle_inventory")
     if previous_path and previous_path != stored_path:
         _delete_media_file(previous_path)
     return _get_inventory_item_internal("vehicle_inventory", item_id)
@@ -1612,7 +1716,7 @@ def remove_vehicle_item_image(item_id: int) -> models.Item:
             f"UPDATE {config.tables.items} SET image_path = NULL WHERE id = ?",
             (item_id,),
         )
-        conn.commit()
+        _persist_after_commit(conn, "vehicle_inventory")
     if previous_path:
         _delete_media_file(previous_path)
     return _get_inventory_item_internal("vehicle_inventory", item_id)
@@ -2896,7 +3000,7 @@ def receive_purchase_order(
                     "UPDATE purchase_orders SET status = ? WHERE id = ?",
                     (new_status, order_id),
                 )
-            conn.commit()
+            _persist_after_commit(conn, "default")
         except Exception:
             conn.rollback()
             raise
@@ -3094,7 +3198,7 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
                 f"Dotation - {collaborator_name}",
             ),
         )
-        conn.commit()
+        _persist_after_commit(conn, "default")
         return get_dotation(cur.lastrowid)
 
 
@@ -3213,7 +3317,7 @@ def update_dotation(dotation_id: int, payload: models.DotationUpdate) -> models.
                 dotation_id,
             ),
         )
-        conn.commit()
+        _persist_after_commit(conn, "default")
     return get_dotation(dotation_id)
 
 
@@ -3251,7 +3355,7 @@ def delete_dotation(dotation_id: int, *, restock: bool = False) -> None:
                 "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
                 (row["item_id"], row["quantity"], reason),
             )
-        conn.commit()
+        _persist_after_commit(conn, "default")
 
 
 def list_pharmacy_items() -> list[models.PharmacyItem]:
@@ -3330,7 +3434,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
             raise ValueError("Ce code-barres est déjà utilisé") from exc
-        conn.commit()
+        _persist_after_commit(conn, "pharmacy")
         return get_pharmacy_item(cur.lastrowid)
 
 
@@ -3352,7 +3456,7 @@ def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> mo
             conn.execute(f"UPDATE pharmacy_items SET {assignments} WHERE id = ?", values)
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
             raise ValueError("Ce code-barres est déjà utilisé") from exc
-        conn.commit()
+        _persist_after_commit(conn, "pharmacy")
     return get_pharmacy_item(item_id)
 
 
@@ -3362,7 +3466,7 @@ def delete_pharmacy_item(item_id: int) -> None:
         cur = conn.execute("DELETE FROM pharmacy_items WHERE id = ?", (item_id,))
         if cur.rowcount == 0:
             raise ValueError("Produit pharmaceutique introuvable")
-        conn.commit()
+        _persist_after_commit(conn, "pharmacy")
 
 
 def list_pharmacy_categories() -> list[models.PharmacyCategory]:
@@ -3435,7 +3539,7 @@ def create_pharmacy_category(payload: models.PharmacyCategoryCreate) -> models.P
                 "INSERT INTO pharmacy_category_sizes (category_id, name) VALUES (?, ?)",
                 ((category_id, size) for size in normalized_sizes),
             )
-        conn.commit()
+        _persist_after_commit(conn, "pharmacy")
         return models.PharmacyCategory(id=category_id, name=payload.name, sizes=normalized_sizes)
 
 
@@ -3468,7 +3572,7 @@ def update_pharmacy_category(
                     "INSERT INTO pharmacy_category_sizes (category_id, name) VALUES (?, ?)",
                     ((category_id, size) for size in normalized_sizes),
                 )
-        conn.commit()
+        _persist_after_commit(conn, "pharmacy")
 
     return get_pharmacy_category(category_id)
 
@@ -3478,7 +3582,7 @@ def delete_pharmacy_category(category_id: int) -> None:
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM pharmacy_category_sizes WHERE category_id = ?", (category_id,))
         conn.execute("DELETE FROM pharmacy_categories WHERE id = ?", (category_id,))
-        conn.commit()
+        _persist_after_commit(conn, "pharmacy")
 
 
 def record_pharmacy_movement(item_id: int, payload: models.PharmacyMovementCreate) -> None:
@@ -3497,7 +3601,7 @@ def record_pharmacy_movement(item_id: int, payload: models.PharmacyMovementCreat
             "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
             (payload.delta, item_id),
         )
-        conn.commit()
+        _persist_after_commit(conn, "pharmacy")
 
 
 def fetch_pharmacy_movements(item_id: int) -> list[models.PharmacyMovement]:
@@ -3756,7 +3860,7 @@ def receive_pharmacy_purchase_order(
                     "UPDATE pharmacy_purchase_orders SET status = ? WHERE id = ?",
                     (new_status, order_id),
                 )
-            conn.commit()
+            _persist_after_commit(conn, "pharmacy")
         except Exception:
             conn.rollback()
             raise
