@@ -1,6 +1,9 @@
 """Utilitaires de sauvegarde pour les bases de données."""
 from __future__ import annotations
 
+import os
+from collections.abc import Iterator
+from contextlib import contextmanager
 from datetime import datetime
 from pathlib import Path
 import sqlite3
@@ -38,6 +41,24 @@ def _ensure_safe_member(member: ZipInfo) -> None:
         raise BackupImportError("Archive invalide: chemin non autorisé")
 
 
+@contextmanager
+def _open_sqlite_readonly(path: Path) -> Iterator[sqlite3.Connection]:
+    """Return a context-managed SQLite connection opened in read-only mode."""
+
+    if os.name == "nt":  # Windows cannot reliably use immutable URIs
+        conn = sqlite3.connect(path)
+    else:
+        source_uri = path.resolve().as_uri()
+        immutable_uri = f"{source_uri}?mode=ro&immutable=1"
+        conn = sqlite3.connect(immutable_uri, uri=True)
+
+    try:
+        conn.execute("PRAGMA query_only = 1")
+        yield conn
+    finally:
+        conn.close()
+
+
 def _restore_sqlite_db(source: Path, destination: Path) -> None:
     """Restore a SQLite database using the backup API.
 
@@ -48,17 +69,15 @@ def _restore_sqlite_db(source: Path, destination: Path) -> None:
     truncated automatically before the copy.
 
     The uploaded SQLite files come from temporary directories created during the
-    tests.  On Windows these temporary files may stay locked for a short period
-    if their URI representation is not normalized before connecting.  We build
-    an explicit ``file:`` URI from :meth:`Path.as_uri` so that SQLite never keeps
-    an additional handle on the original file, allowing ``TemporaryDirectory`` to
-    clean it up reliably on Windows.
+    tests.  Opening them in read-only mode differs slightly between platforms:
+    on Windows we have to use a regular connection and enable ``PRAGMA
+    query_only`` to avoid the driver keeping a write handle, while on POSIX
+    systems we rely on the immutable URI variant to prevent SQLite from holding
+    onto the source file beyond the backup call.
     """
 
-    source_uri = source.resolve().as_uri()
-    immutable_uri = f"{source_uri}?mode=ro&immutable=1"
-    with sqlite3.connect(immutable_uri, uri=True) as source_conn:
-        with sqlite3.connect(destination) as dest_conn:
+    with sqlite3.connect(destination) as dest_conn:
+        with _open_sqlite_readonly(source) as source_conn:
             source_conn.backup(dest_conn)
 
 
