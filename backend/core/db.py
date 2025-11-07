@@ -1,9 +1,12 @@
 """Gestion basique des connexions SQLite."""
 from __future__ import annotations
 
+from collections.abc import Iterator
+from contextlib import contextmanager
 from pathlib import Path
 import sqlite3
 from threading import RLock
+from typing import ContextManager
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
@@ -21,12 +24,28 @@ def _connect(path: Path) -> sqlite3.Connection:
     return conn
 
 
-def get_users_connection() -> sqlite3.Connection:
-    return _connect(USERS_DB_PATH)
+@contextmanager
+def _managed_connection(path: Path) -> Iterator[sqlite3.Connection]:
+    """Yield a SQLite connection that is always closed on exit."""
+
+    conn = _connect(path)
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        if conn.in_transaction:
+            conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
-def get_stock_connection() -> sqlite3.Connection:
-    return _connect(STOCK_DB_PATH)
+def get_users_connection() -> ContextManager[sqlite3.Connection]:
+    return _managed_connection(USERS_DB_PATH)
+
+
+def get_stock_connection() -> ContextManager[sqlite3.Connection]:
+    return _managed_connection(STOCK_DB_PATH)
 
 
 def init_databases() -> None:
