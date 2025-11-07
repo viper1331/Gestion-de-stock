@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import os
 from collections.abc import Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
 from datetime import datetime
 from pathlib import Path
 import sqlite3
@@ -76,9 +76,18 @@ def _restore_sqlite_db(source: Path, destination: Path) -> None:
     onto the source file beyond the backup call.
     """
 
-    with sqlite3.connect(destination) as dest_conn:
-        with _open_sqlite_readonly(source) as source_conn:
-            source_conn.backup(dest_conn)
+    # ``sqlite3.Connection.backup`` keeps references between the source and
+    # destination connections for the duration of the call.  On Windows the
+    # operating system can keep the source database locked until every related
+    # handle is closed, which breaks removal of the temporary directory used by
+    # the tests.  Managing both connections with an ``ExitStack`` guarantees
+    # that the destination connection is closed before the read-only source
+    # connection, releasing the handle on the extracted file as soon as the
+    # function exits.
+    with ExitStack() as stack:
+        source_conn = stack.enter_context(_open_sqlite_readonly(source))
+        dest_conn = stack.enter_context(sqlite3.connect(destination))
+        source_conn.backup(dest_conn)
 
 
 def restore_backup_from_zip(archive_path: Path) -> None:
