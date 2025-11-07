@@ -1,3 +1,4 @@
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import sys
@@ -1831,7 +1832,7 @@ def test_backup_import_restores_user_database() -> None:
         copy2(db.STOCK_DB_PATH, stock_copy)
         copy2(db.USERS_DB_PATH, users_copy)
 
-        with sqlite3.connect(users_copy) as conn:
+        with closing(sqlite3.connect(users_copy)) as conn:
             conn.execute("DELETE FROM users WHERE username = ?", (restored_username,))
             conn.execute(
                 "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
