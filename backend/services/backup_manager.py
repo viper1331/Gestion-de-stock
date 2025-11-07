@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import sqlite3
 from shutil import copy2, make_archive
 from tempfile import TemporaryDirectory
 from zipfile import BadZipFile, ZipFile, ZipInfo
@@ -37,6 +38,29 @@ def _ensure_safe_member(member: ZipInfo) -> None:
         raise BackupImportError("Archive invalide: chemin non autorisé")
 
 
+def _restore_sqlite_db(source: Path, destination: Path) -> None:
+    """Restore a SQLite database using the backup API.
+
+    On Windows an open SQLite database file cannot be replaced directly on disk.
+    Using the native backup API copies the content while keeping the target file
+    open only for the duration of the backup, preventing ``PermissionError``
+    when the application holds background connections. The target database is
+    truncated automatically before the copy.
+    """
+
+    # Open the source in read-only mode to avoid modifying the extracted file.
+    source_conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
+    try:
+        dest_conn = sqlite3.connect(destination)
+        try:
+            with dest_conn:
+                source_conn.backup(dest_conn)
+        finally:
+            dest_conn.close()
+    finally:
+        source_conn.close()
+
+
 def restore_backup_from_zip(archive_path: Path) -> None:
     """Restaure les bases à partir d'une archive ZIP."""
     if not archive_path.exists():
@@ -59,7 +83,8 @@ def restore_backup_from_zip(archive_path: Path) -> None:
 
         stock_source = stock_candidates[0]
         users_source = users_candidates[0]
-        copy2(stock_source, db.STOCK_DB_PATH)
-        copy2(users_source, db.USERS_DB_PATH)
+
+        _restore_sqlite_db(stock_source, db.STOCK_DB_PATH)
+        _restore_sqlite_db(users_source, db.USERS_DB_PATH)
 
     db.init_databases()
