@@ -46,7 +46,13 @@ def _open_sqlite_readonly(path: Path) -> Iterator[sqlite3.Connection]:
     """Return a context-managed SQLite connection opened in read-only mode."""
 
     if os.name == "nt":  # Windows cannot reliably use immutable URIs
-        conn = sqlite3.connect(path)
+        # ``sqlite3`` expects Windows paths to be prefixed with ``/`` when
+        # using the URI form.  Opening the database in read-only mode avoids
+        # SQLite grabbing a persistent write handle which prevents temporary
+        # directories from being cleaned up after the tests on Windows.
+        source_path = path.resolve().as_posix()
+        uri = f"file:/{source_path}?mode=ro"
+        conn = sqlite3.connect(uri, uri=True)
     else:
         source_uri = path.resolve().as_uri()
         immutable_uri = f"{source_uri}?mode=ro&immutable=1"
