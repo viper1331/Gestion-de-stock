@@ -52,17 +52,23 @@ def _open_sqlite_readonly(path: Path) -> Iterator[sqlite3.Connection]:
         # directories from being cleaned up after the tests on Windows.
         source_path = path.resolve().as_posix()
         uri = f"file:/{source_path}?mode=ro"
-        conn = sqlite3.connect(uri, uri=True)
     else:
         source_uri = path.resolve().as_uri()
-        immutable_uri = f"{source_uri}?mode=ro&immutable=1"
-        conn = sqlite3.connect(immutable_uri, uri=True)
+        uri = f"{source_uri}?mode=ro&immutable=1"
 
-    try:
+    with closing(sqlite3.connect(uri, uri=True)) as conn:
         conn.execute("PRAGMA query_only = 1")
         yield conn
-    finally:
-        conn.close()
+
+
+def _verify_sqlite_database(path: Path) -> None:
+    """Ensure the extracted SQLite database is structurally valid."""
+
+    with _open_sqlite_readonly(path) as conn:
+        cur = conn.execute("PRAGMA quick_check")
+        result = cur.fetchone()
+        if not result or result[0] != "ok":
+            raise BackupImportError("Archive corrompue: base de données invalide")
 
 
 def _restore_sqlite_db(source: Path, destination: Path) -> None:
@@ -121,6 +127,9 @@ def restore_backup_from_zip(archive_path: Path) -> None:
 
         stock_source = stock_candidates[0]
         users_source = users_candidates[0]
+
+        _verify_sqlite_database(stock_source)
+        _verify_sqlite_database(users_source)
 
         _restore_sqlite_db(stock_source, db.STOCK_DB_PATH)
         _restore_sqlite_db(users_source, db.USERS_DB_PATH)
