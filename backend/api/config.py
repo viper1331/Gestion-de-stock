@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import get_current_user
 from backend.core import models
+from backend.services.backup_scheduler import backup_scheduler
 
 router = APIRouter()
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
@@ -35,3 +36,5 @@ async def write_config(entry: models.ConfigEntry, user: models.User = Depends(ge
     parser.set(entry.section, entry.key, entry.value)
     with CONFIG_PATH.open("w", encoding="utf-8") as configfile:
         parser.write(configfile)
+    if entry.section == "backup":
+        await backup_scheduler.reload_from_config()

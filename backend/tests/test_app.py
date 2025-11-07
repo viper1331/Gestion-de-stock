@@ -1,7 +1,11 @@
 from pathlib import Path
+import sqlite3
 import sys
+import zipfile
 
 import io
+from shutil import copy2
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -1763,3 +1767,99 @@ def test_remise_inventory_crud_cycle() -> None:
         f"/remise-inventory/categories/{category_id}", headers=admin_headers
     )
     assert category_delete.status_code == 204
+
+
+def test_backup_schedule_roundtrip() -> None:
+    headers = _login_headers("admin", "admin123")
+    try:
+        response = client.post(
+            "/backup/schedule",
+            json={"enabled": True, "days": ["monday", "wednesday"], "time": "22:30"},
+            headers=headers,
+        )
+        assert response.status_code == 204, response.text
+
+        fetched = client.get("/backup/schedule", headers=headers)
+        assert fetched.status_code == 200, fetched.text
+        data = fetched.json()
+        assert data["enabled"] is True
+        assert set(data["days"]) == {"monday", "wednesday"}
+        assert data["time"] == "22:30"
+    finally:
+        reset = client.post(
+            "/backup/schedule",
+            json={"enabled": False, "days": [], "time": "02:00"},
+            headers=headers,
+        )
+        assert reset.status_code == 204, reset.text
+
+
+def test_backup_schedule_requires_admin() -> None:
+    username = f"backup-user-{uuid4().hex[:6]}"
+    _create_user(username, "Password123!", role="user")
+    headers = _login_headers(username, "Password123!")
+    response = client.get("/backup/schedule", headers=headers)
+    assert response.status_code == 403
+
+
+def test_backup_import_requires_admin() -> None:
+    username = f"import-user-{uuid4().hex[:6]}"
+    _create_user(username, "Password123!", role="user")
+    headers = _login_headers(username, "Password123!")
+    with TemporaryDirectory() as tmpdir:
+        archive_path = Path(tmpdir) / "backup.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.writestr("stock.db", b"dummy")
+            archive.writestr("users.db", b"dummy")
+        with archive_path.open("rb") as stream:
+            response = client.post(
+                "/backup/import",
+                headers=headers,
+                files={"file": ("backup.zip", stream, "application/zip")},
+            )
+    assert response.status_code == 403
+
+
+def test_backup_import_restores_user_database() -> None:
+    headers = _login_headers("admin", "admin123")
+    restored_username = f"restored-{uuid4().hex[:6]}"
+
+    with TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        stock_copy = tmp_path / "stock.db"
+        users_copy = tmp_path / "users.db"
+        copy2(db.STOCK_DB_PATH, stock_copy)
+        copy2(db.USERS_DB_PATH, users_copy)
+
+        with sqlite3.connect(users_copy) as conn:
+            conn.execute("DELETE FROM users WHERE username = ?", (restored_username,))
+            conn.execute(
+                "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
+                (restored_username, security.hash_password("demo-pass"), "user"),
+            )
+            conn.commit()
+
+        archive_path = tmp_path / "backup.zip"
+        with zipfile.ZipFile(archive_path, "w") as archive:
+            archive.write(stock_copy, arcname="stock.db")
+            archive.write(users_copy, arcname="users.db")
+
+        with db.get_users_connection() as conn:
+            conn.execute("DELETE FROM users WHERE username = ?", (restored_username,))
+            conn.commit()
+
+        with archive_path.open("rb") as stream:
+            response = client.post(
+                "/backup/import",
+                headers=headers,
+                files={"file": ("backup.zip", stream, "application/zip")},
+            )
+        assert response.status_code == 204, response.text
+
+    with db.get_users_connection() as conn:
+        cur = conn.execute("SELECT username FROM users WHERE username = ?", (restored_username,))
+        restored = cur.fetchone()
+        conn.execute("DELETE FROM users WHERE username = ?", (restored_username,))
+        conn.commit()
+
+    assert restored is not None
