@@ -4,7 +4,51 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Optional
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator, model_validator
+
+BACKUP_WEEKDAY_INDEX: dict[str, int] = {
+    "monday": 0,
+    "tuesday": 1,
+    "wednesday": 2,
+    "thursday": 3,
+    "friday": 4,
+    "saturday": 5,
+    "sunday": 6,
+}
+
+_BACKUP_DAY_ALIASES: dict[str, str] = {
+    "mon": "monday",
+    "monday": "monday",
+    "lundi": "monday",
+    "tue": "tuesday",
+    "tuesday": "tuesday",
+    "mardi": "tuesday",
+    "wed": "wednesday",
+    "wednesday": "wednesday",
+    "mercredi": "wednesday",
+    "thu": "thursday",
+    "thursday": "thursday",
+    "jeudi": "thursday",
+    "fri": "friday",
+    "friday": "friday",
+    "vendredi": "friday",
+    "sat": "saturday",
+    "saturday": "saturday",
+    "samedi": "saturday",
+    "sun": "sunday",
+    "sunday": "sunday",
+    "dimanche": "sunday",
+}
+
+
+def _normalize_backup_day(day: str) -> str:
+    normalized = day.strip().lower()
+    if not normalized:
+        raise ValueError("Jour de sauvegarde vide")
+    normalized = _BACKUP_DAY_ALIASES.get(normalized, normalized)
+    if normalized not in BACKUP_WEEKDAY_INDEX:
+        raise ValueError(f"Jour de sauvegarde invalide: {day}")
+    return normalized
 
 
 class Token(BaseModel):
@@ -149,6 +193,47 @@ class ConfigEntry(BaseModel):
     section: str
     key: str
     value: str
+
+
+class BackupSchedule(BaseModel):
+    enabled: bool = False
+    days: list[str] = Field(default_factory=list)
+    time: str = "02:00"
+
+    @field_validator("days", mode="before")
+    @classmethod
+    def _coerce_days(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            if not isinstance(raw, str):
+                raise ValueError("Jour de sauvegarde invalide")
+            day = _normalize_backup_day(raw)
+            if day not in seen:
+                normalized.append(day)
+                seen.add(day)
+        return normalized
+
+    @field_validator("time")
+    @classmethod
+    def _validate_time(cls, value: str) -> str:
+        datetime.strptime(value, "%H:%M")
+        return value
+
+    @model_validator(mode="after")
+    def _ensure_days_when_enabled(self) -> "BackupSchedule":
+        if self.enabled and not self.days:
+            raise ValueError("Au moins un jour doit être sélectionné")
+        return self
+
+
+class BackupScheduleStatus(BackupSchedule):
+    next_run: datetime | None = None
+    last_run: datetime | None = None
 
 
 class SupplierBase(BaseModel):

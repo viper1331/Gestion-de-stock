@@ -1,29 +1,79 @@
-"""Endpoint de sauvegarde des bases."""
+"""Endpoints de gestion des sauvegardes des bases."""
 from __future__ import annotations
 
-from datetime import datetime
 from pathlib import Path
-from shutil import copy2, make_archive
+from tempfile import TemporaryDirectory
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
 from backend.api.auth import get_current_user
-from backend.core import db, models
+from backend.core import models
+from backend.services.backup_manager import (
+    BackupImportError,
+    create_backup_archive,
+    restore_backup_from_zip,
+)
+from backend.services.backup_scheduler import backup_scheduler
 
 router = APIRouter()
-BACKUP_DIR = Path(__file__).resolve().parent.parent / "backups"
-BACKUP_DIR.mkdir(exist_ok=True)
 
 
 @router.get("/", response_class=FileResponse)
 async def backup_databases(_: models.User = Depends(get_current_user)) -> FileResponse:
-    timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
-    archive_dir = BACKUP_DIR / timestamp
-    archive_dir.mkdir(parents=True, exist_ok=True)
-    stock_path = archive_dir / "stock.db"
-    users_path = archive_dir / "users.db"
-    copy2(db.STOCK_DB_PATH, stock_path)
-    copy2(db.USERS_DB_PATH, users_path)
-    archive_path = make_archive(str(archive_dir), "zip", archive_dir)
-    return FileResponse(archive_path, filename=f"backup-{timestamp}.zip")
+    archive_path = create_backup_archive()
+    return FileResponse(archive_path, filename=archive_path.name)
+
+
+@router.post("/import", status_code=204)
+async def import_backup(
+    file: UploadFile = File(...),
+    user: models.User = Depends(get_current_user),
+) -> None:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
+    with TemporaryDirectory() as tmpdir:
+        target = Path(tmpdir) / "import.zip"
+        with target.open("wb") as buffer:
+            while True:
+                chunk = await file.read(1024 * 1024)
+                if not chunk:
+                    break
+                buffer.write(chunk)
+        await file.close()
+
+        if target.stat().st_size == 0:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Fichier de sauvegarde vide",
+            )
+
+        try:
+            restore_backup_from_zip(target)
+        except BackupImportError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        except OSError as exc:  # pragma: no cover - erreurs disque imprévisibles
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Impossible d'importer la sauvegarde",
+            ) from exc
+
+
+@router.get("/schedule", response_model=models.BackupScheduleStatus)
+async def get_backup_schedule(
+    user: models.User = Depends(get_current_user),
+) -> models.BackupScheduleStatus:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    return await backup_scheduler.get_status()
+
+
+@router.post("/schedule", status_code=204)
+async def update_backup_schedule(
+    schedule: models.BackupSchedule,
+    user: models.User = Depends(get_current_user),
+) -> None:
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    await backup_scheduler.update_schedule(schedule)
