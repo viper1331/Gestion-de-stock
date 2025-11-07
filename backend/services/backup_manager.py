@@ -46,19 +46,19 @@ def _restore_sqlite_db(source: Path, destination: Path) -> None:
     open only for the duration of the backup, preventing ``PermissionError``
     when the application holds background connections. The target database is
     truncated automatically before the copy.
+
+    The uploaded SQLite files come from temporary directories created during the
+    tests.  On Windows these temporary files may stay locked for a short period
+    if their URI representation is not normalized before connecting.  We build
+    an explicit ``file:`` URI using a POSIX path so that SQLite never keeps an
+    additional handle on the original file, allowing ``TemporaryDirectory`` to
+    clean it up reliably on Windows.
     """
 
-    # Open the source in read-only mode to avoid modifying the extracted file.
-    source_conn = sqlite3.connect(f"file:{source}?mode=ro", uri=True)
-    try:
-        dest_conn = sqlite3.connect(destination)
-        try:
-            with dest_conn:
-                source_conn.backup(dest_conn)
-        finally:
-            dest_conn.close()
-    finally:
-        source_conn.close()
+    source_uri = source.resolve().as_posix()
+    with sqlite3.connect(f"file:{source_uri}?mode=ro&immutable=1", uri=True) as source_conn:
+        with sqlite3.connect(destination) as dest_conn:
+            source_conn.backup(dest_conn)
 
 
 def restore_backup_from_zip(archive_path: Path) -> None:
