@@ -17,6 +17,7 @@ import pickupIllustration from "../../assets/vehicles/vehicle-pickup.svg";
 import ambulanceIllustration from "../../assets/vehicles/vehicle-ambulance.svg";
 import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
+import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 
 interface VehicleViewConfig {
@@ -1009,6 +1010,7 @@ export function VehicleInventoryPage() {
                 emptyMessage="Aucun matériel n'est stocké dans les autres vues pour ce véhicule."
                 items={itemsInOtherViews}
                 onItemFeedback={pushFeedback}
+                storageKey="vehicleInventory:panel:otherViews"
               />
 
               <VehicleItemsPanel
@@ -1017,6 +1019,7 @@ export function VehicleInventoryPage() {
                 emptyMessage="Tout le matériel est déjà affecté à une vue."
                 items={itemsWaitingAssignment}
                 onItemFeedback={pushFeedback}
+                storageKey="vehicleInventory:panel:pendingAssignment"
               />
 
               <DroppableLibrary
@@ -1619,6 +1622,7 @@ interface VehicleItemsPanelProps {
   emptyMessage: string;
   items: VehicleItem[];
   onItemFeedback?: (feedback: Feedback) => void;
+  storageKey: string;
 }
 
 function VehicleItemsPanel({
@@ -1626,9 +1630,10 @@ function VehicleItemsPanel({
   description,
   emptyMessage,
   items,
-  onItemFeedback
+  onItemFeedback,
+  storageKey
 }: VehicleItemsPanelProps) {
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = usePersistentBoolean(storageKey, false);
 
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
@@ -1680,7 +1685,10 @@ function DroppableLibrary({
   onItemFeedback
 }: DroppableLibraryProps) {
   const [isHovering, setIsHovering] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = usePersistentBoolean(
+    "vehicleInventory:library",
+    false
+  );
 
   return (
     <div

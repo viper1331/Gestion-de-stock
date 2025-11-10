@@ -4,6 +4,7 @@ import clsx from "clsx";
 
 import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
+import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 
 interface VehiclePhoto {
   id: number;
@@ -16,7 +17,10 @@ export function VehiclePhotosPanel() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
-  const [isCollapsed, setIsCollapsed] = useState(false);
+  const [isCollapsed, setIsCollapsed] = usePersistentBoolean(
+    "vehiclePhotos:collapsed",
+    false
+  );
 
   const photosQuery = useQuery({
     queryKey: ["vehicle-photos"],
