@@ -1,6 +1,7 @@
 """Utilitaires de sauvegarde pour les bases de données."""
 from __future__ import annotations
 
+import logging
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager, closing
@@ -13,8 +14,12 @@ from zipfile import BadZipFile, ZipFile, ZipInfo
 
 from backend.core import db
 
+logger = logging.getLogger(__name__)
+
 BACKUP_ROOT = Path(__file__).resolve().parent.parent / "backups"
 BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
+
+MAX_BACKUP_FILES = 3
 
 
 def create_backup_archive() -> Path:
@@ -28,7 +33,31 @@ def create_backup_archive() -> Path:
         copy2(db.USERS_DB_PATH, users_path)
         base_name = BACKUP_ROOT / f"backup-{timestamp}"
         archive_path = Path(make_archive(str(base_name), "zip", tmpdir))
+    _prune_old_backups(MAX_BACKUP_FILES)
     return archive_path
+
+
+def _prune_old_backups(max_count: int) -> None:
+    """Supprime les anciennes sauvegardes en excès."""
+
+    if max_count <= 0:
+        return
+
+    try:
+        backups = sorted(
+            BACKUP_ROOT.glob("backup-*.zip"),
+            key=lambda path: (path.name, path.stat().st_mtime),
+            reverse=True,
+        )
+    except OSError as exc:  # pragma: no cover - cas inattendu
+        logger.warning("Impossible d'énumérer les sauvegardes existantes: %s", exc)
+        return
+
+    for outdated in backups[max_count:]:
+        try:
+            outdated.unlink()
+        except OSError as exc:  # pragma: no cover - journalisation d'erreur
+            logger.warning("Impossible de supprimer l'ancienne sauvegarde %s: %s", outdated.name, exc)
 
 
 class BackupImportError(Exception):
