@@ -1,9 +1,10 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { api } from "../../lib/api";
 import { persistValue, readPersistedValue } from "../../lib/persist";
+import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
@@ -33,6 +34,45 @@ interface PharmacyPayload {
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
+}
+
+const EMPTY_PHARMACY_PAYLOAD: PharmacyPayload = {
+  name: "",
+  dosage: null,
+  packaging: null,
+  barcode: null,
+  quantity: 0,
+  low_stock_threshold: DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
+  expiration_date: null,
+  location: null,
+  category_id: null
+};
+
+interface PharmacyFormDraft {
+  name: string;
+  dosage: string;
+  packaging: string;
+  barcode: string;
+  quantity: number;
+  low_stock_threshold: number;
+  expiration_date: string;
+  location: string;
+  category_id: string;
+}
+
+function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
+  return {
+    name: payload.name ?? "",
+    dosage: payload.dosage ?? "",
+    packaging: payload.packaging ?? "",
+    barcode: payload.barcode ?? "",
+    quantity: payload.quantity ?? 0,
+    low_stock_threshold:
+      payload.low_stock_threshold ?? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
+    expiration_date: payload.expiration_date ?? "",
+    location: payload.location ?? "",
+    category_id: payload.category_id ? String(payload.category_id) : ""
+  };
 }
 
 interface PharmacyCategory {
@@ -149,6 +189,14 @@ export function PharmacyPage() {
     },
     enabled: canView
   });
+
+  const existingBarcodes = useMemo<ExistingSkuEntry[]>(
+    () =>
+      items
+        .filter((item) => item.barcode && item.barcode.trim().length > 0)
+        .map((item) => ({ id: item.id, sku: item.barcode as string })),
+    [items]
+  );
 
   useEffect(() => {
     if (movementItemId === null) {
@@ -272,18 +320,53 @@ export function PharmacyPage() {
         category_id: selected.category_id
       };
     }
-    return {
-      name: "",
-      dosage: "",
-      packaging: "",
-      barcode: "",
-      quantity: 0,
-      low_stock_threshold: DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
-      expiration_date: "",
-      location: "",
-      category_id: null
-    };
+    return { ...EMPTY_PHARMACY_PAYLOAD };
   }, [formMode, selected]);
+
+  const [draft, setDraft] = useState<PharmacyFormDraft>(() => createPharmacyFormDraft(formValues));
+  const [isBarcodeAuto, setIsBarcodeAuto] = useState<boolean>(
+    !(formValues.barcode && formValues.barcode.trim().length > 0)
+  );
+
+  useEffect(() => {
+    setDraft(createPharmacyFormDraft(formValues));
+    setIsBarcodeAuto(!(formValues.barcode && formValues.barcode.trim().length > 0));
+  }, [formValues]);
+
+  const buildBarcodeSource = (data: PharmacyFormDraft) =>
+    [data.name, data.dosage, data.packaging]
+      .map((value) => value.trim())
+      .filter((value) => value.length > 0)
+      .join(" ");
+
+  const regenerateBarcodeIfNeeded = (data: PharmacyFormDraft): string => {
+    if (!isBarcodeAuto) {
+      return data.barcode;
+    }
+    return ensureUniqueSku({
+      desiredSku: "",
+      prefix: "PHA",
+      source: buildBarcodeSource(data),
+      existingSkus: existingBarcodes,
+      excludeId: formMode === "edit" && selected ? selected.id ?? null : null
+    });
+  };
+
+  const updateDraft = (updates: Partial<PharmacyFormDraft>, regenerate = false) => {
+    setDraft((previous) => {
+      const next = { ...previous, ...updates };
+      if (regenerate) {
+        next.barcode = regenerateBarcodeIfNeeded(next);
+      }
+      return next;
+    });
+  };
+
+  const handleBarcodeChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const normalized = normalizeSkuInput(event.target.value);
+    setDraft((previous) => ({ ...previous, barcode: normalized }));
+    setIsBarcodeAuto(normalized.length === 0);
+  };
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
     return (
@@ -311,49 +394,57 @@ export function PharmacyPage() {
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const formData = new FormData(event.currentTarget);
-    const rawThreshold = formData.get("low_stock_threshold");
-    const rawCategory = formData.get("category_id");
-    const normalizedThreshold =
-      rawThreshold === null || (typeof rawThreshold === "string" && rawThreshold.trim() === "")
-        ? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD
-        : Number(rawThreshold);
-    const payload: PharmacyPayload = {
-      name: (formData.get("name") as string).trim(),
-      dosage: ((formData.get("dosage") as string) || "").trim() || null,
-      packaging: ((formData.get("packaging") as string) || "").trim() || null,
-      barcode: ((formData.get("barcode") as string) || "").trim() || null,
-      quantity: Number(formData.get("quantity") ?? 0),
-      low_stock_threshold: Number.isNaN(normalizedThreshold)
-        ? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD
-        : normalizedThreshold,
-      expiration_date: ((formData.get("expiration_date") as string) || "").trim() || null,
-      location: ((formData.get("location") as string) || "").trim() || null,
-      category_id:
-        rawCategory === null || (typeof rawCategory === "string" && rawCategory.trim() === "")
-          ? null
-          : Number(rawCategory)
-    };
-    if (!payload.name) {
+    const trimmedName = draft.name.trim();
+    if (!trimmedName) {
       setError("Le nom est obligatoire.");
       return;
     }
-    if (payload.quantity < 0) {
+
+    const normalizedQuantity = Number.isNaN(draft.quantity) ? 0 : draft.quantity;
+    if (normalizedQuantity < 0) {
       setError("La quantité doit être positive.");
       return;
     }
-    if (payload.low_stock_threshold < 0) {
+
+    const normalizedThreshold = Number.isNaN(draft.low_stock_threshold)
+      ? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD
+      : draft.low_stock_threshold;
+    if (normalizedThreshold < 0) {
       setError("Le seuil de stock doit être positif ou nul.");
       return;
     }
+
+    const finalBarcode = ensureUniqueSku({
+      desiredSku: draft.barcode,
+      prefix: "PHA",
+      source: buildBarcodeSource(draft),
+      existingSkus: existingBarcodes,
+      excludeId: formMode === "edit" && selected ? selected.id ?? null : null
+    });
+
+    const payload: PharmacyPayload = {
+      name: trimmedName,
+      dosage: draft.dosage.trim() ? draft.dosage.trim() : null,
+      packaging: draft.packaging.trim() ? draft.packaging.trim() : null,
+      barcode: finalBarcode,
+      quantity: normalizedQuantity,
+      low_stock_threshold: normalizedThreshold,
+      expiration_date: draft.expiration_date.trim() ? draft.expiration_date : null,
+      location: draft.location.trim() ? draft.location.trim() : null,
+      category_id: draft.category_id.trim() ? Number(draft.category_id) : null
+    };
+
+    setDraft((previous) => ({ ...previous, barcode: finalBarcode }));
     setMessage(null);
     setError(null);
+
     if (formMode === "edit" && selected) {
       await updateItem.mutateAsync({ id: selected.id, payload });
     } else {
       await createItem.mutateAsync(payload);
+      setDraft(createPharmacyFormDraft(EMPTY_PHARMACY_PAYLOAD));
+      setIsBarcodeAuto(true);
     }
-    event.currentTarget.reset();
   };
 
   return (
@@ -570,8 +661,8 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-name"
-                  name="name"
-                  defaultValue={formValues.name}
+                  value={draft.name}
+                  onChange={(event) => updateDraft({ name: event.target.value }, true)}
                   required
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Nom du médicament ou du consommable"
@@ -583,8 +674,8 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-dosage"
-                  name="dosage"
-                  defaultValue={formValues.dosage ?? ""}
+                  value={draft.dosage}
+                  onChange={(event) => updateDraft({ dosage: event.target.value }, true)}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Dosage ou concentration si applicable"
                 />
@@ -595,8 +686,8 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-packaging"
-                  name="packaging"
-                  defaultValue={formValues.packaging ?? ""}
+                  value={draft.packaging}
+                  onChange={(event) => updateDraft({ packaging: event.target.value }, true)}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Conditionnement de l'article (boîte, unité...)"
                 />
@@ -607,8 +698,8 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-barcode"
-                  name="barcode"
-                  defaultValue={formValues.barcode ?? ""}
+                  value={draft.barcode}
+                  onChange={handleBarcodeChange}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Code-barres associé (facultatif)"
                   inputMode="text"
@@ -621,8 +712,8 @@ export function PharmacyPage() {
                 </label>
                 <select
                   id="pharmacy-category"
-                  name="category_id"
-                  defaultValue={formValues.category_id ?? ""}
+                  value={draft.category_id}
+                  onChange={(event) => updateDraft({ category_id: event.target.value })}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Associez ce produit à une catégorie métier"
                 >
@@ -640,10 +731,16 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-quantity"
-                  name="quantity"
                   type="number"
                   min={0}
-                  defaultValue={formValues.quantity}
+                  value={Number.isNaN(draft.quantity) ? "" : draft.quantity}
+                  onChange={(event) => {
+                    const { value } = event.target;
+                    updateDraft(
+                      { quantity: value === "" ? Number.NaN : Number(value) },
+                      false
+                    );
+                  }}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   required
                   title="Quantité disponible en stock"
@@ -655,10 +752,21 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-low-stock-threshold"
-                  name="low_stock_threshold"
                   type="number"
                   min={0}
-                  defaultValue={formValues.low_stock_threshold}
+                  value={
+                    Number.isNaN(draft.low_stock_threshold) ? "" : draft.low_stock_threshold
+                  }
+                  onChange={(event) => {
+                    const { value } = event.target;
+                    updateDraft(
+                      {
+                        low_stock_threshold:
+                          value === "" ? Number.NaN : Number(value)
+                      },
+                      false
+                    );
+                  }}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   required
                   title="Quantité minimale avant alerte de stock faible"
@@ -670,9 +778,9 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-expiration"
-                  name="expiration_date"
                   type="date"
-                  defaultValue={formValues.expiration_date ?? ""}
+                  value={draft.expiration_date}
+                  onChange={(event) => updateDraft({ expiration_date: event.target.value })}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Date d'expiration (facultative)"
                 />
@@ -683,8 +791,8 @@ export function PharmacyPage() {
                 </label>
                 <input
                   id="pharmacy-location"
-                  name="location"
-                  defaultValue={formValues.location ?? ""}
+                  value={draft.location}
+                  onChange={(event) => updateDraft({ location: event.target.value })}
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   title="Emplacement de stockage (armoire, pièce...)"
                 />

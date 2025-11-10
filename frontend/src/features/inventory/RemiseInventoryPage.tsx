@@ -13,6 +13,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   storageKeyPrefix: "remise-inventory",
   showPurchaseOrders: false,
   searchPlaceholder: "Rechercher une remise par nom ou SKU",
+  barcodePrefix: "IS",
   itemNoun: {
     singular: "matériel",
     plural: "matériels",
