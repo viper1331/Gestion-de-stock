@@ -60,7 +60,7 @@ export function AppLayout() {
                   to: "/barcode",
                   label: "Codes-barres",
                   tooltip: "Générer et scanner les codes-barres",
-                  module: "clothing"
+                  module: "barcode"
                 }
               ]
             }
