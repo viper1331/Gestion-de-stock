@@ -281,10 +281,11 @@ ENABLE_PHARMACY_MODULE = config['Settings'].getboolean('enable_pharmacy_module',
 ENABLE_CLOTHING_MODULE = config['Settings'].getboolean('enable_clothing_module', fallback=True)
 TEXT_COLOR_PREF = config['Settings'].get('text_color', '').strip()
 
-AVAILABLE_MODULES: tuple[str, ...] = ("pharmacy", "clothing")
+AVAILABLE_MODULES: tuple[str, ...] = ("pharmacy", "clothing", "barcode")
 MODULE_LABELS: dict[str, str] = {
     "pharmacy": "Pharmacie",
     "clothing": "Habillement",
+    "barcode": "Code-barres",
 }
 
 KNOWN_TTS_DRIVERS = ("sapi5", "nsss", "espeak")
@@ -1011,6 +1012,10 @@ def default_module_permissions_for_role(role: Optional[str]) -> dict[str, bool]:
             fallback=ENABLE_PHARMACY_MODULE,
         ),
         "clothing": config['Settings'].getboolean(
+            'enable_clothing_module',
+            fallback=ENABLE_CLOTHING_MODULE,
+        ),
+        "barcode": config['Settings'].getboolean(
             'enable_clothing_module',
             fallback=ENABLE_CLOTHING_MODULE,
         ),

@@ -10,7 +10,7 @@ from backend.services import barcode as barcode_service
 
 router = APIRouter()
 
-MODULE_KEY = "clothing"
+MODULE_KEY = "barcode"
 
 
 def _require_permission(user: models.User, *, action: str) -> None:
