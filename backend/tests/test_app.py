@@ -10,6 +10,7 @@ from tempfile import TemporaryDirectory
 from typing import Any
 from uuid import uuid4
 
+import pytest
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -1956,3 +1957,39 @@ def test_apply_update_returns_result(monkeypatch: Any) -> None:
     payload = response.json()
     assert payload["updated"] is True
     assert payload["status"]["branch"] == "main"
+
+
+def test_update_settings_fallback_to_git(monkeypatch: Any) -> None:
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("GITHUB_BRANCH", raising=False)
+    monkeypatch.delenv("GITHUB_TOKEN", raising=False)
+
+    def fake_run_git_command(*args: str) -> str:
+        if args == ("config", "--get", "remote.origin.url"):
+            return "git@github.com:MyOrg/MyRepo.git"
+        if args == ("rev-parse", "--abbrev-ref", "HEAD"):
+            return "release"
+        raise AssertionError(f"Commande inattendue: {args}")
+
+    monkeypatch.setattr(update_service, "_run_git_command", fake_run_git_command)
+
+    settings = update_service._get_settings()
+
+    assert settings.slug == "MyOrg/MyRepo"
+    assert settings.branch == "release"
+    assert settings.token is None
+
+
+def test_update_settings_invalid_remote(monkeypatch: Any) -> None:
+    monkeypatch.delenv("GITHUB_REPOSITORY", raising=False)
+    monkeypatch.delenv("GITHUB_BRANCH", raising=False)
+
+    def fake_run_git_command(*args: str) -> str:
+        if args == ("config", "--get", "remote.origin.url"):
+            return "invalid-remote"
+        raise update_service.UpdateExecutionError("unexpected command")
+
+    monkeypatch.setattr(update_service, "_run_git_command", fake_run_git_command)
+
+    with pytest.raises(update_service.UpdateConfigurationError):
+        update_service._get_settings()
