@@ -422,6 +422,10 @@ class PharmacyItem(PharmacyItemBase):
     id: int
 
 
+class BarcodeValue(BaseModel):
+    sku: str = Field(..., min_length=1, max_length=64)
+
+
 class PharmacyCategory(BaseModel):
     id: int
     name: str

@@ -3384,6 +3384,20 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
         ]
 
 
+def list_existing_barcodes() -> list[models.BarcodeValue]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT DISTINCT barcode
+            FROM pharmacy_items
+            WHERE barcode IS NOT NULL AND TRIM(barcode) <> ""
+            ORDER BY barcode COLLATE NOCASE
+            """
+        )
+        return [models.BarcodeValue(sku=row["barcode"]) for row in cur.fetchall()]
+
+
 def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
