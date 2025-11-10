@@ -25,6 +25,7 @@ from backend.core.storage import (
     VEHICLE_PHOTO_MEDIA_DIR,
     relative_to_media,
 )
+from backend.services import barcode as barcode_service
 
 # Initialisation des bases de données au chargement du module
 _db_initialized = False
@@ -97,6 +98,13 @@ _INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
         )
     ),
 }
+
+_BARCODE_MODULE_SOURCES: tuple[tuple[str, str, str], ...] = (
+    ("clothing", "items", "sku"),
+    ("pharmacy", "pharmacy_items", "barcode"),
+    ("inventory_remise", "remise_items", "sku"),
+    ("vehicle_inventory", "vehicle_items", "sku"),
+)
 
 DEFAULT_VEHICLE_VIEW_NAME = "VUE PRINCIPALE"
 
@@ -3384,18 +3392,50 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
         ]
 
 
-def list_existing_barcodes() -> list[models.BarcodeValue]:
+def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
     ensure_database_ready()
+
+    accessible_sources = [
+        (table, column)
+        for module, table, column in _BARCODE_MODULE_SOURCES
+        if has_module_access(user, module, action="view")
+    ]
+    if not accessible_sources:
+        return []
+
+    existing_visual_keys = {
+        asset.sku.strip().casefold()
+        for asset in barcode_service.list_barcode_assets()
+        if asset.sku.strip()
+    }
+
+    collected: dict[str, str] = {}
     with db.get_stock_connection() as conn:
-        cur = conn.execute(
-            """
-            SELECT DISTINCT barcode
-            FROM pharmacy_items
-            WHERE barcode IS NOT NULL AND TRIM(barcode) <> ""
-            ORDER BY barcode COLLATE NOCASE
-            """
-        )
-        return [models.BarcodeValue(sku=row["barcode"]) for row in cur.fetchall()]
+        for table, column in accessible_sources:
+            cur = conn.execute(
+                f"""
+                SELECT DISTINCT {column} AS value
+                FROM {table}
+                WHERE {column} IS NOT NULL AND TRIM({column}) <> ""
+                """
+            )
+            for row in cur.fetchall():
+                raw_value = row["value"]
+                if not raw_value:
+                    continue
+                normalized = raw_value.strip()
+                if not normalized:
+                    continue
+                key = normalized.casefold()
+                if key in existing_visual_keys:
+                    continue
+                if key not in collected:
+                    collected[key] = normalized
+
+    return [
+        models.BarcodeValue(sku=value)
+        for _, value in sorted(collected.items(), key=lambda item: item[1].casefold())
+    ]
 
 
 def get_pharmacy_item(item_id: int) -> models.PharmacyItem:

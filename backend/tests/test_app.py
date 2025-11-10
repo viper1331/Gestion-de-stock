@@ -1045,28 +1045,79 @@ def test_barcode_listing_requires_permission() -> None:
     assert response.status_code == 403
 
 
-def test_existing_barcodes_listing() -> None:
+def test_existing_barcodes_listing(monkeypatch: Any, tmp_path: Path) -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
 
+    assets_dir = tmp_path / "barcodes"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM pharmacy_items")
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM remise_items")
         conn.commit()
 
+    services.create_item(models.ItemCreate(name="Pantalon", sku="HAB-001"))
+    services.create_remise_item(models.ItemCreate(name="Trousse", sku="REM-001"))
     services.create_pharmacy_item(
         models.PharmacyItemCreate(name="Doliprane", barcode="3400934058479", quantity=10)
     )
-    services.create_pharmacy_item(
-        models.PharmacyItemCreate(name="Paracetamol", barcode="3400934058486", quantity=5)
-    )
+
+    (assets_dir / "HAB-001.png").write_bytes(_TRANSPARENT_PIXEL)
 
     response = client.get("/barcode/existing", headers=admin_headers)
     assert response.status_code == 200, response.text
     payload = response.json()
     assert payload == [
         {"sku": "3400934058479"},
-        {"sku": "3400934058486"},
+        {"sku": "REM-001"},
     ]
+
+
+def test_existing_barcodes_listing_respects_module_permissions(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    services.ensure_database_ready()
+    user_id = _create_user("limited-barcode", "limited123", role="user")
+
+    assets_dir = tmp_path / "barcodes"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM pharmacy_items")
+        conn.execute("DELETE FROM items")
+        conn.commit()
+
+    services.create_item(models.ItemCreate(name="Veste", sku="HAB-010"))
+    services.create_pharmacy_item(
+        models.PharmacyItemCreate(name="Paracetamol", barcode="3400934058486", quantity=5)
+    )
+
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="barcode",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="pharmacy",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+
+    user_headers = _login_headers("limited-barcode", "limited123")
+
+    response = client.get("/barcode/existing", headers=user_headers)
+    assert response.status_code == 200, response.text
+    assert response.json() == [{"sku": "3400934058486"}]
 
 
 def test_existing_barcodes_listing_requires_permission() -> None:

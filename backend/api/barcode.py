@@ -63,7 +63,7 @@ async def list_existing_barcode_values(
     user: models.User = Depends(get_current_user),
 ) -> list[models.BarcodeValue]:
     _require_permission(user, action="view")
-    return services.list_existing_barcodes()
+    return services.list_existing_barcodes(user)
 
 
 @router.get("/assets/{filename}")
