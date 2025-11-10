@@ -2,12 +2,8 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
-
-interface ConfigEntry {
-  section: string;
-  key: string;
-  value: string;
-}
+import { fetchConfigEntries } from "../../lib/config";
+import type { ConfigEntry } from "../../lib/config";
 
 interface BackupScheduleStatus {
   enabled: boolean;
@@ -39,10 +35,7 @@ export function SettingsPage() {
   const queryClient = useQueryClient();
   const { data: entries = [], isFetching } = useQuery({
     queryKey: ["config"],
-    queryFn: async () => {
-      const response = await api.get<ConfigEntry[]>("/config/");
-      return response.data;
-    }
+    queryFn: fetchConfigEntries
   });
   const { data: scheduleStatus, isFetching: isScheduleFetching } = useQuery({
     queryKey: ["backup", "schedule"],

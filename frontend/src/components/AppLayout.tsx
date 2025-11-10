@@ -77,8 +77,8 @@ export function AppLayout() {
               tooltip: "Outils de suivi du stock d'habillement",
               links: [
                 {
-                  to: "/",
-                  label: "Vue d'ensemble",
+                  to: "/inventory",
+                  label: "Inventaire habillement",
                   tooltip: "Consulter le tableau de bord habillement",
                   module: "clothing"
                 },
@@ -303,6 +303,14 @@ export function AppLayout() {
           Gestion Stock Pro
         </Link>
         <nav className="mt-8 flex flex-col gap-4 text-sm">
+          <NavLink
+            to="/"
+            end
+            className={({ isActive }) => navClass(isActive)}
+            title="Accéder à la page d'accueil personnalisée"
+          >
+            Accueil
+          </NavLink>
           {navigationGroups.map((group) => {
             const isOpen = openGroups[group.id] ?? false;
 
@@ -333,7 +341,7 @@ export function AppLayout() {
                             <NavLink
                               key={link.to}
                               to={link.to}
-                              end={link.to === "/"}
+                              end={link.to === "/" || link.to === "/inventory"}
                               className={({ isActive }) => navClass(isActive)}
                               title={link.tooltip}
                             >
