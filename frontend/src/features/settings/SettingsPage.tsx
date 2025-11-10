@@ -164,6 +164,7 @@ export function SettingsPage() {
     time: "02:00"
   });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
 
   useEffect(() => {
     if (scheduleStatus) {
@@ -377,6 +378,21 @@ export function SettingsPage() {
   const nextRunLabel = formatDateTime(scheduleStatus?.next_run ?? null);
   const lastRunLabel = formatDateTime(scheduleStatus?.last_run ?? null);
 
+  const isSectionCollapsed = (id: string) => collapsedSections[id] ?? false;
+
+  const toggleSectionVisibility = (id: string) => {
+    setCollapsedSections((prev) => ({
+      ...prev,
+      [id]: !prev[id]
+    }));
+  };
+
+  const getSectionContentId = (id: string) =>
+    `settings-section-${id.replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase()}`;
+
+  const homepageSectionKey = "homepage";
+  const backupsSectionKey = "backups";
+
   return (
     <section className="space-y-6">
       <header className="space-y-1">
@@ -390,16 +406,31 @@ export function SettingsPage() {
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
         <div className="space-y-4">
-          <header className="space-y-1">
-            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
-              Personnalisation de l'accueil
-            </h3>
-            <p className="text-xs text-slate-400">
-              Modifiez vos textes sans impacter les autres utilisateurs. Laisser un champ vide
-              rétablit la valeur organisationnelle.
-            </p>
-          </header>
-          <div className="space-y-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <header className="space-y-1">
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                Personnalisation de l'accueil
+              </h3>
+              <p className="text-xs text-slate-400">
+                Modifiez vos textes sans impacter les autres utilisateurs. Laisser un champ vide
+                rétablit la valeur organisationnelle.
+              </p>
+            </header>
+            <button
+              type="button"
+              onClick={() => toggleSectionVisibility(homepageSectionKey)}
+              className="self-start rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-800"
+              aria-expanded={!isSectionCollapsed(homepageSectionKey)}
+              aria-controls={getSectionContentId(homepageSectionKey)}
+            >
+              {isSectionCollapsed(homepageSectionKey) ? "Afficher" : "Masquer"}
+            </button>
+          </div>
+          <div
+            id={getSectionContentId(homepageSectionKey)}
+            className="space-y-4"
+            hidden={isSectionCollapsed(homepageSectionKey)}
+          >
             {HOMEPAGE_FIELDS.map((field) => {
               const pendingValue = homepageChanges[field.key] ?? personalHomepageMap[field.key] ?? "";
               const effectiveValue = effectiveHomepageConfig[field.key];
@@ -468,163 +499,209 @@ export function SettingsPage() {
       {isAdmin ? (
         <div className="rounded-lg border border-slate-800 bg-slate-900">
           <div className="divide-y divide-slate-900">
-            {Object.entries(groupedEntries).map(([section, sectionEntries]) => (
-              <div key={section} className="p-4">
-                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">{section}</h3>
-                <div className="mt-3 space-y-3">
-                  {sectionEntries.map((entry) => {
-                    const key = `${entry.section}.${entry.key}`;
-                    const pendingValue = changes[key] ?? entry.value;
-                    return (
-                      <form
-                        key={key}
-                        className="flex flex-wrap items-center gap-3 rounded-md border border-slate-800 bg-slate-950 p-3"
-                        onSubmit={(event) => handleSubmit(event, entry)}
-                      >
-                        <div className="w-full sm:w-48">
-                          <p className="text-xs font-semibold text-slate-400">{entry.key}</p>
-                          <p className="text-[11px] text-slate-500">Valeur actuelle : {entry.value}</p>
-                        </div>
-                        <input
-                          value={pendingValue}
-                          onChange={(event) => setChanges((prev) => ({ ...prev, [key]: event.target.value }))}
-                          className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                          title="Modifier la valeur qui sera synchronisée avec le serveur"
-                        />
-                        <button
-                          type="submit"
-                          disabled={updateConfig.isPending || pendingValue === entry.value}
-                          className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                          title={
-                            updateConfig.isPending
-                              ? "Enregistrement en cours"
-                              : pendingValue === entry.value
-                              ? "Aucune modification à sauvegarder"
-                              : "Sauvegarder ce paramètre"
-                          }
+            {Object.entries(groupedEntries).map(([section, sectionEntries]) => {
+              const sectionKey = `admin:${section}`;
+              const sectionContentId = getSectionContentId(sectionKey);
+              return (
+                <div key={section} className="p-4">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">{section}</h3>
+                    <button
+                      type="button"
+                      onClick={() => toggleSectionVisibility(sectionKey)}
+                      className="rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-800"
+                      aria-expanded={!isSectionCollapsed(sectionKey)}
+                      aria-controls={sectionContentId}
+                    >
+                      {isSectionCollapsed(sectionKey) ? "Afficher" : "Masquer"}
+                    </button>
+                  </div>
+                  <div
+                    id={sectionContentId}
+                    className="mt-3 space-y-3"
+                    hidden={isSectionCollapsed(sectionKey)}
+                  >
+                    {sectionEntries.map((entry) => {
+                      const key = `${entry.section}.${entry.key}`;
+                      const pendingValue = changes[key] ?? entry.value;
+                      return (
+                        <form
+                          key={key}
+                          className="flex flex-wrap items-center gap-3 rounded-md border border-slate-800 bg-slate-950 p-3"
+                          onSubmit={(event) => handleSubmit(event, entry)}
                         >
-                          {updateConfig.isPending ? "Enregistrement..." : "Enregistrer"}
-                        </button>
-                      </form>
-                    );
-                  })}
+                          <div className="w-full sm:w-48">
+                            <p className="text-xs font-semibold text-slate-400">{entry.key}</p>
+                            <p className="text-[11px] text-slate-500">Valeur actuelle : {entry.value}</p>
+                          </div>
+                          <input
+                            value={pendingValue}
+                            onChange={(event) => setChanges((prev) => ({ ...prev, [key]: event.target.value }))}
+                            className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                            title="Modifier la valeur qui sera synchronisée avec le serveur"
+                          />
+                          <button
+                            type="submit"
+                            disabled={updateConfig.isPending || pendingValue === entry.value}
+                            className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                            title={
+                              updateConfig.isPending
+                                ? "Enregistrement en cours"
+                                : pendingValue === entry.value
+                                ? "Aucune modification à sauvegarder"
+                                : "Sauvegarder ce paramètre"
+                            }
+                          >
+                            {updateConfig.isPending ? "Enregistrement..." : "Enregistrer"}
+                          </button>
+                        </form>
+                      );
+                    })}
+                  </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         </div>
       ) : null}
-      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h3 className="text-sm font-semibold text-white">Sauvegarde manuelle</h3>
-            <p className="text-xs text-slate-400">Téléchargez un export ZIP des bases utilisateurs et stock.</p>
-          </div>
-          <button
-            type="button"
-            onClick={handleBackup}
-            disabled={isBackingUp}
-            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-            title="Télécharger une sauvegarde complète des données"
-          >
-            {isBackingUp ? "Sauvegarde..." : "Exporter"}
-          </button>
-        </div>
-        <div className="border-t border-slate-800 pt-4">
-          <h3 className="text-sm font-semibold text-white">Importer une sauvegarde</h3>
-          <p className="text-xs text-slate-400">Restaurez une archive créée précédemment.</p>
-          <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept=".zip"
-              onChange={(event) => setSelectedFile(event.target.files ? event.target.files[0] : null)}
-              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-            />
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+        <div className="space-y-4">
+          <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+            <div>
+              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">Sauvegardes</h3>
+              <p className="text-xs text-slate-400">
+                Gérez vos sauvegardes manuelles et automatiques pour sécuriser vos données.
+              </p>
+            </div>
             <button
               type="button"
-              onClick={handleImport}
-              disabled={isImporting || !selectedFile}
-              className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+              onClick={() => toggleSectionVisibility(backupsSectionKey)}
+              className="self-start rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-800"
+              aria-expanded={!isSectionCollapsed(backupsSectionKey)}
+              aria-controls={getSectionContentId(backupsSectionKey)}
             >
-              {isImporting ? "Importation..." : "Importer"}
+              {isSectionCollapsed(backupsSectionKey) ? "Afficher" : "Masquer"}
             </button>
           </div>
-        </div>
-        <div className="border-t border-slate-800 pt-4">
-          <h3 className="text-sm font-semibold text-white">Sauvegarde automatique</h3>
-          <p className="text-xs text-slate-400">Planifiez des sauvegardes régulières selon vos besoins.</p>
-          {isScheduleFetching && !scheduleStatus ? (
-            <p className="mt-3 text-xs text-slate-400">Chargement de la planification...</p>
-          ) : (
-            <form onSubmit={handleScheduleSubmit} className="mt-3 space-y-4">
-              <label className="flex items-center gap-2 text-sm text-slate-200">
-                <input
-                  type="checkbox"
-                  checked={scheduleForm.enabled}
-                  onChange={(event) =>
-                    setScheduleForm((prev) => ({ ...prev, enabled: event.target.checked }))
-                  }
-                  className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
-                />
-                Activer les sauvegardes automatiques
-              </label>
+          <div
+            id={getSectionContentId(backupsSectionKey)}
+            className="space-y-6"
+            hidden={isSectionCollapsed(backupsSectionKey)}
+          >
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                  Jours de sauvegarde
+                <h3 className="text-sm font-semibold text-white">Sauvegarde manuelle</h3>
+                <p className="text-xs text-slate-400">
+                  Téléchargez un export ZIP des bases utilisateurs et stock.
                 </p>
-                <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                  {WEEK_DAYS.map((day) => (
-                    <label
-                      key={day.value}
-                      className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-2 text-xs text-slate-200"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={scheduleForm.days.includes(day.value)}
-                        onChange={() => toggleDay(day.value)}
-                        disabled={!scheduleForm.enabled}
-                        className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
-                      />
-                      {day.label}
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                <label className="text-xs font-semibold uppercase tracking-wide text-slate-400" htmlFor="backup-time">
-                  Heure de sauvegarde
-                </label>
-                <input
-                  id="backup-time"
-                  type="time"
-                  value={scheduleForm.time}
-                  onChange={(event) => setScheduleForm((prev) => ({ ...prev, time: event.target.value }))}
-                  disabled={!scheduleForm.enabled}
-                  className="w-full max-w-xs rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                />
               </div>
               <button
-                type="submit"
-                disabled={
-                  updateSchedule.isPending ||
-                  (scheduleForm.enabled && scheduleForm.days.length === 0)
-                }
+                type="button"
+                onClick={handleBackup}
+                disabled={isBackingUp}
                 className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                title="Télécharger une sauvegarde complète des données"
               >
-                {updateSchedule.isPending ? "Enregistrement..." : "Sauvegarder la planification"}
+                {isBackingUp ? "Sauvegarde..." : "Exporter"}
               </button>
-            </form>
-          )}
-          <div className="mt-4 space-y-1 text-xs text-slate-400">
-            <p>
-              Prochaine sauvegarde :
-              {nextRunLabel ? ` ${nextRunLabel}` : " aucune sauvegarde planifiée."}
-            </p>
-            <p>
-              Dernière sauvegarde automatique :
-              {lastRunLabel ? ` ${lastRunLabel}` : " jamais exécutée."}
-            </p>
+            </div>
+            <div className="border-t border-slate-800 pt-4">
+              <h3 className="text-sm font-semibold text-white">Importer une sauvegarde</h3>
+              <p className="text-xs text-slate-400">Restaurez une archive créée précédemment.</p>
+              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  accept=".zip"
+                  onChange={(event) => setSelectedFile(event.target.files ? event.target.files[0] : null)}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                />
+                <button
+                  type="button"
+                  onClick={handleImport}
+                  disabled={isImporting || !selectedFile}
+                  className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  {isImporting ? "Importation..." : "Importer"}
+                </button>
+              </div>
+            </div>
+            <div className="border-t border-slate-800 pt-4">
+              <h3 className="text-sm font-semibold text-white">Sauvegarde automatique</h3>
+              <p className="text-xs text-slate-400">Planifiez des sauvegardes régulières selon vos besoins.</p>
+              {isScheduleFetching && !scheduleStatus ? (
+                <p className="mt-3 text-xs text-slate-400">Chargement de la planification...</p>
+              ) : (
+                <form onSubmit={handleScheduleSubmit} className="mt-3 space-y-4">
+                  <label className="flex items-center gap-2 text-sm text-slate-200">
+                    <input
+                      type="checkbox"
+                      checked={scheduleForm.enabled}
+                      onChange={(event) =>
+                        setScheduleForm((prev) => ({ ...prev, enabled: event.target.checked }))
+                      }
+                      className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                    />
+                    Activer les sauvegardes automatiques
+                  </label>
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Jours de sauvegarde
+                    </p>
+                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
+                      {WEEK_DAYS.map((day) => (
+                        <label
+                          key={day.value}
+                          className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-2 text-xs text-slate-200"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={scheduleForm.days.includes(day.value)}
+                            onChange={() => toggleDay(day.value)}
+                            disabled={!scheduleForm.enabled}
+                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                          />
+                          {day.label}
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-400" htmlFor="backup-time">
+                      Heure de sauvegarde
+                    </label>
+                    <input
+                      id="backup-time"
+                      type="time"
+                      value={scheduleForm.time}
+                      onChange={(event) => setScheduleForm((prev) => ({ ...prev, time: event.target.value }))}
+                      disabled={!scheduleForm.enabled}
+                      className="w-full max-w-xs rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <button
+                    type="submit"
+                    disabled={
+                      updateSchedule.isPending ||
+                      (scheduleForm.enabled && scheduleForm.days.length === 0)
+                    }
+                    className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {updateSchedule.isPending ? "Enregistrement..." : "Sauvegarder la planification"}
+                  </button>
+                </form>
+              )}
+              <div className="mt-4 space-y-1 text-xs text-slate-400">
+                <p>
+                  Prochaine sauvegarde :
+                  {nextRunLabel ? ` ${nextRunLabel}` : " aucune sauvegarde planifiée."}
+                </p>
+                <p>
+                  Dernière sauvegarde automatique :
+                  {lastRunLabel ? ` ${lastRunLabel}` : " jamais exécutée."}
+                </p>
+              </div>
+            </div>
           </div>
         </div>
       </div>
