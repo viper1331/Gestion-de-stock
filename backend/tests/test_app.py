@@ -1170,6 +1170,16 @@ def test_vehicle_inventory_crud_cycle() -> None:
     assert category_with_image["id"] == category_id
     assert category_with_image["image_url"].startswith("/media/")
 
+    categories_list_resp = client.get(
+        "/vehicle-inventory/categories/",
+        headers=admin_headers,
+    )
+    assert categories_list_resp.status_code == 200, categories_list_resp.text
+    categories_list = categories_list_resp.json()
+    listed_category = next((entry for entry in categories_list if entry["id"] == category_id), None)
+    assert listed_category is not None
+    assert listed_category["image_url"].startswith("/media/")
+
     remove_image_resp = client.delete(
         f"/vehicle-inventory/categories/{category_id}/image",
         headers=admin_headers,
@@ -1177,6 +1187,19 @@ def test_vehicle_inventory_crud_cycle() -> None:
     assert remove_image_resp.status_code == 200, remove_image_resp.text
     category_without_image = remove_image_resp.json()
     assert category_without_image["image_url"] is None
+
+    categories_without_image_resp = client.get(
+        "/vehicle-inventory/categories/",
+        headers=admin_headers,
+    )
+    assert categories_without_image_resp.status_code == 200, categories_without_image_resp.text
+    categories_without_image = categories_without_image_resp.json()
+    listed_without_image = next(
+        (entry for entry in categories_without_image if entry["id"] == category_id),
+        None,
+    )
+    assert listed_without_image is not None
+    assert listed_without_image["image_url"] is None
 
     sku = f"VEH-{uuid4().hex[:6]}"
     create_resp = client.post(

@@ -1242,12 +1242,16 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
                 category_view_configs = None
             else:
                 category_view_configs = view_configs_map.get(category_id, []) if view_configs_map else []
+            image_url = None
+            if module == "vehicle_inventory" and "image_path" in row.keys():
+                image_url = _build_media_url(row["image_path"])
             categories.append(
                 models.Category(
                     id=category_id,
                     name=row["name"],
                     sizes=sizes,
                     view_configs=category_view_configs,
+                    image_url=image_url,
                 )
             )
         return categories
