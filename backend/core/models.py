@@ -198,6 +198,8 @@ class ConfigEntry(BaseModel):
 class BackupSchedule(BaseModel):
     enabled: bool = False
     days: list[str] = Field(default_factory=list)
+
+
     time: str = "02:00"
 
     @field_validator("days", mode="before")
@@ -234,6 +236,30 @@ class BackupSchedule(BaseModel):
 class BackupScheduleStatus(BackupSchedule):
     next_run: datetime | None = None
     last_run: datetime | None = None
+
+
+class PullRequestInfo(BaseModel):
+    number: int
+    title: str
+    url: str
+    merged_at: datetime | None = None
+    head_sha: str
+
+
+class UpdateStatus(BaseModel):
+    repository: str
+    branch: str
+    current_commit: str | None = None
+    latest_pull_request: PullRequestInfo | None = None
+    last_deployed_pull: int | None = None
+    last_deployed_sha: str | None = None
+    last_deployed_at: datetime | None = None
+    pending_update: bool = False
+
+
+class UpdateApplyResponse(BaseModel):
+    updated: bool
+    status: UpdateStatus
 
 
 class SupplierBase(BaseModel):
