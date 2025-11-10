@@ -1,7 +1,5 @@
-import {
-  InventoryModuleDashboard,
-  type InventoryModuleConfig
-} from "./InventoryModuleDashboard";
+import { InventoryModuleDashboard } from "./InventoryModuleDashboard";
+import { type InventoryModuleConfig } from "./config";
 
 const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   title: "Inventaire remises",

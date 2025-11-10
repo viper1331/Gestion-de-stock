@@ -1,9 +1,10 @@
-import { InventoryModuleDashboard, DEFAULT_INVENTORY_CONFIG } from "./InventoryModuleDashboard";
+import { InventoryModuleDashboard } from "./InventoryModuleDashboard";
+import { DEFAULT_INVENTORY_CONFIG } from "./config";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 
 export { InventoryModuleDashboard } from "./InventoryModuleDashboard";
-export type { InventoryModuleConfig } from "./InventoryModuleDashboard";
+export type { InventoryModuleConfig } from "./config";
 
 export function Dashboard() {
   const { user } = useAuth();
