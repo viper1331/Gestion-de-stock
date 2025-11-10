@@ -186,13 +186,15 @@ export function SettingsPage() {
   };
 
   const groupedEntries = useMemo(() => {
-    return entries.reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
-      if (!acc[entry.section]) {
-        acc[entry.section] = [];
-      }
-      acc[entry.section].push(entry);
-      return acc;
-    }, {});
+    return entries
+      .filter((entry) => entry.section !== "homepage")
+      .reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
+        if (!acc[entry.section]) {
+          acc[entry.section] = [];
+        }
+        acc[entry.section].push(entry);
+        return acc;
+      }, {});
   }, [entries]);
 
   const personalHomepageMap = useMemo(() => {
