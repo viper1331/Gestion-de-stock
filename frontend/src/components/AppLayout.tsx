@@ -202,6 +202,12 @@ export function AppLayout() {
                   label: "Permissions",
                   tooltip: "Gérer les droits d'accès",
                   adminOnly: true
+                },
+                {
+                  to: "/updates",
+                  label: "Mises à jour",
+                  tooltip: "Gérer les mises à jour GitHub du serveur",
+                  adminOnly: true
                 }
               ]
             }
