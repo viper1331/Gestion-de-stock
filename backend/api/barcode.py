@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -58,3 +58,13 @@ async def get_barcode_asset(
     if not path:
         raise HTTPException(status_code=404, detail="Fichier de code-barres introuvable")
     return FileResponse(path, filename=path.name, media_type="image/png")
+
+
+@router.get("/export/pdf")
+async def export_barcode_pdf(user: models.User = Depends(get_current_user)) -> StreamingResponse:
+    _require_permission(user, action="view")
+    pdf_buffer = barcode_service.generate_barcode_pdf()
+    if not pdf_buffer:
+        raise HTTPException(status_code=404, detail="Aucun code-barres disponible pour l'export")
+    headers = {"Content-Disposition": "attachment; filename=barcodes.pdf"}
+    return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)

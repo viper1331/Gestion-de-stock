@@ -1,3 +1,4 @@
+import axios from "axios";
 import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../../lib/api";
@@ -14,6 +15,7 @@ export function BarcodePage() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [gallery, setGallery] = useState<BarcodeVisual[]>([]);
@@ -156,6 +158,37 @@ export function BarcodePage() {
     }
   };
 
+  const handleExportPdf = async () => {
+    if (!canView || isExportingPdf) {
+      return;
+    }
+    setIsExportingPdf(true);
+    setMessage(null);
+    setError(null);
+    try {
+      const response = await api.get(`/barcode/export/pdf`, { responseType: "blob" });
+      const blobUrl = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = blobUrl;
+      link.download = "codes-barres.pdf";
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      setMessage("Export PDF téléchargé.");
+      window.setTimeout(() => {
+        URL.revokeObjectURL(blobUrl);
+      }, 500);
+    } catch (err) {
+      if (axios.isAxiosError(err) && err.response?.status === 404) {
+        setError("Aucun code-barres disponible pour l'export.");
+      } else {
+        setError("Impossible de générer le PDF.");
+      }
+    } finally {
+      setIsExportingPdf(false);
+    }
+  };
+
   if (modulePermissions.isLoading && user?.role !== "admin") {
     return (
       <section className="space-y-4">
@@ -218,6 +251,17 @@ export function BarcodePage() {
       </form>
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      <div className="flex flex-wrap gap-3">
+        <button
+          type="button"
+          onClick={handleExportPdf}
+          disabled={isExportingPdf}
+          className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-700 disabled:cursor-not-allowed disabled:opacity-70"
+          title="Exporter les codes-barres au format PDF A4"
+        >
+          {isExportingPdf ? "Export en cours..." : "Exporter en PDF A4"}
+        </button>
+      </div>
       {imageUrl ? (
         <div className="rounded-lg border border-slate-800 bg-slate-900 p-6">
           <img src={imageUrl} alt={`Barcode ${sku}`} className="mx-auto" />
