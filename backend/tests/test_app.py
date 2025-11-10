@@ -7,6 +7,7 @@ import zipfile
 import io
 from shutil import copy2
 from tempfile import TemporaryDirectory
+from typing import Any
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
@@ -17,6 +18,7 @@ if str(ROOT) not in sys.path:
 
 from backend.app import app
 from backend.core import db, models, security, services
+from backend.services import update_service
 
 client = TestClient(app)
 
@@ -1887,3 +1889,70 @@ def test_backup_import_restores_user_database() -> None:
         conn.commit()
 
     assert restored is not None
+
+
+def test_updates_status_requires_admin() -> None:
+    username = f"user-{uuid4().hex[:6]}"
+    password = "secretpass"
+    _create_user(username, password, role="user")
+    headers = _login_headers(username, password)
+    response = client.get("/updates/status", headers=headers)
+    assert response.status_code == 403
+
+
+def test_updates_status_returns_payload(monkeypatch: Any) -> None:
+    async def fake_status() -> update_service.UpdateStatusData:
+        return update_service.UpdateStatusData(
+            repository="owner/repo",
+            branch="main",
+            current_commit="abc123",
+            latest_pull_request=update_service.PullRequestData(
+                number=7,
+                title="Correctif critique",
+                url="https://example.com/pr/7",
+                merged_at=None,
+                head_sha="deadbeef",
+            ),
+            last_deployed_pull=7,
+            last_deployed_sha="deadbeef",
+            last_deployed_at=None,
+            pending_update=False,
+        )
+
+    monkeypatch.setattr(update_service, "get_status", fake_status)
+    headers = _login_headers("admin", "admin123")
+    response = client.get("/updates/status", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["repository"] == "owner/repo"
+    assert payload["latest_pull_request"]["number"] == 7
+    assert payload["pending_update"] is False
+
+
+def test_apply_update_returns_result(monkeypatch: Any) -> None:
+    async def fake_apply() -> tuple[bool, update_service.UpdateStatusData]:
+        status = update_service.UpdateStatusData(
+            repository="owner/repo",
+            branch="main",
+            current_commit="cafebabe",
+            latest_pull_request=update_service.PullRequestData(
+                number=8,
+                title="Nouvelle fonctionnalité",
+                url="https://example.com/pr/8",
+                merged_at=None,
+                head_sha="abcdef01",
+            ),
+            last_deployed_pull=8,
+            last_deployed_sha="abcdef01",
+            last_deployed_at=None,
+            pending_update=False,
+        )
+        return True, status
+
+    monkeypatch.setattr(update_service, "apply_latest_update", fake_apply)
+    headers = _login_headers("admin", "admin123")
+    response = client.post("/updates/apply", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] is True
+    assert payload["status"]["branch"] == "main"

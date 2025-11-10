@@ -17,6 +17,7 @@ from backend.api import (
     pharmacy_orders,
     purchase_orders,
     permissions,
+    updates,
     users,
     vehicle_inventory,
     remise_inventory,
@@ -51,6 +52,7 @@ app.include_router(vehicle_inventory.router, prefix="/vehicle-inventory", tags=[
 app.include_router(remise_inventory.router, prefix="/remise-inventory", tags=["remise-inventory"])
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 app.include_router(users.router, prefix="/users", tags=["users"])
+app.include_router(updates.router, prefix="/updates", tags=["updates"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
