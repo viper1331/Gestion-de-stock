@@ -58,6 +58,14 @@ router.add_api_route(
 )
 
 
+@router.get("/existing", response_model=list[models.BarcodeValue])
+async def list_existing_barcode_values(
+    user: models.User = Depends(get_current_user),
+) -> list[models.BarcodeValue]:
+    _require_permission(user, action="view")
+    return services.list_existing_barcodes()
+
+
 @router.get("/assets/{filename}")
 async def get_barcode_asset(
     filename: str, user: models.User = Depends(get_current_user)

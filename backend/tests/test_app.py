@@ -1044,6 +1044,40 @@ def test_barcode_listing_requires_permission() -> None:
     assert response.status_code == 403
 
 
+def test_existing_barcodes_listing() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM pharmacy_items")
+        conn.commit()
+
+    services.create_pharmacy_item(
+        models.PharmacyItemCreate(name="Doliprane", barcode="3400934058479", quantity=10)
+    )
+    services.create_pharmacy_item(
+        models.PharmacyItemCreate(name="Paracetamol", barcode="3400934058486", quantity=5)
+    )
+
+    response = client.get("/barcode/existing", headers=admin_headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload == [
+        {"sku": "3400934058479"},
+        {"sku": "3400934058486"},
+    ]
+
+
+def test_existing_barcodes_listing_requires_permission() -> None:
+    services.ensure_database_ready()
+    user_id = _create_user("noviewexisting", "noview123", role="user")
+    assert user_id > 0
+
+    headers = _login_headers("noviewexisting", "noview123")
+    response = client.get("/barcode/existing", headers=headers)
+    assert response.status_code == 403
+
+
 def test_barcode_pdf_export(monkeypatch: Any, tmp_path: Path) -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

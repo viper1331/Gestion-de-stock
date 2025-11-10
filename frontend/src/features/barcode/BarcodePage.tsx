@@ -5,6 +5,8 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 
+const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
+
 export function BarcodePage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
@@ -12,7 +14,7 @@ export function BarcodePage() {
   const canEdit =
     user?.role === "admin" || modulePermissions.canAccess("barcode", "edit");
 
-  const [sku, setSku] = useState("SKU-001");
+  const [sku, setSku] = useState(DEFAULT_SKU_PLACEHOLDER);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -22,6 +24,9 @@ export function BarcodePage() {
   const [gallery, setGallery] = useState<BarcodeVisual[]>([]);
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
   const [galleryError, setGalleryError] = useState<string | null>(null);
+  const [knownBarcodes, setKnownBarcodes] = useState<ExistingBarcodeValue[]>([]);
+  const [isKnownBarcodesLoading, setIsKnownBarcodesLoading] = useState(false);
+  const [knownBarcodesError, setKnownBarcodesError] = useState<string | null>(null);
   const isMountedRef = useRef(true);
 
   useEffect(() => {
@@ -45,6 +50,46 @@ export function BarcodePage() {
       }
     };
   }, [imageUrl]);
+
+  const refreshKnownBarcodes = useCallback(async () => {
+    if (!canView || !isMountedRef.current) {
+      return;
+    }
+
+    setIsKnownBarcodesLoading(true);
+    setKnownBarcodesError(null);
+
+    try {
+      const response = await api.get<ExistingBarcodeValue[]>("/barcode/existing");
+      if (!isMountedRef.current) {
+        return;
+      }
+      const entries = response.data;
+      setKnownBarcodes(entries);
+      if (entries.length > 0) {
+        setSku((previous) => {
+          if (
+            previous &&
+            previous.trim().length > 0 &&
+            previous !== DEFAULT_SKU_PLACEHOLDER
+          ) {
+            return previous;
+          }
+          return entries[0].sku;
+        });
+      }
+    } catch (err) {
+      if (!isMountedRef.current) {
+        return;
+      }
+      setKnownBarcodes([]);
+      setKnownBarcodesError("Impossible de charger les codes-barres existants.");
+    } finally {
+      if (isMountedRef.current) {
+        setIsKnownBarcodesLoading(false);
+      }
+    }
+  }, [canView]);
 
   const refreshGallery = useCallback(async () => {
     if (!canView || !isMountedRef.current) {
@@ -109,9 +154,10 @@ export function BarcodePage() {
 
   useEffect(() => {
     if (canView) {
+      void refreshKnownBarcodes();
       void refreshGallery();
     }
-  }, [canView, refreshGallery]);
+  }, [canView, refreshGallery, refreshKnownBarcodes]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -130,6 +176,7 @@ export function BarcodePage() {
       setImageUrl(url);
       setMessage("Code-barres généré.");
       void refreshGallery();
+      void refreshKnownBarcodes();
     } catch (err) {
       setError("Impossible de générer le code-barres.");
     } finally {
@@ -152,6 +199,7 @@ export function BarcodePage() {
       setImageUrl(null);
       setMessage("Code-barres supprimé.");
       void refreshGallery();
+      void refreshKnownBarcodes();
     } catch (err) {
       setError("Impossible de supprimer le fichier généré.");
     } finally {
@@ -226,6 +274,7 @@ export function BarcodePage() {
           <input
             value={sku}
             onChange={(event) => setSku(event.target.value)}
+            list="known-barcode-options"
             className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
             title="Identifiant de l'article pour générer le code-barres"
           />
@@ -252,6 +301,22 @@ export function BarcodePage() {
       </form>
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {isKnownBarcodesLoading ? (
+        <p className="text-sm text-slate-400">Chargement des codes-barres existants...</p>
+      ) : null}
+      {knownBarcodesError ? (
+        <p className="text-sm text-yellow-300">{knownBarcodesError}</p>
+      ) : null}
+      {knownBarcodes.length ? (
+        <p className="text-xs text-slate-400">
+          Sélectionnez un code-barres existant dans la liste ou saisissez-en un nouveau.
+        </p>
+      ) : null}
+      <datalist id="known-barcode-options">
+        {knownBarcodes.map((entry) => (
+          <option key={entry.sku} value={entry.sku} />
+        ))}
+      </datalist>
       <div className="flex flex-wrap gap-3">
         <button
           type="button"
@@ -334,6 +399,10 @@ export function BarcodePage() {
     </section>
   );
 }
+
+type ExistingBarcodeValue = {
+  sku: string;
+};
 
 type BarcodeSummary = {
   sku: string;
