@@ -1045,6 +1045,54 @@ def test_barcode_listing_requires_permission() -> None:
     assert response.status_code == 403
 
 
+def test_barcode_listing_respects_module_permissions(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    services.ensure_database_ready()
+    user_id = _create_user("limited-visual", "limited123", role="user")
+
+    assets_dir = tmp_path / "barcodes"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM remise_items")
+        conn.commit()
+
+    services.create_item(models.ItemCreate(name="Veste", sku="HAB-010"))
+    services.create_remise_item(models.ItemCreate(name="Caisse", sku="REM-200"))
+
+    assert barcode_service.generate_barcode_png("HAB-010") is not None
+    assert barcode_service.generate_barcode_png("REM-200") is not None
+    assert barcode_service.generate_barcode_png("OTHER-999") is not None
+
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="barcode",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="inventory_remise",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+
+    user_headers = _login_headers("limited-visual", "limited123")
+
+    listing = client.get("/barcode", headers=user_headers)
+    assert listing.status_code == 200, listing.text
+    payload = listing.json()
+
+    assert [entry["sku"] for entry in payload] == ["REM-200"]
+
+
 def test_existing_barcodes_listing(monkeypatch: Any, tmp_path: Path) -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

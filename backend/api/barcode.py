@@ -38,7 +38,7 @@ async def delete_barcode(sku: str, user: models.User = Depends(get_current_user)
 @router.get("")
 async def list_barcodes(user: models.User = Depends(get_current_user)) -> list[dict[str, str]]:
     _require_permission(user, action="view")
-    assets = barcode_service.list_barcode_assets()
+    assets = services.list_accessible_barcode_assets(user)
     return [
         {
             "sku": asset.sku,
