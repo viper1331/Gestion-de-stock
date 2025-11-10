@@ -3438,6 +3438,59 @@ def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
     ]
 
 
+def list_accessible_barcode_assets(user: models.User) -> list[barcode_service.BarcodeAsset]:
+    """Retourne les fichiers de codes-barres consultables par l'utilisateur."""
+
+    assets = barcode_service.list_barcode_assets()
+    if not assets:
+        return []
+
+    if user.role == "admin":
+        return assets
+
+    ensure_database_ready()
+
+    accessible_sources = [
+        (table, column)
+        for module, table, column in _BARCODE_MODULE_SOURCES
+        if has_module_access(user, module, action="view")
+    ]
+    if not accessible_sources:
+        return []
+
+    allowed_values: set[str] = set()
+    with db.get_stock_connection() as conn:
+        for table, column in accessible_sources:
+            cur = conn.execute(
+                f"""
+                SELECT DISTINCT {column} AS value
+                FROM {table}
+                WHERE {column} IS NOT NULL AND TRIM({column}) <> ""
+                """
+            )
+            for row in cur.fetchall():
+                raw_value = row["value"]
+                if not raw_value:
+                    continue
+                normalized = raw_value.strip()
+                if not normalized:
+                    continue
+                allowed_values.add(normalized.casefold())
+
+    if not allowed_values:
+        return []
+
+    filtered_assets: list[barcode_service.BarcodeAsset] = []
+    for asset in assets:
+        normalized_sku = asset.sku.strip()
+        if not normalized_sku:
+            continue
+        if normalized_sku.casefold() in allowed_values:
+            filtered_assets.append(asset)
+
+    return filtered_assets
+
+
 def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
