@@ -18,6 +18,7 @@ export function BarcodePage() {
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
+  const [deletingSku, setDeletingSku] = useState<string | null>(null);
   const [isExportingPdf, setIsExportingPdf] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -208,6 +209,36 @@ export function BarcodePage() {
     }
   };
 
+  const handleDeleteVisual = useCallback(
+    async (targetSku: string) => {
+      if (!canEdit) {
+        return;
+      }
+
+      setDeletingSku(targetSku);
+      setMessage(null);
+      setError(null);
+
+      try {
+        await api.delete(`/barcode/generate/${targetSku}`);
+
+        if (sku === targetSku && imageUrl) {
+          URL.revokeObjectURL(imageUrl);
+          setImageUrl(null);
+        }
+
+        setMessage("Code-barres supprimé.");
+        void refreshGallery();
+        void refreshKnownBarcodes();
+      } catch (err) {
+        setError("Impossible de supprimer le fichier généré.");
+      } finally {
+        setDeletingSku(null);
+      }
+    },
+    [canEdit, imageUrl, refreshGallery, refreshKnownBarcodes, sku]
+  );
+
   const handleExportPdf = async () => {
     if (!canView || isExportingPdf) {
       return;
@@ -390,6 +421,16 @@ export function BarcodePage() {
                     >
                       Copier le SKU
                     </button>
+                    {canEdit ? (
+                      <button
+                        type="button"
+                        onClick={() => void handleDeleteVisual(entry.sku)}
+                        disabled={deletingSku === entry.sku}
+                        className="rounded-md bg-red-500 px-3 py-1 text-slate-100 shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {deletingSku === entry.sku ? "Suppression..." : "Supprimer"}
+                      </button>
+                    ) : null}
                   </div>
                 </figcaption>
               </figure>
