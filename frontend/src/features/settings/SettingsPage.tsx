@@ -16,6 +16,8 @@ import {
   isHomePageConfigKey
 } from "../home/homepageConfig";
 
+const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
+
 interface BackupScheduleStatus {
   enabled: boolean;
   days: string[];
@@ -164,7 +166,31 @@ export function SettingsPage() {
     time: "02:00"
   });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
-  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>({});
+  const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
+    if (typeof window === "undefined") {
+      return {};
+    }
+    try {
+      const storedValue = window.localStorage.getItem(COLLAPSED_STORAGE_KEY);
+      if (!storedValue) {
+        return {};
+      }
+      const parsed = JSON.parse(storedValue);
+      if (typeof parsed !== "object" || parsed === null) {
+        return {};
+      }
+      return Object.entries(parsed as Record<string, unknown>).reduce(
+        (acc, [key, value]) => {
+          acc[key] = Boolean(value);
+          return acc;
+        },
+        {} as Record<string, boolean>
+      );
+    } catch (err) {
+      console.warn("Impossible de lire l'état des sections masquées", err);
+      return {};
+    }
+  });
 
   useEffect(() => {
     if (scheduleStatus) {
@@ -386,6 +412,17 @@ export function SettingsPage() {
       [id]: !prev[id]
     }));
   };
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(COLLAPSED_STORAGE_KEY, JSON.stringify(collapsedSections));
+    } catch (err) {
+      console.warn("Impossible d'enregistrer l'état des sections masquées", err);
+    }
+  }, [collapsedSections]);
 
   const getSectionContentId = (id: string) =>
     `settings-section-${id.replace(/[^a-zA-Z0-9]+/g, "-").toLowerCase()}`;
