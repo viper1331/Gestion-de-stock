@@ -19,7 +19,7 @@ if str(ROOT) not in sys.path:
 
 from backend.app import app
 from backend.core import db, models, security, services
-from backend.services import update_service
+from backend.services import barcode as barcode_service, update_service
 
 client = TestClient(app)
 
@@ -1001,6 +1001,44 @@ def test_pharmacy_barcode_uniqueness_validation() -> None:
     )
     assert conflict.status_code == 400, conflict.text
 
+
+def test_barcode_listing_and_assets(monkeypatch: Any, tmp_path: Path) -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    assets_dir = tmp_path / "barcodes"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+
+    generated = barcode_service.generate_barcode_png("SKU-ALPHA")
+    assert generated is not None and generated.exists()
+    generated_two = barcode_service.generate_barcode_png("SKU-BETA")
+    assert generated_two is not None and generated_two.exists()
+
+    listing = client.get("/barcode", headers=admin_headers)
+    assert listing.status_code == 200, listing.text
+    data = listing.json()
+    assert {entry["sku"] for entry in data} == {"SKU-ALPHA", "SKU-BETA"}
+    assert all(entry["filename"].endswith(".png") for entry in data)
+    assert all("modified_at" in entry for entry in data)
+
+    first_filename = data[0]["filename"]
+    asset = client.get(f"/barcode/assets/{first_filename}", headers=admin_headers)
+    assert asset.status_code == 200, asset.text
+    assert asset.headers["content-type"] == "image/png"
+
+    missing = client.get("/barcode/assets/inconnu.png", headers=admin_headers)
+    assert missing.status_code == 404
+
+
+def test_barcode_listing_requires_permission() -> None:
+    services.ensure_database_ready()
+    user_id = _create_user("noview", "noview123", role="user")
+    assert user_id > 0
+
+    headers = _login_headers("noview", "noview123")
+    response = client.get("/barcode", headers=headers)
+    assert response.status_code == 403
 
 def test_pharmacy_movement_management() -> None:
     services.ensure_database_ready()

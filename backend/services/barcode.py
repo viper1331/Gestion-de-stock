@@ -1,8 +1,10 @@
 """Service pour la génération des codes-barres."""
 from __future__ import annotations
 
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Optional
+from typing import List, Optional
 
 from PIL import Image, ImageDraw, ImageFont
 
@@ -23,6 +25,16 @@ WRITER_OPTIONS = {
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "barcodes"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+
+
+@dataclass(frozen=True)
+class BarcodeAsset:
+    """Représentation d'un fichier de code-barres généré."""
+
+    sku: str
+    filename: str
+    path: Path
+    modified_at: datetime
 
 
 def _barcode_path(sku: str) -> Path:
@@ -91,3 +103,57 @@ def delete_barcode_png(sku: str) -> None:
     path = _barcode_path(sku)
     if path.exists():
         path.unlink()
+
+
+def list_barcode_assets() -> List[BarcodeAsset]:
+    """Retourne la liste des fichiers de codes-barres disponibles."""
+
+    assets: List[BarcodeAsset] = []
+    base_dir = ASSETS_DIR.resolve()
+
+    candidates = sorted(
+        (path for path in base_dir.glob("*.png") if path.is_file()),
+        key=lambda path: path.stat().st_mtime,
+        reverse=True,
+    )
+
+    for file_path in candidates:
+        try:
+            stat = file_path.stat()
+        except FileNotFoundError:
+            continue
+        assets.append(
+            BarcodeAsset(
+                sku=file_path.stem,
+                filename=file_path.name,
+                path=file_path,
+                modified_at=datetime.fromtimestamp(stat.st_mtime, tz=timezone.utc),
+            )
+        )
+
+    return assets
+
+
+def get_barcode_asset(filename: str) -> Optional[Path]:
+    """Récupère le chemin d'un fichier de code-barres en s'assurant qu'il est sûr."""
+
+    if not filename.lower().endswith(".png"):
+        return None
+
+    candidate = Path(filename)
+    if candidate.name != filename:
+        return None
+
+    try:
+        resolved = (ASSETS_DIR / candidate.name).resolve(strict=False)
+    except FileNotFoundError:
+        return None
+
+    base_dir = ASSETS_DIR.resolve()
+    if resolved.parent != base_dir:
+        return None
+
+    if not resolved.exists() or not resolved.is_file():
+        return None
+
+    return resolved

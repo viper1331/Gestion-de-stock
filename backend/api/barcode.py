@@ -33,3 +33,28 @@ async def generate_barcode(
 async def delete_barcode(sku: str, user: models.User = Depends(get_current_user)) -> None:
     _require_permission(user, action="edit")
     barcode_service.delete_barcode_png(sku)
+
+
+@router.get("/")
+async def list_barcodes(user: models.User = Depends(get_current_user)) -> list[dict[str, str]]:
+    _require_permission(user, action="view")
+    assets = barcode_service.list_barcode_assets()
+    return [
+        {
+            "sku": asset.sku,
+            "filename": asset.filename,
+            "modified_at": asset.modified_at.isoformat(),
+        }
+        for asset in assets
+    ]
+
+
+@router.get("/assets/{filename}")
+async def get_barcode_asset(
+    filename: str, user: models.User = Depends(get_current_user)
+) -> FileResponse:
+    _require_permission(user, action="view")
+    path = barcode_service.get_barcode_asset(filename)
+    if not path:
+        raise HTTPException(status_code=404, detail="Fichier de code-barres introuvable")
+    return FileResponse(path, filename=path.name, media_type="image/png")

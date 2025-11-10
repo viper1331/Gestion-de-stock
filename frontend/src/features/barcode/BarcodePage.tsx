@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -16,6 +16,24 @@ export function BarcodePage() {
   const [isDeleting, setIsDeleting] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [gallery, setGallery] = useState<BarcodeVisual[]>([]);
+  const [isGalleryLoading, setIsGalleryLoading] = useState(false);
+  const [galleryError, setGalleryError] = useState<string | null>(null);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      gallery.forEach((entry) => {
+        URL.revokeObjectURL(entry.imageUrl);
+      });
+    };
+  }, [gallery]);
 
   useEffect(() => {
     return () => {
@@ -24,6 +42,73 @@ export function BarcodePage() {
       }
     };
   }, [imageUrl]);
+
+  const refreshGallery = useCallback(async () => {
+    if (!canView || !isMountedRef.current) {
+      return;
+    }
+
+    setIsGalleryLoading(true);
+    setGalleryError(null);
+
+    try {
+      const response = await api.get<BarcodeSummary[]>("/barcode");
+      const entries = response.data;
+      const visuals = await Promise.all(
+        entries.map(async (entry) => {
+          try {
+            const assetResponse = await api.get(`/barcode/assets/${encodeURIComponent(entry.filename)}`, {
+              responseType: "blob"
+            });
+            if (!isMountedRef.current) {
+              return null;
+            }
+            const objectUrl = URL.createObjectURL(assetResponse.data);
+            return {
+              sku: entry.sku,
+              filename: entry.filename,
+              modifiedAt: entry.modified_at,
+              imageUrl: objectUrl
+            } as BarcodeVisual;
+          } catch (assetError) {
+            console.error("Impossible de charger le fichier de code-barres", assetError);
+            return null;
+          }
+        })
+      );
+
+      if (!isMountedRef.current) {
+        visuals.forEach((entry) => {
+          if (entry) {
+            URL.revokeObjectURL(entry.imageUrl);
+          }
+        });
+        return;
+      }
+
+      const successful = visuals.filter((entry): entry is BarcodeVisual => entry !== null);
+      setGallery(successful);
+      if (successful.length !== entries.length) {
+        setGalleryError("Certains fichiers de code-barres n'ont pas pu être chargés.");
+      }
+    } catch (err) {
+      if (!isMountedRef.current) {
+        return;
+      }
+      setGallery([]);
+      setGalleryError("Impossible de récupérer la liste des codes-barres.");
+    } finally {
+      if (isMountedRef.current) {
+        setIsGalleryLoading(false);
+      }
+    }
+  }, [canView]);
+
+  useEffect(() => {
+    if (canView) {
+      void refreshGallery();
+    }
+  }, [canView, refreshGallery]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -41,6 +126,7 @@ export function BarcodePage() {
       }
       setImageUrl(url);
       setMessage("Code-barres généré.");
+      void refreshGallery();
     } catch (err) {
       setError("Impossible de générer le code-barres.");
     } finally {
@@ -62,6 +148,7 @@ export function BarcodePage() {
       }
       setImageUrl(null);
       setMessage("Code-barres supprimé.");
+      void refreshGallery();
     } catch (err) {
       setError("Impossible de supprimer le fichier généré.");
     } finally {
@@ -154,6 +241,72 @@ export function BarcodePage() {
           </div>
         </div>
       ) : null}
+      <section className="space-y-3">
+        <header className="space-y-1">
+          <h3 className="text-xl font-semibold text-white">Codes-barres générés</h3>
+          <p className="text-sm text-slate-400">
+            Accédez rapidement aux visuels déjà créés pour vos articles.
+          </p>
+        </header>
+        {isGalleryLoading ? <p className="text-sm text-slate-400">Chargement des visuels...</p> : null}
+        {galleryError ? <p className="text-sm text-yellow-300">{galleryError}</p> : null}
+        {!isGalleryLoading && !gallery.length ? (
+          <p className="text-sm text-slate-400">Aucun code-barres généré pour le moment.</p>
+        ) : null}
+        {gallery.length ? (
+          <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+            {gallery.map((entry) => (
+              <figure
+                key={entry.filename}
+                className="space-y-3 rounded-lg border border-slate-800 bg-slate-900 p-4 shadow"
+              >
+                <img src={entry.imageUrl} alt={`Code-barres ${entry.sku}`} className="mx-auto max-h-48 object-contain" />
+                <figcaption className="space-y-1 text-center text-sm text-slate-300">
+                  <div className="font-semibold text-white">{entry.sku}</div>
+                  <div className="text-xs text-slate-400">{formatTimestamp(entry.modifiedAt)}</div>
+                  <div className="flex justify-center gap-2 text-xs">
+                    <a
+                      href={entry.imageUrl}
+                      download={entry.filename}
+                      className="rounded-md bg-slate-800 px-3 py-1 text-slate-200 hover:bg-slate-700"
+                    >
+                      Télécharger
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => navigator.clipboard.writeText(entry.sku)}
+                      className="rounded-md bg-slate-800 px-3 py-1 text-slate-200 hover:bg-slate-700"
+                    >
+                      Copier le SKU
+                    </button>
+                  </div>
+                </figcaption>
+              </figure>
+            ))}
+          </div>
+        ) : null}
+      </section>
     </section>
   );
+}
+
+type BarcodeSummary = {
+  sku: string;
+  filename: string;
+  modified_at: string;
+};
+
+type BarcodeVisual = {
+  sku: string;
+  filename: string;
+  modifiedAt: string;
+  imageUrl: string;
+};
+
+function formatTimestamp(isoString: string): string {
+  const date = new Date(isoString);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+  return date.toLocaleString();
 }
