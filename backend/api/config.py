@@ -7,11 +7,28 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import get_current_user
-from backend.core import models
+from backend.core import db, models
 from backend.services.backup_scheduler import backup_scheduler
 
 router = APIRouter()
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
+
+_HOMEPAGE_ALLOWED_KEYS: tuple[str, ...] = (
+    "title",
+    "subtitle",
+    "welcome_message",
+    "primary_link_label",
+    "primary_link_path",
+    "secondary_link_label",
+    "secondary_link_path",
+    "announcement",
+    "focus_1_label",
+    "focus_1_description",
+    "focus_2_label",
+    "focus_2_description",
+    "focus_3_label",
+    "focus_3_description",
+)
 
 
 @router.get("/", response_model=list[models.ConfigEntry])
@@ -38,3 +55,46 @@ async def write_config(entry: models.ConfigEntry, user: models.User = Depends(ge
         parser.write(configfile)
     if entry.section == "backup":
         await backup_scheduler.reload_from_config()
+
+
+def _validate_homepage_entry(entry: models.ConfigEntry) -> None:
+    if entry.section != "homepage":
+        raise HTTPException(status_code=400, detail="Section de configuration invalide")
+    if entry.key not in _HOMEPAGE_ALLOWED_KEYS:
+        raise HTTPException(status_code=400, detail="Clé de configuration inconnue")
+
+
+@router.get("/homepage/personal", response_model=list[models.ConfigEntry])
+async def read_personal_homepage_config(
+    user: models.User = Depends(get_current_user),
+) -> list[models.ConfigEntry]:
+    with db.get_users_connection() as conn:
+        rows = conn.execute(
+            "SELECT key, value FROM user_homepage_config WHERE user_id = ? ORDER BY key",
+            (user.id,),
+        ).fetchall()
+    return [models.ConfigEntry(section="homepage", key=row["key"], value=row["value"]) for row in rows]
+
+
+@router.post("/homepage/personal", status_code=204)
+async def write_personal_homepage_config(
+    entry: models.ConfigEntry,
+    user: models.User = Depends(get_current_user),
+) -> None:
+    _validate_homepage_entry(entry)
+    value = entry.value.strip()
+    with db.get_users_connection() as conn:
+        if value:
+            conn.execute(
+                """
+                INSERT INTO user_homepage_config (user_id, key, value)
+                VALUES (?, ?, ?)
+                ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value
+                """,
+                (user.id, entry.key, value),
+            )
+        else:
+            conn.execute(
+                "DELETE FROM user_homepage_config WHERE user_id = ? AND key = ?",
+                (user.id, entry.key),
+            )

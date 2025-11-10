@@ -2,8 +2,19 @@ import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
-import { fetchConfigEntries } from "../../lib/config";
+import {
+  fetchConfigEntries,
+  fetchUserHomepageConfig,
+  updateUserHomepageConfig
+} from "../../lib/config";
 import type { ConfigEntry } from "../../lib/config";
+import { useAuth } from "../auth/useAuth";
+import {
+  buildHomeConfig,
+  DEFAULT_HOME_CONFIG,
+  HomePageConfigKey,
+  isHomePageConfigKey
+} from "../home/homepageConfig";
 
 interface BackupScheduleStatus {
   enabled: boolean;
@@ -31,10 +42,100 @@ const WEEK_DAYS = [
 
 const WEEK_DAY_ORDER = WEEK_DAYS.map((day) => day.value);
 
+type HomepageFieldType = "text" | "textarea" | "url";
+
+const HOMEPAGE_FIELDS: Array<{
+  key: HomePageConfigKey;
+  label: string;
+  description: string;
+  type?: HomepageFieldType;
+}> = [
+  {
+    key: "title",
+    label: "Titre principal",
+    description: "Titre affiché en haut de la page d'accueil."
+  },
+  {
+    key: "subtitle",
+    label: "Sous-titre",
+    description: "Texte introductif sous le titre principal.",
+    type: "textarea"
+  },
+  {
+    key: "welcome_message",
+    label: "Message de bienvenue",
+    description: "Paragraphe d'accueil présenté à l'utilisateur connecté.",
+    type: "textarea"
+  },
+  {
+    key: "announcement",
+    label: "Annonce",
+    description: "Encadré d'information mis en avant sur la page.",
+    type: "textarea"
+  },
+  {
+    key: "primary_link_label",
+    label: "Libellé du lien principal",
+    description: "Texte du bouton d'action principal."
+  },
+  {
+    key: "primary_link_path",
+    label: "Lien principal",
+    description: "Chemin interne ouvert par le bouton principal (ex: /inventory).",
+    type: "url"
+  },
+  {
+    key: "secondary_link_label",
+    label: "Libellé du lien secondaire",
+    description: "Texte du second bouton d'action."
+  },
+  {
+    key: "secondary_link_path",
+    label: "Lien secondaire",
+    description: "Chemin interne ouvert par le second bouton (ex: /reports).",
+    type: "url"
+  },
+  {
+    key: "focus_1_label",
+    label: "Priorité 1 - titre",
+    description: "Titre du premier encadré de priorité."
+  },
+  {
+    key: "focus_1_description",
+    label: "Priorité 1 - description",
+    description: "Description du premier encadré.",
+    type: "textarea"
+  },
+  {
+    key: "focus_2_label",
+    label: "Priorité 2 - titre",
+    description: "Titre du second encadré de priorité."
+  },
+  {
+    key: "focus_2_description",
+    label: "Priorité 2 - description",
+    description: "Description du second encadré.",
+    type: "textarea"
+  },
+  {
+    key: "focus_3_label",
+    label: "Priorité 3 - titre",
+    description: "Titre du troisième encadré de priorité."
+  },
+  {
+    key: "focus_3_description",
+    label: "Priorité 3 - description",
+    description: "Description du troisième encadré.",
+    type: "textarea"
+  }
+];
+
 export function SettingsPage() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
   const { data: entries = [], isFetching } = useQuery({
-    queryKey: ["config"],
+    queryKey: ["config", "global"],
     queryFn: fetchConfigEntries
   });
   const { data: scheduleStatus, isFetching: isScheduleFetching } = useQuery({
@@ -42,10 +143,16 @@ export function SettingsPage() {
     queryFn: async () => {
       const response = await api.get<BackupScheduleStatus>("/backup/schedule");
       return response.data;
-    }
+    },
+    enabled: isAdmin
+  });
+  const { data: personalEntries = [], isFetching: isFetchingPersonal } = useQuery({
+    queryKey: ["config", "homepage", "personal"],
+    queryFn: fetchUserHomepageConfig
   });
 
   const [changes, setChanges] = useState<Record<string, string>>({});
+  const [homepageChanges, setHomepageChanges] = useState<Partial<Record<HomePageConfigKey, string>>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isBackingUp, setIsBackingUp] = useState(false);
@@ -88,6 +195,20 @@ export function SettingsPage() {
     }, {});
   }, [entries]);
 
+  const personalHomepageMap = useMemo(() => {
+    return personalEntries.reduce<Partial<Record<HomePageConfigKey, string>>>((acc, entry) => {
+      if (entry.section === "homepage" && isHomePageConfigKey(entry.key)) {
+        acc[entry.key] = entry.value;
+      }
+      return acc;
+    }, {});
+  }, [personalEntries]);
+
+  const effectiveHomepageConfig = useMemo(
+    () => buildHomeConfig([...entries, ...personalEntries]),
+    [entries, personalEntries]
+  );
+
   const updateConfig = useMutation({
     mutationFn: async (entry: ConfigEntry) => {
       await api.post("/config/", entry);
@@ -97,6 +218,16 @@ export function SettingsPage() {
       await queryClient.invalidateQueries({ queryKey: ["config"] });
     },
     onError: () => setError("Impossible d'enregistrer le paramètre."),
+    onSettled: () => setTimeout(() => setMessage(null), 4000)
+  });
+
+  const updateHomepagePreference = useMutation({
+    mutationFn: updateUserHomepageConfig,
+    onSuccess: async () => {
+      setMessage("Préférence enregistrée.");
+      await queryClient.invalidateQueries({ queryKey: ["config", "homepage", "personal"] });
+    },
+    onError: () => setError("Impossible d'enregistrer la personnalisation."),
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
@@ -124,6 +255,49 @@ export function SettingsPage() {
       delete next[key];
       return next;
     });
+  };
+
+  const handleHomepageSubmit = async (
+    event: FormEvent<HTMLFormElement>,
+    key: HomePageConfigKey
+  ) => {
+    event.preventDefault();
+    const pendingValue = homepageChanges[key] ?? personalHomepageMap[key] ?? "";
+    setMessage(null);
+    setError(null);
+    try {
+      await updateHomepagePreference.mutateAsync({
+        section: "homepage",
+        key,
+        value: pendingValue
+      });
+      setHomepageChanges((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      // handled in onError
+    }
+  };
+
+  const handleHomepageReset = async (key: HomePageConfigKey) => {
+    setMessage(null);
+    setError(null);
+    try {
+      await updateHomepagePreference.mutateAsync({
+        section: "homepage",
+        key,
+        value: ""
+      });
+      setHomepageChanges((prev) => {
+        const next = { ...prev };
+        delete next[key];
+        return next;
+      });
+    } catch (err) {
+      // handled in onError
+    }
   };
 
   const handleBackup = async () => {
@@ -207,56 +381,137 @@ export function SettingsPage() {
         <h2 className="text-2xl font-semibold text-white">Paramètres</h2>
         <p className="text-sm text-slate-400">Synchronisez vos préférences avec le backend.</p>
       </header>
-      {isFetching ? <p className="text-sm text-slate-400">Chargement des paramètres...</p> : null}
+      {isFetching || isFetchingPersonal ? (
+        <p className="text-sm text-slate-400">Chargement des paramètres...</p>
+      ) : null}
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
-      <div className="rounded-lg border border-slate-800 bg-slate-900">
-        <div className="divide-y divide-slate-900">
-          {Object.entries(groupedEntries).map(([section, sectionEntries]) => (
-            <div key={section} className="p-4">
-              <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">{section}</h3>
-              <div className="mt-3 space-y-3">
-                {sectionEntries.map((entry) => {
-                  const key = `${entry.section}.${entry.key}`;
-                  const pendingValue = changes[key] ?? entry.value;
-                  return (
-                    <form
-                      key={key}
-                      className="flex flex-wrap items-center gap-3 rounded-md border border-slate-800 bg-slate-950 p-3"
-                      onSubmit={(event) => handleSubmit(event, entry)}
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+        <div className="space-y-4">
+          <header className="space-y-1">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+              Personnalisation de l'accueil
+            </h3>
+            <p className="text-xs text-slate-400">
+              Modifiez vos textes sans impacter les autres utilisateurs. Laisser un champ vide
+              rétablit la valeur organisationnelle.
+            </p>
+          </header>
+          <div className="space-y-4">
+            {HOMEPAGE_FIELDS.map((field) => {
+              const pendingValue = homepageChanges[field.key] ?? personalHomepageMap[field.key] ?? "";
+              const effectiveValue = effectiveHomepageConfig[field.key];
+              const isDirty = homepageChanges[field.key] !== undefined;
+              const isMultiline = field.type === "textarea";
+              return (
+                <form
+                  key={field.key}
+                  onSubmit={(event) => handleHomepageSubmit(event, field.key)}
+                  className="space-y-2 rounded-md border border-slate-800 bg-slate-950 p-3"
+                >
+                  <div className="flex flex-col gap-1">
+                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                      {field.label}
+                    </label>
+                    <p className="text-[11px] text-slate-500">{field.description}</p>
+                    <p className="text-[11px] text-slate-500">
+                      Valeur appliquée : <span className="text-slate-300">{effectiveValue}</span>
+                    </p>
+                  </div>
+                  {isMultiline ? (
+                    <textarea
+                      value={pendingValue}
+                      onChange={(event) =>
+                        setHomepageChanges((prev) => ({ ...prev, [field.key]: event.target.value }))
+                      }
+                      placeholder={DEFAULT_HOME_CONFIG[field.key]}
+                      className="h-28 w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                  ) : (
+                    <input
+                      type={field.type === "url" ? "text" : "text"}
+                      value={pendingValue}
+                      onChange={(event) =>
+                        setHomepageChanges((prev) => ({ ...prev, [field.key]: event.target.value }))
+                      }
+                      placeholder={DEFAULT_HOME_CONFIG[field.key]}
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                  )}
+                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+                    <button
+                      type="button"
+                      onClick={() => handleHomepageReset(field.key)}
+                      className="inline-flex items-center justify-center rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-800"
                     >
-                      <div className="w-full sm:w-48">
-                        <p className="text-xs font-semibold text-slate-400">{entry.key}</p>
-                        <p className="text-[11px] text-slate-500">Valeur actuelle : {entry.value}</p>
-                      </div>
-                      <input
-                        value={pendingValue}
-                        onChange={(event) => setChanges((prev) => ({ ...prev, [key]: event.target.value }))}
-                        className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                        title="Modifier la valeur qui sera synchronisée avec le serveur"
-                      />
-                      <button
-                        type="submit"
-                        disabled={updateConfig.isPending || pendingValue === entry.value}
-                        className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                        title={
-                          updateConfig.isPending
-                            ? "Enregistrement en cours"
-                            : pendingValue === entry.value
-                            ? "Aucune modification à sauvegarder"
-                            : "Sauvegarder ce paramètre"
-                        }
-                      >
-                        {updateConfig.isPending ? "Enregistrement..." : "Enregistrer"}
-                      </button>
-                    </form>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
+                      Réinitialiser
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={
+                        updateHomepagePreference.isPending ||
+                        (!isDirty && (personalHomepageMap[field.key] ?? "") === pendingValue)
+                      }
+                      className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {updateHomepagePreference.isPending ? "Enregistrement..." : "Enregistrer"}
+                    </button>
+                  </div>
+                </form>
+              );
+            })}
+          </div>
         </div>
       </div>
+      {isAdmin ? (
+        <div className="rounded-lg border border-slate-800 bg-slate-900">
+          <div className="divide-y divide-slate-900">
+            {Object.entries(groupedEntries).map(([section, sectionEntries]) => (
+              <div key={section} className="p-4">
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">{section}</h3>
+                <div className="mt-3 space-y-3">
+                  {sectionEntries.map((entry) => {
+                    const key = `${entry.section}.${entry.key}`;
+                    const pendingValue = changes[key] ?? entry.value;
+                    return (
+                      <form
+                        key={key}
+                        className="flex flex-wrap items-center gap-3 rounded-md border border-slate-800 bg-slate-950 p-3"
+                        onSubmit={(event) => handleSubmit(event, entry)}
+                      >
+                        <div className="w-full sm:w-48">
+                          <p className="text-xs font-semibold text-slate-400">{entry.key}</p>
+                          <p className="text-[11px] text-slate-500">Valeur actuelle : {entry.value}</p>
+                        </div>
+                        <input
+                          value={pendingValue}
+                          onChange={(event) => setChanges((prev) => ({ ...prev, [key]: event.target.value }))}
+                          className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                          title="Modifier la valeur qui sera synchronisée avec le serveur"
+                        />
+                        <button
+                          type="submit"
+                          disabled={updateConfig.isPending || pendingValue === entry.value}
+                          className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                          title={
+                            updateConfig.isPending
+                              ? "Enregistrement en cours"
+                              : pendingValue === entry.value
+                              ? "Aucune modification à sauvegarder"
+                              : "Sauvegarder ce paramètre"
+                          }
+                        >
+                          {updateConfig.isPending ? "Enregistrement..." : "Enregistrer"}
+                        </button>
+                      </form>
+                    );
+                  })}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-6">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
