@@ -8,9 +8,52 @@ import {
   fetchUserHomepageConfig
 } from "../../lib/config";
 import { buildHomeConfig } from "./homepageConfig";
+import { useModulePermissions } from "../permissions/useModulePermissions";
+
+const PATH_MODULE_MAP: Record<string, string> = {
+  "/barcode": "barcode",
+  "/inventory": "clothing",
+  "/reports": "clothing",
+  "/purchase-orders": "clothing",
+  "/suppliers": "suppliers",
+  "/collaborators": "dotations",
+  "/dotations": "dotations",
+  "/vehicle-inventory": "vehicle_inventory",
+  "/remise-inventory": "inventory_remise",
+  "/pharmacy": "pharmacy"
+};
+
+function normalizeInternalPath(path: string): string | null {
+  if (!path) {
+    return null;
+  }
+
+  const trimmed = path.trim();
+  if (trimmed.length === 0) {
+    return null;
+  }
+
+  const base = typeof window !== "undefined" ? window.location.origin : "http://localhost";
+
+  try {
+    const url = new URL(trimmed, base);
+    const normalized = url.pathname.replace(/\/+/g, "/");
+    const withoutTrailingSlash = normalized.replace(/\/$/, "");
+    return withoutTrailingSlash.length > 0 ? withoutTrailingSlash : "/";
+  } catch {
+    if (!trimmed.startsWith("/")) {
+      return null;
+    }
+    const sanitized = trimmed.split(/[?#]/)[0];
+    const normalized = sanitized.replace(/\/+/g, "/");
+    const withoutTrailingSlash = normalized.replace(/\/$/, "");
+    return withoutTrailingSlash.length > 0 ? withoutTrailingSlash : "/";
+  }
+}
 
 export function HomePage() {
   const { user } = useAuth();
+  const { canAccess, isLoading: isModuleLoading } = useModulePermissions({ enabled: Boolean(user) });
   const { data: entries = [], isFetching: isFetchingGlobal } = useQuery({
     queryKey: ["config", "global"],
     queryFn: fetchConfigEntries
@@ -34,6 +77,34 @@ export function HomePage() {
     [config.primary_link_label, config.primary_link_path, config.secondary_link_label, config.secondary_link_path]
   );
 
+  const accessibleQuickLinks = useMemo(() => {
+    if (!user) {
+      return [];
+    }
+
+    if (user.role === "admin") {
+      return quickLinks;
+    }
+
+    if (isModuleLoading) {
+      return [];
+    }
+
+    return quickLinks.filter((link) => {
+      const normalizedPath = normalizeInternalPath(link.path);
+      if (!normalizedPath) {
+        return false;
+      }
+
+      const moduleId = PATH_MODULE_MAP[normalizedPath];
+      if (!moduleId) {
+        return true;
+      }
+
+      return canAccess(moduleId);
+    });
+  }, [canAccess, isModuleLoading, quickLinks, user]);
+
   const focusCards = [
     { label: config.focus_1_label, description: config.focus_1_description },
     { label: config.focus_2_label, description: config.focus_2_description },
@@ -47,9 +118,12 @@ export function HomePage() {
         <h1 className="mt-2 text-3xl font-bold text-white sm:text-4xl">{config.title}</h1>
         <p className="mt-3 max-w-3xl text-sm text-slate-300 sm:text-base">{config.subtitle}</p>
         <p className="mt-4 max-w-3xl text-sm text-slate-400">{config.welcome_message}</p>
-        {quickLinks.length > 0 ? (
+        {isModuleLoading && user?.role !== "admin" ? (
+          <p className="mt-4 text-xs text-slate-500">Chargement des liens disponibles selon vos autorisations...</p>
+        ) : null}
+        {accessibleQuickLinks.length > 0 ? (
           <div className="mt-6 flex flex-wrap gap-3">
-            {quickLinks.map((link) => (
+            {accessibleQuickLinks.map((link) => (
               <Link
                 key={`${link.label}-${link.path}`}
                 to={link.path}
@@ -59,6 +133,12 @@ export function HomePage() {
               </Link>
             ))}
           </div>
+        ) : null}
+        {!isModuleLoading && accessibleQuickLinks.length === 0 && quickLinks.length > 0 ? (
+          <p className="mt-4 text-xs text-slate-500">
+            Aucun raccourci n'est disponible avec vos droits actuels. Contactez un administrateur pour accéder aux modules
+            correspondants.
+          </p>
         ) : null}
         {isFetchingGlobal || isFetchingPersonal ? (
           <p className="mt-4 text-xs text-slate-500">Mise à jour de la configuration...</p>
