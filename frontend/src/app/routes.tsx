@@ -16,6 +16,7 @@ import { AdminUsersPage } from "../features/users/AdminUsersPage";
 import { PurchaseOrdersPage } from "../features/inventory/PurchaseOrdersPage";
 import { VehicleInventoryPage } from "../features/inventory/VehicleInventoryPage";
 import { RemiseInventoryPage } from "../features/inventory/RemiseInventoryPage";
+import { UpdatesPage } from "../features/updates/UpdatesPage";
 
 export const router = createBrowserRouter([
   {
@@ -39,7 +40,8 @@ export const router = createBrowserRouter([
       { path: "dotations", element: <DotationsPage /> },
       { path: "pharmacy", element: <PharmacyPage /> },
       { path: "users", element: <AdminUsersPage /> },
-      { path: "permissions", element: <ModulePermissionsPage /> }
+      { path: "permissions", element: <ModulePermissionsPage /> },
+      { path: "updates", element: <UpdatesPage /> }
     ]
   }
 ]);
