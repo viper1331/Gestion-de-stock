@@ -259,7 +259,7 @@ export function ModulePermissionsPage() {
               }))
             }
             disabled={isFetchingModules || availableModules.length === 0}
-            size={Math.min(Math.max(availableModules.length, 1), 6)}
+            size={availableModules.length > 0 ? Math.min(availableModules.length, 6) : 6}
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             title="Sélectionnez un ou plusieurs modules à autoriser"
           >
