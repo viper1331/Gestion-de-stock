@@ -1628,20 +1628,40 @@ function VehicleItemsPanel({
   items,
   onItemFeedback
 }: VehicleItemsPanelProps) {
+  const [isCollapsed, setIsCollapsed] = useState(false);
+
   return (
     <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-      <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
-      <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{description}</p>
-      <div className="mt-4 space-y-3">
-        {items.map((item) => (
-          <ItemCard key={item.id} item={item} onFeedback={onItemFeedback} />
-        ))}
-        {items.length === 0 && (
-          <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            {emptyMessage}
-          </p>
-        )}
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">{title}</h3>
+          <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{description}</p>
+        </div>
+        <button
+          type="button"
+          onClick={() => setIsCollapsed((value) => !value)}
+          aria-expanded={!isCollapsed}
+          className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+        >
+          {isCollapsed ? "Afficher" : "Masquer"}
+        </button>
       </div>
+      {isCollapsed ? (
+        <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">
+          Panneau masqué. Cliquez sur « Afficher » pour voir le matériel disponible.
+        </p>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {items.map((item) => (
+            <ItemCard key={item.id} item={item} onFeedback={onItemFeedback} />
+          ))}
+          {items.length === 0 && (
+            <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+              {emptyMessage}
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
@@ -1660,21 +1680,29 @@ function DroppableLibrary({
   onItemFeedback
 }: DroppableLibraryProps) {
   const [isHovering, setIsHovering] = useState(false);
+  const [isCollapsed, setIsCollapsed] = useState(false);
 
   return (
     <div
       className={clsx(
         "rounded-2xl border border-slate-200 bg-white p-5 shadow-sm transition dark:border-slate-700 dark:bg-slate-900",
-        isHovering &&
-          "border-blue-400 bg-blue-50/60 text-blue-700 dark:border-blue-500 dark:bg-blue-950/50 dark:text-blue-200"
+        isHovering && !isCollapsed &&
+          "border-blue-400 bg-blue-50/60 text-blue-700 dark:border-blue-500 dark:bg-blue-950/50 dark:text-blue-200",
+        isCollapsed && "opacity-90"
       )}
       onDragOver={(event) => {
+        if (isCollapsed) {
+          return;
+        }
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
         setIsHovering(true);
       }}
       onDragLeave={() => setIsHovering(false)}
       onDrop={(event) => {
+        if (isCollapsed) {
+          return;
+        }
         event.preventDefault();
         setIsHovering(false);
         const data = readDraggedItemData(event);
@@ -1683,7 +1711,7 @@ function DroppableLibrary({
         }
       }}
     >
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-sm font-semibold text-slate-900 dark:text-slate-100">
             Bibliothèque de matériel
@@ -1693,23 +1721,37 @@ function DroppableLibrary({
             bibliothèque pour le retirer du véhicule.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setIsCollapsed((value) => !value)}
+          aria-expanded={!isCollapsed}
+          className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+        >
+          {isCollapsed ? "Afficher" : "Masquer"}
+        </button>
       </div>
-      <div className="mt-4 space-y-3">
-        {items.map((item) => (
-          <ItemCard
-            key={item.id}
-            item={item}
-            onRemove={() => onRemoveFromVehicle(item.id)}
-            onFeedback={onItemFeedback}
-          />
-        ))}
+      {isCollapsed ? (
+        <p className="mt-4 text-xs text-slate-500 dark:text-slate-400">
+          Bibliothèque masquée. Cliquez sur « Afficher » pour parcourir le matériel disponible.
+        </p>
+      ) : (
+        <div className="mt-4 space-y-3">
+          {items.map((item) => (
+            <ItemCard
+              key={item.id}
+              item={item}
+              onRemove={() => onRemoveFromVehicle(item.id)}
+              onFeedback={onItemFeedback}
+            />
+          ))}
           {items.length === 0 && (
             <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre
-            disponibles ici.
-          </p>
-        )}
-      </div>
+              Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre
+              disponibles ici.
+            </p>
+          )}
+        </div>
+      )}
     </div>
   );
 }
