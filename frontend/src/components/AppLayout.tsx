@@ -47,6 +47,26 @@ export function AppLayout() {
 
       const groups: NavGroup[] = [
         {
+          id: "code-barres",
+          label: "Codes-barres",
+          tooltip: "Accéder aux outils de codes-barres",
+          sections: [
+            {
+              id: "code-barres-operations",
+              label: "Opérations",
+              tooltip: "Outils de gestion des codes-barres",
+              links: [
+                {
+                  to: "/barcode",
+                  label: "Codes-barres",
+                  tooltip: "Générer et scanner les codes-barres",
+                  module: "clothing"
+                }
+              ]
+            }
+          ]
+        },
+        {
           id: "habillement",
           label: "Habillement",
           tooltip: "Accéder aux fonctionnalités d'habillement",
@@ -60,12 +80,6 @@ export function AppLayout() {
                   to: "/",
                   label: "Vue d'ensemble",
                   tooltip: "Consulter le tableau de bord habillement",
-                  module: "clothing"
-                },
-                {
-                  to: "/barcode",
-                  label: "Codes-barres",
-                  tooltip: "Générer et scanner les codes-barres d'habillement",
                   module: "clothing"
                 },
                 {
@@ -225,12 +239,37 @@ export function AppLayout() {
     [modulePermissions.canAccess, user]
   );
 
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({
-    habillement: true,
-    "inventaires-specialises": false,
-    pharmacie: false,
-    administration: false
-  });
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
+    Object.fromEntries(navigationGroups.map((group) => [group.id, false]))
+  );
+
+  useEffect(() => {
+    setOpenGroups((prev) => {
+      const next: Record<string, boolean> = {};
+      let hasChanges = false;
+      const groupIds = new Set(navigationGroups.map((group) => group.id));
+
+      navigationGroups.forEach((group) => {
+        const previousValue = prev[group.id] ?? false;
+        next[group.id] = previousValue;
+        if (prev[group.id] === undefined) {
+          hasChanges = true;
+        }
+      });
+
+      Object.keys(prev).forEach((key) => {
+        if (!groupIds.has(key)) {
+          hasChanges = true;
+        }
+      });
+
+      if (!hasChanges) {
+        return prev;
+      }
+
+      return next;
+    });
+  }, [navigationGroups]);
 
   const toggleGroup = (groupId: string) => {
     setOpenGroups((prev) => ({
