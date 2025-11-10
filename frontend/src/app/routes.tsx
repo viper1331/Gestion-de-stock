@@ -3,6 +3,7 @@ import { createBrowserRouter } from "react-router-dom";
 import { AuthLayout } from "../features/auth/AuthLayout";
 import { Login } from "../features/auth/Login";
 import { AppLayout } from "../components/AppLayout";
+import { HomePage } from "../features/home/HomePage";
 import { Dashboard } from "../features/inventory/Dashboard";
 import { BarcodePage } from "../features/barcode/BarcodePage";
 import { ReportsPage } from "../features/reports/ReportsPage";
@@ -28,7 +29,8 @@ export const router = createBrowserRouter([
     path: "/*",
     element: <AppLayout />,
     children: [
-      { path: "", element: <Dashboard /> },
+      { path: "", element: <HomePage /> },
+      { path: "inventory", element: <Dashboard /> },
       { path: "vehicle-inventory", element: <VehicleInventoryPage /> },
       { path: "remise-inventory", element: <RemiseInventoryPage /> },
       { path: "barcode", element: <BarcodePage /> },
