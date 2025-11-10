@@ -68,6 +68,12 @@ def init_databases() -> None:
                     can_edit INTEGER NOT NULL DEFAULT 0,
                     UNIQUE(user_id, module)
                 );
+                CREATE TABLE IF NOT EXISTS user_homepage_config (
+                    user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+                    key TEXT NOT NULL,
+                    value TEXT NOT NULL,
+                    PRIMARY KEY (user_id, key)
+                );
                 """
             )
         with get_stock_connection() as conn:

@@ -3,62 +3,27 @@ import { Link } from "react-router-dom";
 import { useQuery } from "@tanstack/react-query";
 
 import { useAuth } from "../auth/useAuth";
-import { fetchConfigEntries, ConfigEntry } from "../../lib/config";
-
-const DEFAULT_CONFIG = {
-  title: "Gestion Stock Pro",
-  subtitle: "Centralisez vos opérations de stock, vos achats et vos dotations en un seul endroit.",
-  welcome_message:
-    "Bienvenue sur votre espace de travail. Retrouvez ici une vue synthétique de vos modules et vos actions prioritaires.",
-  primary_link_label: "Ouvrir l'inventaire habillement",
-  primary_link_path: "/inventory",
-  secondary_link_label: "Consulter les rapports d'activité",
-  secondary_link_path: "/reports",
-  announcement:
-    "Pensez à vérifier les mises à jour dans l'onglet \"Mises à jour\" pour garder votre environnement à jour.",
-  focus_1_label: "Inventaire habillement",
-  focus_1_description: "Suivez les entrées, sorties et niveaux de stock en temps réel pour l'ensemble des articles.",
-  focus_2_label: "Gestion des dotations",
-  focus_2_description: "Attribuez les équipements aux collaborateurs et gardez l'historique des dotations à jour.",
-  focus_3_label: "Rapports et analyses",
-  focus_3_description: "Identifiez rapidement les tendances et anticipez les besoins grâce aux rapports consolidés."
-} as const;
-
-type HomePageConfig = { [Key in keyof typeof DEFAULT_CONFIG]: string };
-
-type HomePageConfigKey = keyof typeof DEFAULT_CONFIG;
-
-function isHomePageConfigKey(value: string): value is HomePageConfigKey {
-  return Object.prototype.hasOwnProperty.call(DEFAULT_CONFIG, value);
-}
-
-function buildHomeConfig(entries: ConfigEntry[]): HomePageConfig {
-  const config: HomePageConfig = { ...DEFAULT_CONFIG };
-
-  entries.forEach((entry) => {
-    if (entry.section !== "homepage") {
-      return;
-    }
-
-    if (!isHomePageConfigKey(entry.key)) {
-      return;
-    }
-
-    const trimmed = entry.value.trim();
-    config[entry.key] = trimmed.length > 0 ? trimmed : DEFAULT_CONFIG[entry.key];
-  });
-
-  return config;
-}
+import {
+  fetchConfigEntries,
+  fetchUserHomepageConfig
+} from "../../lib/config";
+import { buildHomeConfig } from "./homepageConfig";
 
 export function HomePage() {
   const { user } = useAuth();
-  const { data: entries = [], isFetching } = useQuery({
-    queryKey: ["config"],
+  const { data: entries = [], isFetching: isFetchingGlobal } = useQuery({
+    queryKey: ["config", "global"],
     queryFn: fetchConfigEntries
   });
+  const { data: personalEntries = [], isFetching: isFetchingPersonal } = useQuery({
+    queryKey: ["config", "homepage", "personal"],
+    queryFn: fetchUserHomepageConfig
+  });
 
-  const config = useMemo(() => buildHomeConfig(entries), [entries]);
+  const config = useMemo(
+    () => buildHomeConfig([...entries, ...personalEntries]),
+    [entries, personalEntries]
+  );
 
   const quickLinks = useMemo(
     () =>
@@ -95,7 +60,7 @@ export function HomePage() {
             ))}
           </div>
         ) : null}
-        {isFetching ? (
+        {isFetchingGlobal || isFetchingPersonal ? (
           <p className="mt-4 text-xs text-slate-500">Mise à jour de la configuration...</p>
         ) : null}
       </div>
