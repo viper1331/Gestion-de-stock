@@ -332,12 +332,12 @@ async def apply_latest_update() -> tuple[bool, UpdateStatusData]:
     settings = _get_settings()
     state = _load_state()
     latest = await _fetch_latest_merged_pull(settings)
-    if latest is None:
-        raise UpdateError(
-            "Aucun pull request fusionné n'a été trouvé sur le dépôt GitHub configuré."
-        )
-
     current_commit = _current_commit()
+
+    if latest is None:
+        status = _build_status(settings, state, latest, current_commit)
+        return False, status
+
     if (
         state.last_deployed_pull == latest.number
         and state.last_deployed_sha == latest.head_sha
