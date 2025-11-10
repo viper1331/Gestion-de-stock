@@ -220,7 +220,7 @@ export function UpdatesPage() {
             <div className="flex items-start justify-between gap-4">
               <dt className="text-slate-400">Commit actuel</dt>
               <dd className="font-mono text-sm text-white">
-                {truncateCommit(status?.current_commit) ?? "-"}
+                {truncateCommit(status?.current_commit ?? null) ?? "-"}
               </dd>
             </div>
             <div className="flex items-start justify-between gap-4">
