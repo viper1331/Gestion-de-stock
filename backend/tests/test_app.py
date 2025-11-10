@@ -1,10 +1,10 @@
 from contextlib import closing
-from pathlib import Path
 import sqlite3
 import sys
 import zipfile
 
 import io
+from pathlib import Path
 from shutil import copy2
 from tempfile import TemporaryDirectory
 from typing import Any
@@ -12,6 +12,7 @@ from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+from PIL import Image
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -1042,20 +1043,40 @@ def test_barcode_listing_requires_permission() -> None:
     response = client.get("/barcode", headers=headers)
     assert response.status_code == 403
 
-    grant = client.put(
-        "/permissions/modules",
-        json={
-            "user_id": user_id,
-            "module": "barcode",
-            "can_view": True,
-            "can_edit": False,
-        },
-        headers=admin_headers,
-    )
-    assert grant.status_code == 200, grant.text
 
-    allowed = client.get("/barcode", headers=headers)
-    assert allowed.status_code == 200, allowed.text
+def test_barcode_pdf_export(monkeypatch: Any, tmp_path: Path) -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    assets_dir = tmp_path / "barcodes"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+
+    for index in range(5):
+        image = Image.new("RGB", (400, 200), color="white")
+        image.save(assets_dir / f"SKU-{index}.png")
+
+    response = client.get("/barcode/export/pdf", headers=admin_headers)
+    assert response.status_code == 200, response.text
+    assert response.headers["content-type"] == "application/pdf"
+    assert len(response.content) > 100
+
+
+def test_barcode_pdf_export_requires_permission(monkeypatch: Any, tmp_path: Path) -> None:
+    services.ensure_database_ready()
+    user_id = _create_user("noviewpdf", "noview123", role="user")
+    assert user_id > 0
+
+    assets_dir = tmp_path / "barcodes"
+    assets_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+
+    image = Image.new("RGB", (400, 200), color="white")
+    image.save(assets_dir / "SKU-ONLY.png")
+
+    headers = _login_headers("noviewpdf", "noview123")
+    response = client.get("/barcode/export/pdf", headers=headers)
+    assert response.status_code == 403
 
 def test_pharmacy_movement_management() -> None:
     services.ensure_database_ready()

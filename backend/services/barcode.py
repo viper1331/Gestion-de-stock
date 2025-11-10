@@ -3,10 +3,11 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from io import BytesIO
 from pathlib import Path
 from typing import List, Optional
 
-from PIL import Image, ImageDraw, ImageFont
+from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 try:  # pragma: no cover - dépendance optionnelle en environnement de test
     import barcode as _barcode_lib
@@ -25,6 +26,14 @@ WRITER_OPTIONS = {
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "barcodes"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+
+PDF_PAGE_WIDTH_CM = 21.0
+PDF_PAGE_HEIGHT_CM = 29.7
+PDF_DPI = 300
+PDF_COLUMNS = 3
+PDF_ROWS = 8
+PDF_MARGIN_CM = 0.8
+PDF_CELL_PADDING_CM = 0.3
 
 
 @dataclass(frozen=True)
@@ -157,3 +166,72 @@ def get_barcode_asset(filename: str) -> Optional[Path]:
         return None
 
     return resolved
+
+
+def generate_barcode_pdf() -> Optional[BytesIO]:
+    """Crée un PDF A4 avec une grille de codes-barres."""
+
+    assets = list_barcode_assets()
+    if not assets:
+        return None
+
+    px_per_cm = PDF_DPI / 2.54
+    page_width_px = int(round(PDF_PAGE_WIDTH_CM * px_per_cm))
+    page_height_px = int(round(PDF_PAGE_HEIGHT_CM * px_per_cm))
+    margin_px = int(round(PDF_MARGIN_CM * px_per_cm))
+    cell_padding_px = int(round(PDF_CELL_PADDING_CM * px_per_cm))
+
+    usable_width = page_width_px - 2 * margin_px
+    usable_height = page_height_px - 2 * margin_px
+    if usable_width <= 0 or usable_height <= 0:
+        return None
+
+    cell_width = usable_width // PDF_COLUMNS
+    cell_height = usable_height // PDF_ROWS
+    if cell_width <= 0 or cell_height <= 0:
+        return None
+
+    cells_per_page = PDF_COLUMNS * PDF_ROWS
+    pages: list[Image.Image] = []
+
+    for start in range(0, len(assets), cells_per_page):
+        page = Image.new("RGB", (page_width_px, page_height_px), color="white")
+        chunk = assets[start : start + cells_per_page]
+
+        for index, asset in enumerate(chunk):
+            try:
+                with Image.open(asset.path) as original:
+                    barcode_image = original.convert("RGB")
+            except Exception:
+                continue
+
+            row = index // PDF_COLUMNS
+            column = index % PDF_COLUMNS
+
+            x0 = margin_px + column * cell_width
+            y0 = margin_px + row * cell_height
+            available_width = max(1, cell_width - 2 * cell_padding_px)
+            available_height = max(1, cell_height - 2 * cell_padding_px)
+
+            resized = ImageOps.contain(barcode_image, (available_width, available_height))
+            barcode_image.close()
+            paste_x = x0 + (cell_width - resized.width) // 2
+            paste_y = y0 + (cell_height - resized.height) // 2
+
+            page.paste(resized, (paste_x, paste_y))
+            resized.close()
+
+        pages.append(page)
+
+    if not pages:
+        return None
+
+    buffer = BytesIO()
+    first_page, *other_pages = pages
+    try:
+        first_page.save(buffer, format="PDF", resolution=PDF_DPI, save_all=bool(other_pages), append_images=other_pages)
+        buffer.seek(0)
+    finally:
+        for page in pages:
+            page.close()
+    return buffer
