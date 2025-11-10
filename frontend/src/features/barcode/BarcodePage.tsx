@@ -8,8 +8,9 @@ import { useModulePermissions } from "../permissions/useModulePermissions";
 export function BarcodePage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
-  const canView = user?.role === "admin" || modulePermissions.canAccess("clothing");
-  const canEdit = user?.role === "admin" || modulePermissions.canAccess("clothing", "edit");
+  const canView = user?.role === "admin" || modulePermissions.canAccess("barcode");
+  const canEdit =
+    user?.role === "admin" || modulePermissions.canAccess("barcode", "edit");
 
   const [sku, setSku] = useState("SKU-001");
   const [imageUrl, setImageUrl] = useState<string | null>(null);

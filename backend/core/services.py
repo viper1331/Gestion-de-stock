@@ -32,6 +32,7 @@ _db_initialized = False
 _AUTO_PO_CLOSED_STATUSES = ("CANCELLED", "RECEIVED")
 
 _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
+    ("barcode", "Code-barres"),
     ("clothing", "Habillement"),
     ("suppliers", "Fournisseurs"),
     ("dotations", "Dotations"),

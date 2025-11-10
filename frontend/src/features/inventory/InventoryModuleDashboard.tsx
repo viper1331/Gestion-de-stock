@@ -9,6 +9,7 @@ import { ColumnManager } from "../../components/ColumnManager";
 import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
 import { persistValue, readPersistedValue } from "../../lib/persist";
+import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
 
 interface Category {
@@ -101,6 +102,7 @@ export interface InventoryModuleConfig {
   searchPlaceholder?: string;
   supportsItemImages?: boolean;
   itemNoun?: InventoryItemNounConfig;
+  barcodePrefix?: string;
 }
 
 export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
@@ -114,7 +116,8 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   storageKeyPrefix: "inventory",
   showPurchaseOrders: true,
   searchPlaceholder: "Rechercher par nom ou SKU",
-  supportsItemImages: false
+  supportsItemImages: false,
+  barcodePrefix: "HAB"
 };
 
 interface InventoryModuleDashboardProps {
@@ -149,6 +152,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   const columnStorageKey = `gsp/${config.storageKeyPrefix}/columns`;
   const columnVisibilityStorageKey = `gsp/${config.storageKeyPrefix}/column-visibility`;
   const searchPlaceholder = config.searchPlaceholder ?? "Rechercher par nom ou SKU";
+  const barcodePrefix = config.barcodePrefix ?? "SKU";
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -197,6 +201,14 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     }
   });
   const suppliers = suppliersQuery.data ?? [];
+
+  const existingSkus = useMemo<ExistingSkuEntry[]>(
+    () =>
+      items
+        .filter((item) => item.sku && item.sku.trim().length > 0)
+        .map((item) => ({ id: item.id, sku: item.sku })),
+    [items]
+  );
 
   const createItem = useMutation({
     mutationFn: async (payload: ItemFormValues) => {
@@ -768,6 +780,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 supportsItemImages={supportsItemImages}
                 initialImageUrl={initialImageUrl}
                 itemNoun={itemNoun}
+                existingSkus={existingSkus}
+                barcodePrefix={barcodePrefix}
+                currentItemId={selectedItem?.id ?? null}
               />
             </div>
 
@@ -871,7 +886,10 @@ function ItemForm({
   isSubmitting,
   supportsItemImages = false,
   initialImageUrl = null,
-  itemNoun
+  itemNoun,
+  existingSkus,
+  barcodePrefix,
+  currentItemId
 }: {
   initialValues: ItemFormValues;
   categories: Category[];
@@ -883,6 +901,9 @@ function ItemForm({
   supportsItemImages?: boolean;
   initialImageUrl?: string | null;
   itemNoun: InventoryItemNounForms;
+  existingSkus: ExistingSkuEntry[];
+  barcodePrefix: string;
+  currentItemId: number | null;
 }) {
   const [values, setValues] = useState<ItemFormValues>(initialValues);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -891,6 +912,9 @@ function ItemForm({
     url: initialImageUrl,
     isLocal: false
   });
+  const [isSkuAuto, setIsSkuAuto] = useState<boolean>(
+    mode === "create" && initialValues.sku.trim().length === 0
+  );
   const selectedCategory = useMemo(
     () => categories.find((category) => category.id === values.category_id),
     [categories, values.category_id]
@@ -902,7 +926,8 @@ function ItemForm({
 
   useEffect(() => {
     setValues(initialValues);
-  }, [initialValues]);
+    setIsSkuAuto(mode === "create" && initialValues.sku.trim().length === 0);
+  }, [initialValues, mode]);
 
   useEffect(() => {
     if (!supportsItemImages) {
@@ -976,10 +1001,41 @@ function ItemForm({
     setRemoveImage(false);
   };
 
+  const handleNameChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const nextName = event.target.value;
+    setValues((prev) => {
+      const updated = { ...prev, name: nextName };
+      if (isSkuAuto) {
+        updated.sku = ensureUniqueSku({
+          desiredSku: "",
+          prefix: barcodePrefix,
+          source: nextName,
+          existingSkus,
+          excludeId: currentItemId
+        });
+      }
+      return updated;
+    });
+  };
+
+  const handleSkuChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const normalized = normalizeSkuInput(event.target.value);
+    setValues((prev) => ({ ...prev, sku: normalized }));
+    setIsSkuAuto(normalized.length === 0);
+  };
+
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    const finalSku = ensureUniqueSku({
+      desiredSku: values.sku,
+      prefix: barcodePrefix,
+      source: values.name.trim(),
+      existingSkus,
+      excludeId: currentItemId
+    });
     const payload = {
       ...values,
+      sku: finalSku,
       quantity: Number(values.quantity) || 0,
       low_stock_threshold: Number(values.low_stock_threshold) || 0,
       category_id: values.category_id ?? null,
@@ -997,6 +1053,7 @@ function ItemForm({
         low_stock_threshold: 0,
         supplier_id: null
       });
+      setIsSkuAuto(true);
       if (supportsItemImages) {
         setPreview((previous) => {
           if (previous.isLocal && previous.url) {
@@ -1070,7 +1127,7 @@ function ItemForm({
         <input
           id="item-name"
           value={values.name}
-          onChange={(event) => setValues((prev) => ({ ...prev, name: event.target.value }))}
+          onChange={handleNameChange}
           required
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
           title={`Saisissez le nom complet ${itemNoun.de}`}
@@ -1083,8 +1140,7 @@ function ItemForm({
         <input
           id="item-sku"
           value={values.sku}
-          onChange={(event) => setValues((prev) => ({ ...prev, sku: event.target.value }))}
-          required
+          onChange={handleSkuChange}
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
           title="Identifiant unique ou code-barres associé"
         />

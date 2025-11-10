@@ -579,6 +579,7 @@ def test_available_modules_listing_requires_admin() -> None:
     assert response.status_code == 200, response.text
     data = response.json()
     assert any(entry["key"] == "suppliers" for entry in data)
+    assert any(entry["key"] == "barcode" for entry in data)
 
     username = f"user-{uuid4().hex[:6]}"
     _create_user(username, "Testpass123", role="user")
@@ -1037,6 +1038,7 @@ def test_barcode_listing_requires_permission() -> None:
     user_id = _create_user("noview", "noview123", role="user")
     assert user_id > 0
 
+    admin_headers = _login_headers("admin", "admin123")
     headers = _login_headers("noview", "noview123")
     response = client.get("/barcode", headers=headers)
     assert response.status_code == 403
