@@ -1,3 +1,4 @@
+import asyncio
 from contextlib import closing
 import sqlite3
 import sys
@@ -2033,6 +2034,26 @@ def test_apply_update_returns_result(monkeypatch: Any) -> None:
     payload = response.json()
     assert payload["updated"] is True
     assert payload["status"]["branch"] == "main"
+
+
+def test_apply_latest_update_returns_false_when_no_pull(monkeypatch: Any) -> None:
+    settings = update_service.UpdateSettings(owner="owner", repository="repo", branch="main")
+    state = update_service.UpdateState()
+
+    monkeypatch.setattr(update_service, "_get_settings", lambda: settings)
+    monkeypatch.setattr(update_service, "_load_state", lambda: state)
+
+    async def fake_fetch(_: update_service.UpdateSettings) -> update_service.PullRequestData | None:
+        return None
+
+    monkeypatch.setattr(update_service, "_fetch_latest_merged_pull", fake_fetch)
+    monkeypatch.setattr(update_service, "_current_commit", lambda: "cafebabe")
+
+    updated, status = asyncio.run(update_service.apply_latest_update())
+
+    assert updated is False
+    assert status.latest_pull_request is None
+    assert status.pending_update is False
 
 
 def test_update_settings_fallback_to_git(monkeypatch: Any) -> None:
