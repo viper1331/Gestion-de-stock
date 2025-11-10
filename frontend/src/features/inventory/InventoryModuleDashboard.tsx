@@ -11,6 +11,12 @@ import { resolveMediaUrl } from "../../lib/media";
 import { persistValue, readPersistedValue } from "../../lib/persist";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
+import {
+  DEFAULT_INVENTORY_CONFIG,
+  type FrenchGender,
+  type InventoryItemNounConfig,
+  type InventoryModuleConfig
+} from "./config";
 
 interface Category {
   id: number;
@@ -56,14 +62,6 @@ interface ItemFormSubmitPayload {
   removeImage: boolean;
 }
 
-type FrenchGender = "masculine" | "feminine";
-
-export interface InventoryItemNounConfig {
-  singular: string;
-  plural?: string;
-  gender: FrenchGender;
-}
-
 interface InventoryItemNounForms {
   singular: string;
   plural: string;
@@ -89,36 +87,6 @@ interface Supplier {
   id: number;
   name: string;
 }
-
-export interface InventoryModuleConfig {
-  title: string;
-  description: string;
-  basePath: string;
-  categoriesPath: string;
-  supplierModule?: string | null;
-  queryKeyPrefix: string;
-  storageKeyPrefix: string;
-  showPurchaseOrders?: boolean;
-  searchPlaceholder?: string;
-  supportsItemImages?: boolean;
-  itemNoun?: InventoryItemNounConfig;
-  barcodePrefix?: string;
-}
-
-export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
-  title: "Inventaire",
-  description:
-    "Retrouvez l'ensemble des articles, appliquez des mouvements et gérez les catégories.",
-  basePath: "/items",
-  categoriesPath: "/categories",
-  supplierModule: "suppliers",
-  queryKeyPrefix: "inventory",
-  storageKeyPrefix: "inventory",
-  showPurchaseOrders: true,
-  searchPlaceholder: "Rechercher par nom ou SKU",
-  supportsItemImages: false,
-  barcodePrefix: "HAB"
-};
 
 interface InventoryModuleDashboardProps {
   config?: InventoryModuleConfig;
