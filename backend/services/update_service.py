@@ -8,6 +8,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 import httpx
 
@@ -144,18 +145,86 @@ def _save_state(state: UpdateState) -> None:
         raise UpdateExecutionError("Impossible d'écrire le fichier d'état des mises à jour") from exc
 
 
-def _get_settings() -> UpdateSettings:
-    slug = os.getenv("GITHUB_REPOSITORY")
-    if not slug:
-        raise UpdateConfigurationError(
-            "La variable d'environnement GITHUB_REPOSITORY est requise (format owner/repo)."
-        )
+def _normalize_slug(slug: str) -> str:
+    slug = slug.strip()
+    if slug.endswith(".git"):
+        slug = slug[:-4]
     if "/" not in slug:
         raise UpdateConfigurationError(
             "La variable GITHUB_REPOSITORY doit être au format 'propriétaire/référentiel'."
         )
     owner, repository = slug.split("/", 1)
-    branch = os.getenv("GITHUB_BRANCH", "main")
+    owner = owner.strip()
+    repository = repository.strip()
+    if not owner or not repository:
+        raise UpdateConfigurationError(
+            "La variable GITHUB_REPOSITORY doit contenir un propriétaire et un dépôt valides."
+        )
+    return f"{owner}/{repository}"
+
+
+def _slug_from_git_remote() -> str:
+    try:
+        remote_url = _run_git_command("config", "--get", "remote.origin.url")
+    except UpdateExecutionError as exc:
+        raise UpdateConfigurationError(
+            "Impossible de déterminer le dépôt GitHub. Définissez la variable GITHUB_REPOSITORY."
+        ) from exc
+
+    remote_url = remote_url.strip()
+    if remote_url.endswith(".git"):
+        remote_url = remote_url[:-4]
+
+    if remote_url.startswith("git@"):
+        _, _, path = remote_url.partition(":")
+    elif remote_url.startswith(("https://", "http://", "ssh://", "git://")):
+        parsed = urlparse(remote_url)
+        path = parsed.path.strip("/")
+        if not path:
+            raise UpdateConfigurationError(
+                "Impossible d'interpréter l'URL du dépôt Git configuré. Définissez GITHUB_REPOSITORY."
+            )
+        segments = [segment for segment in path.split("/") if segment]
+        if len(segments) < 2:
+            raise UpdateConfigurationError(
+                "Impossible d'interpréter l'URL du dépôt Git configuré. Définissez GITHUB_REPOSITORY."
+            )
+        path = "/".join(segments[-2:])
+    else:
+        path = remote_url
+
+    path = path.strip("/")
+    if "/" not in path:
+        raise UpdateConfigurationError(
+            "Impossible d'interpréter l'URL du dépôt Git configuré. Définissez GITHUB_REPOSITORY."
+        )
+    return _normalize_slug(path)
+
+
+def _detect_branch(default: str = "main") -> str:
+    try:
+        branch = _run_git_command("rev-parse", "--abbrev-ref", "HEAD")
+    except UpdateExecutionError:
+        return default
+    branch = branch.strip()
+    return branch or default
+
+
+def _get_settings() -> UpdateSettings:
+    slug_env = os.getenv("GITHUB_REPOSITORY")
+    if slug_env:
+        slug = _normalize_slug(slug_env)
+    else:
+        slug = _slug_from_git_remote()
+
+    owner, repository = slug.split("/", 1)
+
+    branch = os.getenv("GITHUB_BRANCH")
+    if branch:
+        branch = branch.strip()
+    if not branch:
+        branch = _detect_branch()
+
     token = os.getenv("GITHUB_TOKEN")
     return UpdateSettings(owner=owner, repository=repository, branch=branch, token=token)
 
