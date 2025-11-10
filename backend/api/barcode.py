@@ -35,7 +35,7 @@ async def delete_barcode(sku: str, user: models.User = Depends(get_current_user)
     barcode_service.delete_barcode_png(sku)
 
 
-@router.get("/")
+@router.get("")
 async def list_barcodes(user: models.User = Depends(get_current_user)) -> list[dict[str, str]]:
     _require_permission(user, action="view")
     assets = barcode_service.list_barcode_assets()
@@ -47,6 +47,15 @@ async def list_barcodes(user: models.User = Depends(get_current_user)) -> list[d
         }
         for asset in assets
     ]
+
+
+# Assure la rétrocompatibilité avec l'URL historique terminée par un slash
+router.add_api_route(
+    "/",
+    list_barcodes,
+    methods=["GET"],
+    include_in_schema=False,
+)
 
 
 @router.get("/assets/{filename}")
