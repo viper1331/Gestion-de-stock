@@ -1,32 +1,8 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
-import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
-
-interface PullRequestInfo {
-  number: number;
-  title: string;
-  url: string;
-  merged_at: string | null;
-  head_sha: string;
-}
-
-interface UpdateStatus {
-  repository: string;
-  branch: string;
-  current_commit: string | null;
-  latest_pull_request: PullRequestInfo | null;
-  last_deployed_pull: number | null;
-  last_deployed_sha: string | null;
-  last_deployed_at: string | null;
-  pending_update: boolean;
-}
-
-interface UpdateApplyResponse {
-  updated: boolean;
-  status: UpdateStatus;
-}
+import { applyLatestUpdate, fetchUpdateStatus } from "./api";
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -68,19 +44,13 @@ export function UpdatesPage() {
     refetch
   } = useQuery({
     queryKey: ["updates", "status"],
-    queryFn: async () => {
-      const response = await api.get<UpdateStatus>("/updates/status");
-      return response.data;
-    },
+    queryFn: fetchUpdateStatus,
     enabled: user?.role === "admin",
     staleTime: 30_000
   });
 
   const applyUpdate = useMutation({
-    mutationFn: async () => {
-      const response = await api.post<UpdateApplyResponse>("/updates/apply");
-      return response.data;
-    },
+    mutationFn: applyLatestUpdate,
     onSuccess: (data) => {
       queryClient.setQueryData(["updates", "status"], data.status);
       setActionError(null);

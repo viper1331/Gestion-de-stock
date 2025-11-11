@@ -9,6 +9,7 @@ import {
 } from "../../lib/config";
 import { buildHomeConfig } from "./homepageConfig";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { fetchUpdateAvailability, fetchUpdateStatus } from "../updates/api";
 
 const PATH_MODULE_MAP: Record<string, string> = {
   "/barcode": "barcode",
@@ -54,6 +55,7 @@ function normalizeInternalPath(path: string): string | null {
 export function HomePage() {
   const { user } = useAuth();
   const { canAccess, isLoading: isModuleLoading } = useModulePermissions({ enabled: Boolean(user) });
+  const isAdmin = user?.role === "admin";
   const { data: entries = [], isFetching: isFetchingGlobal } = useQuery({
     queryKey: ["config", "global"],
     queryFn: fetchConfigEntries
@@ -61,6 +63,28 @@ export function HomePage() {
   const { data: personalEntries = [], isFetching: isFetchingPersonal } = useQuery({
     queryKey: ["config", "homepage", "personal"],
     queryFn: fetchUserHomepageConfig
+  });
+
+  const {
+    data: updateStatus,
+    isFetching: isFetchingUpdates,
+    isError: isUpdateStatusError,
+    error: updateStatusError
+  } = useQuery({
+    queryKey: ["updates", "status"],
+    queryFn: fetchUpdateStatus,
+    enabled: Boolean(user) && isAdmin
+  });
+
+  const {
+    data: updateAvailability,
+    isFetching: isFetchingAvailability,
+    isError: isUpdateAvailabilityError,
+    error: updateAvailabilityError
+  } = useQuery({
+    queryKey: ["updates", "availability"],
+    queryFn: fetchUpdateAvailability,
+    enabled: Boolean(user) && !isAdmin
   });
 
   const config = useMemo(
@@ -111,6 +135,26 @@ export function HomePage() {
     { label: config.focus_3_label, description: config.focus_3_description }
   ];
 
+  const isCheckingUpdates = isAdmin ? isFetchingUpdates : isFetchingAvailability;
+
+  const updateStatusErrorMessage = useMemo(() => {
+    const hasError = isAdmin ? isUpdateStatusError : isUpdateAvailabilityError;
+    if (!hasError) {
+      return null;
+    }
+    const rawError = isAdmin ? updateStatusError : updateAvailabilityError;
+    if (rawError instanceof Error) {
+      return rawError.message;
+    }
+    return "Impossible de récupérer l'état des mises à jour.";
+  }, [isAdmin, isUpdateAvailabilityError, isUpdateStatusError, updateAvailabilityError, updateStatusError]);
+
+  const hasPendingUpdate = isAdmin
+    ? Boolean(updateStatus?.pending_update)
+    : Boolean(updateAvailability?.pending_update);
+
+  const trackedBranch = isAdmin ? updateStatus?.branch ?? null : updateAvailability?.branch ?? null;
+
   return (
     <section className="space-y-6">
       <div className="rounded-xl border border-slate-800 bg-gradient-to-r from-indigo-500/10 via-slate-950 to-slate-950 p-6 shadow-lg">
@@ -151,6 +195,63 @@ export function HomePage() {
           <p className="mt-2 text-sm leading-relaxed">{config.announcement}</p>
         </div>
       ) : null}
+
+      <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
+        <header className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold text-white">Mises à jour du serveur</h2>
+            <p className="text-xs text-slate-400">Gardez l'application synchronisée avec GitHub.</p>
+          </div>
+          {isAdmin ? (
+            <Link
+              to="/updates"
+              className="inline-flex items-center justify-center rounded-md border border-indigo-500 px-3 py-1.5 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300"
+            >
+              Gérer les mises à jour
+            </Link>
+          ) : null}
+        </header>
+        {isAdmin ? (
+          <div className="mt-3 space-y-2 text-sm">
+            {isCheckingUpdates ? (
+              <p className="text-slate-400">Vérification des mises à jour en cours...</p>
+            ) : updateStatusErrorMessage ? (
+              <p className="text-red-300">{updateStatusErrorMessage}</p>
+            ) : hasPendingUpdate ? (
+              <p className="text-amber-300">
+                Une mise à jour GitHub est disponible. Appliquez-la depuis la page « Mises à jour ».
+              </p>
+            ) : (
+              <p className="text-emerald-300">Aucune mise à jour en attente. Le serveur est synchronisé avec la branche suivie.</p>
+            )}
+            {trackedBranch ? (
+              <p className="text-xs text-slate-400">Branche suivie : {trackedBranch}</p>
+            ) : null}
+            {updateStatus?.latest_pull_request ? (
+              <p className="text-xs text-slate-500">
+                Dernière PR fusionnée : {updateStatus.latest_pull_request.title} (#{updateStatus.latest_pull_request.number}).
+              </p>
+            ) : null}
+          </div>
+        ) : (
+          <div className="mt-3 space-y-2 text-sm">
+            {isCheckingUpdates ? (
+              <p className="text-slate-400">Vérification des mises à jour en cours...</p>
+            ) : updateStatusErrorMessage ? (
+              <p className="text-red-300">{updateStatusErrorMessage}</p>
+            ) : hasPendingUpdate ? (
+              <p className="text-amber-300">
+                Une mise à jour est disponible. Prévenez un administrateur afin qu'il l'applique lors de sa prochaine connexion.
+              </p>
+            ) : (
+              <p className="text-slate-300">Aucune mise à jour en attente pour le moment.</p>
+            )}
+            {trackedBranch ? (
+              <p className="text-xs text-slate-500">Branche suivie : {trackedBranch}</p>
+            ) : null}
+          </div>
+        )}
+      </section>
 
       <section className="space-y-3">
         <header>
