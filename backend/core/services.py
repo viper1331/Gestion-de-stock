@@ -3457,42 +3457,76 @@ def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
     ]
 
 
+def _collect_normalized_barcode_values(
+    conn: sqlite3.Connection, sources: Iterable[tuple[str, str, str]]
+) -> set[str]:
+    """Retourne les codes-barres connus pour les modules fournis (normalisés)."""
+
+    collected: set[str] = set()
+    for module, table, column in sources:
+        for normalized in _iter_module_barcode_values(conn, module, table, column):
+            key = normalized.casefold()
+            collected.add(key)
+            sanitized = normalized.replace("/", "-")
+            if sanitized != normalized:
+                collected.add(sanitized.casefold())
+    return collected
+
+
 def list_accessible_barcode_assets(user: models.User) -> list[barcode_service.BarcodeAsset]:
-    """Retourne les fichiers de codes-barres consultables par l'utilisateur."""
+    """Retourne les fichiers de codes-barres consultables par l'utilisateur.
+
+    Les fichiers orphelins (ne correspondant plus à un enregistrement existant) sont
+    automatiquement purgés pour éviter d'exposer des visuels obsolètes.
+    """
 
     assets = barcode_service.list_barcode_assets()
     if not assets:
         return []
 
-    if user.role == "admin":
-        return assets
-
     ensure_database_ready()
 
-    accessible_sources = [
-        (module, table, column)
-        for module, table, column in _BARCODE_MODULE_SOURCES
-        if has_module_access(user, module, action="view")
-    ]
-    if not accessible_sources:
-        return []
+    if user.role == "admin":
+        accessible_sources: list[tuple[str, str, str]] = list(_BARCODE_MODULE_SOURCES)
+    else:
+        accessible_sources = [
+            (module, table, column)
+            for module, table, column in _BARCODE_MODULE_SOURCES
+            if has_module_access(user, module, action="view")
+        ]
+        if not accessible_sources:
+            return []
 
-    allowed_values: set[str] = set()
     with db.get_stock_connection() as conn:
-        for module, table, column in accessible_sources:
-            for normalized in _iter_module_barcode_values(conn, module, table, column):
-                allowed_values.add(normalized.casefold())
-
-    if not allowed_values:
-        return []
+        allowed_values = _collect_normalized_barcode_values(conn, accessible_sources)
 
     filtered_assets: list[barcode_service.BarcodeAsset] = []
+    purge_candidates: list[barcode_service.BarcodeAsset] = []
+
     for asset in assets:
         normalized_sku = asset.sku.strip()
         if not normalized_sku:
+            purge_candidates.append(asset)
             continue
-        if normalized_sku.casefold() in allowed_values:
+
+        normalized_key = normalized_sku.casefold()
+
+        if normalized_key in allowed_values:
             filtered_assets.append(asset)
+            continue
+
+        if user.role == "admin":
+            # Si l'administrateur ne dispose pas de référence pour ce code,
+            # il s'agit d'un fichier orphelin à supprimer dynamiquement.
+            purge_candidates.append(asset)
+
+    if user.role == "admin" and purge_candidates:
+        for asset in purge_candidates:
+            try:
+                asset.path.unlink(missing_ok=True)
+            except OSError:
+                # L'échec de suppression ne doit pas bloquer l'affichage.
+                pass
 
     return filtered_assets
 
