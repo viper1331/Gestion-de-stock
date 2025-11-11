@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from pathlib import Path
 from textwrap import wrap
-from typing import Any, BinaryIO, Callable, Iterable, Optional
+from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional
 from uuid import uuid4
 
 from reportlab.lib import colors
@@ -3392,11 +3392,43 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
         ]
 
 
+def _iter_module_barcode_values(
+    conn: sqlite3.Connection, module: str, table: str, column: str
+) -> Iterator[str]:
+    """Itère sur les valeurs de codes-barres pour un module donné."""
+
+    if module == "vehicle_inventory":
+        query = f"""
+            SELECT DISTINCT src.{column} AS value
+            FROM {table} AS src
+            LEFT JOIN remise_items AS base ON base.id = src.remise_item_id
+            WHERE src.{column} IS NOT NULL
+              AND TRIM(src.{column}) <> ""
+              AND (src.remise_item_id IS NULL OR base.id IS NOT NULL)
+        """
+    else:
+        query = f"""
+            SELECT DISTINCT {column} AS value
+            FROM {table}
+            WHERE {column} IS NOT NULL AND TRIM({column}) <> ""
+        """
+
+    cur = conn.execute(query)
+    for row in cur.fetchall():
+        raw_value = row["value"]
+        if not raw_value:
+            continue
+        normalized = raw_value.strip()
+        if not normalized:
+            continue
+        yield normalized
+
+
 def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
     ensure_database_ready()
 
     accessible_sources = [
-        (table, column)
+        (module, table, column)
         for module, table, column in _BARCODE_MODULE_SOURCES
         if has_module_access(user, module, action="view")
     ]
@@ -3411,21 +3443,8 @@ def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
 
     collected: dict[str, str] = {}
     with db.get_stock_connection() as conn:
-        for table, column in accessible_sources:
-            cur = conn.execute(
-                f"""
-                SELECT DISTINCT {column} AS value
-                FROM {table}
-                WHERE {column} IS NOT NULL AND TRIM({column}) <> ""
-                """
-            )
-            for row in cur.fetchall():
-                raw_value = row["value"]
-                if not raw_value:
-                    continue
-                normalized = raw_value.strip()
-                if not normalized:
-                    continue
+        for module, table, column in accessible_sources:
+            for normalized in _iter_module_barcode_values(conn, module, table, column):
                 key = normalized.casefold()
                 if key in existing_visual_keys:
                     continue
@@ -3451,7 +3470,7 @@ def list_accessible_barcode_assets(user: models.User) -> list[barcode_service.Ba
     ensure_database_ready()
 
     accessible_sources = [
-        (table, column)
+        (module, table, column)
         for module, table, column in _BARCODE_MODULE_SOURCES
         if has_module_access(user, module, action="view")
     ]
@@ -3460,21 +3479,8 @@ def list_accessible_barcode_assets(user: models.User) -> list[barcode_service.Ba
 
     allowed_values: set[str] = set()
     with db.get_stock_connection() as conn:
-        for table, column in accessible_sources:
-            cur = conn.execute(
-                f"""
-                SELECT DISTINCT {column} AS value
-                FROM {table}
-                WHERE {column} IS NOT NULL AND TRIM({column}) <> ""
-                """
-            )
-            for row in cur.fetchall():
-                raw_value = row["value"]
-                if not raw_value:
-                    continue
-                normalized = raw_value.strip()
-                if not normalized:
-                    continue
+        for module, table, column in accessible_sources:
+            for normalized in _iter_module_barcode_values(conn, module, table, column):
                 allowed_values.add(normalized.casefold())
 
     if not allowed_values:

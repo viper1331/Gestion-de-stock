@@ -80,7 +80,8 @@ async def get_barcode_asset(
 @router.get("/export/pdf")
 async def export_barcode_pdf(user: models.User = Depends(get_current_user)) -> StreamingResponse:
     _require_permission(user, action="view")
-    pdf_buffer = barcode_service.generate_barcode_pdf()
+    assets = services.list_accessible_barcode_assets(user)
+    pdf_buffer = barcode_service.generate_barcode_pdf(assets=assets)
     if not pdf_buffer:
         raise HTTPException(status_code=404, detail="Aucun code-barres disponible pour l'export")
     headers = {"Content-Disposition": "attachment; filename=barcodes.pdf"}

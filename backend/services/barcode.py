@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
 from pathlib import Path
-from typing import List, Optional
+from typing import Iterable, List, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
@@ -168,11 +168,22 @@ def get_barcode_asset(filename: str) -> Optional[Path]:
     return resolved
 
 
-def generate_barcode_pdf() -> Optional[BytesIO]:
-    """Crée un PDF A4 avec une grille de codes-barres."""
+def generate_barcode_pdf(
+    assets: Optional[Iterable[BarcodeAsset]] = None,
+) -> Optional[BytesIO]:
+    """Crée un PDF A4 avec une grille de codes-barres.
 
-    assets = list_barcode_assets()
-    if not assets:
+    Args:
+        assets: Optionnellement une collection d'assets déjà filtrés.
+            Si omis, tous les fichiers disponibles seront utilisés.
+    """
+
+    if assets is None:
+        assets_list = list_barcode_assets()
+    else:
+        assets_list = list(assets)
+
+    if not assets_list:
         return None
 
     px_per_cm = PDF_DPI / 2.54
@@ -194,9 +205,9 @@ def generate_barcode_pdf() -> Optional[BytesIO]:
     cells_per_page = PDF_COLUMNS * PDF_ROWS
     pages: list[Image.Image] = []
 
-    for start in range(0, len(assets), cells_per_page):
+    for start in range(0, len(assets_list), cells_per_page):
         page = Image.new("RGB", (page_width_px, page_height_px), color="white")
-        chunk = assets[start : start + cells_per_page]
+        chunk = assets_list[start : start + cells_per_page]
 
         for index, asset in enumerate(chunk):
             try:
