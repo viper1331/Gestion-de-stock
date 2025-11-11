@@ -2140,6 +2140,32 @@ def test_updates_status_returns_payload(monkeypatch: Any) -> None:
     assert payload["pending_update"] is False
 
 
+def test_updates_availability_for_regular_user(monkeypatch: Any) -> None:
+    async def fake_status() -> update_service.UpdateStatusData:
+        return update_service.UpdateStatusData(
+            repository="owner/repo",
+            branch="develop",
+            current_commit="abc123",
+            latest_pull_request=None,
+            last_deployed_pull=5,
+            last_deployed_sha="abc123",
+            last_deployed_at=None,
+            pending_update=True,
+        )
+
+    monkeypatch.setattr(update_service, "get_status", fake_status)
+
+    username = f"user-{uuid4().hex[:6]}"
+    password = "secretpass"
+    _create_user(username, password, role="user")
+    headers = _login_headers(username, password)
+    response = client.get("/updates/availability", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["pending_update"] is True
+    assert payload["branch"] == "develop"
+
+
 def test_apply_update_returns_result(monkeypatch: Any) -> None:
     async def fake_apply() -> tuple[bool, update_service.UpdateStatusData]:
         status = update_service.UpdateStatusData(

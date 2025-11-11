@@ -257,6 +257,11 @@ class UpdateStatus(BaseModel):
     pending_update: bool = False
 
 
+class UpdateAvailability(BaseModel):
+    pending_update: bool = False
+    branch: str | None = None
+
+
 class UpdateApplyResponse(BaseModel):
     updated: bool
     status: UpdateStatus

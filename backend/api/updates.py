@@ -15,6 +15,17 @@ def _ensure_admin(user: models.User) -> None:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
 
 
+@router.get("/availability", response_model=models.UpdateAvailability)
+async def get_update_availability(user: models.User = Depends(get_current_user)) -> models.UpdateAvailability:
+    try:
+        status_data = await update_service.get_status()
+    except update_service.UpdateConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except update_service.UpdateError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    return models.UpdateAvailability(pending_update=status_data.pending_update, branch=status_data.branch)
+
+
 @router.get("/status", response_model=models.UpdateStatus)
 async def get_update_status(user: models.User = Depends(get_current_user)) -> models.UpdateStatus:
     _ensure_admin(user)
