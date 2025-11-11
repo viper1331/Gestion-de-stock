@@ -435,6 +435,12 @@ export function VehicleInventoryPage() {
     [selectedView]
   );
 
+  const backgroundPanelStorageKey = useMemo(() => {
+    const vehicleIdentifier = selectedVehicle?.id ? `vehicle-${selectedVehicle.id}` : "no-vehicle";
+    const viewIdentifier = normalizeViewName(normalizedSelectedView).replace(/\s+/g, "-");
+    return `vehicleInventory:backgroundPanel:${vehicleIdentifier}:${viewIdentifier}`;
+  }, [selectedVehicle?.id, normalizedSelectedView]);
+
   const selectedViewConfig = useMemo(() => {
     if (!selectedVehicle?.view_configs || !normalizedSelectedView) {
       return null;
@@ -1001,6 +1007,7 @@ export function VehicleInventoryPage() {
                 })
               }
               isUpdatingBackground={updateViewBackground.isPending}
+              backgroundPanelStorageKey={backgroundPanelStorageKey}
             />
 
             <aside className="space-y-6">
@@ -1240,6 +1247,7 @@ interface VehicleCompartmentProps {
   onItemFeedback: (feedback: Feedback) => void;
   onBackgroundChange: (photoId: number | null) => void;
   isUpdatingBackground: boolean;
+  backgroundPanelStorageKey: string;
 }
 
 function VehicleCompartment({
@@ -1252,10 +1260,14 @@ function VehicleCompartment({
   onRemoveItem,
   onItemFeedback,
   onBackgroundChange,
-  isUpdatingBackground
+  isUpdatingBackground,
+  backgroundPanelStorageKey
 }: VehicleCompartmentProps) {
   const [isHovering, setIsHovering] = useState(false);
-  const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
+  const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = usePersistentBoolean(
+    backgroundPanelStorageKey,
+    true
+  );
   const boardRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const queryClient = useQueryClient();
