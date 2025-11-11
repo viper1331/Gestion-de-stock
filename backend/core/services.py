@@ -3487,7 +3487,13 @@ def list_accessible_barcode_assets(user: models.User) -> list[barcode_service.Ba
     ensure_database_ready()
 
     if user.role == "admin":
-        accessible_sources: list[tuple[str, str, str]] = list(_BARCODE_MODULE_SOURCES)
+        # Les administrateurs doivent pouvoir visualiser tous les fichiers générés,
+        # même lorsqu'ils ne sont pas encore associés à une donnée métier. Cela
+        # permet notamment de vérifier immédiatement un code-barres fraîchement
+        # créé (les tests de régression couvrent ce comportement). On ne tente
+        # donc pas de filtrer ni de purger ces visuels dans ce cas.
+        return assets
+
     else:
         accessible_sources = [
             (module, table, column)
