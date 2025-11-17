@@ -656,6 +656,22 @@ def _apply_schema_migrations() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_remise_movements_item ON remise_movements(item_id);
+            CREATE TABLE IF NOT EXISTS remise_lots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name)
+            );
+            CREATE TABLE IF NOT EXISTS remise_lot_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lot_id INTEGER NOT NULL REFERENCES remise_lots(id) ON DELETE CASCADE,
+                remise_item_id INTEGER NOT NULL REFERENCES remise_items(id) ON DELETE CASCADE,
+                quantity INTEGER NOT NULL CHECK(quantity > 0),
+                UNIQUE(lot_id, remise_item_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_remise_lot_items_lot ON remise_lot_items(lot_id);
+            CREATE INDEX IF NOT EXISTS idx_remise_lot_items_item ON remise_lot_items(remise_item_id);
             """
         )
         _ensure_vehicle_item_columns(conn)
@@ -2254,6 +2270,226 @@ def record_remise_movement(item_id: int, payload: models.MovementCreate) -> None
 
 def fetch_remise_movements(item_id: int) -> list[models.Movement]:
     return _fetch_inventory_movements_internal("inventory_remise", item_id)
+
+
+def _build_remise_lot(row: sqlite3.Row) -> models.RemiseLot:
+    return models.RemiseLot(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        created_at=_coerce_datetime(row["created_at"]),
+        item_count=row["item_count"],
+        total_quantity=row["total_quantity"],
+    )
+
+
+def _require_remise_lot(conn: sqlite3.Connection, lot_id: int) -> None:
+    exists = conn.execute("SELECT 1 FROM remise_lots WHERE id = ?", (lot_id,)).fetchone()
+    if exists is None:
+        raise ValueError("Lot introuvable")
+
+
+def list_remise_lots() -> list[models.RemiseLot]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT rl.id, rl.name, rl.description, rl.created_at,
+                   COUNT(rli.id) AS item_count,
+                   COALESCE(SUM(rli.quantity), 0) AS total_quantity
+            FROM remise_lots AS rl
+            LEFT JOIN remise_lot_items AS rli ON rli.lot_id = rl.id
+            GROUP BY rl.id
+            ORDER BY rl.created_at DESC, rl.name
+            """
+        ).fetchall()
+    return [_build_remise_lot(row) for row in rows]
+
+
+def get_remise_lot(lot_id: int) -> models.RemiseLot:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT rl.id, rl.name, rl.description, rl.created_at,
+                   COUNT(rli.id) AS item_count,
+                   COALESCE(SUM(rli.quantity), 0) AS total_quantity
+            FROM remise_lots AS rl
+            LEFT JOIN remise_lot_items AS rli ON rli.lot_id = rl.id
+            WHERE rl.id = ?
+            GROUP BY rl.id
+            """,
+            (lot_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Lot introuvable")
+    return _build_remise_lot(row)
+
+
+def create_remise_lot(payload: models.RemiseLotCreate) -> models.RemiseLot:
+    ensure_database_ready()
+    description = payload.description.strip() if payload.description else None
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO remise_lots (name, description) VALUES (?, ?)",
+            (payload.name.strip(), description),
+        )
+        lot_id = cur.lastrowid
+        _persist_after_commit(conn)
+    return get_remise_lot(lot_id)
+
+
+def update_remise_lot(lot_id: int, payload: models.RemiseLotUpdate) -> models.RemiseLot:
+    ensure_database_ready()
+    assignments: list[str] = []
+    values: list[object] = []
+    if payload.name is not None:
+        assignments.append("name = ?")
+        values.append(payload.name.strip())
+    if payload.description is not None:
+        assignments.append("description = ?")
+        values.append(payload.description.strip() or None)
+    if not assignments:
+        return get_remise_lot(lot_id)
+
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"UPDATE remise_lots SET {', '.join(assignments)} WHERE id = ?",
+            (*values, lot_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("Lot introuvable")
+        _persist_after_commit(conn)
+    return get_remise_lot(lot_id)
+
+
+def delete_remise_lot(lot_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _require_remise_lot(conn, lot_id)
+        items = conn.execute(
+            "SELECT remise_item_id, quantity FROM remise_lot_items WHERE lot_id = ?",
+            (lot_id,),
+        ).fetchall()
+        for row in items:
+            _update_remise_quantity(conn, row["remise_item_id"], row["quantity"])
+        conn.execute("DELETE FROM remise_lot_items WHERE lot_id = ?", (lot_id,))
+        conn.execute("DELETE FROM remise_lots WHERE id = ?", (lot_id,))
+        _persist_after_commit(conn, "inventory_remise")
+
+
+def _build_remise_lot_item(row: sqlite3.Row) -> models.RemiseLotItem:
+    return models.RemiseLotItem(
+        id=row["id"],
+        lot_id=row["lot_id"],
+        remise_item_id=row["remise_item_id"],
+        quantity=row["quantity"],
+        remise_name=row["remise_name"],
+        remise_sku=row["remise_sku"],
+        available_quantity=row["available_quantity"],
+    )
+
+
+def _get_remise_lot_item(
+    conn: sqlite3.Connection, lot_id: int, lot_item_id: int
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT rli.id, rli.lot_id, rli.remise_item_id, rli.quantity,
+               ri.name AS remise_name, ri.sku AS remise_sku, ri.quantity AS available_quantity
+        FROM remise_lot_items AS rli
+        JOIN remise_items AS ri ON ri.id = rli.remise_item_id
+        WHERE rli.id = ? AND rli.lot_id = ?
+        """,
+        (lot_item_id, lot_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Affectation introuvable")
+    return row
+
+
+def list_remise_lot_items(lot_id: int) -> list[models.RemiseLotItem]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _require_remise_lot(conn, lot_id)
+        rows = conn.execute(
+            """
+            SELECT rli.id, rli.lot_id, rli.remise_item_id, rli.quantity,
+                   ri.name AS remise_name, ri.sku AS remise_sku, ri.quantity AS available_quantity
+            FROM remise_lot_items AS rli
+            JOIN remise_items AS ri ON ri.id = rli.remise_item_id
+            WHERE rli.lot_id = ?
+            ORDER BY ri.name
+            """,
+            (lot_id,),
+        ).fetchall()
+    return [_build_remise_lot_item(row) for row in rows]
+
+
+def add_remise_lot_item(
+    lot_id: int, payload: models.RemiseLotItemBase
+) -> models.RemiseLotItem:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _require_remise_lot(conn, lot_id)
+        _update_remise_quantity(conn, payload.remise_item_id, -payload.quantity)
+        existing = conn.execute(
+            """
+            SELECT id, quantity
+            FROM remise_lot_items
+            WHERE lot_id = ? AND remise_item_id = ?
+            """,
+            (lot_id, payload.remise_item_id),
+        ).fetchone()
+        if existing:
+            new_quantity = existing["quantity"] + payload.quantity
+            conn.execute(
+                "UPDATE remise_lot_items SET quantity = ? WHERE id = ?",
+                (new_quantity, existing["id"]),
+            )
+            lot_item_id = existing["id"]
+        else:
+            cur = conn.execute(
+                "INSERT INTO remise_lot_items (lot_id, remise_item_id, quantity) VALUES (?, ?, ?)",
+                (lot_id, payload.remise_item_id, payload.quantity),
+            )
+            lot_item_id = cur.lastrowid
+        _persist_after_commit(conn, "inventory_remise")
+    with db.get_stock_connection() as conn:
+        row = _get_remise_lot_item(conn, lot_id, lot_item_id)
+    return _build_remise_lot_item(row)
+
+
+def update_remise_lot_item(
+    lot_id: int, lot_item_id: int, payload: models.RemiseLotItemUpdate
+) -> models.RemiseLotItem:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = _get_remise_lot_item(conn, lot_id, lot_item_id)
+        target_quantity = payload.quantity if payload.quantity is not None else row["quantity"]
+        delta = target_quantity - row["quantity"]
+        _update_remise_quantity(conn, row["remise_item_id"], -delta)
+        if delta != 0:
+            conn.execute(
+                "UPDATE remise_lot_items SET quantity = ? WHERE id = ?",
+                (target_quantity, lot_item_id),
+            )
+        _persist_after_commit(conn, "inventory_remise")
+    with db.get_stock_connection() as conn:
+        updated_row = _get_remise_lot_item(conn, lot_id, lot_item_id)
+    return _build_remise_lot_item(updated_row)
+
+
+def remove_remise_lot_item(lot_id: int, lot_item_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = _get_remise_lot_item(conn, lot_id, lot_item_id)
+        _update_remise_quantity(conn, row["remise_item_id"], row["quantity"])
+        conn.execute(
+            "DELETE FROM remise_lot_items WHERE id = ? AND lot_id = ?",
+            (lot_item_id, lot_id),
+        )
+        _persist_after_commit(conn, "inventory_remise")
 
 
 def export_items_to_csv(path: Path) -> Path:

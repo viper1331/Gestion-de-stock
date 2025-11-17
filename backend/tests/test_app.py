@@ -2006,6 +2006,95 @@ def test_remise_inventory_crud_cycle() -> None:
     assert category_delete.status_code == 204
 
 
+def test_remise_lot_allocation_cycle() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Remise-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot test",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 10,
+            "category_id": category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    item_id = item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": f"Lot-{uuid4().hex[:6]}", "description": "Test lot"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    assign_resp = client.post(
+        f"/remise-inventory/lots/{lot_id}/items",
+        json={"remise_item_id": item_id, "quantity": 4},
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+    assigned = assign_resp.json()
+    assert assigned["quantity"] == 4
+
+    lot_items_resp = client.get(
+        f"/remise-inventory/lots/{lot_id}/items", headers=admin_headers
+    )
+    assert lot_items_resp.status_code == 200, lot_items_resp.text
+    lot_items = lot_items_resp.json()
+    assert lot_items and lot_items[0]["available_quantity"] == 6
+
+    lots_listing = client.get("/remise-inventory/lots/", headers=admin_headers)
+    assert lots_listing.status_code == 200, lots_listing.text
+    lot_entry = next(entry for entry in lots_listing.json() if entry["id"] == lot_id)
+    assert lot_entry["item_count"] == 1
+    assert lot_entry["total_quantity"] == 4
+
+    update_resp = client.put(
+        f"/remise-inventory/lots/{lot_id}/items/{assigned['id']}",
+        json={"quantity": 2},
+        headers=admin_headers,
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    updated = update_resp.json()
+    assert updated["quantity"] == 2
+    assert updated["available_quantity"] == 8
+
+    removal_resp = client.delete(
+        f"/remise-inventory/lots/{lot_id}/items/{assigned['id']}",
+        headers=admin_headers,
+    )
+    assert removal_resp.status_code == 204, removal_resp.text
+    restored_item = services.get_remise_item(item_id)
+    assert restored_item.quantity == 10
+
+    delete_lot_resp = client.delete(
+        f"/remise-inventory/lots/{lot_id}", headers=admin_headers
+    )
+    assert delete_lot_resp.status_code == 204, delete_lot_resp.text
+
+    cleanup_item = client.delete(
+        f"/remise-inventory/{item_id}", headers=admin_headers
+    )
+    assert cleanup_item.status_code == 204, cleanup_item.text
+    cleanup_category = client.delete(
+        f"/remise-inventory/categories/{category_id}", headers=admin_headers
+    )
+    assert cleanup_category.status_code == 204, cleanup_category.text
+
+
 def test_backup_schedule_roundtrip() -> None:
     headers = _login_headers("admin", "admin123")
     try:
