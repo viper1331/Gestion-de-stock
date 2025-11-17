@@ -131,6 +131,9 @@ class Item(BaseModel):
     image_url: str | None = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
+    documentation_url: str | None = None
+    tutorial_url: str | None = None
+    qr_token: str | None = None
 
 
 class ItemCreate(BaseModel):
@@ -144,6 +147,8 @@ class ItemCreate(BaseModel):
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
     remise_item_id: Optional[int] = None
+    documentation_url: Optional[str] = None
+    tutorial_url: Optional[str] = None
 
 
 class ItemUpdate(BaseModel):
@@ -158,6 +163,8 @@ class ItemUpdate(BaseModel):
     remise_item_id: Optional[int] = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
+    documentation_url: Optional[str] = None
+    tutorial_url: Optional[str] = None
 
 
 class VehiclePhoto(BaseModel):
@@ -182,6 +189,16 @@ class Movement(BaseModel):
 class MovementCreate(BaseModel):
     delta: int
     reason: Optional[str] = None
+
+
+class VehicleQrInfo(BaseModel):
+    item_id: int
+    name: str
+    sku: str
+    category_name: str | None = None
+    image_url: str | None = None
+    documentation_url: str | None = None
+    tutorial_url: str | None = None
 
 
 class LowStockReport(BaseModel):

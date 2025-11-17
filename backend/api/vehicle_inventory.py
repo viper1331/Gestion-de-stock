@@ -1,14 +1,16 @@
 """Routes pour la gestion de l'inventaire véhicules."""
 from __future__ import annotations
 
+import html
 import io
 from datetime import datetime
 
-from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
-from fastapi.responses import StreamingResponse
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request
+from fastapi.responses import HTMLResponse, StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
+from backend.services import qrcode_service
 
 router = APIRouter()
 
@@ -43,6 +45,31 @@ async def export_vehicle_inventory_pdf(
             "Content-Disposition": f"attachment; filename=\"{filename}\"",
         },
     )
+
+
+@router.get("/{item_id}/qr-code")
+async def generate_vehicle_item_qr_code(
+    item_id: int,
+    request: Request,
+    regenerate: bool = Query(
+        default=False,
+        description="Générer un nouveau lien sécurisé avant de créer le QR code",
+    ),
+    user: models.User = Depends(get_current_user),
+):
+    _require_permission(user, action="view")
+    try:
+        qr_token = services.get_vehicle_item_qr_token(item_id, regenerate=regenerate)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    qr_url = str(request.url_for("vehicle_item_public_page", qr_token=qr_token))
+    qr_buffer = qrcode_service.generate_qr_png(qr_url, label=f"Véhicule #{item_id}")
+    headers = {
+        "Content-Disposition": f"attachment; filename=vehicule-{item_id}-qr.png",
+        "X-Vehicle-QR-Token": qr_token,
+    }
+    return StreamingResponse(qr_buffer, media_type="image/png", headers=headers)
 
 
 @router.post("/", response_model=models.Item, status_code=201)
@@ -246,3 +273,129 @@ async def delete_vehicle_photo(
         services.delete_vehicle_photo(photo_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/public/{qr_token}", response_model=models.VehicleQrInfo)
+async def fetch_public_vehicle_item(qr_token: str) -> models.VehicleQrInfo:
+    try:
+        return services.get_vehicle_item_public_info(qr_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get(
+    "/public/{qr_token}/page",
+    response_class=HTMLResponse,
+    name="vehicle_item_public_page",
+)
+async def render_public_vehicle_page(qr_token: str) -> HTMLResponse:
+    try:
+        info = services.get_vehicle_item_public_info(qr_token)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    title = html.escape(info.name)
+    documentation_link = (
+        f'<a href="{html.escape(info.documentation_url)}" target="_blank" rel="noopener">Consulter la documentation</a>'
+        if info.documentation_url
+        else "Aucune documentation n'est disponible pour cet équipement."
+    )
+    tutorial_link = (
+        f'<a href="{html.escape(info.tutorial_url)}" target="_blank" rel="noopener">Ouvrir le tutoriel</a>'
+        if info.tutorial_url
+        else "Aucun tutoriel n'est disponible pour cet équipement."
+    )
+    category = html.escape(info.category_name) if info.category_name else "Non associé"
+    image_section = (
+        f'<img src="{html.escape(info.image_url)}" alt="{title}" style="max-width: 280px; border-radius: 8px;" />'
+        if info.image_url
+        else ""
+    )
+
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang=\"fr\">
+      <head>
+        <meta charset=\"UTF-8\" />
+        <meta name=\"viewport\" content=\"width=device-width, initial-scale=1.0\" />
+        <title>{title} | Informations véhicule</title>
+        <style>
+          body {{
+            font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+            background: linear-gradient(120deg, #0f172a 0%, #1e293b 45%, #0f172a 100%);
+            color: #e2e8f0;
+            margin: 0;
+            padding: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+          }}
+          .card {{
+            background: rgba(15, 23, 42, 0.88);
+            border: 1px solid rgba(148, 163, 184, 0.2);
+            box-shadow: 0 20px 45px rgba(0, 0, 0, 0.35);
+            border-radius: 16px;
+            padding: 24px;
+            max-width: 720px;
+            width: calc(100% - 32px);
+          }}
+          h1 {{
+            margin: 0 0 4px;
+            font-size: 24px;
+          }}
+          p {{
+            margin: 6px 0;
+            color: #cbd5e1;
+          }}
+          a {{
+            color: #38bdf8;
+            text-decoration: none;
+            font-weight: 600;
+          }}
+          a:hover {{
+            text-decoration: underline;
+          }}
+          .grid {{
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
+            gap: 16px;
+            margin-top: 18px;
+          }}
+          .pill {{
+            display: inline-block;
+            background: rgba(148, 163, 184, 0.15);
+            color: #cbd5e1;
+            padding: 6px 12px;
+            border-radius: 999px;
+            font-size: 12px;
+            text-transform: uppercase;
+            letter-spacing: 0.08em;
+          }}
+        </style>
+      </head>
+      <body>
+        <main class=\"card\">
+          <div style=\"display:flex; align-items:center; gap:18px;\">
+            <div style=\"flex:1;\">
+              <h1>{title}</h1>
+              <p class=\"pill\">Catégorie : {category}</p>
+              <p>Référence : <strong>{html.escape(info.sku)}</strong></p>
+            </div>
+            {image_section}
+          </div>
+          <div class=\"grid\">
+            <div>
+              <h2 style=\"margin: 0 0 8px;\">Documentation</h2>
+              <p>{documentation_link}</p>
+            </div>
+            <div>
+              <h2 style=\"margin: 0 0 8px;\">Tutoriel</h2>
+              <p>{tutorial_link}</p>
+            </div>
+          </div>
+        </main>
+      </body>
+    </html>
+    """
+    return HTMLResponse(html_content)

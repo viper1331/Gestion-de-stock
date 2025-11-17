@@ -147,6 +147,12 @@ export function AppLayout() {
                   module: "vehicle_inventory"
                 },
                 {
+                  to: "/vehicle-inventory/qr-codes",
+                  label: "QR véhicules",
+                  tooltip: "Partager les fiches matériel via QR codes",
+                  module: "vehicle_inventory"
+                },
+                {
                   to: "/remise-inventory",
                   label: "Inventaire remises",
                   tooltip: "Suivre les stocks mis en remise",
