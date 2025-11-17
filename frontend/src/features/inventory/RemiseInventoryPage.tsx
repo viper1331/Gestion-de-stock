@@ -1,4 +1,5 @@
 import { InventoryModuleDashboard } from "./InventoryModuleDashboard";
+import { RemiseLotsPanel } from "./RemiseLotsPanel";
 import { type InventoryModuleConfig } from "./config";
 
 const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
@@ -20,5 +21,10 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
 };
 
 export function RemiseInventoryPage() {
-  return <InventoryModuleDashboard config={REMISE_INVENTORY_CONFIG} />;
+  return (
+    <div className="space-y-6">
+      <InventoryModuleDashboard config={REMISE_INVENTORY_CONFIG} />
+      <RemiseLotsPanel />
+    </div>
+  );
 }

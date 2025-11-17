@@ -24,6 +24,7 @@ from backend.api import (
     users,
     vehicle_inventory,
     remise_inventory,
+    about,
 )
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
@@ -71,6 +72,7 @@ app.include_router(remise_inventory.router, prefix="/remise-inventory", tags=["r
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(updates.router, prefix="/updates", tags=["updates"])
+app.include_router(about.router, prefix="/about", tags=["about"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
