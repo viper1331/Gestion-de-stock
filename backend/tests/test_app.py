@@ -1015,8 +1015,11 @@ def test_barcode_listing_and_assets(monkeypatch: Any, tmp_path: Path) -> None:
 
     generated = barcode_service.generate_barcode_png("SKU-ALPHA")
     assert generated is not None and generated.exists()
+    assert generated.stat().st_size > 0
+
     generated_two = barcode_service.generate_barcode_png("SKU-BETA")
     assert generated_two is not None and generated_two.exists()
+    assert generated_two.stat().st_size > 0
 
     listing = client.get("/barcode", headers=admin_headers)
     assert listing.status_code == 200, listing.text

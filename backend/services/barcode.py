@@ -1,4 +1,9 @@
-"""Service pour la génération des codes-barres."""
+"""Service pour la génération des codes-barres.
+
+La génération repose sur `python-barcode` et `Pillow` pour produire des
+images Code 128 B scannables. Sans ces dépendances, l'API lève une erreur
+explicite plutôt que de revenir silencieusement à un rendu factice.
+"""
 from __future__ import annotations
 
 import logging
@@ -11,12 +16,12 @@ from typing import Iterable, List, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
-try:  # pragma: no cover - dépendance optionnelle en environnement de test
+try:  # pragma: no cover - dépendances requises pour la génération réelle
     import barcode as _barcode_lib
     from barcode.charsets import code128 as _code128_charset
     from barcode.codex import Code128, check_code
     from barcode.writer import ImageWriter
-except ModuleNotFoundError:  # pragma: no cover - dépendance optionnelle en environnement de test
+except ModuleNotFoundError:  # pragma: no cover - géré dans generate_barcode_png
     _barcode_lib = None
     ImageWriter = None  # type: ignore[assignment]
 else:
