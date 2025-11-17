@@ -5,11 +5,13 @@ import { useAuth } from "../features/auth/useAuth";
 import { ThemeToggle } from "./ThemeToggle";
 import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
+import { useUiStore } from "../app/store";
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
+  const { sidebarOpen, toggleSidebar } = useUiStore();
 
   useEffect(() => {
     initialize();
@@ -306,18 +308,34 @@ export function AppLayout() {
 
   return (
     <div className="flex h-screen bg-slate-950 text-slate-50">
-      <aside className="w-64 border-r border-slate-800 bg-slate-900 p-6">
-        <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
-          Gestion Stock Pro
-        </Link>
-        <nav className="mt-8 flex flex-col gap-4 text-sm">
+      <aside
+        className={`relative flex h-full flex-col border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
+          sidebarOpen ? "w-64 p-6" : "w-20 p-4"
+        }`}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
+            <span aria-hidden>{sidebarOpen ? "Gestion Stock Pro" : "GSP"}</span>
+            <span className="sr-only">Gestion Stock Pro</span>
+          </Link>
+          <button
+            type="button"
+            onClick={toggleSidebar}
+            className="rounded-md border border-slate-800 bg-slate-900 p-2 text-slate-200 shadow hover:bg-slate-800"
+            aria-label={sidebarOpen ? "Réduire le menu principal" : "Déplier le menu principal"}
+          >
+            <span aria-hidden>{sidebarOpen ? "⟨" : "⟩"}</span>
+          </button>
+        </div>
+        <nav className={`mt-8 flex flex-col gap-4 text-sm ${sidebarOpen ? "" : "items-center"}`}>
           <NavLink
             to="/"
             end
-            className={({ isActive }) => navClass(isActive)}
+            className={({ isActive }) => navClass(isActive, sidebarOpen)}
             title="Accéder à la page d'accueil personnalisée"
           >
-            Accueil
+            <span aria-hidden>{sidebarOpen ? "Accueil" : "A"}</span>
+            <span className="sr-only">Accueil</span>
           </NavLink>
           {navigationGroups.map((group) => {
             const isOpen = openGroups[group.id] ?? false;
@@ -327,14 +345,19 @@ export function AppLayout() {
                 <button
                   type="button"
                   onClick={() => toggleGroup(group.id)}
-                  className="flex w-full items-center justify-between rounded-md px-3 py-2 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+                  className={`flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
+                    sidebarOpen ? "justify-between px-3 py-2" : "justify-center p-2"
+                  }`}
                   aria-expanded={isOpen}
                   title={group.tooltip}
                 >
-                  <span>{group.label}</span>
-                  <span aria-hidden>{isOpen ? "−" : "+"}</span>
+                  <span>
+                    <span aria-hidden>{sidebarOpen ? group.label : group.label.charAt(0)}</span>
+                    <span className="sr-only">{group.label}</span>
+                  </span>
+                  {sidebarOpen ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
                 </button>
-                {isOpen ? (
+                {sidebarOpen && isOpen ? (
                   <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
                     {group.sections.map((section) => (
                       <div key={section.id}>
@@ -350,10 +373,11 @@ export function AppLayout() {
                               key={link.to}
                               to={link.to}
                               end={link.to === "/" || link.to === "/inventory"}
-                              className={({ isActive }) => navClass(isActive)}
+                              className={({ isActive }) => navClass(isActive, sidebarOpen)}
                               title={link.tooltip}
                             >
-                              {link.label}
+                              <span aria-hidden>{sidebarOpen ? link.label : link.label.charAt(0)}</span>
+                              <span className="sr-only">{link.label}</span>
                             </NavLink>
                           ))}
                         </div>
@@ -368,19 +392,29 @@ export function AppLayout() {
         {modulePermissions.isLoading && user?.role !== "admin" ? (
           <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
         ) : null}
-        <div className="mt-auto flex flex-col gap-3 pt-6">
-          <div className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
-            <p className="font-semibold text-slate-200">{user.username}</p>
-            <p>Rôle : {user.role}</p>
+        <div className="mt-auto flex w-full flex-col gap-3 pt-6">
+          <div
+            className={`rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
+              sidebarOpen ? "px-3 py-2" : "px-2 py-1 text-center"
+            }`}
+          >
+            <p className="font-semibold text-slate-200" aria-hidden={!sidebarOpen}>
+              {sidebarOpen ? user.username : user.username.charAt(0)}
+            </p>
+            <p className={sidebarOpen ? undefined : "sr-only"}>Rôle : {user.role}</p>
+            {!sidebarOpen ? <span className="sr-only">Rôle : {user.role}</span> : null}
           </div>
           <MicToggle />
           <ThemeToggle />
           <button
             onClick={logout}
-            className="rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-red-400"
+            className={`rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
+              sidebarOpen ? "px-3 py-2" : "px-2 py-1 text-center"
+            }`}
             title="Se déconnecter de votre session"
           >
-            Se déconnecter
+            <span aria-hidden>{sidebarOpen ? "Se déconnecter" : "✕"}</span>
+            <span className="sr-only">Se déconnecter</span>
           </button>
         </div>
       </aside>
@@ -391,8 +425,8 @@ export function AppLayout() {
   );
 }
 
-function navClass(isActive: boolean) {
-  return `rounded-md px-3 py-2 font-medium transition-colors ${
-    isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-800"
-  }`;
+function navClass(isActive: boolean, expanded: boolean) {
+  return `rounded-md font-medium transition-colors ${
+    expanded ? "px-3 py-2" : "px-2 py-1 justify-center"
+  } ${isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-800"}`;
 }
