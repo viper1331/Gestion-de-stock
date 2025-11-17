@@ -11,10 +11,35 @@ from PIL import Image, ImageDraw, ImageFont, ImageOps
 
 try:  # pragma: no cover - dépendance optionnelle en environnement de test
     import barcode as _barcode_lib
+    from barcode.charsets import code128 as _code128_charset
+    from barcode.codex import Code128, check_code
     from barcode.writer import ImageWriter
 except ModuleNotFoundError:  # pragma: no cover - dépendance optionnelle en environnement de test
     _barcode_lib = None
     ImageWriter = None  # type: ignore[assignment]
+else:
+    class Code128B(Code128):
+        """Version restreinte du Code 128 forçant le jeu de caractères B."""
+
+        name = "Code 128 B"
+
+        def __init__(self, code: str, writer=None) -> None:
+            self.code = code
+            self.writer = writer or self.default_writer()
+            self._charset = "B"
+            self._buffer = ""
+            check_code(self.code, self.name, set(_code128_charset.B.keys()))
+
+        def _maybe_switch_charset(self, pos: int):  # pragma: no cover - logique simple
+            return []
+
+        def _convert(self, char: str):  # pragma: no cover - délégué à la bibliothèque
+            try:
+                return _code128_charset.B[char]
+            except KeyError:  # pragma: no cover - cohérent avec check_code
+                raise RuntimeError(
+                    f"Character {char} could not be converted in charset B."
+                ) from None
 
 WRITER_OPTIONS = {
     "module_width": 0.2,
@@ -56,8 +81,7 @@ def generate_barcode_png(sku: str) -> Optional[Path]:
 
     if _barcode_lib and ImageWriter:
         try:
-            barcode_class = _barcode_lib.get_barcode_class("code128")
-            code = barcode_class(sku, writer=ImageWriter())
+            code = Code128B(sku, writer=ImageWriter())
 
             filename = path.with_suffix("")
             generated_path = code.save(str(filename), options=WRITER_OPTIONS)
