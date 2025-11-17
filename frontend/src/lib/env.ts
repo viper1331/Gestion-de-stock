@@ -6,7 +6,11 @@ export function getApiBaseUrl(): string {
     return envUrl.replace(/\/$/, "");
   }
 
-  if (typeof window !== "undefined" && window.location?.origin) {
+  if (
+    typeof window !== "undefined" &&
+    window.location?.origin &&
+    !import.meta.env.DEV
+  ) {
     return window.location.origin.replace(/\/$/, "");
   }
 
