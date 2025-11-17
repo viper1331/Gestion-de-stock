@@ -48,3 +48,17 @@ async def apply_update(user: models.User = Depends(get_current_user)) -> models.
     except update_service.UpdateError as exc:
         raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
     return models.UpdateApplyResponse(updated=updated, status=models.UpdateStatus.model_validate(status_data.to_dict()))
+
+
+@router.post("/revert", response_model=models.UpdateApplyResponse)
+async def revert_update(user: models.User = Depends(get_current_user)) -> models.UpdateApplyResponse:
+    _ensure_admin(user)
+    try:
+        reverted, status_data = await update_service.revert_last_update()
+    except update_service.UpdateConfigurationError as exc:
+        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(exc)) from exc
+    except update_service.UpdateError as exc:
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=str(exc)) from exc
+    return models.UpdateApplyResponse(
+        updated=reverted, status=models.UpdateStatus.model_validate(status_data.to_dict())
+    )

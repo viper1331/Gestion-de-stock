@@ -15,3 +15,8 @@ export async function applyLatestUpdate(): Promise<UpdateApplyResponse> {
   const response = await api.post<UpdateApplyResponse>("/updates/apply");
   return response.data;
 }
+
+export async function revertToPreviousUpdate(): Promise<UpdateApplyResponse> {
+  const response = await api.post<UpdateApplyResponse>("/updates/revert");
+  return response.data;
+}

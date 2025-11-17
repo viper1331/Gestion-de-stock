@@ -2,7 +2,7 @@ import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "../auth/useAuth";
-import { applyLatestUpdate, fetchUpdateStatus } from "./api";
+import { applyLatestUpdate, fetchUpdateStatus, revertToPreviousUpdate } from "./api";
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -69,6 +69,26 @@ export function UpdatesPage() {
     }
   });
 
+  const revertUpdate = useMutation({
+    mutationFn: revertToPreviousUpdate,
+    onSuccess: (data) => {
+      queryClient.setQueryData(["updates", "status"], data.status);
+      setActionError(null);
+      setMessage(
+        data.updated
+          ? "Version précédente restaurée."
+          : "Aucune version précédente n'a pu être restaurée."
+      );
+    },
+    onError: (err: unknown) => {
+      console.error(err);
+      setActionError("Impossible de restaurer la version précédente.");
+    },
+    onSettled: () => {
+      setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
   const fetchErrorMessage = useMemo(() => {
     if (!isError) {
       return null;
@@ -84,6 +104,10 @@ export function UpdatesPage() {
   const formattedLastDeployment = useMemo(
     () => formatDate(status?.last_deployed_at ?? null),
     [status?.last_deployed_at]
+  );
+  const formattedPreviousDeployment = useMemo(
+    () => formatDate(status?.previous_deployed_at ?? null),
+    [status?.previous_deployed_at]
   );
   const formattedMergedAt = useMemo(
     () => formatDate(latestPullRequest?.merged_at ?? null),
@@ -120,6 +144,16 @@ export function UpdatesPage() {
     }
   };
 
+  const handleRevert = async () => {
+    setActionError(null);
+    setMessage(null);
+    try {
+      await revertUpdate.mutateAsync();
+    } catch (err) {
+      // L'erreur est gérée dans onError.
+    }
+  };
+
   return (
     <section className="space-y-6">
       <header className="space-y-1">
@@ -145,6 +179,19 @@ export function UpdatesPage() {
           disabled={applyUpdate.isPending || isFetching || isLoading}
         >
           {applyUpdate.isPending ? "Mise à jour..." : "Appliquer la mise à jour"}
+        </button>
+        <button
+          type="button"
+          onClick={handleRevert}
+          className="inline-flex items-center rounded-md bg-amber-600 px-4 py-2 text-sm font-medium text-white hover:bg-amber-500 disabled:opacity-50"
+          disabled={
+            revertUpdate.isPending ||
+            isFetching ||
+            isLoading ||
+            !status?.can_revert
+          }
+        >
+          {revertUpdate.isPending ? "Restauration..." : "Restaurer la version précédente"}
         </button>
       </div>
 
@@ -263,6 +310,11 @@ export function UpdatesPage() {
         {status?.last_deployed_pull && (
           <p className="mt-3 text-xs opacity-80">
             Dernier pull request déployé: #{status.last_deployed_pull} ({truncateCommit(status.last_deployed_sha)}).
+          </p>
+        )}
+        {status?.previous_deployed_sha && (
+          <p className="mt-1 text-xs opacity-80">
+            Version précédente disponible: #{status.previous_deployed_pull ?? "-"} ({truncateCommit(status.previous_deployed_sha)}), déployée le {formattedPreviousDeployment ?? "-"}.
           </p>
         )}
       </section>

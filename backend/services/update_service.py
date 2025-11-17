@@ -45,6 +45,9 @@ class UpdateState:
     last_deployed_pull: int | None = None
     last_deployed_sha: str | None = None
     last_deployed_at: datetime | None = None
+    previous_deployed_pull: int | None = None
+    previous_deployed_sha: str | None = None
+    previous_deployed_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -59,6 +62,10 @@ class UpdateStatusData:
     last_deployed_sha: str | None
     last_deployed_at: datetime | None
     pending_update: bool
+    previous_deployed_pull: int | None
+    previous_deployed_sha: str | None
+    previous_deployed_at: datetime | None
+    can_revert: bool
 
     def to_dict(self) -> dict[str, Any]:
         """Convertit l'état en dictionnaire sérialisable."""
@@ -79,7 +86,11 @@ class UpdateStatusData:
             "last_deployed_pull": self.last_deployed_pull,
             "last_deployed_sha": self.last_deployed_sha,
             "last_deployed_at": self.last_deployed_at,
+            "previous_deployed_pull": self.previous_deployed_pull,
+            "previous_deployed_sha": self.previous_deployed_sha,
+            "previous_deployed_at": self.previous_deployed_at,
             "pending_update": self.pending_update,
+            "can_revert": self.can_revert,
         }
         return payload
 
@@ -128,6 +139,9 @@ def _load_state() -> UpdateState:
         last_deployed_pull=payload.get("last_deployed_pull"),
         last_deployed_sha=payload.get("last_deployed_sha"),
         last_deployed_at=_parse_datetime(payload.get("last_deployed_at")),
+        previous_deployed_pull=payload.get("previous_deployed_pull"),
+        previous_deployed_sha=payload.get("previous_deployed_sha"),
+        previous_deployed_at=_parse_datetime(payload.get("previous_deployed_at")),
     )
 
 
@@ -136,6 +150,9 @@ def _save_state(state: UpdateState) -> None:
         "last_deployed_pull": state.last_deployed_pull,
         "last_deployed_sha": state.last_deployed_sha,
         "last_deployed_at": state.last_deployed_at.isoformat() if state.last_deployed_at else None,
+        "previous_deployed_pull": state.previous_deployed_pull,
+        "previous_deployed_sha": state.previous_deployed_sha,
+        "previous_deployed_at": state.previous_deployed_at.isoformat() if state.previous_deployed_at else None,
     }
     _STATE_FILE.parent.mkdir(parents=True, exist_ok=True)
     try:
@@ -278,7 +295,11 @@ def _build_status(
         last_deployed_pull=state.last_deployed_pull,
         last_deployed_sha=state.last_deployed_sha,
         last_deployed_at=state.last_deployed_at,
+        previous_deployed_pull=state.previous_deployed_pull,
+        previous_deployed_sha=state.previous_deployed_sha,
+        previous_deployed_at=state.previous_deployed_at,
         pending_update=pending,
+        can_revert=state.previous_deployed_sha is not None,
     )
 
 
@@ -349,12 +370,52 @@ async def apply_latest_update() -> tuple[bool, UpdateStatusData]:
     _run_git_command("checkout", settings.branch)
     _run_git_command("pull", "--ff-only", "origin", settings.branch)
 
+    previous_sha = state.last_deployed_sha or current_commit
+    previous_at = state.last_deployed_at
+
     new_state = UpdateState(
         last_deployed_pull=latest.number,
         last_deployed_sha=latest.head_sha,
         last_deployed_at=_now(),
+        previous_deployed_pull=state.last_deployed_pull,
+        previous_deployed_sha=previous_sha,
+        previous_deployed_at=previous_at,
     )
     _save_state(new_state)
     new_commit = _current_commit()
     status = _build_status(settings, new_state, latest, new_commit)
+    return True, status
+
+
+async def revert_last_update() -> tuple[bool, UpdateStatusData]:
+    """Restaure la version précédente déployée si elle est disponible."""
+
+    settings = _get_settings()
+    state = _load_state()
+    latest = await _fetch_latest_merged_pull(settings)
+    current_commit = _current_commit()
+
+    if state.previous_deployed_sha is None:
+        status = _build_status(settings, state, latest, current_commit)
+        return False, status
+
+    target_pull = state.previous_deployed_pull
+    target_sha = state.previous_deployed_sha
+    target_at = state.previous_deployed_at or _now()
+
+    _run_git_command("checkout", settings.branch)
+    _run_git_command("fetch", "origin", settings.branch)
+    _run_git_command("reset", "--hard", target_sha)
+
+    new_state = UpdateState(
+        last_deployed_pull=target_pull,
+        last_deployed_sha=target_sha,
+        last_deployed_at=target_at,
+        previous_deployed_pull=state.last_deployed_pull,
+        previous_deployed_sha=state.last_deployed_sha,
+        previous_deployed_at=state.last_deployed_at,
+    )
+    _save_state(new_state)
+    reverted_commit = _current_commit()
+    status = _build_status(settings, new_state, latest, reverted_commit)
     return True, status

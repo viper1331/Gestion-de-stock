@@ -316,7 +316,11 @@ class UpdateStatus(BaseModel):
     last_deployed_pull: int | None = None
     last_deployed_sha: str | None = None
     last_deployed_at: datetime | None = None
+    previous_deployed_pull: int | None = None
+    previous_deployed_sha: str | None = None
+    previous_deployed_at: datetime | None = None
     pending_update: bool = False
+    can_revert: bool = False
 
 
 class UpdateAvailability(BaseModel):
