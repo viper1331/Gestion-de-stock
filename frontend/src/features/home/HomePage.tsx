@@ -351,7 +351,7 @@ export function HomePage() {
     ]
   );
 
-  const isCheckingStockPermissions = Boolean(user) && isModuleLoading && user.role !== "admin";
+  const isCheckingStockPermissions = Boolean(user) && isModuleLoading && user?.role !== "admin";
   const showLowStockSection = Boolean(user) && (isCheckingStockPermissions || lowStockCards.length > 0);
 
   const isCheckingUpdates = isAdmin ? isFetchingUpdates : isFetchingAvailability;
