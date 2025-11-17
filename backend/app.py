@@ -1,4 +1,6 @@
 """Application FastAPI principale pour Gestion Stock Pro."""
+from contextlib import asynccontextmanager
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -26,7 +28,17 @@ from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
 from backend.ws import camera, voice
 
-app = FastAPI(title="Gestion Stock Pro API", version="2.0.0")
+
+@asynccontextmanager
+async def _lifespan(_: FastAPI):
+    await backup_scheduler.start()
+    try:
+        yield
+    finally:
+        await backup_scheduler.stop()
+
+
+app = FastAPI(title="Gestion Stock Pro API", version="2.0.0", lifespan=_lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -58,17 +70,6 @@ app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
 app.include_router(camera.router, prefix="/ws", tags=["ws-camera"])
 app.include_router(voice.router, prefix="/ws", tags=["ws-voice"])
-
-
-@app.on_event("startup")
-async def _start_services() -> None:
-    await backup_scheduler.start()
-
-
-@app.on_event("shutdown")
-async def _stop_services() -> None:
-    await backup_scheduler.stop()
-
 
 @app.get("/health", tags=["health"])
 async def healthcheck() -> dict[str, str]:
