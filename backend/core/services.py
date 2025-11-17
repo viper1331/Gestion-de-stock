@@ -389,6 +389,33 @@ def ensure_database_ready() -> None:
         _db_initialized = True
 
 
+def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
+    vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
+    vehicle_item_columns = {row["name"] for row in vehicle_item_info}
+    updated_schema = False
+
+    if "qr_token" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN qr_token TEXT")
+        updated_schema = True
+
+    missing_tokens = conn.execute(
+        "SELECT id FROM vehicle_items WHERE qr_token IS NULL OR qr_token = ''"
+    ).fetchall()
+    for row in missing_tokens:
+        conn.execute(
+            "UPDATE vehicle_items SET qr_token = ? WHERE id = ?",
+            (uuid4().hex, row["id"]),
+        )
+        updated_schema = True
+
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_items_qr_token ON vehicle_items(qr_token)"
+    )
+
+    if updated_schema:
+        _persist_after_commit(conn, "vehicle_inventory")
+
+
 def _apply_schema_migrations() -> None:
     with db.get_stock_connection() as conn:
         cur = conn.execute("PRAGMA table_info(items)")
@@ -623,21 +650,9 @@ def _apply_schema_migrations() -> None:
             conn.execute("ALTER TABLE vehicle_items ADD COLUMN documentation_url TEXT")
         if "tutorial_url" not in vehicle_item_columns:
             conn.execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
-        if "qr_token" not in vehicle_item_columns:
-            conn.execute("ALTER TABLE vehicle_items ADD COLUMN qr_token TEXT")
-        missing_tokens = conn.execute(
-            "SELECT id FROM vehicle_items WHERE qr_token IS NULL OR qr_token = ''"
-        ).fetchall()
-        for row in missing_tokens:
-            conn.execute(
-                "UPDATE vehicle_items SET qr_token = ? WHERE id = ?",
-                (uuid4().hex, row["id"]),
-            )
+        _ensure_vehicle_item_qr_tokens(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)"
-        )
-        conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_items_qr_token ON vehicle_items(qr_token)"
         )
 
         _sync_vehicle_inventory_with_remise(conn)
@@ -2132,6 +2147,7 @@ def fetch_vehicle_movements(item_id: int) -> list[models.Movement]:
 def get_vehicle_item_qr_token(item_id: int, *, regenerate: bool = False) -> str:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
+        _ensure_vehicle_item_qr_tokens(conn)
         row = conn.execute(
             "SELECT qr_token FROM vehicle_items WHERE id = ?",
             (item_id,),
@@ -2152,6 +2168,7 @@ def get_vehicle_item_qr_token(item_id: int, *, regenerate: bool = False) -> str:
 def get_vehicle_item_public_info(qr_token: str) -> models.VehicleQrInfo:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
+        _ensure_vehicle_item_qr_tokens(conn)
         row = conn.execute(
             """
             SELECT vi.id,
