@@ -109,6 +109,23 @@ export function VehicleQrManagerPage() {
     return itemsToSort;
   }, [collator, filteredItems, getVehicleName, sortBy]);
 
+  const groupedItems = useMemo(() => {
+    const groups = new Map<string, VehicleItem[]>();
+    sortedItems.forEach((item) => {
+      const vehicleName = getVehicleName(item);
+      const existing = groups.get(vehicleName);
+      if (existing) {
+        existing.push(item);
+      } else {
+        groups.set(vehicleName, [item]);
+      }
+    });
+
+    return Array.from(groups.entries()).sort(([vehicleA], [vehicleB]) =>
+      collator.compare(vehicleA, vehicleB)
+    );
+  }, [collator, getVehicleName, sortedItems]);
+
   const updateResources = useMutation({
     mutationFn: async (payload: { itemId: number; documentation_url: string; tutorial_url: string }) => {
       await api.put(`/vehicle-inventory/${payload.itemId}`, {
@@ -188,6 +205,111 @@ export function VehicleQrManagerPage() {
     return `${getApiBaseUrl()}/vehicle-inventory/public/${item.qr_token}/page`;
   };
 
+  const renderItemCard = (item: VehicleItem) => {
+    const draft = drafts[item.id] ?? { documentation_url: "", tutorial_url: "" };
+    const shareUrl = buildShareUrl(item);
+    const vehicleName = getVehicleName(item);
+    const cover = resolveMediaUrl(item.image_url);
+    const hasVehicle = Boolean(item.category_id);
+
+    return (
+      <article
+        key={item.id}
+        className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
+      >
+        <div className="flex items-start gap-3">
+          <div className="h-16 w-16 overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-800">
+            {cover ? (
+              <img src={cover} alt={item.name} className="h-full w-full object-cover" />
+            ) : (
+              <div className="flex h-full w-full items-center justify-center text-xs text-slate-400">Aucune image</div>
+            )}
+          </div>
+          <div className="flex-1">
+            <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{vehicleName}</p>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">{item.name}</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Réf. {item.sku}</p>
+          </div>
+        </div>
+
+        <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+          Documentation
+          <input
+            type="url"
+            value={draft.documentation_url}
+            onChange={(event) => handleUpdateDraft(item.id, "documentation_url", event.target.value)}
+            placeholder="https://..."
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+          />
+        </label>
+
+        <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+          Tutoriel
+          <input
+            type="url"
+            value={draft.tutorial_url}
+            onChange={(event) => handleUpdateDraft(item.id, "tutorial_url", event.target.value)}
+            placeholder="https://..."
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+          />
+        </label>
+
+        <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+          <button
+            type="button"
+            onClick={() => handleSave(item.id)}
+            disabled={updateResources.isPending}
+            className="inline-flex items-center gap-2 rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+          >
+            {updateResources.isPending ? "Enregistrement..." : "Enregistrer les liens"}
+          </button>
+          {hasVehicle ? (
+            <>
+              <button
+                type="button"
+                onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: false })}
+                className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Télécharger le QR
+              </button>
+              <button
+                type="button"
+                onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: true })}
+                className="inline-flex items-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50 dark:border-amber-400/60 dark:text-amber-200 dark:hover:bg-amber-500/10"
+              >
+                Régénérer le lien
+              </button>
+              {shareUrl ? (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await navigator.clipboard.writeText(shareUrl);
+                      setFeedback("Lien copié dans le presse-papiers.");
+                    } catch (clipError) {
+                      setFeedback("Impossible de copier le lien.");
+                    }
+                  }}
+                  className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  Copier le lien
+                </button>
+              ) : (
+                <span className="text-xs text-amber-600 dark:text-amber-300">
+                  Le QR sera disponible après la première génération.
+                </span>
+              )}
+            </>
+          ) : (
+            <span className="text-xs text-amber-600 dark:text-amber-300">
+              Affectez ce matériel à un véhicule pour générer un QR code.
+            </span>
+          )}
+        </div>
+      </article>
+    );
+  };
+
   return (
     <div className="space-y-6 p-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
@@ -238,110 +360,20 @@ export function VehicleQrManagerPage() {
           Aucun matériel véhicule ne correspond à votre recherche.
         </p>
       ) : (
-        <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {sortedItems.map((item) => {
-            const draft = drafts[item.id] ?? { documentation_url: "", tutorial_url: "" };
-            const shareUrl = buildShareUrl(item);
-            const vehicleName = getVehicleName(item);
-            const cover = resolveMediaUrl(item.image_url);
-            const hasVehicle = Boolean(item.category_id);
-            return (
-              <article
-                key={item.id}
-                className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
-              >
-                <div className="flex items-start gap-3">
-                  <div className="h-16 w-16 overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-800">
-                    {cover ? (
-                      <img src={cover} alt={item.name} className="h-full w-full object-cover" />
-                    ) : (
-                      <div className="flex h-full w-full items-center justify-center text-xs text-slate-400">Aucune image</div>
-                    )}
-                  </div>
-                  <div className="flex-1">
-                    <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{vehicleName}</p>
-                    <h2 className="text-base font-semibold text-slate-900 dark:text-white">{item.name}</h2>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">Réf. {item.sku}</p>
-                  </div>
-                </div>
-
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  Documentation
-                  <input
-                    type="url"
-                    value={draft.documentation_url}
-                    onChange={(event) => handleUpdateDraft(item.id, "documentation_url", event.target.value)}
-                    placeholder="https://..."
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  />
-                </label>
-
-                <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-                  Tutoriel
-                  <input
-                    type="url"
-                    value={draft.tutorial_url}
-                    onChange={(event) => handleUpdateDraft(item.id, "tutorial_url", event.target.value)}
-                    placeholder="https://..."
-                    className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-                  />
-                </label>
-
-                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-                  <button
-                    type="button"
-                    onClick={() => handleSave(item.id)}
-                    disabled={updateResources.isPending}
-                    className="inline-flex items-center gap-2 rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    {updateResources.isPending ? "Enregistrement..." : "Enregistrer les liens"}
-                  </button>
-                  {hasVehicle ? (
-                    <>
-                      <button
-                        type="button"
-                        onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: false })}
-                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                      >
-                        Télécharger le QR
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: true })}
-                        className="inline-flex items-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50 dark:border-amber-400/60 dark:text-amber-200 dark:hover:bg-amber-500/10"
-                      >
-                        Régénérer le lien
-                      </button>
-                      {shareUrl ? (
-                        <button
-                          type="button"
-                          onClick={async () => {
-                            try {
-                              await navigator.clipboard.writeText(shareUrl);
-                              setFeedback("Lien copié dans le presse-papiers.");
-                            } catch (clipError) {
-                              setFeedback("Impossible de copier le lien.");
-                            }
-                          }}
-                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                        >
-                          Copier le lien
-                        </button>
-                      ) : (
-                        <span className="text-xs text-amber-600 dark:text-amber-300">
-                          Le QR sera disponible après la première génération.
-                        </span>
-                      )}
-                    </>
-                  ) : (
-                    <span className="text-xs text-amber-600 dark:text-amber-300">
-                      Affectez ce matériel à un véhicule pour générer un QR code.
-                    </span>
-                  )}
-                </div>
-              </article>
-            );
-          })}
+        <div className="space-y-8">
+          {groupedItems.map(([vehicleName, vehicleItems]) => (
+            <section key={vehicleName} className="space-y-3">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-lg font-semibold text-slate-900 dark:text-white">{vehicleName}</h2>
+                <p className="text-sm text-slate-500 dark:text-slate-400">
+                  {vehicleItems.length} {vehicleItems.length > 1 ? "matériels" : "matériel"}
+                </p>
+              </div>
+              <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+                {vehicleItems.map(renderItemCard)}
+              </div>
+            </section>
+          ))}
         </div>
       )}
     </div>
