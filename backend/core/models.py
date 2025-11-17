@@ -129,6 +129,7 @@ class Item(BaseModel):
     remise_item_id: int | None = None
     remise_quantity: int | None = None
     image_url: str | None = None
+    shared_file_url: str | None = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
     documentation_url: str | None = None
@@ -147,6 +148,7 @@ class ItemCreate(BaseModel):
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
     remise_item_id: Optional[int] = None
+    shared_file_url: Optional[str] = None
     documentation_url: Optional[str] = None
     tutorial_url: Optional[str] = None
 
@@ -163,6 +165,7 @@ class ItemUpdate(BaseModel):
     remise_item_id: Optional[int] = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
+    shared_file_url: Optional[str] = None
     documentation_url: Optional[str] = None
     tutorial_url: Optional[str] = None
 
@@ -197,6 +200,7 @@ class VehicleQrInfo(BaseModel):
     sku: str
     category_name: str | None = None
     image_url: str | None = None
+    shared_file_url: str | None = None
     documentation_url: str | None = None
     tutorial_url: str | None = None
 

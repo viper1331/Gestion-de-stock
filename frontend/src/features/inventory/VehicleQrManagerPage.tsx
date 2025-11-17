@@ -11,6 +11,7 @@ interface VehicleItem {
   name: string;
   sku: string;
   category_id: number | null;
+  shared_file_url: string | null;
   documentation_url: string | null;
   tutorial_url: string | null;
   qr_token: string | null;
@@ -23,6 +24,7 @@ interface VehicleCategory {
 }
 
 interface ResourceDraft {
+  shared_file_url: string;
   documentation_url: string;
   tutorial_url: string;
 }
@@ -61,6 +63,7 @@ export function VehicleQrManagerPage() {
     const nextDrafts: Record<number, ResourceDraft> = {};
     itemsWithVehicle.forEach((item) => {
       nextDrafts[item.id] = {
+        shared_file_url: item.shared_file_url ?? "",
         documentation_url: item.documentation_url ?? "",
         tutorial_url: item.tutorial_url ?? ""
       };
@@ -132,8 +135,14 @@ export function VehicleQrManagerPage() {
   }, [collator, getVehicleName, sortedItems]);
 
   const updateResources = useMutation({
-    mutationFn: async (payload: { itemId: number; documentation_url: string; tutorial_url: string }) => {
+    mutationFn: async (payload: {
+      itemId: number;
+      shared_file_url: string;
+      documentation_url: string;
+      tutorial_url: string;
+    }) => {
       await api.put(`/vehicle-inventory/${payload.itemId}`, {
+        shared_file_url: payload.shared_file_url || null,
         documentation_url: payload.documentation_url || null,
         tutorial_url: payload.tutorial_url || null
       });
@@ -200,6 +209,7 @@ export function VehicleQrManagerPage() {
     if (!draft) return;
     updateResources.mutate({
       itemId,
+      shared_file_url: draft.shared_file_url,
       documentation_url: draft.documentation_url,
       tutorial_url: draft.tutorial_url
     });
@@ -207,11 +217,12 @@ export function VehicleQrManagerPage() {
 
   const buildShareUrl = (item: VehicleItem) => {
     if (!item.qr_token) return null;
+    if (item.shared_file_url) return item.shared_file_url;
     return `${getApiBaseUrl()}/vehicle-inventory/public/${item.qr_token}/page`;
   };
 
   const renderItemCard = (item: VehicleItem) => {
-    const draft = drafts[item.id] ?? { documentation_url: "", tutorial_url: "" };
+    const draft = drafts[item.id] ?? { shared_file_url: "", documentation_url: "", tutorial_url: "" };
     const shareUrl = buildShareUrl(item);
     const vehicleName = getVehicleName(item);
     const cover = resolveMediaUrl(item.image_url);
@@ -236,6 +247,20 @@ export function VehicleQrManagerPage() {
             <p className="text-xs text-slate-500 dark:text-slate-400">Réf. {item.sku}</p>
           </div>
         </div>
+
+        <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+          Fichier associé (OneDrive)
+          <input
+            type="url"
+            value={draft.shared_file_url}
+            onChange={(event) => handleUpdateDraft(item.id, "shared_file_url", event.target.value)}
+            placeholder="https://onedrive.live.com/..."
+            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+          />
+          <p className="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">
+            Saisissez le lien partagé du fichier hébergé dans OneDrive. Il sera utilisé pour la redirection du QR code.
+          </p>
+        </label>
 
         <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
           Documentation

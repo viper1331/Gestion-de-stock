@@ -409,6 +409,8 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN documentation_url TEXT")
     if "tutorial_url" not in vehicle_item_columns:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
+    if "shared_file_url" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN shared_file_url TEXT")
 
 
 def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
@@ -603,6 +605,7 @@ def _apply_schema_migrations() -> None:
                 remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL,
                 documentation_url TEXT,
                 tutorial_url TEXT,
+                shared_file_url TEXT,
                 qr_token TEXT
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
@@ -886,12 +889,15 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     documentation_url = None
     tutorial_url = None
     qr_token = None
+    shared_file_url = None
     if "documentation_url" in row.keys():
         documentation_url = row["documentation_url"]
     if "tutorial_url" in row.keys():
         tutorial_url = row["tutorial_url"]
     if "qr_token" in row.keys():
         qr_token = row["qr_token"]
+    if "shared_file_url" in row.keys():
+        shared_file_url = row["shared_file_url"]
     name = row["remise_name"] if "remise_name" in row.keys() and row["remise_name"] else row["name"]
     sku = row["remise_sku"] if "remise_sku" in row.keys() and row["remise_sku"] else row["sku"]
     supplier_id = row["supplier_id"] if "supplier_id" in row.keys() else None
@@ -913,6 +919,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         remise_item_id=remise_item_id,
         remise_quantity=remise_quantity,
         image_url=image_url,
+        shared_file_url=shared_file_url,
         position_x=position_x,
         position_y=position_y,
         documentation_url=documentation_url,
@@ -1123,11 +1130,12 @@ def _create_inventory_item_internal(
             values.append(remise_item_id)
             columns.extend(["position_x", "position_y"])
             values.extend([payload.position_x, payload.position_y])
-            columns.extend(["documentation_url", "tutorial_url", "qr_token"])
+            columns.extend(["documentation_url", "tutorial_url", "shared_file_url", "qr_token"])
             values.extend(
                 [
                     payload.documentation_url,
                     payload.tutorial_url,
+                    payload.shared_file_url,
                     uuid4().hex,
                 ]
             )
@@ -2195,6 +2203,7 @@ def get_vehicle_item_public_info(qr_token: str) -> models.VehicleQrInfo:
                    COALESCE(ri.sku, vi.sku) AS sku,
                    vi.documentation_url,
                    vi.tutorial_url,
+                   vi.shared_file_url,
                    vi.image_path,
                    vc.name AS category_name
             FROM vehicle_items AS vi
@@ -2213,6 +2222,7 @@ def get_vehicle_item_public_info(qr_token: str) -> models.VehicleQrInfo:
         sku=row["sku"],
         category_name=row["category_name"],
         image_url=image_url,
+        shared_file_url=row["shared_file_url"] if "shared_file_url" in row.keys() else None,
         documentation_url=row["documentation_url"] if "documentation_url" in row.keys() else None,
         tutorial_url=row["tutorial_url"] if "tutorial_url" in row.keys() else None,
     )
