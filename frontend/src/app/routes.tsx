@@ -18,8 +18,14 @@ import { PurchaseOrdersPage } from "../features/inventory/PurchaseOrdersPage";
 import { VehicleInventoryPage } from "../features/inventory/VehicleInventoryPage";
 import { RemiseInventoryPage } from "../features/inventory/RemiseInventoryPage";
 import { UpdatesPage } from "../features/updates/UpdatesPage";
+import { VehicleQrManagerPage } from "../features/inventory/VehicleQrManagerPage";
+import { VehicleGuidePage } from "../features/inventory/VehicleGuidePage";
 
 export const router = createBrowserRouter([
+  {
+    path: "/vehicle-guides/:qrToken",
+    element: <VehicleGuidePage />
+  },
   {
     path: "/login",
     element: <AuthLayout />,
@@ -32,6 +38,7 @@ export const router = createBrowserRouter([
       { path: "", element: <HomePage /> },
       { path: "inventory", element: <Dashboard /> },
       { path: "vehicle-inventory", element: <VehicleInventoryPage /> },
+      { path: "vehicle-inventory/qr-codes", element: <VehicleQrManagerPage /> },
       { path: "remise-inventory", element: <RemiseInventoryPage /> },
       { path: "barcode", element: <BarcodePage /> },
       { path: "reports", element: <ReportsPage /> },

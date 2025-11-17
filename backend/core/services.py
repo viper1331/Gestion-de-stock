@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import io
 import json
+import html
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -550,7 +551,10 @@ def _apply_schema_migrations() -> None:
                 image_path TEXT,
                 position_x REAL,
                 position_y REAL,
-                remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL
+                remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL,
+                documentation_url TEXT,
+                tutorial_url TEXT,
+                qr_token TEXT
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -615,8 +619,25 @@ def _apply_schema_migrations() -> None:
             conn.execute(
                 "ALTER TABLE vehicle_items ADD COLUMN remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL"
             )
+        if "documentation_url" not in vehicle_item_columns:
+            conn.execute("ALTER TABLE vehicle_items ADD COLUMN documentation_url TEXT")
+        if "tutorial_url" not in vehicle_item_columns:
+            conn.execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
+        if "qr_token" not in vehicle_item_columns:
+            conn.execute("ALTER TABLE vehicle_items ADD COLUMN qr_token TEXT")
+        missing_tokens = conn.execute(
+            "SELECT id FROM vehicle_items WHERE qr_token IS NULL OR qr_token = ''"
+        ).fetchall()
+        for row in missing_tokens:
+            conn.execute(
+                "UPDATE vehicle_items SET qr_token = ? WHERE id = ?",
+                (uuid4().hex, row["id"]),
+            )
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)"
+        )
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_items_qr_token ON vehicle_items(qr_token)"
         )
 
         _sync_vehicle_inventory_with_remise(conn)
@@ -841,6 +862,15 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         image_url = _build_media_url(row["image_path"])
     position_x = row["position_x"] if "position_x" in row.keys() else None
     position_y = row["position_y"] if "position_y" in row.keys() else None
+    documentation_url = None
+    tutorial_url = None
+    qr_token = None
+    if "documentation_url" in row.keys():
+        documentation_url = row["documentation_url"]
+    if "tutorial_url" in row.keys():
+        tutorial_url = row["tutorial_url"]
+    if "qr_token" in row.keys():
+        qr_token = row["qr_token"]
     name = row["remise_name"] if "remise_name" in row.keys() and row["remise_name"] else row["name"]
     sku = row["remise_sku"] if "remise_sku" in row.keys() and row["remise_sku"] else row["sku"]
     supplier_id = row["supplier_id"] if "supplier_id" in row.keys() else None
@@ -864,6 +894,9 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         image_url=image_url,
         position_x=position_x,
         position_y=position_y,
+        documentation_url=documentation_url,
+        tutorial_url=tutorial_url,
+        qr_token=qr_token,
     )
 
 
@@ -1068,6 +1101,14 @@ def _create_inventory_item_internal(
             values.append(remise_item_id)
             columns.extend(["position_x", "position_y"])
             values.extend([payload.position_x, payload.position_y])
+            columns.extend(["documentation_url", "tutorial_url", "qr_token"])
+            values.extend(
+                [
+                    payload.documentation_url,
+                    payload.tutorial_url,
+                    uuid4().hex,
+                ]
+            )
         placeholders = ",".join("?" for _ in columns)
         cur = conn.execute(
             f"INSERT INTO {config.tables.items} ({', '.join(columns)}) VALUES ({placeholders})",
@@ -1087,6 +1128,7 @@ def _update_inventory_item_internal(
     config = _get_inventory_config(module)
     fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
     fields.pop("image_url", None)
+    fields.pop("qr_token", None)
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     if module == "vehicle_inventory":
@@ -2085,6 +2127,59 @@ def record_vehicle_movement(item_id: int, payload: models.MovementCreate) -> Non
 
 def fetch_vehicle_movements(item_id: int) -> list[models.Movement]:
     return _fetch_inventory_movements_internal("vehicle_inventory", item_id)
+
+
+def get_vehicle_item_qr_token(item_id: int, *, regenerate: bool = False) -> str:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT qr_token FROM vehicle_items WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        token = row["qr_token"]
+        if regenerate or not token:
+            token = uuid4().hex
+            conn.execute(
+                "UPDATE vehicle_items SET qr_token = ? WHERE id = ?",
+                (token, item_id),
+            )
+            _persist_after_commit(conn, "vehicle_inventory")
+        return token
+
+
+def get_vehicle_item_public_info(qr_token: str) -> models.VehicleQrInfo:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT vi.id,
+                   COALESCE(ri.name, vi.name) AS name,
+                   COALESCE(ri.sku, vi.sku) AS sku,
+                   vi.documentation_url,
+                   vi.tutorial_url,
+                   vi.image_path,
+                   vc.name AS category_name
+            FROM vehicle_items AS vi
+            LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
+            LEFT JOIN vehicle_categories AS vc ON vc.id = vi.category_id
+            WHERE vi.qr_token = ?
+            """,
+            (qr_token,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("QR code invalide ou expiré")
+    image_url = _build_media_url(row["image_path"]) if "image_path" in row.keys() else None
+    return models.VehicleQrInfo(
+        item_id=row["id"],
+        name=row["name"],
+        sku=row["sku"],
+        category_name=row["category_name"],
+        image_url=image_url,
+        documentation_url=row["documentation_url"] if "documentation_url" in row.keys() else None,
+        tutorial_url=row["tutorial_url"] if "tutorial_url" in row.keys() else None,
+    )
 
 
 def list_remise_categories() -> list[models.Category]:
