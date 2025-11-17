@@ -39,6 +39,7 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("suppliers", "Fournisseurs"),
     ("dotations", "Dotations"),
     ("pharmacy", "Pharmacie"),
+    ("vehicle_qrcodes", "QR véhicules"),
     ("vehicle_inventory", "Inventaire véhicules"),
     ("inventory_remise", "Inventaire remises"),
 )
@@ -47,6 +48,7 @@ _AVAILABLE_MODULE_KEYS: set[str] = {key for key, _ in _AVAILABLE_MODULE_DEFINITI
 _MODULE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "suppliers": ("clothing",),
     "dotations": ("clothing",),
+    "vehicle_qrcodes": ("vehicle_inventory",),
 }
 
 

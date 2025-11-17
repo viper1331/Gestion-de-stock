@@ -28,6 +28,7 @@ export function AppLayout() {
         label: string;
         tooltip: string;
         module?: string;
+        modules?: string[];
         adminOnly?: boolean;
       };
 
@@ -150,7 +151,7 @@ export function AppLayout() {
                   to: "/vehicle-inventory/qr-codes",
                   label: "QR véhicules",
                   tooltip: "Partager les fiches matériel via QR codes",
-                  module: "vehicle_inventory"
+                  modules: ["vehicle_qrcodes", "vehicle_inventory"]
                 },
                 {
                   to: "/remise-inventory",
@@ -235,13 +236,14 @@ export function AppLayout() {
                 if (link.adminOnly) {
                   return user?.role === "admin";
                 }
-                if (!link.module) {
+                const allowedModules = link.modules ?? (link.module ? [link.module] : []);
+                if (allowedModules.length === 0) {
                   return true;
                 }
                 if (user.role === "admin") {
                   return true;
                 }
-                return modulePermissions.canAccess(link.module);
+                return allowedModules.some((module) => modulePermissions.canAccess(module));
               })
             }))
             .filter((section) => section.links.length > 0)
