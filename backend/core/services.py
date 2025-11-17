@@ -1197,6 +1197,7 @@ def _update_inventory_item_internal(
             current_quantity = current_row["quantity"]
             current_remise_item_id = current_row["remise_item_id"]
             current_category_id = current_row["category_id"]
+            target_category_id = fields.get("category_id", current_category_id)
             if "remise_item_id" in fields:
                 remise_item_id = fields["remise_item_id"]
                 if remise_item_id is None:
@@ -1208,7 +1209,10 @@ def _update_inventory_item_internal(
                 if source is None:
                     raise ValueError("Article de remise introuvable")
                 fields["name"] = source["name"]
-                fields["sku"] = source["sku"]
+                new_sku = source["sku"]
+                if target_category_id is not None:
+                    new_sku = f"{new_sku}-{uuid4().hex[:6]}"
+                fields["sku"] = new_sku
                 if fields.get("supplier_id") is None:
                     fields["supplier_id"] = source["supplier_id"]
             target_remise_item_id = fields.get("remise_item_id", current_remise_item_id)
