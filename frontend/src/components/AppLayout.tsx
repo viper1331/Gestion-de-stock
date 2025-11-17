@@ -86,6 +86,7 @@ export function AppLayout() {
         to: string;
         label: string;
         tooltip: string;
+        icon?: string;
         module?: string;
         modules?: string[];
         adminOnly?: boolean;
@@ -102,6 +103,7 @@ export function AppLayout() {
         id: string;
         label: string;
         tooltip: string;
+        icon?: string;
         sections: NavSection[];
       };
 
@@ -110,6 +112,7 @@ export function AppLayout() {
           id: "code-barres",
           label: "Codes-barres",
           tooltip: "Accéder aux outils de codes-barres",
+          icon: "🏷️",
           sections: [
             {
               id: "code-barres-operations",
@@ -120,6 +123,7 @@ export function AppLayout() {
                   to: "/barcode",
                   label: "Codes-barres",
                   tooltip: "Générer et scanner les codes-barres",
+                  icon: "📌",
                   module: "barcode"
                 }
               ]
@@ -130,6 +134,7 @@ export function AppLayout() {
           id: "habillement",
           label: "Habillement",
           tooltip: "Accéder aux fonctionnalités d'habillement",
+          icon: "🧥",
           sections: [
             {
               id: "habillement-operations",
@@ -140,12 +145,14 @@ export function AppLayout() {
                   to: "/inventory",
                   label: "Inventaire habillement",
                   tooltip: "Consulter le tableau de bord habillement",
+                  icon: "📦",
                   module: "clothing"
                 },
                 {
                   to: "/reports",
                   label: "Rapports",
                   tooltip: "Analyser les rapports d'habillement",
+                  icon: "📈",
                   module: "clothing"
                 }
               ]
@@ -159,6 +166,7 @@ export function AppLayout() {
                   to: "/purchase-orders",
                   label: "Bons de commande",
                   tooltip: "Gérer les bons de commande d'habillement",
+                  icon: "🧾",
                   module: "clothing"
                 }
               ]
@@ -172,18 +180,21 @@ export function AppLayout() {
                   to: "/suppliers",
                   label: "Fournisseurs",
                   tooltip: "Gérer les fournisseurs d'habillement",
+                  icon: "🏭",
                   module: "suppliers"
                 },
                 {
                   to: "/collaborators",
                   label: "Collaborateurs",
                   tooltip: "Suivre les collaborateurs et leurs dotations",
+                  icon: "👥",
                   module: "dotations"
                 },
                 {
                   to: "/dotations",
                   label: "Dotations",
                   tooltip: "Attribuer les dotations d'habillement",
+                  icon: "🎯",
                   module: "dotations"
                 }
               ]
@@ -194,6 +205,7 @@ export function AppLayout() {
           id: "inventaires-specialises",
           label: "Inventaires spécialisés",
           tooltip: "Accéder aux inventaires véhicules et remises",
+          icon: "🚚",
           sections: [
             {
               id: "inventaires-dedies",
@@ -204,18 +216,21 @@ export function AppLayout() {
                   to: "/vehicle-inventory",
                   label: "Inventaire véhicules",
                   tooltip: "Gérer le parc véhicules",
+                  icon: "🚗",
                   module: "vehicle_inventory"
                 },
                 {
                   to: "/vehicle-inventory/qr-codes",
                   label: "QR véhicules",
                   tooltip: "Partager les fiches matériel via QR codes",
+                  icon: "🔖",
                   modules: ["vehicle_qrcodes", "vehicle_inventory"]
                 },
                 {
                   to: "/remise-inventory",
                   label: "Inventaire remises",
                   tooltip: "Suivre les stocks mis en remise",
+                  icon: "🏢",
                   module: "inventory_remise"
                 }
               ]
@@ -226,6 +241,7 @@ export function AppLayout() {
           id: "pharmacie",
           label: "Pharmacie",
           tooltip: "Accéder aux fonctionnalités de pharmacie",
+          icon: "💊",
           sections: [
             {
               id: "pharmacie-operations",
@@ -236,6 +252,7 @@ export function AppLayout() {
                   to: "/pharmacy",
                   label: "Vue d'ensemble pharmacie",
                   tooltip: "Consulter le tableau de bord pharmacie",
+                  icon: "🏥",
                   module: "pharmacy"
                 }
               ]
@@ -246,6 +263,7 @@ export function AppLayout() {
           id: "support",
           label: "Support",
           tooltip: "Consulter les informations du programme",
+          icon: "ℹ️",
           sections: [
             {
               id: "support-ressources",
@@ -256,6 +274,7 @@ export function AppLayout() {
                   to: "/about",
                   label: "À propos",
                   tooltip: "Consulter la licence et la version en ligne",
+                  icon: "📘",
                 }
               ]
             }
@@ -265,6 +284,7 @@ export function AppLayout() {
           id: "administration",
           label: "Administration",
           tooltip: "Paramétrer votre environnement",
+          icon: "🛠️",
           sections: [
             {
               id: "administration-parametres",
@@ -274,24 +294,28 @@ export function AppLayout() {
                 {
                   to: "/settings",
                   label: "Paramètres",
-                  tooltip: "Configurer les paramètres généraux"
+                  tooltip: "Configurer les paramètres généraux",
+                  icon: "⚙️",
                 },
                 {
                   to: "/users",
                   label: "Utilisateurs",
                   tooltip: "Administrer les comptes utilisateurs",
+                  icon: "👤",
                   adminOnly: true
                 },
                 {
                   to: "/permissions",
                   label: "Permissions",
                   tooltip: "Gérer les droits d'accès",
+                  icon: "🔒",
                   adminOnly: true
                 },
                 {
                   to: "/updates",
                   label: "Mises à jour",
                   tooltip: "Gérer les mises à jour GitHub du serveur",
+                  icon: "⬆️",
                   adminOnly: true
                 }
               ]
@@ -403,15 +427,15 @@ export function AppLayout() {
             <span aria-hidden>{sidebarOpen ? "⟨" : "⟩"}</span>
           </button>
         </div>
-        <nav className={`mt-8 flex flex-col gap-4 text-sm ${sidebarOpen ? "" : "items-center"}`}>
+        <nav className={`mt-8 flex flex-col gap-3 text-sm ${sidebarOpen ? "" : "items-center"}`}>
           <NavLink
             to="/"
             end
             className={({ isActive }) => navClass(isActive, sidebarOpen)}
             title="Accéder à la page d'accueil personnalisée"
           >
-            <span aria-hidden>{sidebarOpen ? "Accueil" : "A"}</span>
-            <span className="sr-only">Accueil</span>
+            <NavIcon symbol="🏠" label="Accueil" />
+            <span className={sidebarOpen ? "block" : "sr-only"}>Accueil</span>
           </NavLink>
           {navigationGroups.map((group) => {
             const isOpen = openGroups[group.id] ?? false;
@@ -421,15 +445,15 @@ export function AppLayout() {
                 <button
                   type="button"
                   onClick={() => toggleGroup(group.id)}
-                  className={`flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
-                    sidebarOpen ? "justify-between px-3 py-2" : "justify-center p-2"
+                  className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
+                    sidebarOpen ? "justify-between px-3 py-2" : "h-11 justify-center"
                   }`}
                   aria-expanded={isOpen}
                   title={group.tooltip}
                 >
-                  <span>
-                    <span aria-hidden>{sidebarOpen ? group.label : group.label.charAt(0)}</span>
-                    <span className="sr-only">{group.label}</span>
+                  <span className="flex items-center gap-3">
+                    <NavIcon symbol={group.icon} label={group.label} />
+                    <span className={sidebarOpen ? "block text-left" : "sr-only"}>{group.label}</span>
                   </span>
                   {sidebarOpen ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
                 </button>
@@ -452,8 +476,8 @@ export function AppLayout() {
                               className={({ isActive }) => navClass(isActive, sidebarOpen)}
                               title={link.tooltip}
                             >
-                              <span aria-hidden>{sidebarOpen ? link.label : link.label.charAt(0)}</span>
-                              <span className="sr-only">{link.label}</span>
+                              <NavIcon symbol={link.icon} label={link.label} />
+                              <span>{link.label}</span>
                             </NavLink>
                           ))}
                         </div>
@@ -470,27 +494,28 @@ export function AppLayout() {
         ) : null}
         <div className="mt-auto flex w-full flex-col gap-3 pt-6">
           <div
-            className={`rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
-              sidebarOpen ? "px-3 py-2" : "px-2 py-1 text-center"
+            className={`flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
+              sidebarOpen ? "px-3 py-2" : "px-2 py-1 justify-center"
             }`}
           >
-            <p className="font-semibold text-slate-200" aria-hidden={!sidebarOpen}>
-              {sidebarOpen ? user.username : user.username.charAt(0)}
-            </p>
-            <p className={sidebarOpen ? undefined : "sr-only"}>Rôle : {user.role}</p>
+            <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
+            <div className={sidebarOpen ? "leading-tight" : "sr-only"}>
+              <p className="font-semibold text-slate-200">{user.username}</p>
+              <p>Rôle : {user.role}</p>
+            </div>
             {!sidebarOpen ? <span className="sr-only">Rôle : {user.role}</span> : null}
           </div>
-          <MicToggle />
-          <ThemeToggle />
+          <MicToggle compact={!sidebarOpen} />
+          <ThemeToggle compact={!sidebarOpen} />
           <button
             onClick={logout}
-            className={`rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
-              sidebarOpen ? "px-3 py-2" : "px-2 py-1 text-center"
+            className={`flex items-center justify-center gap-2 rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
+              sidebarOpen ? "px-3 py-2" : "px-2 py-2"
             }`}
             title="Se déconnecter de votre session"
           >
-            <span aria-hidden>{sidebarOpen ? "Se déconnecter" : "✕"}</span>
-            <span className="sr-only">Se déconnecter</span>
+            <span aria-hidden>⎋</span>
+            <span className={sidebarOpen ? "block" : "sr-only"}>Se déconnecter</span>
           </button>
         </div>
       </aside>
@@ -502,7 +527,18 @@ export function AppLayout() {
 }
 
 function navClass(isActive: boolean, expanded: boolean) {
-  return `rounded-md font-medium transition-colors ${
-    expanded ? "px-3 py-2" : "px-2 py-1 justify-center"
-  } ${isActive ? "bg-slate-800 text-white" : "text-slate-300 hover:bg-slate-800"}`;
+  return `flex items-center gap-3 rounded-md font-medium transition-colors ${
+    expanded ? "px-3 py-2" : "h-11 w-full justify-center"
+  } ${isActive ? "bg-slate-800 text-white shadow-sm" : "text-slate-300 hover:bg-slate-800"}`;
+}
+
+function NavIcon({ symbol, label }: { symbol?: string; label: string }) {
+  return (
+    <span
+      aria-hidden
+      className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-800 bg-slate-800/60 text-lg"
+    >
+      {symbol ?? label.charAt(0)}
+    </span>
+  );
 }
