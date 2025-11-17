@@ -211,9 +211,6 @@ export function HomePage() {
     { label: config.focus_3_label, description: config.focus_3_description }
   ];
 
-  const isCheckingStockPermissions = Boolean(user) && isModuleLoading && user.role !== "admin";
-  const showLowStockSection = Boolean(user) && (isCheckingStockPermissions || lowStockCards.length > 0);
-
   const pharmacyLowStock = useMemo(() => {
     if (!canSeePharmacyAlerts) {
       return [] as PharmacyItem[];
@@ -284,6 +281,9 @@ export function HomePage() {
       pharmacyLowStock
     ]
   );
+
+  const isCheckingStockPermissions = Boolean(user) && isModuleLoading && user.role !== "admin";
+  const showLowStockSection = Boolean(user) && (isCheckingStockPermissions || lowStockCards.length > 0);
 
   const isCheckingUpdates = isAdmin ? isFetchingUpdates : isFetchingAvailability;
 
