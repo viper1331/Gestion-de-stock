@@ -125,6 +125,7 @@ class Item(BaseModel):
     size: str | None = None
     quantity: int
     low_stock_threshold: int = 0
+    track_low_stock: bool = True
     supplier_id: int | None = None
     remise_item_id: int | None = None
     remise_quantity: int | None = None
@@ -144,6 +145,7 @@ class ItemCreate(BaseModel):
     size: Optional[str] = None
     quantity: int = 0
     low_stock_threshold: int = 0
+    track_low_stock: bool = True
     supplier_id: Optional[int] = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -160,6 +162,7 @@ class ItemUpdate(BaseModel):
     size: Optional[str] = None
     quantity: Optional[int] = None
     low_stock_threshold: Optional[int] = None
+    track_low_stock: Optional[bool] = None
     supplier_id: Optional[int] = None
     image_url: Optional[str] = None
     remise_item_id: Optional[int] = None

@@ -17,6 +17,7 @@ export interface InventoryModuleConfig {
   showPurchaseOrders?: boolean;
   searchPlaceholder?: string;
   supportsItemImages?: boolean;
+  supportsLowStockOptOut?: boolean;
   itemNoun?: InventoryItemNounConfig;
   barcodePrefix?: string;
 }

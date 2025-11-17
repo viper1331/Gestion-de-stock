@@ -77,6 +77,7 @@ interface RemiseItem {
   name: string;
   quantity: number;
   low_stock_threshold: number;
+  track_low_stock: boolean;
 }
 
 export function HomePage() {
@@ -266,6 +267,9 @@ export function HomePage() {
     }
 
     return remiseItems.filter((item) => {
+      if (!item.track_low_stock) {
+        return false;
+      }
       if ((item.low_stock_threshold ?? 0) <= 0) {
         return false;
       }

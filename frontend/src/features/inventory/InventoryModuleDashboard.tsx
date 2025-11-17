@@ -32,6 +32,7 @@ interface Item {
   size: string | null;
   quantity: number;
   low_stock_threshold: number;
+   track_low_stock: boolean;
   supplier_id: number | null;
   remise_item_id: number | null;
   remise_quantity?: number | null;
@@ -53,6 +54,7 @@ interface ItemFormValues {
   size: string;
   quantity: number;
   low_stock_threshold: number;
+  track_low_stock: boolean;
   supplier_id: number | null;
 }
 
@@ -113,6 +115,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   const [error, setError] = useState<string | null>(null);
 
   const supportsItemImages = config.supportsItemImages === true;
+  const supportsLowStockOptOut = config.supportsLowStockOptOut === true;
   const itemNoun = useMemo(
     () => createInventoryItemNounForms(config.itemNoun),
     [config.itemNoun]
@@ -405,6 +408,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
         size: selectedItem.size ?? "",
         quantity: selectedItem.quantity,
         low_stock_threshold: selectedItem.low_stock_threshold,
+        track_low_stock: selectedItem.track_low_stock,
         supplier_id: selectedItem.supplier_id
       };
     }
@@ -415,6 +419,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       size: "",
       quantity: 0,
       low_stock_threshold: 0,
+      track_low_stock: true,
       supplier_id: null
     };
   }, [formMode, selectedItem]);
@@ -601,7 +606,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
               </thead>
               <tbody className="divide-y divide-slate-900 bg-slate-950/60">
                 {items.map((item, index) => {
-                  const { isOutOfStock, isLowStock } = getInventoryAlerts(item);
+                  const { isOutOfStock, isLowStock } = getInventoryAlerts(
+                    item,
+                    supportsLowStockOptOut
+                  );
                   const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
                   const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
                   const selectionTone =
@@ -751,6 +759,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 existingSkus={existingSkus}
                 barcodePrefix={barcodePrefix}
                 currentItemId={selectedItem?.id ?? null}
+                enableLowStockOptOut={supportsLowStockOptOut}
               />
             </div>
 
@@ -857,7 +866,8 @@ function ItemForm({
   itemNoun,
   existingSkus,
   barcodePrefix,
-  currentItemId
+  currentItemId,
+  enableLowStockOptOut = false
 }: {
   initialValues: ItemFormValues;
   categories: Category[];
@@ -872,6 +882,7 @@ function ItemForm({
   existingSkus: ExistingSkuEntry[];
   barcodePrefix: string;
   currentItemId: number | null;
+  enableLowStockOptOut?: boolean;
 }) {
   const [values, setValues] = useState<ItemFormValues>(initialValues);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -1141,6 +1152,28 @@ function ItemForm({
           />
         </div>
       </div>
+      {enableLowStockOptOut ? (
+        <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+          <label className="flex items-start gap-3 text-xs font-semibold text-slate-200" htmlFor="item-track-low-stock">
+            <input
+              id="item-track-low-stock"
+              type="checkbox"
+              checked={values.track_low_stock}
+              onChange={(event) =>
+                setValues((prev) => ({ ...prev, track_low_stock: event.target.checked }))
+              }
+              className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+            />
+            <span className="space-y-1">
+              <span>Suivre les alertes de stock</span>
+              <span className="block text-[11px] font-normal text-slate-400">
+                Désactivez cette option pour exclure ce matériel des alertes de seuil bas dans le tableau
+                de bord.
+              </span>
+            </span>
+          </label>
+        </div>
+      ) : null}
       <div className="space-y-1">
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-size">
           Taille / Variante
@@ -1564,12 +1597,14 @@ function capitalizeFirst(text: string): string {
   return text.charAt(0).toUpperCase() + text.slice(1);
 }
 
-function getInventoryAlerts(item: Item) {
-  const isOutOfStock = item.quantity <= 0;
+function getInventoryAlerts(item: Item, allowOptOut = false) {
+  const trackingEnabled = allowOptOut ? item.track_low_stock : true;
+  const isOutOfStock = trackingEnabled && item.quantity <= 0;
   const hasThreshold = item.low_stock_threshold > 0;
-  const isLowStock = !isOutOfStock && hasThreshold && item.quantity <= item.low_stock_threshold;
+  const isLowStock =
+    trackingEnabled && !isOutOfStock && hasThreshold && item.quantity <= item.low_stock_threshold;
 
-  return { isOutOfStock, isLowStock };
+  return { isOutOfStock, isLowStock, trackingEnabled };
 }
 
 function parseSizesInput(value: string): string[] {

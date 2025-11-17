@@ -413,6 +413,16 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN shared_file_url TEXT")
 
 
+def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
+    remise_item_info = conn.execute("PRAGMA table_info(remise_items)").fetchall()
+    remise_item_columns = {row["name"] for row in remise_item_info}
+
+    if "track_low_stock" not in remise_item_columns:
+        conn.execute(
+            "ALTER TABLE remise_items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 1"
+        )
+
+
 def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
     vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
     vehicle_item_columns = {row["name"] for row in vehicle_item_info}
@@ -646,6 +656,7 @@ def _apply_schema_migrations() -> None:
                 size TEXT,
                 quantity INTEGER NOT NULL DEFAULT 0,
                 low_stock_threshold INTEGER NOT NULL DEFAULT 0,
+                track_low_stock INTEGER NOT NULL DEFAULT 1,
                 supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
             );
             CREATE TABLE IF NOT EXISTS remise_movements (
@@ -674,6 +685,7 @@ def _apply_schema_migrations() -> None:
             CREATE INDEX IF NOT EXISTS idx_remise_lot_items_item ON remise_lot_items(remise_item_id);
             """
         )
+        _ensure_remise_item_columns(conn)
         _ensure_vehicle_item_columns(conn)
         _ensure_vehicle_item_qr_tokens(conn)
         conn.execute(
@@ -923,6 +935,9 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     remise_quantity = None
     if "remise_quantity" in row.keys():
         remise_quantity = row["remise_quantity"]
+    track_low_stock = True
+    if "track_low_stock" in row.keys():
+        track_low_stock = bool(row["track_low_stock"])
     return models.Item(
         id=row["id"],
         name=name,
@@ -931,6 +946,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         size=row["size"],
         quantity=row["quantity"],
         low_stock_threshold=row["low_stock_threshold"],
+        track_low_stock=track_low_stock,
         supplier_id=supplier_id,
         remise_item_id=remise_item_id,
         remise_quantity=remise_quantity,
@@ -973,6 +989,8 @@ def _list_inventory_items_internal(
             params = (like, like)
         query += " ORDER BY name COLLATE NOCASE"
     with db.get_stock_connection() as conn:
+        if module == "inventory_remise":
+            _ensure_remise_item_columns(conn)
         cur = conn.execute(query, params)
         return [_build_inventory_item(row) for row in cur.fetchall()]
 
@@ -980,6 +998,8 @@ def _list_inventory_items_internal(
 def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        if module == "inventory_remise":
+            _ensure_remise_item_columns(conn)
         if module == "vehicle_inventory":
             cur = conn.execute(
                 """
@@ -1055,6 +1075,8 @@ def _create_inventory_item_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        if module == "inventory_remise":
+            _ensure_remise_item_columns(conn)
         name = payload.name
         sku = payload.sku
         insert_sku = sku
@@ -1141,6 +1163,9 @@ def _create_inventory_item_internal(
             payload.low_stock_threshold,
             supplier_id,
         ]
+        if module == "inventory_remise":
+            columns.append("track_low_stock")
+            values.append(int(payload.track_low_stock))
         if module == "vehicle_inventory":
             columns.append("remise_item_id")
             values.append(remise_item_id)
@@ -1184,6 +1209,8 @@ def _update_inventory_item_internal(
     result_item_id = item_id
     should_restack_to_template = False
     with db.get_stock_connection() as conn:
+        if module == "inventory_remise":
+            _ensure_remise_item_columns(conn)
         current_row: sqlite3.Row | None = None
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
