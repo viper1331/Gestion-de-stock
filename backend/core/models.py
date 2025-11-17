@@ -194,6 +194,44 @@ class MovementCreate(BaseModel):
     reason: Optional[str] = None
 
 
+class RemiseLotBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=256)
+
+
+class RemiseLotCreate(RemiseLotBase):
+    pass
+
+
+class RemiseLotUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=256)
+
+
+class RemiseLot(RemiseLotBase):
+    id: int
+    created_at: datetime
+    item_count: int = 0
+    total_quantity: int = 0
+
+
+class RemiseLotItemBase(BaseModel):
+    remise_item_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class RemiseLotItemUpdate(BaseModel):
+    quantity: Optional[int] = Field(default=None, gt=0)
+
+
+class RemiseLotItem(RemiseLotItemBase):
+    id: int
+    lot_id: int
+    remise_name: str
+    remise_sku: str
+    available_quantity: int
+
+
 class VehicleQrInfo(BaseModel):
     item_id: int
     name: str
