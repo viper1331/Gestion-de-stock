@@ -184,6 +184,25 @@ export function AppLayout() {
           ]
         },
         {
+          id: "support",
+          label: "Support",
+          tooltip: "Consulter les informations du programme",
+          sections: [
+            {
+              id: "support-ressources",
+              label: "Ressources",
+              tooltip: "Informations légales et version logicielle",
+              links: [
+                {
+                  to: "/about",
+                  label: "À propos",
+                  tooltip: "Consulter la licence et la version en ligne",
+                }
+              ]
+            }
+          ]
+        },
+        {
           id: "administration",
           label: "Administration",
           tooltip: "Paramétrer votre environnement",

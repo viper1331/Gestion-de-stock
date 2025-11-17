@@ -288,6 +288,20 @@ class UpdateApplyResponse(BaseModel):
     status: UpdateStatus
 
 
+class AboutVersionInfo(BaseModel):
+    label: str
+    branch: str
+    last_update: datetime | None = None
+    source_commit: str | None = None
+    pending_update: bool = False
+
+
+class AboutInfo(BaseModel):
+    summary: str
+    license: str
+    version: AboutVersionInfo
+
+
 class SupplierBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     contact_name: Optional[str] = Field(default=None, max_length=128)
