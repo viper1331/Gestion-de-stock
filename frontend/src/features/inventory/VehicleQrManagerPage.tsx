@@ -3,9 +3,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 
 import { api } from "../../lib/api";
+import { getApiBaseUrl } from "../../lib/env";
 import { resolveMediaUrl } from "../../lib/media";
-
-const API_BASE_URL = (import.meta.env.VITE_API_URL ?? "http://127.0.0.1:8000").replace(/\/$/, "");
 
 interface VehicleItem {
   id: number;
@@ -186,7 +185,7 @@ export function VehicleQrManagerPage() {
 
   const buildShareUrl = (item: VehicleItem) => {
     if (!item.qr_token) return null;
-    return `${API_BASE_URL}/vehicle-inventory/public/${item.qr_token}/page`;
+    return `${getApiBaseUrl()}/vehicle-inventory/public/${item.qr_token}/page`;
   };
 
   return (
