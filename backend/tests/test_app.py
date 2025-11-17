@@ -2216,7 +2216,11 @@ def test_updates_status_returns_payload(monkeypatch: Any) -> None:
             last_deployed_pull=7,
             last_deployed_sha="deadbeef",
             last_deployed_at=None,
+            previous_deployed_pull=None,
+            previous_deployed_sha=None,
+            previous_deployed_at=None,
             pending_update=False,
+            can_revert=False,
         )
 
     monkeypatch.setattr(update_service, "get_status", fake_status)
@@ -2239,7 +2243,11 @@ def test_updates_availability_for_regular_user(monkeypatch: Any) -> None:
             last_deployed_pull=5,
             last_deployed_sha="abc123",
             last_deployed_at=None,
+            previous_deployed_pull=None,
+            previous_deployed_sha=None,
+            previous_deployed_at=None,
             pending_update=True,
+            can_revert=False,
         )
 
     monkeypatch.setattr(update_service, "get_status", fake_status)
@@ -2271,7 +2279,11 @@ def test_apply_update_returns_result(monkeypatch: Any) -> None:
             last_deployed_pull=8,
             last_deployed_sha="abcdef01",
             last_deployed_at=None,
+            previous_deployed_pull=7,
+            previous_deployed_sha="deadbeef",
+            previous_deployed_at=None,
             pending_update=False,
+            can_revert=True,
         )
         return True, status
 
@@ -2282,6 +2294,33 @@ def test_apply_update_returns_result(monkeypatch: Any) -> None:
     payload = response.json()
     assert payload["updated"] is True
     assert payload["status"]["branch"] == "main"
+
+
+def test_revert_update_returns_result(monkeypatch: Any) -> None:
+    async def fake_revert() -> tuple[bool, update_service.UpdateStatusData]:
+        status = update_service.UpdateStatusData(
+            repository="owner/repo",
+            branch="main",
+            current_commit="deadbeef",
+            latest_pull_request=None,
+            last_deployed_pull=6,
+            last_deployed_sha="deadbeef",
+            last_deployed_at=None,
+            previous_deployed_pull=7,
+            previous_deployed_sha="cafebabe",
+            previous_deployed_at=None,
+            pending_update=True,
+            can_revert=True,
+        )
+        return True, status
+
+    monkeypatch.setattr(update_service, "revert_last_update", fake_revert)
+    headers = _login_headers("admin", "admin123")
+    response = client.post("/updates/revert", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["updated"] is True
+    assert payload["status"]["last_deployed_sha"] == "deadbeef"
 
 
 def test_apply_latest_update_returns_false_when_no_pull(monkeypatch: Any) -> None:

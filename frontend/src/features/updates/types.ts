@@ -14,7 +14,11 @@ export interface UpdateStatus {
   last_deployed_pull: number | null;
   last_deployed_sha: string | null;
   last_deployed_at: string | null;
+  previous_deployed_pull: number | null;
+  previous_deployed_sha: string | null;
+  previous_deployed_at: string | null;
   pending_update: boolean;
+  can_revert: boolean;
 }
 
 export interface UpdateAvailability {
