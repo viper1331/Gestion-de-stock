@@ -391,6 +391,26 @@ def ensure_database_ready() -> None:
         _db_initialized = True
 
 
+def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
+    vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
+    vehicle_item_columns = {row["name"] for row in vehicle_item_info}
+
+    if "image_path" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
+    if "position_x" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_x REAL")
+    if "position_y" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_y REAL")
+    if "remise_item_id" not in vehicle_item_columns:
+        conn.execute(
+            "ALTER TABLE vehicle_items ADD COLUMN remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL"
+        )
+    if "documentation_url" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN documentation_url TEXT")
+    if "tutorial_url" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
+
+
 def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
     vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
     vehicle_item_columns = {row["name"] for row in vehicle_item_info}
@@ -635,23 +655,7 @@ def _apply_schema_migrations() -> None:
             CREATE INDEX IF NOT EXISTS idx_remise_movements_item ON remise_movements(item_id);
             """
         )
-
-        vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
-        vehicle_item_columns = {row["name"] for row in vehicle_item_info}
-        if "image_path" not in vehicle_item_columns:
-            conn.execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
-        if "position_x" not in vehicle_item_columns:
-            conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_x REAL")
-        if "position_y" not in vehicle_item_columns:
-            conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_y REAL")
-        if "remise_item_id" not in vehicle_item_columns:
-            conn.execute(
-                "ALTER TABLE vehicle_items ADD COLUMN remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL"
-            )
-        if "documentation_url" not in vehicle_item_columns:
-            conn.execute("ALTER TABLE vehicle_items ADD COLUMN documentation_url TEXT")
-        if "tutorial_url" not in vehicle_item_columns:
-            conn.execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
+        _ensure_vehicle_item_columns(conn)
         _ensure_vehicle_item_qr_tokens(conn)
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)"
@@ -1034,6 +1038,7 @@ def _create_inventory_item_internal(
         supplier_id = payload.supplier_id
         remise_item_id: int | None = None
         if module == "vehicle_inventory":
+            _ensure_vehicle_item_columns(conn)
             remise_item_id = payload.remise_item_id
             if remise_item_id is None:
                 raise ValueError("Un article de remise doit être sélectionné.")
@@ -1157,6 +1162,7 @@ def _update_inventory_item_internal(
     with db.get_stock_connection() as conn:
         current_row: sqlite3.Row | None = None
         if module == "vehicle_inventory":
+            _ensure_vehicle_item_columns(conn)
             current_row = conn.execute(
                 f"SELECT quantity, remise_item_id, category_id, image_path FROM {config.tables.items} WHERE id = ?",
                 (item_id,),
