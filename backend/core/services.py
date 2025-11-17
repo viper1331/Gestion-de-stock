@@ -1726,7 +1726,11 @@ def delete_item(item_id: int) -> None:
 
 
 def list_vehicle_items(search: str | None = None) -> list[models.Item]:
-    return _list_inventory_items_internal("vehicle_inventory", search)
+    items = _list_inventory_items_internal("vehicle_inventory", search)
+    for item in items:
+        if item.category_id is None:
+            item.qr_token = None
+    return items
 
 
 def create_vehicle_item(payload: models.ItemCreate) -> models.Item:
@@ -1734,7 +1738,10 @@ def create_vehicle_item(payload: models.ItemCreate) -> models.Item:
 
 
 def get_vehicle_item(item_id: int) -> models.Item:
-    return _get_inventory_item_internal("vehicle_inventory", item_id)
+    item = _get_inventory_item_internal("vehicle_inventory", item_id)
+    if item.category_id is None:
+        item.qr_token = None
+    return item
 
 
 def update_vehicle_item(item_id: int, payload: models.ItemUpdate) -> models.Item:

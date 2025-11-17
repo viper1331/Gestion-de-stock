@@ -185,7 +185,7 @@ export function VehicleQrManagerPage() {
   };
 
   const buildShareUrl = (item: VehicleItem) => {
-    if (!item.qr_token) return null;
+    if (!item.category_id || !item.qr_token) return null;
     return `${API_BASE_URL}/vehicle-inventory/public/${item.qr_token}/page`;
   };
 
@@ -245,6 +245,7 @@ export function VehicleQrManagerPage() {
             const shareUrl = buildShareUrl(item);
             const vehicleName = getVehicleName(item);
             const cover = resolveMediaUrl(item.image_url);
+            const hasVehicle = Boolean(item.category_id);
             return (
               <article
                 key={item.id}
@@ -296,38 +297,46 @@ export function VehicleQrManagerPage() {
                   >
                     {updateResources.isPending ? "Enregistrement..." : "Enregistrer les liens"}
                   </button>
-                  <button
-                    type="button"
-                    onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: false })}
-                    className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                  >
-                    Télécharger le QR
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: true })}
-                    className="inline-flex items-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50 dark:border-amber-400/60 dark:text-amber-200 dark:hover:bg-amber-500/10"
-                  >
-                    Régénérer le lien
-                  </button>
-                  {shareUrl ? (
-                    <button
-                      type="button"
-                      onClick={async () => {
-                        try {
-                          await navigator.clipboard.writeText(shareUrl);
-                          setFeedback("Lien copié dans le presse-papiers.");
-                        } catch (clipError) {
-                          setFeedback("Impossible de copier le lien.");
-                        }
-                      }}
-                      className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
-                    >
-                      Copier le lien
-                    </button>
+                  {hasVehicle ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: false })}
+                        className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                      >
+                        Télécharger le QR
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: true })}
+                        className="inline-flex items-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50 dark:border-amber-400/60 dark:text-amber-200 dark:hover:bg-amber-500/10"
+                      >
+                        Régénérer le lien
+                      </button>
+                      {shareUrl ? (
+                        <button
+                          type="button"
+                          onClick={async () => {
+                            try {
+                              await navigator.clipboard.writeText(shareUrl);
+                              setFeedback("Lien copié dans le presse-papiers.");
+                            } catch (clipError) {
+                              setFeedback("Impossible de copier le lien.");
+                            }
+                          }}
+                          className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+                        >
+                          Copier le lien
+                        </button>
+                      ) : (
+                        <span className="text-xs text-amber-600 dark:text-amber-300">
+                          Le QR sera disponible après la première génération.
+                        </span>
+                      )}
+                    </>
                   ) : (
                     <span className="text-xs text-amber-600 dark:text-amber-300">
-                      Le QR sera disponible après la première génération.
+                      Affectez ce matériel à un véhicule pour générer un QR code.
                     </span>
                   )}
                 </div>
