@@ -1143,7 +1143,7 @@ def _update_inventory_item_internal(
 ) -> models.Item:
     ensure_database_ready()
     config = _get_inventory_config(module)
-    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
     fields.pop("image_url", None)
     fields.pop("qr_token", None)
     if not fields:
@@ -2369,7 +2369,7 @@ def create_supplier(payload: models.SupplierCreate) -> models.Supplier:
 
 def update_supplier(supplier_id: int, payload: models.SupplierUpdate) -> models.Supplier:
     ensure_database_ready()
-    updates = payload.dict(exclude_unset=True)
+    updates = payload.model_dump(exclude_unset=True)
     modules_update = updates.pop("modules", None)
     fields = {k: v for k, v in updates.items()}
     with db.get_stock_connection() as conn:
@@ -2516,7 +2516,7 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
 
 def update_purchase_order(order_id: int, payload: models.PurchaseOrderUpdate) -> models.PurchaseOrderDetail:
     ensure_database_ready()
-    updates_raw = payload.dict(exclude_unset=True)
+    updates_raw = payload.model_dump(exclude_unset=True)
     if not updates_raw:
         return get_purchase_order(order_id)
     updates: dict[str, object] = {}
@@ -3193,7 +3193,7 @@ def create_collaborator(payload: models.CollaboratorCreate) -> models.Collaborat
 
 def update_collaborator(collaborator_id: int, payload: models.CollaboratorUpdate) -> models.Collaborator:
     ensure_database_ready()
-    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
     if not fields:
         return get_collaborator(collaborator_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)
@@ -3685,6 +3685,9 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
 
 def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyItem:
     ensure_database_ready()
+    expiration_date = (
+        payload.expiration_date.isoformat() if payload.expiration_date is not None else None
+    )
     with db.get_stock_connection() as conn:
         barcode = _normalize_barcode(payload.barcode)
         try:
@@ -3710,7 +3713,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     barcode,
                     payload.quantity,
                     payload.low_stock_threshold,
-                    payload.expiration_date,
+                    expiration_date,
                     payload.location,
                     payload.category_id,
                 ),
@@ -3723,9 +3726,11 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
 
 def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> models.PharmacyItem:
     ensure_database_ready()
-    fields = {k: v for k, v in payload.dict(exclude_unset=True).items()}
+    fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
     if "barcode" in fields:
         fields["barcode"] = _normalize_barcode(fields["barcode"])
+    if "expiration_date" in fields and fields["expiration_date"] is not None:
+        fields["expiration_date"] = fields["expiration_date"].isoformat()
     if not fields:
         return get_pharmacy_item(item_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)
@@ -4038,7 +4043,7 @@ def update_pharmacy_purchase_order(
     order_id: int, payload: models.PharmacyPurchaseOrderUpdate
 ) -> models.PharmacyPurchaseOrderDetail:
     ensure_database_ready()
-    updates_raw = payload.dict(exclude_unset=True)
+    updates_raw = payload.model_dump(exclude_unset=True)
     if not updates_raw:
         return get_pharmacy_purchase_order(order_id)
     updates: dict[str, object] = {}
