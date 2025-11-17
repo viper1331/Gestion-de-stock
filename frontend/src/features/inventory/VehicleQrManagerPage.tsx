@@ -52,16 +52,21 @@ export function VehicleQrManagerPage() {
     }
   });
 
+  const itemsWithVehicle = useMemo(
+    () => items.filter((item) => item.category_id !== null),
+    [items]
+  );
+
   useEffect(() => {
     const nextDrafts: Record<number, ResourceDraft> = {};
-    items.forEach((item) => {
+    itemsWithVehicle.forEach((item) => {
       nextDrafts[item.id] = {
         documentation_url: item.documentation_url ?? "",
         tutorial_url: item.tutorial_url ?? ""
       };
     });
     setDrafts(nextDrafts);
-  }, [items]);
+  }, [itemsWithVehicle]);
 
   const vehicleLookup = useMemo(() => {
     const map = new Map<number, string>();
@@ -79,8 +84,8 @@ export function VehicleQrManagerPage() {
 
   const filteredItems = useMemo(() => {
     const term = search.trim().toLowerCase();
-    if (!term) return items;
-    return items.filter((item) => {
+    if (!term) return itemsWithVehicle;
+    return itemsWithVehicle.filter((item) => {
       const vehicleName = getVehicleName(item);
       return (
         item.name.toLowerCase().includes(term) ||
@@ -88,7 +93,7 @@ export function VehicleQrManagerPage() {
         vehicleName.toLowerCase().includes(term)
       );
     });
-  }, [getVehicleName, items, search]);
+  }, [getVehicleName, itemsWithVehicle, search]);
 
   const sortedItems = useMemo(() => {
     const itemsToSort = [...filteredItems];
