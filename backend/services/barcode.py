@@ -1,6 +1,8 @@
 """Service pour la génération des codes-barres."""
 from __future__ import annotations
 
+import logging
+import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -49,6 +51,8 @@ WRITER_OPTIONS = {
     "quiet_zone": 1.0,
 }
 
+logger = logging.getLogger(__name__)
+
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "barcodes"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -79,22 +83,42 @@ def _barcode_path(sku: str) -> Path:
 def generate_barcode_png(sku: str) -> Optional[Path]:
     path = _barcode_path(sku)
 
-    if _barcode_lib and ImageWriter:
-        try:
-            code = Code128B(sku, writer=ImageWriter())
+    if not (_barcode_lib and ImageWriter):
+        if os.getenv("ALLOW_PLACEHOLDER_BARCODE") == "1":
+            logger.warning(
+                "Bibliothèque python-barcode absente : utilisation du placeholder pour %s.",
+                sku,
+            )
+            return _generate_placeholder_barcode(path, sku)
 
-            filename = path.with_suffix("")
-            generated_path = code.save(str(filename), options=WRITER_OPTIONS)
-            return Path(generated_path)
-        except Exception:
-            if path.exists():
-                path.unlink()
+        raise RuntimeError(
+            "La librairie 'python-barcode' est requise pour générer les codes-barres Code128."
+        )
 
-    return _generate_placeholder_barcode(path, sku)
+    try:
+        code = Code128B(sku, writer=ImageWriter())
+
+        filename = path.with_suffix("")
+        generated_path = code.save(str(filename), options=WRITER_OPTIONS)
+        return Path(generated_path)
+    except Exception as exc:
+        logger.exception(
+            "Erreur lors de la génération du code-barres Code128 pour %s.", sku
+        )
+        if path.exists():
+            path.unlink()
+        raise RuntimeError(
+            "Échec de la génération du code-barres Code128."
+        ) from exc
 
 
 def _generate_placeholder_barcode(path: Path, sku: str) -> Optional[Path]:
-    """Fallback minimaliste pour générer un visuel lorsqu'aucune librairie n'est disponible."""
+    """Fallback visuel non normé, réservé au développement.
+
+    Cette fonction ne produit **pas** de code-barres Code 128 valide et ne doit
+    être utilisée que lorsque `ALLOW_PLACEHOLDER_BARCODE=1` est défini dans
+    l'environnement pour des tests manuels ou du prototypage local.
+    """
 
     try:
         width, height = 400, 200
