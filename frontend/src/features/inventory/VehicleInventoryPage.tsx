@@ -501,7 +501,7 @@ export function VehicleInventoryPage() {
   );
 
   const availableItems = useMemo(
-    () => items.filter((item) => item.category_id === null),
+    () => items.filter((item) => item.category_id === null && (item.remise_quantity ?? 0) > 0),
     [items]
   );
 
