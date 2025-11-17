@@ -46,6 +46,11 @@ const WEEK_DAY_ORDER = WEEK_DAYS.map((day) => day.value);
 
 type HomepageFieldType = "text" | "textarea" | "url";
 
+const ENTRY_DESCRIPTIONS: Record<string, string> = {
+  "general.inactivity_timeout_minutes":
+    "Durée d'inactivité en minutes avant la déconnexion automatique. Définissez 0 ou laissez vide pour désactiver."
+};
+
 const HOMEPAGE_FIELDS: Array<{
   key: HomePageConfigKey;
   label: string;
@@ -561,6 +566,7 @@ export function SettingsPage() {
                     {sectionEntries.map((entry) => {
                       const key = `${entry.section}.${entry.key}`;
                       const pendingValue = changes[key] ?? entry.value;
+                      const description = ENTRY_DESCRIPTIONS[key];
                       return (
                         <form
                           key={key}
@@ -570,6 +576,9 @@ export function SettingsPage() {
                           <div className="w-full sm:w-48">
                             <p className="text-xs font-semibold text-slate-400">{entry.key}</p>
                             <p className="text-[11px] text-slate-500">Valeur actuelle : {entry.value}</p>
+                            {description ? (
+                              <p className="text-[11px] text-slate-500">{description}</p>
+                            ) : null}
                           </div>
                           <input
                             value={pendingValue}

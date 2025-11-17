@@ -1,17 +1,39 @@
 import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { useAuth } from "../features/auth/useAuth";
 import { ThemeToggle } from "./ThemeToggle";
 import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
+import { fetchConfigEntries } from "../lib/config";
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
   const { sidebarOpen, toggleSidebar } = useUiStore();
+
+  const { data: configEntries = [] } = useQuery({
+    queryKey: ["config", "global"],
+    queryFn: fetchConfigEntries,
+    enabled: Boolean(user)
+  });
+
+  const inactivityCooldownMs = useMemo(() => {
+    const cooldownEntry = configEntries.find(
+      (entry) => entry.section === "general" && entry.key === "inactivity_timeout_minutes"
+    );
+    if (!cooldownEntry) {
+      return null;
+    }
+    const minutes = Number.parseInt(cooldownEntry.value, 10);
+    if (!Number.isFinite(minutes) || minutes <= 0) {
+      return null;
+    }
+    return minutes * 60_000;
+  }, [configEntries]);
 
   useEffect(() => {
     initialize();
@@ -22,6 +44,41 @@ export function AppLayout() {
       navigate("/login", { replace: true });
     }
   }, [isReady, navigate, user]);
+
+  useEffect(() => {
+    if (!user || !inactivityCooldownMs) {
+      return undefined;
+    }
+
+    let timeoutId: number | undefined;
+    const resetTimer = () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+      timeoutId = window.setTimeout(() => {
+        logout();
+      }, inactivityCooldownMs);
+    };
+
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === "visible") {
+        resetTimer();
+      }
+    };
+
+    const activityEvents = ["mousemove", "keydown", "mousedown", "touchstart", "scroll", "focus"];
+    activityEvents.forEach((eventName) => window.addEventListener(eventName, resetTimer));
+    document.addEventListener("visibilitychange", handleVisibilityChange);
+    resetTimer();
+
+    return () => {
+      if (timeoutId) {
+        window.clearTimeout(timeoutId);
+      }
+      activityEvents.forEach((eventName) => window.removeEventListener(eventName, resetTimer));
+      document.removeEventListener("visibilitychange", handleVisibilityChange);
+    };
+  }, [inactivityCooldownMs, logout, user]);
 
   const navigationGroups = useMemo(
     () => {
