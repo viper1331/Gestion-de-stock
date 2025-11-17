@@ -211,6 +211,9 @@ export function HomePage() {
     { label: config.focus_3_label, description: config.focus_3_description }
   ];
 
+  const isCheckingStockPermissions = Boolean(user) && isModuleLoading && user.role !== "admin";
+  const showLowStockSection = Boolean(user) && (isCheckingStockPermissions || lowStockCards.length > 0);
+
   const pharmacyLowStock = useMemo(() => {
     if (!canSeePharmacyAlerts) {
       return [] as PharmacyItem[];
@@ -343,22 +346,17 @@ export function HomePage() {
         </div>
       ) : null}
 
-      {user ? (
+      {showLowStockSection ? (
         <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
           <header className="flex flex-wrap items-center justify-between gap-2">
             <div>
               <h2 className="text-base font-semibold text-white">Alertes stock bas</h2>
               <p className="text-xs text-slate-400">Modules surveillés selon vos autorisations.</p>
             </div>
-            {isModuleLoading && user.role !== "admin" ? (
+            {isCheckingStockPermissions ? (
               <span className="text-xs text-slate-500">Analyse des permissions en cours...</span>
             ) : null}
           </header>
-          {lowStockCards.length === 0 && !(isModuleLoading && user.role !== "admin") ? (
-            <p className="mt-3 text-sm text-slate-400">
-              Aucun module de stock accessible avec vos droits actuels.
-            </p>
-          ) : null}
           {lowStockCards.length > 0 ? (
             <div className="mt-4 grid gap-4 md:grid-cols-2">
               {lowStockCards.map((card) => (
