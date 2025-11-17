@@ -1053,6 +1053,22 @@ def test_barcode_generation_requires_dependency(
     assert list(tmp_path.glob("*.png")) == []
 
 
+def test_barcode_generation_does_not_fallback_to_placeholder(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    services.ensure_database_ready()
+    monkeypatch.setattr(barcode_service, "ASSETS_DIR", tmp_path)
+    monkeypatch.setenv("ALLOW_PLACEHOLDER_BARCODE", "1")
+    monkeypatch.setattr(barcode_service, "_barcode_lib", None)
+    monkeypatch.setattr(barcode_service, "ImageWriter", None)
+
+    with pytest.raises(RuntimeError) as excinfo:
+        barcode_service.generate_barcode_png("SKU-ABSENT")
+
+    assert "python-barcode" in str(excinfo.value)
+    assert list(tmp_path.glob("*.png")) == []
+
+
 def test_barcode_listing_requires_permission() -> None:
     services.ensure_database_ready()
     user_id = _create_user("noview", "noview123", role="user")

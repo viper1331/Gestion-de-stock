@@ -7,7 +7,6 @@ explicite plutôt que de revenir silencieusement à un rendu factice.
 from __future__ import annotations
 
 import logging
-import os
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -89,13 +88,6 @@ def generate_barcode_png(sku: str) -> Optional[Path]:
     path = _barcode_path(sku)
 
     if not (_barcode_lib and ImageWriter):
-        if os.getenv("ALLOW_PLACEHOLDER_BARCODE") == "1":
-            logger.warning(
-                "Bibliothèque python-barcode absente : utilisation du placeholder pour %s.",
-                sku,
-            )
-            return _generate_placeholder_barcode(path, sku)
-
         raise RuntimeError(
             "La librairie 'python-barcode' est requise pour générer les codes-barres Code128."
         )
@@ -120,9 +112,9 @@ def generate_barcode_png(sku: str) -> Optional[Path]:
 def _generate_placeholder_barcode(path: Path, sku: str) -> Optional[Path]:
     """Fallback visuel non normé, réservé au développement.
 
-    Cette fonction ne produit **pas** de code-barres Code 128 valide et ne doit
-    être utilisée que lorsque `ALLOW_PLACEHOLDER_BARCODE=1` est défini dans
-    l'environnement pour des tests manuels ou du prototypage local.
+    Cette fonction ne produit **pas** de code-barres Code 128 valide et n'est
+    plus appelée automatiquement. Elle reste disponible pour des usages
+    manuels ou du prototypage local explicite.
     """
 
     try:
