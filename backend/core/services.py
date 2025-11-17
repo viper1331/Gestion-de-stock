@@ -383,9 +383,10 @@ def _load_supplier_modules(
 
 def ensure_database_ready() -> None:
     global _db_initialized
+    db.init_databases()
+    _apply_schema_migrations()
+
     if not _db_initialized:
-        db.init_databases()
-        _apply_schema_migrations()
         _restore_inventory_snapshots()
         seed_default_admin()
         _db_initialized = True
