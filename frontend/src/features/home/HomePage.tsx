@@ -72,6 +72,13 @@ interface PharmacyItem {
   low_stock_threshold: number | null;
 }
 
+interface RemiseItem {
+  id: number;
+  name: string;
+  quantity: number;
+  low_stock_threshold: number;
+}
+
 export function HomePage() {
   const { user } = useAuth();
   const { canAccess, isLoading: isModuleLoading } = useModulePermissions({ enabled: Boolean(user) });
@@ -117,6 +124,22 @@ export function HomePage() {
     return canAccess("pharmacy");
   }, [canAccess, isModuleLoading, user]);
 
+  const canSeeRemiseAlerts = useMemo(() => {
+    if (!user) {
+      return false;
+    }
+
+    if (user.role === "admin") {
+      return true;
+    }
+
+    if (isModuleLoading) {
+      return false;
+    }
+
+    return canAccess("inventory_remise");
+  }, [canAccess, isModuleLoading, user]);
+
   const {
     data: clothingLowStock = [],
     isFetching: isFetchingClothingAlerts
@@ -139,6 +162,18 @@ export function HomePage() {
       return response.data;
     },
     enabled: canSeePharmacyAlerts
+  });
+
+  const {
+    data: remiseItems = [],
+    isFetching: isFetchingRemiseAlerts
+  } = useQuery({
+    queryKey: ["home", "low-stock", "remise"],
+    queryFn: async () => {
+      const response = await api.get<RemiseItem[]>("/remise-inventory/");
+      return response.data;
+    },
+    enabled: canSeeRemiseAlerts
   });
 
   const {
@@ -225,6 +260,20 @@ export function HomePage() {
     });
   }, [canSeePharmacyAlerts, pharmacyItems]);
 
+  const remiseLowStock = useMemo(() => {
+    if (!canSeeRemiseAlerts) {
+      return [] as RemiseItem[];
+    }
+
+    return remiseItems.filter((item) => {
+      if ((item.low_stock_threshold ?? 0) <= 0) {
+        return false;
+      }
+
+      return item.quantity <= item.low_stock_threshold;
+    });
+  }, [canSeeRemiseAlerts, remiseItems]);
+
   const lowStockCards = useMemo(
     () => {
       const cards: {
@@ -270,14 +319,34 @@ export function HomePage() {
         });
       }
 
+      if (canSeeRemiseAlerts) {
+        cards.push({
+          key: "remise",
+          title: "Remises",
+          description: "Articles remis en dessous de leur seuil de stock.",
+          link: "/remise-inventory",
+          items: remiseLowStock.map((item) => ({
+            id: item.id,
+            name: item.name,
+            quantity: item.quantity,
+            threshold: item.low_stock_threshold,
+            shortage: Math.max(item.low_stock_threshold - item.quantity, 0)
+          })),
+          isLoading: isFetchingRemiseAlerts
+        });
+      }
+
       return cards;
     },
     [
       canSeeClothingAlerts,
       canSeePharmacyAlerts,
+      canSeeRemiseAlerts,
       clothingLowStock,
       isFetchingClothingAlerts,
       isFetchingPharmacyAlerts,
+      isFetchingRemiseAlerts,
+      remiseLowStock,
       pharmacyLowStock
     ]
   );
