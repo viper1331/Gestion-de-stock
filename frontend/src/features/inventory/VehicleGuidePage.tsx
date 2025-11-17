@@ -10,6 +10,7 @@ interface VehicleQrInfo {
   sku: string;
   category_name: string | null;
   image_url: string | null;
+  shared_file_url: string | null;
   documentation_url: string | null;
   tutorial_url: string | null;
 }
@@ -62,6 +63,11 @@ export function VehicleGuidePage() {
                   Référence interne : <span className="font-semibold">{info.sku}</span>
                 </p>
                 <div className="grid gap-3 md:grid-cols-2">
+                  <ResourceCard
+                    title="Fichier associé (OneDrive)"
+                    description="Accédez directement au fichier partagé pour ce matériel."
+                    url={info.shared_file_url}
+                  />
                   <ResourceCard
                     title="Documentation technique"
                     description="Consultez les notices, schémas et informations clés pour ce matériel."

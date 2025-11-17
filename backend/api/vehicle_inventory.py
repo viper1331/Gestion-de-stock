@@ -69,8 +69,11 @@ async def generate_vehicle_item_qr_code(
         status_code = 400 if "affecté" in detail.lower() else 404
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
-    qr_url = str(request.url_for("vehicle_item_public_page", qr_token=qr_token))
-    qr_buffer = qrcode_service.generate_qr_png(qr_url, label=f"Véhicule #{item_id}")
+    item = services.get_vehicle_item(item_id)
+    qr_target_url = item.shared_file_url or str(
+        request.url_for("vehicle_item_public_page", qr_token=qr_token)
+    )
+    qr_buffer = qrcode_service.generate_qr_png(qr_target_url, label=f"Véhicule #{item_id}")
     headers = {
         "Content-Disposition": f"attachment; filename=vehicule-{item_id}-qr.png",
         "X-Vehicle-QR-Token": qr_token,
