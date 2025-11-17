@@ -65,7 +65,9 @@ async def generate_vehicle_item_qr_code(
     try:
         qr_token = services.get_vehicle_item_qr_token(item_id, regenerate=regenerate)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = 400 if "affecté" in detail.lower() else 404
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
     qr_url = str(request.url_for("vehicle_item_public_page", qr_token=qr_token))
     qr_buffer = qrcode_service.generate_qr_png(qr_url, label=f"Véhicule #{item_id}")

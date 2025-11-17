@@ -2151,11 +2151,15 @@ def get_vehicle_item_qr_token(item_id: int, *, regenerate: bool = False) -> str:
     with db.get_stock_connection() as conn:
         _ensure_vehicle_item_qr_tokens(conn)
         row = conn.execute(
-            "SELECT qr_token FROM vehicle_items WHERE id = ?",
+            "SELECT qr_token, category_id FROM vehicle_items WHERE id = ?",
             (item_id,),
         ).fetchone()
         if row is None:
             raise ValueError("Article introuvable")
+        if row["category_id"] is None:
+            raise ValueError(
+                "Les QR codes ne peuvent être générés que pour le matériel déjà affecté à un véhicule."
+            )
         token = row["qr_token"]
         if regenerate or not token:
             token = uuid4().hex
