@@ -20,6 +20,7 @@ import { RemiseInventoryPage } from "../features/inventory/RemiseInventoryPage";
 import { UpdatesPage } from "../features/updates/UpdatesPage";
 import { VehicleQrManagerPage } from "../features/inventory/VehicleQrManagerPage";
 import { VehicleGuidePage } from "../features/inventory/VehicleGuidePage";
+import { AboutPage } from "../features/about/AboutPage";
 
 export const router = createBrowserRouter([
   {
@@ -50,7 +51,8 @@ export const router = createBrowserRouter([
       { path: "pharmacy", element: <PharmacyPage /> },
       { path: "users", element: <AdminUsersPage /> },
       { path: "permissions", element: <ModulePermissionsPage /> },
-      { path: "updates", element: <UpdatesPage /> }
+      { path: "updates", element: <UpdatesPage /> },
+      { path: "about", element: <AboutPage /> }
     ]
   }
 ]);
