@@ -5,7 +5,8 @@ import { api } from "../../lib/api";
 
 const MODULE_DEPENDENCIES: Record<string, string[]> = {
   suppliers: ["clothing"],
-  dotations: ["clothing"]
+  dotations: ["clothing"],
+  vehicle_qrcodes: ["vehicle_inventory"]
 };
 
 function collectDependencies(module: string): string[] {

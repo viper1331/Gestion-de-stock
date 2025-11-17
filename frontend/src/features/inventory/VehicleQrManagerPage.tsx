@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 
@@ -31,8 +31,11 @@ interface ResourceDraft {
 export function VehicleQrManagerPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
+  const [sortBy, setSortBy] = useState<"vehicle" | "name">("vehicle");
   const [drafts, setDrafts] = useState<Record<number, ResourceDraft>>({});
   const [feedback, setFeedback] = useState<string | null>(null);
+
+  const collator = useMemo(() => new Intl.Collator("fr", { sensitivity: "base" }), []);
 
   const { data: vehicles = [] } = useQuery({
     queryKey: ["vehicle-categories"],
@@ -67,18 +70,45 @@ export function VehicleQrManagerPage() {
     return map;
   }, [vehicles]);
 
+  const getVehicleName = useCallback(
+    (item: VehicleItem) => {
+      if (!item.category_id) return "Sans véhicule";
+      return vehicleLookup.get(item.category_id) ?? "Sans véhicule";
+    },
+    [vehicleLookup]
+  );
+
   const filteredItems = useMemo(() => {
     const term = search.trim().toLowerCase();
     if (!term) return items;
     return items.filter((item) => {
-      const vehicleName = item.category_id ? vehicleLookup.get(item.category_id) ?? "" : "";
+      const vehicleName = getVehicleName(item);
       return (
         item.name.toLowerCase().includes(term) ||
         item.sku.toLowerCase().includes(term) ||
         vehicleName.toLowerCase().includes(term)
       );
     });
-  }, [items, search, vehicleLookup]);
+  }, [getVehicleName, items, search]);
+
+  const sortedItems = useMemo(() => {
+    const itemsToSort = [...filteredItems];
+    itemsToSort.sort((a, b) => {
+      const vehicleA = getVehicleName(a);
+      const vehicleB = getVehicleName(b);
+
+      if (sortBy === "vehicle") {
+        const byVehicle = collator.compare(vehicleA, vehicleB);
+        if (byVehicle !== 0) return byVehicle;
+        return collator.compare(a.name, b.name);
+      }
+
+      const byName = collator.compare(a.name, b.name);
+      if (byName !== 0) return byName;
+      return collator.compare(vehicleA, vehicleB);
+    });
+    return itemsToSort;
+  }, [collator, filteredItems, getVehicleName, sortBy]);
 
   const updateResources = useMutation({
     mutationFn: async (payload: { itemId: number; documentation_url: string; tutorial_url: string }) => {
@@ -161,20 +191,33 @@ export function VehicleQrManagerPage() {
 
   return (
     <div className="space-y-6 p-6">
-      <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
+      <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">QR codes véhicules</h1>
           <p className="text-sm text-slate-600 dark:text-slate-300">
             Gérez les liens publics associés au matériel véhicule et exportez un QR code prêt à être affiché.
           </p>
         </div>
-        <input
-          type="search"
-          value={search}
-          onChange={(event) => setSearch(event.target.value)}
-          placeholder="Rechercher par nom, référence ou véhicule"
-          className="w-full max-w-md rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
-        />
+        <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
+          <input
+            type="search"
+            value={search}
+            onChange={(event) => setSearch(event.target.value)}
+            placeholder="Rechercher par nom, référence ou véhicule"
+            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:max-w-sm"
+          />
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+            <span className="whitespace-nowrap">Trier par</span>
+            <select
+              value={sortBy}
+              onChange={(event) => setSortBy(event.target.value as typeof sortBy)}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            >
+              <option value="vehicle">Véhicule (A → Z)</option>
+              <option value="name">Nom du matériel</option>
+            </select>
+          </label>
+        </div>
       </div>
 
       {feedback && (
@@ -191,16 +234,16 @@ export function VehicleQrManagerPage() {
 
       {isLoading ? (
         <p className="text-sm text-slate-500 dark:text-slate-400">Chargement...</p>
-      ) : filteredItems.length === 0 ? (
+      ) : sortedItems.length === 0 ? (
         <p className="text-sm text-slate-500 dark:text-slate-400">
           Aucun matériel véhicule ne correspond à votre recherche.
         </p>
       ) : (
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
-          {filteredItems.map((item) => {
+          {sortedItems.map((item) => {
             const draft = drafts[item.id] ?? { documentation_url: "", tutorial_url: "" };
             const shareUrl = buildShareUrl(item);
-            const vehicleName = item.category_id ? vehicleLookup.get(item.category_id) ?? "Sans véhicule" : "Sans véhicule";
+            const vehicleName = getVehicleName(item);
             const cover = resolveMediaUrl(item.image_url);
             return (
               <article

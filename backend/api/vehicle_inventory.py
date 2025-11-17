@@ -14,11 +14,15 @@ from backend.services import qrcode_service
 
 router = APIRouter()
 
-MODULE_KEY = "vehicle_inventory"
+QR_MODULE_KEY = "vehicle_qrcodes"
+FALLBACK_MODULE_KEY = "vehicle_inventory"
 
 
 def _require_permission(user: models.User, *, action: str) -> None:
-    if not services.has_module_access(user, MODULE_KEY, action=action):
+    if services.has_module_access(user, QR_MODULE_KEY, action=action):
+        return
+    if services.has_module_access(user, FALLBACK_MODULE_KEY, action=action):
+        return
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
