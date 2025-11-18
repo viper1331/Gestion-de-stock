@@ -218,6 +218,10 @@ class RemiseLot(RemiseLotBase):
     total_quantity: int = 0
 
 
+class RemiseLotWithItems(RemiseLot):
+    items: list["RemiseLotItem"] = []
+
+
 class RemiseLotItemBase(BaseModel):
     remise_item_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)

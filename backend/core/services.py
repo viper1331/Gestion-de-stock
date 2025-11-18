@@ -1,9 +1,10 @@
 """Services métier pour Gestion Stock Pro."""
 from __future__ import annotations
 
+import html
 import io
 import json
-import html
+from collections import defaultdict
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -2356,6 +2357,55 @@ def get_remise_lot(lot_id: int) -> models.RemiseLot:
     if row is None:
         raise ValueError("Lot introuvable")
     return _build_remise_lot(row)
+
+
+def list_remise_lots_with_items() -> list[models.RemiseLotWithItems]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        lot_rows = conn.execute(
+            """
+            SELECT rl.id, rl.name, rl.description, rl.created_at,
+                   COUNT(rli.id) AS item_count,
+                   COALESCE(SUM(rli.quantity), 0) AS total_quantity
+            FROM remise_lots AS rl
+            LEFT JOIN remise_lot_items AS rli ON rli.lot_id = rl.id
+            GROUP BY rl.id
+            ORDER BY rl.created_at DESC, rl.name
+            """
+        ).fetchall()
+
+        if not lot_rows:
+            return []
+
+        lot_ids = [row["id"] for row in lot_rows]
+        placeholders = ",".join("?" for _ in lot_ids)
+        item_rows = conn.execute(
+            f"""
+            SELECT rli.id, rli.lot_id, rli.remise_item_id, rli.quantity,
+                   ri.name AS remise_name, ri.sku AS remise_sku, ri.quantity AS available_quantity
+            FROM remise_lot_items AS rli
+            JOIN remise_items AS ri ON ri.id = rli.remise_item_id
+            WHERE rli.lot_id IN ({placeholders})
+            ORDER BY rli.lot_id, ri.name
+            """,
+            lot_ids,
+        ).fetchall()
+
+    items_by_lot: dict[int, list[models.RemiseLotItem]] = defaultdict(list)
+    for row in item_rows:
+        items_by_lot[row["lot_id"]].append(_build_remise_lot_item(row))
+
+    lots: list[models.RemiseLotWithItems] = []
+    for row in lot_rows:
+        lot_model = _build_remise_lot(row)
+        lots.append(
+            models.RemiseLotWithItems(
+                **lot_model.model_dump(),
+                items=items_by_lot.get(lot_model.id, []),
+            )
+        )
+
+    return lots
 
 
 def create_remise_lot(payload: models.RemiseLotCreate) -> models.RemiseLot:

@@ -29,6 +29,10 @@ interface RemiseInventoryItem {
   quantity: number;
 }
 
+interface RemiseLotWithItems extends RemiseLot {
+  items: RemiseLotItem[];
+}
+
 interface LotFormState {
   name: string;
   description: string;
@@ -67,6 +71,16 @@ export function RemiseLotsPanel() {
   });
 
   const lots = lotsQuery.data ?? [];
+
+  const lotsWithItemsQuery = useQuery({
+    queryKey: ["remise-lots-with-items"],
+    queryFn: async () => {
+      const response = await api.get<RemiseLotWithItems[]>("/remise-inventory/lots/with-items");
+      return response.data;
+    }
+  });
+
+  const lotsWithItems = lotsWithItemsQuery.data ?? [];
 
   useEffect(() => {
     if (selectedLotId === null && lots.length > 0) {
@@ -118,7 +132,10 @@ export function RemiseLotsPanel() {
       setMessage("Lot créé avec succès.");
       setSelectedLotId(created.id);
       setEditingLotId(created.id);
-      await queryClient.invalidateQueries({ queryKey: ["remise-lots"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] })
+      ]);
     },
     onError: () => setError("Impossible de créer le lot.")
   });
@@ -131,7 +148,10 @@ export function RemiseLotsPanel() {
     onSuccess: async (updated) => {
       setMessage("Lot mis à jour.");
       setSelectedLotId(updated.id);
-      await queryClient.invalidateQueries({ queryKey: ["remise-lots"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] })
+      ]);
     },
     onError: () => setError("Impossible de mettre à jour le lot.")
   });
@@ -146,6 +166,7 @@ export function RemiseLotsPanel() {
       resetLotForm();
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
         queryClient.invalidateQueries({ queryKey: ["items"] })
       ]);
     },
@@ -169,6 +190,7 @@ export function RemiseLotsPanel() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["remise-lot-items"] }),
         queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
         queryClient.invalidateQueries({ queryKey: ["items"] })
       ]);
     },
@@ -196,6 +218,7 @@ export function RemiseLotsPanel() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["remise-lot-items"] }),
         queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
         queryClient.invalidateQueries({ queryKey: ["items"] })
       ]);
     },
@@ -211,6 +234,7 @@ export function RemiseLotsPanel() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["remise-lot-items"] }),
         queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
         queryClient.invalidateQueries({ queryKey: ["items"] })
       ]);
     },
@@ -567,6 +591,73 @@ export function RemiseLotsPanel() {
             )}
           </div>
         </div>
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <h4 className="text-sm font-semibold text-slate-200">Lots disponibles en stock</h4>
+            <p className="text-xs text-slate-400">
+              Consultez les lots créés et le détail du matériel réservé.
+            </p>
+          </div>
+          <div className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1 text-[11px] text-slate-300">
+            {lotsWithItems.length} lot(s)
+          </div>
+        </div>
+
+        {lotsWithItemsQuery.isLoading ? (
+          <p className="text-sm text-slate-400">Chargement des lots...</p>
+        ) : lotsWithItemsQuery.isError ? (
+          <p className="text-sm text-red-300">Impossible de charger les lots détaillés.</p>
+        ) : lotsWithItems.length === 0 ? (
+          <p className="text-sm text-slate-400">Aucun lot en stock pour le moment.</p>
+        ) : (
+          <div className="grid gap-3 md:grid-cols-2">
+            {lotsWithItems.map((lot) => (
+              <div
+                key={lot.id}
+                className="space-y-3 rounded-md border border-slate-800 bg-slate-900/60 p-3"
+              >
+                <div className="flex items-start justify-between gap-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-100">{lot.name}</p>
+                    {lot.description ? (
+                      <p className="text-xs text-slate-400">{lot.description}</p>
+                    ) : null}
+                    <p className="text-[11px] text-slate-500">Créé le {formatDate(lot.created_at)}</p>
+                  </div>
+                  <div className="text-right text-xs text-slate-300">
+                    <p>{lot.item_count} matériel(s)</p>
+                    <p className="text-slate-400">{lot.total_quantity} pièce(s)</p>
+                  </div>
+                </div>
+
+                {lot.items.length === 0 ? (
+                  <p className="text-sm text-slate-400">Ce lot est encore vide.</p>
+                ) : (
+                  <ul className="divide-y divide-slate-800 rounded-md border border-slate-800 bg-slate-950/40">
+                    {lot.items.map((item) => (
+                      <li
+                        key={item.id}
+                        className="flex items-start justify-between gap-3 px-3 py-2 text-sm text-slate-100"
+                      >
+                        <div>
+                          <p className="font-semibold">{item.remise_name}</p>
+                          <p className="text-xs text-slate-400">SKU : {item.remise_sku}</p>
+                        </div>
+                        <div className="text-right text-xs text-slate-300">
+                          <p>Réservé : {item.quantity}</p>
+                          <p className="text-slate-400">Dispo : {item.available_quantity}</p>
+                        </div>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </div>
     </section>
   );

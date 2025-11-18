@@ -2132,6 +2132,63 @@ def test_remise_lot_allocation_cycle() -> None:
     assert cleanup_category.status_code == 204, cleanup_category.text
 
 
+def test_remise_lot_listing_with_items() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Remise-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot visu",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 10,
+            "category_id": category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    item_id = item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": f"Lot-{uuid4().hex[:6]}", "description": "Détails visibles"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    assign_resp = client.post(
+        f"/remise-inventory/lots/{lot_id}/items",
+        json={"remise_item_id": item_id, "quantity": 3},
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+
+    listing_resp = client.get("/remise-inventory/lots/with-items", headers=admin_headers)
+    assert listing_resp.status_code == 200, listing_resp.text
+    payload = listing_resp.json()
+    lot_entry = next(entry for entry in payload if entry["id"] == lot_id)
+    assert lot_entry["item_count"] == 1
+    assert lot_entry["total_quantity"] == 3
+    assert lot_entry["items"]
+    assert lot_entry["items"][0]["remise_item_id"] == item_id
+    assert lot_entry["items"][0]["quantity"] == 3
+    assert lot_entry["items"][0]["available_quantity"] == 7
+
+    client.delete(f"/remise-inventory/lots/{lot_id}", headers=admin_headers)
+    client.delete(f"/remise-inventory/{item_id}", headers=admin_headers)
+    client.delete(f"/remise-inventory/categories/{category_id}", headers=admin_headers)
+
+
 def test_backup_schedule_roundtrip() -> None:
     headers = _login_headers("admin", "admin123")
     try:
