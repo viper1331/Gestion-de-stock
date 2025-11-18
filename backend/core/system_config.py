@@ -163,8 +163,7 @@ def rebuild_cors_middleware(app: FastAPI, allow_origins: list[str] | None = None
         allow_methods=["*"],
         allow_headers=["*"],
     )
-    app.middleware_stack = None
-    if hasattr(app.router, "middleware_stack"):
-        app.router.middleware_stack = None
+    # Rebuild the application middleware stack so the updated CORS settings take
+    # effect immediately.
     app.middleware_stack = app.build_middleware_stack()
     return origins
