@@ -2,7 +2,6 @@
 from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 from fastapi.staticfiles import StaticFiles
 
@@ -25,9 +24,11 @@ from backend.api import (
     vehicle_inventory,
     remise_inventory,
     about,
+    system_config as system_config_api,
 )
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
+from backend.core.system_config import get_effective_cors_origins, rebuild_cors_middleware
 from backend.ws import camera, voice
 
 
@@ -46,14 +47,7 @@ app.add_middleware(
     ProxyHeadersMiddleware,
     trusted_hosts="*",
 )
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["http://localhost:5173", "*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
+rebuild_cors_middleware(app, get_effective_cors_origins())
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
 app.include_router(items.router, prefix="/items", tags=["items"])
@@ -72,6 +66,7 @@ app.include_router(remise_inventory.router, prefix="/remise-inventory", tags=["r
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(updates.router, prefix="/updates", tags=["updates"])
+app.include_router(system_config_api.router, prefix="/system", tags=["system"])
 app.include_router(about.router, prefix="/about", tags=["about"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")

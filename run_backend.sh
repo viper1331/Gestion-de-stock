@@ -5,6 +5,26 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 BACKEND_DIR="$ROOT_DIR/backend"
 
+HOST="${HOST:-0.0.0.0}"
+PORT="${PORT:-8000}"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host)
+      HOST="$2"
+      shift 2
+      ;;
+    --port)
+      PORT="$2"
+      shift 2
+      ;;
+    *)
+      echo "Option inconnue : $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 cd "$BACKEND_DIR"
 
 python_bin="${PYTHON_BIN:-python3}"
@@ -27,8 +47,6 @@ if [ "${SKIP_TESTS:-0}" != "1" ]; then
   pytest
 fi
 
-HOST="${HOST:-127.0.0.1}"
-PORT="${PORT:-8000}"
 EXTRA_ARGS=()
 if [ "${RELOAD:-1}" = "1" ]; then
   EXTRA_ARGS+=("--reload")

@@ -21,6 +21,7 @@ import { UpdatesPage } from "../features/updates/UpdatesPage";
 import { VehicleQrManagerPage } from "../features/inventory/VehicleQrManagerPage";
 import { VehicleGuidePage } from "../features/inventory/VehicleGuidePage";
 import { AboutPage } from "../features/about/AboutPage";
+import { SystemConfigPage } from "../features/system-config/SystemConfigPage";
 
 export const router = createBrowserRouter([
   {
@@ -52,6 +53,7 @@ export const router = createBrowserRouter([
       { path: "users", element: <AdminUsersPage /> },
       { path: "permissions", element: <ModulePermissionsPage /> },
       { path: "updates", element: <UpdatesPage /> },
+      { path: "system-config", element: <SystemConfigPage /> },
       { path: "about", element: <AboutPage /> }
     ]
   }

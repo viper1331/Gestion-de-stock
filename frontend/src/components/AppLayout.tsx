@@ -298,6 +298,13 @@ export function AppLayout() {
                   icon: "⚙️",
                 },
                 {
+                  to: "/system-config",
+                  label: "Configuration système",
+                  tooltip: "Ajuster les URLs publiques et les origines autorisées",
+                  icon: "🌐",
+                  adminOnly: true
+                },
+                {
                   to: "/users",
                   label: "Utilisateurs",
                   tooltip: "Administrer les comptes utilisateurs",
