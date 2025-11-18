@@ -8,10 +8,10 @@ function buildWsBaseUrl() {
 
   const normalizedApi = API_BASE_URL.replace(/\/$/, "");
   if (normalizedApi.startsWith("https://")) {
-    return normalizedApi.replace(/^https:///, "wss://");
+    return normalizedApi.replace(/^https:\/\//, "wss://");
   }
   if (normalizedApi.startsWith("http://")) {
-    return normalizedApi.replace(/^http:///, "ws://");
+    return normalizedApi.replace(/^http:\/\//, "ws://");
   }
   return normalizedApi;
 }
