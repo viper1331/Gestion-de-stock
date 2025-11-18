@@ -118,6 +118,14 @@ async def list_remise_lots(user: models.User = Depends(get_current_user)) -> lis
     return services.list_remise_lots()
 
 
+@router.get("/lots/with-items", response_model=list[models.RemiseLotWithItems])
+async def list_remise_lots_with_items(
+    user: models.User = Depends(get_current_user),
+) -> list[models.RemiseLotWithItems]:
+    _require_permission(user, action="view")
+    return services.list_remise_lots_with_items()
+
+
 @router.post("/lots/", response_model=models.RemiseLot, status_code=201)
 async def create_remise_lot(
     payload: models.RemiseLotCreate, user: models.User = Depends(get_current_user)
