@@ -8,6 +8,7 @@ from typing import Iterable, Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from starlette.middleware import Middleware
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 DEFAULT_CORS_ORIGINS = [
@@ -156,12 +157,15 @@ def rebuild_cors_middleware(app: FastAPI, allow_origins: list[str] | None = None
 
     origins = allow_origins or get_effective_cors_origins()
     app.user_middleware = [mw for mw in app.user_middleware if mw.cls is not CORSMiddleware]
-    app.add_middleware(
-        CORSMiddleware,
-        allow_origins=origins,
-        allow_credentials=True,
-        allow_methods=["*"],
-        allow_headers=["*"],
+    app.user_middleware.insert(
+        0,
+        Middleware(
+            CORSMiddleware,
+            allow_origins=origins,
+            allow_credentials=True,
+            allow_methods=["*"],
+            allow_headers=["*"],
+        ),
     )
     # Rebuild the application middleware stack so the updated CORS settings take
     # effect immediately.
