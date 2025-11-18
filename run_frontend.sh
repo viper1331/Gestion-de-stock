@@ -5,6 +5,21 @@ set -euo pipefail
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 FRONTEND_DIR="$ROOT_DIR/frontend"
 
+HOST="0.0.0.0"
+
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --host)
+      HOST="$2"
+      shift 2
+      ;;
+    *)
+      echo "Option inconnue : $1" >&2
+      exit 1
+      ;;
+  esac
+done
+
 if ! command -v npm >/dev/null 2>&1; then
   echo "❌ npm n'est pas disponible dans le PATH." >&2
   exit 1
@@ -17,10 +32,7 @@ if [ "${SKIP_INSTALL:-0}" != "1" ]; then
   npm install
 fi
 
-ARGS=()
-if [ -n "${HOST:-}" ]; then
-  ARGS+=("--host" "$HOST")
-fi
+ARGS=("--host" "$HOST")
 
 if [ "${OPEN_BROWSER:-0}" = "1" ]; then
   ARGS+=("--open")
@@ -30,10 +42,5 @@ if [ "${HTTPS:-0}" = "1" ]; then
   ARGS+=("--https")
 fi
 
-CMD=(npm run dev)
-if [ "${#ARGS[@]}" -gt 0 ]; then
-  CMD+=(-- "${ARGS[@]}")
-fi
-
-echo "➡️  Lancement du frontend Vite"
-exec "${CMD[@]}"
+echo "➡️  Lancement du frontend Vite sur $HOST"
+exec npm run dev -- "${ARGS[@]}"
