@@ -8,6 +8,7 @@ import {
   SystemConfig,
   updateSystemConfig
 } from "../../lib/systemConfig";
+import { ResolvedApiConfig, resolveApiBaseUrl, resolveApiBaseUrlFromConfig } from "../../lib/apiConfig";
 
 interface ConnectivityResult {
   status: "idle" | "success" | "error";
@@ -37,7 +38,18 @@ export function SystemConfigPage() {
     }
   }, [config]);
 
-  const corsValue = useMemo(() => form?.cors_origins.join("\n") ?? "", [form]);
+  const corsValue = useMemo(() => (form?.cors_origins ?? []).join("\n") ?? "", [form]);
+  const resolvedApi = useMemo<ResolvedApiConfig | null>(
+    () => (form || config ? resolveApiBaseUrlFromConfig(form ?? config ?? null) : null),
+    [config, form]
+  );
+
+  const resolvedSourceLabel = useMemo(() => {
+    if (!resolvedApi) return "";
+    if (resolvedApi.source === "lan") return "LAN";
+    if (resolvedApi.source === "public") return "Public";
+    return "Variable d'environnement";
+  }, [resolvedApi]);
 
   const updateMutation = useMutation({
     mutationFn: updateSystemConfig,
@@ -46,6 +58,7 @@ export function SystemConfigPage() {
       setError(null);
       await queryClient.invalidateQueries({ queryKey: ["system-config"] });
       setForm(payload);
+      await resolveApiBaseUrl();
     },
     onError: () => {
       setFeedback(null);
@@ -77,7 +90,12 @@ export function SystemConfigPage() {
 
   const testConnectivity = async () => {
     if (!form) return;
-    const base = form.backend_url.replace(/\/$/, "");
+    const targetBase = resolvedApi?.baseUrl;
+    if (!targetBase) {
+      setConnectivity({ status: "error", message: "Aucune URL API résolue." });
+      return;
+    }
+    const base = targetBase.replace(/\/$/, "");
     setConnectivity({ status: "idle", message: "Test de connectivité..." });
     try {
       const response = await axios.get(`${base}/health`, { timeout: 5000 });
@@ -122,26 +140,24 @@ export function SystemConfigPage() {
         <div className="grid gap-4 sm:grid-cols-2">
           <label className="space-y-2 text-sm text-slate-200">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              URL publique du backend
+              URL backend LAN
             </span>
             <input
               type="url"
-              value={form?.backend_url ?? ""}
-              onChange={(event) => handleFieldChange("backend_url", event.target.value)}
+              value={form?.backend_url_lan ?? ""}
+              onChange={(event) => handleFieldChange("backend_url_lan", event.target.value)}
               className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-              required
             />
           </label>
           <label className="space-y-2 text-sm text-slate-200">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              URL publique du frontend
+              URL backend publique
             </span>
             <input
               type="url"
-              value={form?.frontend_url ?? ""}
-              onChange={(event) => handleFieldChange("frontend_url", event.target.value)}
+              value={form?.backend_url_public ?? ""}
+              onChange={(event) => handleFieldChange("backend_url_public", event.target.value)}
               className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-              required
             />
           </label>
           <label className="space-y-2 text-sm text-slate-200">
@@ -185,14 +201,27 @@ export function SystemConfigPage() {
             />
           </label>
           <label className="space-y-2 text-sm text-slate-200">
+            <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              URL publique du frontend
+            </span>
+            <input
+              type="url"
+              value={form?.frontend_url ?? ""}
+              onChange={(event) => handleFieldChange("frontend_url", event.target.value)}
+              className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              required
+            />
+          </label>
+          <label className="space-y-2 text-sm text-slate-200">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Mode réseau</span>
             <select
-              value={form?.network_mode ?? "lan"}
+              value={form?.network_mode ?? "auto"}
               onChange={(event) => handleFieldChange("network_mode", event.target.value as SystemConfig["network_mode"])}
               className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             >
-              <option value="lan">LAN</option>
-              <option value="internet">Internet</option>
+              <option value="lan">LAN uniquement</option>
+              <option value="public">Internet uniquement</option>
+              <option value="auto">Automatique (LAN si IP privée, sinon Public)</option>
             </select>
           </label>
         </div>
@@ -239,7 +268,8 @@ export function SystemConfigPage() {
               </p>
             ) : null}
             <div className="rounded-md border border-slate-800 bg-slate-900 p-3 text-xs text-slate-400">
-              <p>URL API active : {form?.backend_url ?? ""}</p>
+              <p>URL API active (résolue) : {resolvedApi?.baseUrl ?? "Non définie"}</p>
+              <p>Source : {resolvedSourceLabel || "N/A"}</p>
               <p>URL Frontend active : {form?.frontend_url ?? ""}</p>
             </div>
           </div>

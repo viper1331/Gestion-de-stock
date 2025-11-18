@@ -8,7 +8,7 @@ from typing import Iterable, Literal
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:5151",
@@ -23,15 +23,56 @@ class SystemConfig(BaseModel):
 
     model_config = ConfigDict(extra="allow")
 
-    backend_url: HttpUrl = Field("http://localhost:8000", description="URL publique ou locale du backend")
+    backend_url: HttpUrl | None = Field(
+        "http://localhost:8000",
+        description="URL historique (compatibilité) du backend",
+    )
+    backend_url_lan: HttpUrl | None = Field(
+        None, description="URL backend à utiliser sur le réseau local"
+    )
+    backend_url_public: HttpUrl | None = Field(
+        None, description="URL backend à utiliser depuis Internet"
+    )
     frontend_url: HttpUrl = Field("http://localhost:5151", description="URL publique ou locale du frontend")
     backend_host: str = Field("0.0.0.0", description="Hôte d'écoute du backend")
     backend_port: int = Field(8000, ge=1, le=65535, description="Port d'écoute du backend")
     frontend_host: str = Field("0.0.0.0", description="Hôte d'écoute du frontend")
     frontend_port: int = Field(5151, ge=1, le=65535, description="Port d'écoute du frontend")
     cors_origins: list[str] = Field(default_factory=lambda: list(DEFAULT_CORS_ORIGINS))
-    network_mode: Literal["lan", "internet"] = Field("lan", description="Mode de déploiement")
+    network_mode: Literal["auto", "lan", "public"] = Field(
+        "auto", description="Mode de sélection de l'URL backend"
+    )
     extra: dict[str, str] = Field(default_factory=dict, description="Réglages additionnels")
+
+    @model_validator(mode="before")
+    @classmethod
+    def _migrate_legacy_fields(cls, value: dict) -> dict:
+        data = dict(value or {})
+
+        legacy_public = data.get("backend_public_url") or data.get("backend_url")
+        data.setdefault("backend_url_public", legacy_public)
+
+        if not data.get("backend_url_lan"):
+            if data.get("network_mode") in {"lan"}:  # Ancien mode
+                data["backend_url_lan"] = data.get("backend_url") or legacy_public
+
+        mode = data.get("network_mode")
+        if mode == "internet":
+            data["network_mode"] = "public"
+        elif mode not in {"lan", "public", "auto"}:
+            data["network_mode"] = "auto"
+
+        if not data.get("backend_url"):
+            for candidate in (
+                data.get("backend_url_public"),
+                data.get("backend_url_lan"),
+                "http://localhost:8000",
+            ):
+                if candidate:
+                    data["backend_url"] = candidate
+                    break
+
+        return data
 
     @field_validator("cors_origins", mode="before")
     @classmethod
