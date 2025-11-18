@@ -21,7 +21,9 @@ if str(ROOT) not in sys.path:
 
 from backend.app import app
 from backend.core import db, models, security, services
+from backend.core.storage import MEDIA_ROOT
 from backend.services import barcode as barcode_service, update_service
+from backend.services.backup_manager import create_backup_archive, restore_backup_from_zip
 
 client = TestClient(app)
 
@@ -2224,6 +2226,32 @@ def test_backup_import_restores_user_database() -> None:
         conn.commit()
 
     assert restored is not None
+
+
+def test_backup_archive_preserves_media_files() -> None:
+    media_root = MEDIA_ROOT
+    sample_dir = media_root / f"backup-test-{uuid4().hex[:6]}"
+    sample_dir.mkdir(parents=True, exist_ok=True)
+    sample_file = sample_dir / "sample.txt"
+    archive_path: Path | None = None
+    try:
+        original_content = "media-backup-content"
+        sample_file.write_text(original_content)
+
+        archive_path = create_backup_archive()
+
+        sample_file.write_text("overwritten")
+        restore_backup_from_zip(archive_path)
+
+        assert sample_file.read_text() == original_content
+    finally:
+        sample_file.unlink(missing_ok=True)
+        try:
+            sample_dir.rmdir()
+        except OSError:
+            pass
+        if archive_path:
+            archive_path.unlink(missing_ok=True)
 
 
 def test_updates_status_requires_admin() -> None:

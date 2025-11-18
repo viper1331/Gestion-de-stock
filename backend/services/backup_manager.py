@@ -8,11 +8,12 @@ from contextlib import contextmanager, closing
 from datetime import datetime
 from pathlib import Path
 import sqlite3
-from shutil import copy2, make_archive
+from shutil import copy2, copytree, make_archive, rmtree
 from tempfile import TemporaryDirectory
 from zipfile import BadZipFile, ZipFile, ZipInfo
 
 from backend.core import db
+from backend.core.storage import MEDIA_ROOT
 
 logger = logging.getLogger(__name__)
 
@@ -31,6 +32,9 @@ def create_backup_archive() -> Path:
         users_path = temp_dir / "users.db"
         copy2(db.STOCK_DB_PATH, stock_path)
         copy2(db.USERS_DB_PATH, users_path)
+        media_target = temp_dir / "media"
+        if MEDIA_ROOT.exists():
+            copytree(MEDIA_ROOT, media_target, dirs_exist_ok=True)
         base_name = BACKUP_ROOT / f"backup-{timestamp}"
         archive_path = Path(make_archive(str(base_name), "zip", tmpdir))
     _prune_old_backups(MAX_BACKUP_FILES)
@@ -156,11 +160,21 @@ def restore_backup_from_zip(archive_path: Path) -> None:
 
         stock_source = stock_candidates[0]
         users_source = users_candidates[0]
+        media_source = temp_dir / "media"
 
         _verify_sqlite_database(stock_source)
         _verify_sqlite_database(users_source)
 
         _restore_sqlite_db(stock_source, db.STOCK_DB_PATH)
         _restore_sqlite_db(users_source, db.USERS_DB_PATH)
+
+        if media_source.exists():
+            try:
+                rmtree(MEDIA_ROOT)
+            except FileNotFoundError:
+                pass
+            copytree(media_source, MEDIA_ROOT, dirs_exist_ok=True)
+        else:
+            MEDIA_ROOT.mkdir(parents=True, exist_ok=True)
 
     db.init_databases()
