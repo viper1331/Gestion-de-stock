@@ -3,7 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 
 import { api } from "../../lib/api";
-import { API_BASE_URL } from "../../lib/env";
+import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { resolveMediaUrl } from "../../lib/media";
 
 interface VehicleItem {
@@ -218,7 +218,7 @@ export function VehicleQrManagerPage() {
   const buildShareUrl = (item: VehicleItem) => {
     if (!item.qr_token) return null;
     if (item.shared_file_url) return item.shared_file_url;
-    const base = API_BASE_URL.replace(/\/$/, "");
+    const base = getCachedApiBaseUrl();
     return `${base}/vehicle-inventory/public/${item.qr_token}/page`;
   };
 

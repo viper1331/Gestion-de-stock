@@ -8,7 +8,7 @@ import {
   fetchUserHomepageConfig
 } from "../../lib/config";
 import { api } from "../../lib/api";
-import { API_BASE_URL } from "../../lib/env";
+import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { buildHomeConfig } from "./homepageConfig";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { fetchUpdateAvailability, fetchUpdateStatus } from "../updates/api";
@@ -38,7 +38,7 @@ function normalizeInternalPath(path: string): string | null {
     return null;
   }
 
-  const base = typeof window !== "undefined" ? window.location.origin : API_BASE_URL;
+  const base = typeof window !== "undefined" ? window.location.origin : getCachedApiBaseUrl();
 
   try {
     const url = new URL(trimmed, base);

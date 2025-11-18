@@ -1,5 +1,7 @@
 {
   "backend_url": "http://localhost:8000",
+  "backend_url_lan": "http://localhost:8000",
+  "backend_url_public": "http://localhost:8000",
   "frontend_url": "http://localhost:5151",
   "backend_host": "0.0.0.0",
   "backend_port": 8000,
@@ -9,6 +11,6 @@
     "http://localhost:5151",
     "http://127.0.0.1:5151"
   ],
-  "network_mode": "lan",
+  "network_mode": "auto",
   "extra": {}
 }

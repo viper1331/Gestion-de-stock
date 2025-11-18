@@ -1,4 +1,4 @@
-import { API_BASE_URL } from "./env";
+import { getCachedApiBaseUrl } from "./apiConfig";
 
 function buildWsBaseUrl() {
   const override = import.meta.env.VITE_WS_URL;
@@ -6,7 +6,7 @@ function buildWsBaseUrl() {
     return override.replace(/\/$/, "");
   }
 
-  const normalizedApi = API_BASE_URL.replace(/\/$/, "");
+  const normalizedApi = getCachedApiBaseUrl();
   if (normalizedApi.startsWith("https://")) {
     return normalizedApi.replace(/^https:\/\//, "wss://");
   }
