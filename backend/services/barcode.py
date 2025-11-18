@@ -7,6 +7,7 @@ explicite plutôt que de revenir silencieusement à un rendu factice.
 from __future__ import annotations
 
 import logging
+import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from io import BytesIO
@@ -56,6 +57,13 @@ WRITER_OPTIONS = {
 }
 
 logger = logging.getLogger(__name__)
+
+logger.debug(
+    "Barcode module loaded from %s (_barcode_lib=%s, ImageWriter=%s)",
+    sys.executable,
+    bool(_barcode_lib),
+    bool(ImageWriter),
+)
 
 ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "barcodes"
 ASSETS_DIR.mkdir(parents=True, exist_ok=True)
