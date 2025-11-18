@@ -48,6 +48,29 @@ interface VehicleItem {
   position_y: number | null;
 }
 
+interface RemiseLot {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  item_count: number;
+  total_quantity: number;
+}
+
+interface RemiseLotItem {
+  id: number;
+  lot_id: number;
+  remise_item_id: number;
+  quantity: number;
+  remise_name: string;
+  remise_sku: string;
+  available_quantity: number;
+}
+
+interface RemiseLotWithItems extends RemiseLot {
+  items: RemiseLotItem[];
+}
+
 interface VehiclePhoto {
   id: number;
   image_url: string;
@@ -146,6 +169,14 @@ export function VehicleInventoryPage() {
     queryKey: ["vehicle-items"],
     queryFn: async () => {
       const response = await api.get<VehicleItem[]>("/vehicle-inventory/");
+      return response.data;
+    }
+  });
+
+  const { data: remiseLots = [], isLoading: isLoadingLots } = useQuery({
+    queryKey: ["remise-lots-with-items"],
+    queryFn: async () => {
+      const response = await api.get<RemiseLotWithItems[]>("/remise-inventory/lots/with-items");
       return response.data;
     }
   });
@@ -307,6 +338,57 @@ export function VehicleInventoryPage() {
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
+    }
+  });
+
+  const assignLotToVehicle = useMutation({
+    mutationFn: async ({
+      lot,
+      categoryId
+    }: {
+      lot: RemiseLotWithItems;
+      categoryId: number;
+    }) => {
+      const created: VehicleItem[] = [];
+      for (const item of lot.items) {
+        const response = await api.post<VehicleItem>("/vehicle-inventory/", {
+          name: item.remise_name,
+          sku: item.remise_sku,
+          category_id: categoryId,
+          size: null,
+          quantity: item.quantity,
+          position_x: null,
+          position_y: null,
+          remise_item_id: item.remise_item_id
+        });
+        created.push(response.data);
+      }
+      return created;
+    },
+    onSuccess: async (_, variables) => {
+      const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
+      setFeedback({
+        type: "success",
+        text: vehicleName
+          ? `Le lot a été ajouté au véhicule ${vehicleName}.`
+          : "Le lot a été ajouté au véhicule."
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vehicle-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["items"] })
+      ]);
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.data?.detail) {
+        setFeedback({ type: "error", text: error.response.data.detail });
+        return;
+      }
+      setFeedback({
+        type: "error",
+        text: "Impossible d'ajouter ce lot au véhicule."
+      });
     }
   });
 
@@ -503,6 +585,16 @@ export function VehicleInventoryPage() {
   const availableItems = useMemo(
     () => items.filter((item) => item.category_id === null && (item.remise_quantity ?? 0) > 0),
     [items]
+  );
+
+  const availableLots = useMemo(
+    () =>
+      remiseLots.filter(
+        (lot) =>
+          lot.items.length > 0 &&
+          lot.items.every((item) => item.quantity > 0 && item.available_quantity >= item.quantity)
+      ),
+    [remiseLots]
   );
 
   const isLoading =
@@ -1031,6 +1123,20 @@ export function VehicleInventoryPage() {
 
               <DroppableLibrary
                 items={availableItems}
+                lots={availableLots}
+                isLoadingLots={isLoadingLots}
+                isAssigningLot={assignLotToVehicle.isPending}
+                vehicleName={selectedVehicle?.name ?? null}
+                onAssignLot={(lot) => {
+                  if (!selectedVehicle) {
+                    setFeedback({
+                      type: "error",
+                      text: "Sélectionnez un véhicule avant d'ajouter un lot."
+                    });
+                    return;
+                  }
+                  assignLotToVehicle.mutate({ lot, categoryId: selectedVehicle.id });
+                }}
                 onDropItem={(itemId) =>
                   updateItemLocation.mutate({
                     itemId,
@@ -1685,6 +1791,11 @@ function VehicleItemsPanel({
 
 interface DroppableLibraryProps {
   items: VehicleItem[];
+  lots?: RemiseLotWithItems[];
+  isLoadingLots?: boolean;
+  isAssigningLot?: boolean;
+  vehicleName: string | null;
+  onAssignLot?: (lot: RemiseLotWithItems) => void;
   onDropItem: (itemId: number) => void;
   onRemoveFromVehicle: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
@@ -1692,6 +1803,11 @@ interface DroppableLibraryProps {
 
 function DroppableLibrary({
   items,
+  lots = [],
+  isLoadingLots = false,
+  isAssigningLot = false,
+  vehicleName,
+  onAssignLot,
   onDropItem,
   onRemoveFromVehicle,
   onItemFeedback
@@ -1756,6 +1872,70 @@ function DroppableLibrary({
         </p>
       ) : (
         <div className="mt-4 space-y-3">
+          <div className="space-y-2">
+            <div className="flex items-center justify-between gap-2">
+              <div>
+                <h4 className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Lots disponibles</h4>
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                  Ajoutez un lot complet au véhicule pour préparer son contenu en une seule action.
+                </p>
+              </div>
+              {vehicleName ? (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">{vehicleName}</p>
+              ) : (
+                <p className="text-[11px] text-slate-500 dark:text-slate-400">Aucun véhicule sélectionné</p>
+              )}
+            </div>
+            {isLoadingLots ? (
+              <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                Chargement des lots disponibles...
+              </p>
+            ) : lots.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                Aucun lot complet en stock n'est disponible actuellement.
+              </p>
+            ) : (
+              <div className="space-y-2">
+                {lots.map((lot) => (
+                  <div
+                    key={lot.id}
+                    className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
+                  >
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="space-y-1">
+                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{lot.name}</p>
+                        {lot.description ? (
+                          <p className="text-[11px] text-slate-500 dark:text-slate-400">{lot.description}</p>
+                        ) : null}
+                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                          {lot.item_count} matériel(s) • {lot.total_quantity} pièce(s)
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => onAssignLot?.(lot)}
+                        disabled={!onAssignLot || isAssigningLot}
+                        className="rounded-full border border-blue-500 px-3 py-1 text-[11px] font-semibold text-blue-600 transition hover:border-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-400 dark:text-blue-200 dark:hover:border-blue-300"
+                      >
+                        {isAssigningLot ? "Ajout en cours..." : "Ajouter au véhicule"}
+                      </button>
+                    </div>
+                    <ul className="mt-2 space-y-1 text-[11px] text-slate-600 dark:text-slate-300">
+                      {lot.items.map((item) => (
+                        <li key={item.id} className="flex items-center justify-between gap-2">
+                          <span className="truncate">{item.remise_name}</span>
+                          <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                            {item.quantity} prévu(s) • {item.available_quantity} en stock
+                          </span>
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+
           {items.map((item) => (
             <ItemCard
               key={item.id}
@@ -1766,8 +1946,9 @@ function DroppableLibrary({
           ))}
           {items.length === 0 && (
             <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-              Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre
-              disponibles ici.
+              {lots.length > 0
+                ? "Aucun article individuel disponible. Ajoutez un lot pour préparer du matériel."
+                : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
             </p>
           )}
         </div>
