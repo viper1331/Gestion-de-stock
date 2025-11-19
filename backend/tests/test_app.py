@@ -2246,6 +2246,87 @@ def test_remise_lot_allocation_cycle() -> None:
     assert cleanup_category.status_code == 204, cleanup_category.text
 
 
+def test_vehicle_items_detached_when_lot_deleted() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Véhicule-{uuid4().hex[:6]}"},
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Remise-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot véhicule",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 8,
+            "category_id": category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    remise_item_id = item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": f"Lot-{uuid4().hex[:6]}", "description": "Lot à supprimer"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    assign_resp = client.post(
+        f"/remise-inventory/lots/{lot_id}/items",
+        json={"remise_item_id": remise_item_id, "quantity": 3},
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+
+    vehicle_item_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Affectation lot",
+            "sku": f"VEH-{uuid4().hex[:6]}",
+            "category_id": vehicle_category_id,
+            "size": "vue_exterieure",
+            "quantity": 3,
+            "remise_item_id": remise_item_id,
+            "lot_id": lot_id,
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_item_resp.status_code == 201, vehicle_item_resp.text
+    vehicle_item_id = vehicle_item_resp.json()["id"]
+    assert vehicle_item_resp.json()["lot_id"] == lot_id
+
+    delete_resp = client.delete(
+        f"/remise-inventory/lots/{lot_id}", headers=admin_headers
+    )
+    assert delete_resp.status_code == 204, delete_resp.text
+
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    updated_entry = next(
+        (entry for entry in vehicle_items_resp.json() if entry["id"] == vehicle_item_id),
+        None,
+    )
+    assert updated_entry is not None
+    assert updated_entry["lot_id"] is None
+
+
 def test_remise_lot_listing_with_items() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

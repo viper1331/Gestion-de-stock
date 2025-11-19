@@ -2593,6 +2593,8 @@ def delete_remise_lot(lot_id: int) -> None:
         if row is None:
             raise ValueError("Lot introuvable")
         image_path = row["image_path"]
+        _ensure_vehicle_item_columns(conn)
+        conn.execute("UPDATE vehicle_items SET lot_id = NULL WHERE lot_id = ?", (lot_id,))
         conn.execute("DELETE FROM remise_lot_items WHERE lot_id = ?", (lot_id,))
         conn.execute("DELETE FROM remise_lots WHERE id = ?", (lot_id,))
         _persist_after_commit(conn)
