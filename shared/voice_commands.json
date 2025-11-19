@@ -1,0 +1,78 @@
+{
+    "modules": [
+        {
+            "id": "inventory",
+            "label": "Inventaire g\u00e9n\u00e9ral",
+            "description": "Commandes pour ajuster les quantit\u00e9s et consulter le stock sans ouvrir de fen\u00eatre.",
+            "commands": [
+                {
+                    "label": "Ajouter des articles",
+                    "phrases": [
+                        "ajouter [nombre] [nom de l'article]",
+                        "ajoute [nombre] [nom de l'article]"
+                    ],
+                    "description": "Augmente instantan\u00e9ment la quantit\u00e9 de l'article cibl\u00e9.",
+                    "example": "ajouter 5 gants anti-feu"
+                },
+                {
+                    "label": "Retirer des articles",
+                    "phrases": [
+                        "retirer [nombre] [nom de l'article]"
+                    ],
+                    "description": "Soustrait la quantit\u00e9 demand\u00e9e en gardant un journal du mouvement.",
+                    "example": "retirer 2 bouteilles oxyg\u00e8ne"
+                },
+                {
+                    "label": "Consulter une quantit\u00e9",
+                    "phrases": [
+                        "quantit\u00e9 de [nom de l'article]"
+                    ],
+                    "description": "Annonce la quantit\u00e9 disponible pour l'article demand\u00e9.",
+                    "example": "quantit\u00e9 de casque F1"
+                }
+            ]
+        },
+        {
+            "id": "barcode",
+            "label": "Codes-barres",
+            "description": "Automatise la g\u00e9n\u00e9ration d'\u00e9tiquettes Code128 pr\u00eates \u00e0 l'impression.",
+            "commands": [
+                {
+                    "label": "G\u00e9n\u00e9rer un code-barres",
+                    "phrases": [
+                        "g\u00e9n\u00e9rer codebarre pour [nom de l'article]",
+                        "g\u00e9n\u00e9rer code-barres pour [nom de l'article]"
+                    ],
+                    "description": "Cr\u00e9e un visuel PNG et l'associe \u00e0 l'article s\u00e9lectionn\u00e9.",
+                    "example": "g\u00e9n\u00e9rer codebarre pour radio portative"
+                }
+            ]
+        },
+        {
+            "id": "assistant",
+            "label": "Assistance & s\u00e9curit\u00e9",
+            "description": "Commandes transverses pour piloter l'assistant vocal lui-m\u00eame.",
+            "commands": [
+                {
+                    "label": "Obtenir de l'aide",
+                    "phrases": [
+                        "aide",
+                        "aide vocale"
+                    ],
+                    "description": "Relit la liste compl\u00e8te des commandes vocales disponibles.",
+                    "example": "aide vocale"
+                },
+                {
+                    "label": "Arr\u00eater l'\u00e9coute",
+                    "phrases": [
+                        "stop voice",
+                        "arr\u00eate \u00e9coute",
+                        "arrete \u00e9coute"
+                    ],
+                    "description": "Met en pause la reconnaissance jusqu'\u00e0 r\u00e9activation manuelle.",
+                    "example": "arr\u00eate \u00e9coute"
+                }
+            ]
+        }
+    ]
+}

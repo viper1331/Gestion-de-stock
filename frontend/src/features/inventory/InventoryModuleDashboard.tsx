@@ -1030,8 +1030,8 @@ function ItemForm({
         size: "",
         quantity: 0,
         low_stock_threshold: 0,
-        supplier_id: null,
-        track_low_stock: true
+        track_low_stock: true,
+        supplier_id: null
       });
       setIsSkuAuto(true);
       if (supportsItemImages) {

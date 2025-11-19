@@ -613,6 +613,19 @@ voice_active = False
 recognizer = None
 microphone = None
 db_lock = threading.Lock()
+VOICE_COMMANDS_CACHE = None
+VOICE_COMMANDS_FILE = os.path.abspath(
+    os.path.join(os.path.dirname(__file__), os.pardir, "shared", "voice_commands.json")
+)
+DEFAULT_VOICE_HELP = (
+    "Commandes vocales disponibles :\n"
+    " • 'ajouter [nombre] [nom de l'article]'   → ajoute la quantité spécifiée\n"
+    " • 'retirer [nombre] [nom de l'article]'   → retire la quantité spécifiée\n"
+    " • 'quantité de [nom de l'article]'        → annonce la quantité actuelle\n"
+    " • 'générer codebarre pour [nom de l'article]' → génère le code-barres associé\n"
+    " • 'aide' ou 'aide vocale'                  → affiche cette aide\n"
+    " • 'stop voice' ou 'arrête écoute'         → désactive la reconnaissance vocale\n"
+)
 
 
 try:
@@ -626,6 +639,90 @@ try:
 except Exception:  # pragma: no cover - import errors reported during initialization
     ClothingInventoryManager = None  # type: ignore[assignment]
     ClothingItem = None  # type: ignore[assignment]
+
+
+def load_voice_command_modules():
+    """Charge depuis le fichier partagé la configuration des commandes vocales."""
+
+    global VOICE_COMMANDS_CACHE
+    if VOICE_COMMANDS_CACHE is not None:
+        return VOICE_COMMANDS_CACHE
+
+    modules: list[dict] = []
+    if os.path.exists(VOICE_COMMANDS_FILE):
+        try:
+            with open(VOICE_COMMANDS_FILE, "r", encoding="utf-8") as handle:
+                data = json.load(handle) or {}
+            loaded_modules = data.get("modules", [])
+            if isinstance(loaded_modules, list):
+                modules = loaded_modules
+        except Exception as exc:
+            print(f"[VOICE] Impossible de charger {VOICE_COMMANDS_FILE} : {exc}")
+    else:
+        print(f"[VOICE] Fichier {VOICE_COMMANDS_FILE} introuvable, utilisation de l'aide par défaut.")
+
+    VOICE_COMMANDS_CACHE = modules
+    return modules
+
+
+def format_voice_help_text():
+    """Construit un texte d'aide structuré à partir des modules déclarés."""
+
+    modules = load_voice_command_modules()
+    if not modules:
+        return DEFAULT_VOICE_HELP
+
+    lines: list[str] = ["Commandes vocales disponibles :"]
+    for module in modules:
+        label = module.get("label") or module.get("id", "Module")
+        description = module.get("description", "")
+        if description:
+            lines.append(f"[{label}] {description}")
+        else:
+            lines.append(f"[{label}]")
+
+        for command in module.get("commands", []):
+            cmd_label = command.get("label") or "Commande"
+            phrases = ", ".join(f"'{phrase}'" for phrase in command.get("phrases", []) if phrase)
+            if phrases:
+                lines.append(f" • {cmd_label} : {phrases}")
+            else:
+                lines.append(f" • {cmd_label}")
+            description = command.get("description")
+            if description:
+                lines.append(f"   → {description}")
+        lines.append("")
+
+    return "\n".join(line for line in lines if line.strip())
+
+
+def narrate_voice_help(modules: Optional[list] = None, fallback_text: str = DEFAULT_VOICE_HELP) -> None:
+    """Lit vocalement l'aide suivant la configuration des modules disponibles."""
+
+    if modules is None:
+        modules = load_voice_command_modules()
+
+    try:
+        if modules:
+            speak("Voici les commandes vocales regroupées par module.")
+            for module in modules:
+                label = module.get("label") or module.get("id", "Module")
+                speak(label)
+                for command in module.get("commands", []):
+                    cmd_label = command.get("label") or "Commande"
+                    phrases = command.get("phrases", [])
+                    main_phrase = phrases[0] if phrases else ""
+                    if main_phrase:
+                        speak(f"{cmd_label} : {main_phrase}")
+                    else:
+                        speak(cmd_label)
+        else:
+            speak("Voici la liste des commandes vocales disponibles :")
+            for line in fallback_text.split("\n"):
+                if line.strip():
+                    speak(line)
+    except Exception:
+        pass
 
 
 def log_stock_movement(cursor, item_id, quantity_change, movement_type, source, operator=None, note=None, timestamp=None):
@@ -3463,23 +3560,9 @@ if ENABLE_VOICE and SR_LIB_AVAILABLE:
         print("[DEBUG_VOICE] Fin de la boucle listen_commands, voice_active =", voice_active)
 
     def show_voice_help_direct():
-        help_text = (
-            "Commandes vocales disponibles :\n"
-            " • 'ajouter [nombre] [nom de l'article]'   → ajoute la quantité spécifiée\n"
-            " • 'retirer [nombre] [nom de l'article]'   → retire la quantité spécifiée\n"
-            " • 'quantité de [nom de l'article]'        → annonce la quantité actuelle\n"
-            " • 'générer codebarre pour [nom de l'article]' → génère le code-barres associé\n"
-            " • 'aide' ou 'aide vocale'                  → affiche cette aide\n"
-            " • 'stop voice' ou 'arrête écoute'         → désactive la reconnaissance vocale\n"
-        )
+        help_text = format_voice_help_text()
         print(help_text)
-        try:
-            speak("Voici la liste des commandes vocales disponibles : ")
-            for line in help_text.split('\n'):
-                if line.strip():
-                    speak(line)
-        except:
-            pass
+        narrate_voice_help(load_voice_command_modules(), help_text)
 
     def handle_voice_command(command):
         cmd = command.lower()
@@ -8190,23 +8273,9 @@ class StockApp(tk.Tk):
         UserManagementDialog(self, self.current_user_id)
 
     def show_voice_help(self):
-        help_text = (
-            "Commandes vocales disponibles :\n"
-            " • 'ajouter [nombre] [nom de l'article]'   → ajoute la quantité\n"
-            " • 'retirer [nombre] [nom de l'article]'   → retire la quantité\n"
-            " • 'quantité de [nom de l'article]'        → annonce la quantité\n"
-            " • 'générer codebarre pour [nom de l'article]' → génère le code-barres\n"
-            " • 'aide' ou 'aide vocale'                  → affiche cette aide\n"
-            " • 'stop voice' ou 'arrête écoute'         → désactive la reconnaissance vocale\n"
-        )
+        help_text = format_voice_help_text()
         messagebox.showinfo("Aide Vocale", help_text)
-        try:
-            speak("Voici la liste des commandes vocales disponibles : ")
-            for line in help_text.split('\n'):
-                if line.strip():
-                    speak(line)
-        except:
-            pass
+        narrate_voice_help(load_voice_command_modules(), help_text)
 
     def backup_database(self):
         default_name = f"backup_gestion_stock_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip"
