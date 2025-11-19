@@ -188,6 +188,10 @@ class VehicleViewBackgroundUpdate(BaseModel):
     photo_id: int | None = Field(default=None, ge=1)
 
 
+class VehicleLotUnassign(BaseModel):
+    category_id: int = Field(..., ge=1)
+
+
 class Movement(BaseModel):
     id: int
     item_id: int

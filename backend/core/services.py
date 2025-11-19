@@ -1365,6 +1365,39 @@ def _delete_inventory_item_internal(module: str, item_id: int) -> None:
         _persist_after_commit(conn, *_inventory_modules_to_persist(module))
 
 
+def unassign_vehicle_lot(lot_id: int, category_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_item_columns(conn)
+        _require_remise_lot(conn, lot_id)
+        rows = conn.execute(
+            """
+            SELECT id, quantity, remise_item_id, image_path
+            FROM vehicle_items
+            WHERE lot_id = ? AND category_id = ?
+            ORDER BY id
+            """,
+            (lot_id, category_id),
+        ).fetchall()
+        if not rows:
+            raise ValueError("Aucun matériel de ce lot n'est associé à ce véhicule.")
+        for row in rows:
+            remise_item_id = row["remise_item_id"]
+            if remise_item_id is None:
+                raise ValueError("Impossible de réapprovisionner ce matériel sans article de remise associé.")
+            quantity = row["quantity"] or 0
+            if quantity:
+                _update_remise_quantity(conn, remise_item_id, quantity)
+            image_path = row["image_path"]
+            if image_path:
+                _delete_media_file(image_path)
+        conn.execute(
+            "DELETE FROM vehicle_items WHERE lot_id = ? AND category_id = ?",
+            (lot_id, category_id),
+        )
+        _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
+
+
 def _list_inventory_categories_internal(module: str) -> list[models.Category]:
     ensure_database_ready()
     config = _get_inventory_config(module)
