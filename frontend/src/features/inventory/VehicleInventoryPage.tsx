@@ -2930,41 +2930,10 @@ function buildMarkerLayoutMap(entries: VehicleMarkerEntry[]): Map<string, Marker
     return layout;
   }
 
-  const clusters: {
-    base: MarkerLayoutPosition;
-    members: { entry: VehicleMarkerEntry; base: MarkerLayoutPosition }[];
-  }[] = [];
-
-  const DISTANCE_THRESHOLD = 0.07;
-
   for (const entry of entries) {
-    const base = {
+    layout.set(entry.key, {
       x: clamp(entry.position_x ?? 0.5, 0, 1),
       y: clamp(entry.position_y ?? 0.5, 0, 1)
-    };
-    let cluster = clusters.find((candidate) =>
-      getMarkerDistance(candidate.base, base) <= DISTANCE_THRESHOLD
-    );
-    if (!cluster) {
-      cluster = { base, members: [] };
-      clusters.push(cluster);
-    }
-    cluster.members.push({ entry, base });
-  }
-
-  for (const cluster of clusters) {
-    if (cluster.members.length === 1) {
-      const [member] = cluster.members;
-      layout.set(member.entry.key, member.base);
-      continue;
-    }
-    const distributedPositions = [
-      cluster.base,
-      ...generateLotPositions(cluster.base, cluster.members.length - 1)
-    ];
-    cluster.members.forEach((member, index) => {
-      const coords = distributedPositions[index] ?? cluster.base;
-      layout.set(member.entry.key, coords);
     });
   }
 
@@ -3156,12 +3125,6 @@ function generateLotPositions(base: { x: number; y: number }, count: number): { 
       y: clamp(base.y + Math.sin(angle) * radius, 0, 1)
     };
   });
-}
-
-function getMarkerDistance(a: MarkerLayoutPosition, b: MarkerLayoutPosition): number {
-  const deltaX = a.x - b.x;
-  const deltaY = a.y - b.y;
-  return Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 }
 
 function clamp(value: number, min: number, max: number): number {
