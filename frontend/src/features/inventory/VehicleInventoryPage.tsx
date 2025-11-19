@@ -117,6 +117,7 @@ type DraggedItemData = {
   itemId?: number;
   categoryId?: number | null;
   remiseItemId?: number | null;
+  assignedLotItemIds?: number[];
   offsetX?: number;
   offsetY?: number;
   elementWidth?: number;
@@ -1116,7 +1117,10 @@ export function VehicleInventoryPage() {
                   size: targetView,
                   position,
                   quantity: options?.quantity ?? undefined,
-                  successMessage: options?.isReposition ? "Position enregistrée." : undefined
+                  successMessage:
+                    options?.isReposition && !options?.suppressFeedback
+                      ? "Position enregistrée."
+                      : undefined
                 });
               }}
               onRemoveItem={(itemId) => {
@@ -1400,6 +1404,7 @@ interface VehicleCompartmentProps {
       quantity?: number | null;
       sourceCategoryId?: number | null;
       remiseItemId?: number | null;
+      suppressFeedback?: boolean;
     }
   ) => void;
   onRemoveItem: (itemId: number) => void;
@@ -1432,6 +1437,7 @@ function VehicleCompartment({
   const boardRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const queryClient = useQueryClient();
+  const markerEntries = useMemo(() => buildVehicleMarkerEntries(items), [items]);
 
   const uploadBackground = useMutation({
     mutationFn: async (file: File) => {
@@ -1498,6 +1504,15 @@ function VehicleCompartment({
       x: clamp(centerX / rect.width, 0, 1),
       y: clamp(centerY / rect.height, 0, 1)
     };
+    if (data.assignedLotItemIds && data.assignedLotItemIds.length > 0) {
+      data.assignedLotItemIds.forEach((lotItemId, index) => {
+        onDropItem(lotItemId, position, {
+          isReposition: true,
+          suppressFeedback: index > 0
+        });
+      });
+      return;
+    }
     if (data.lotId !== null && data.lotId !== undefined) {
       if (onDropLot) {
         onDropLot(data.lotId, position);
@@ -1709,8 +1724,8 @@ function VehicleCompartment({
           onDrop={handleDrop}
         >
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-slate-900/5 via-transparent to-white/10 dark:from-slate-950/20 dark:to-slate-900/10" />
-          {items.map((item) => (
-            <VehicleItemMarker key={item.id} item={item} />
+          {markerEntries.map((entry) => (
+            <VehicleItemMarker key={entry.key} entry={entry} />
           ))}
           {items.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-center text-sm font-medium text-slate-600 dark:text-slate-300">
@@ -1744,19 +1759,35 @@ function VehicleCompartment({
   );
 }
 
-interface VehicleItemMarkerProps {
-  item: VehicleItem;
+interface VehicleMarkerEntry {
+  key: string;
+  name: string;
+  quantity: number;
+  image_url: string | null;
+  position_x: number | null;
+  position_y: number | null;
+  lot_id: number | null;
+  lot_name: string | null;
+  lotItemIds: number[];
+  tooltip: string | null;
+  isLot: boolean;
+  primaryItemId: number | null;
+  category_id: number | null;
+  remise_item_id: number | null;
 }
 
-function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
-  const positionX = clamp(item.position_x ?? 0.5, 0, 1);
-  const positionY = clamp(item.position_y ?? 0.5, 0, 1);
-  const imageUrl = resolveMediaUrl(item.image_url);
+interface VehicleItemMarkerProps {
+  entry: VehicleMarkerEntry;
+}
+
+function VehicleItemMarker({ entry }: VehicleItemMarkerProps) {
+  const positionX = clamp(entry.position_x ?? 0.5, 0, 1);
+  const positionY = clamp(entry.position_y ?? 0.5, 0, 1);
+  const imageUrl = resolveMediaUrl(entry.image_url);
   const hasImage = Boolean(imageUrl);
-  const lotLabel = item.lot_id ? item.lot_name ?? `Lot #${item.lot_id}` : null;
-  const markerTitle = lotLabel
-    ? `${item.name} (Qté : ${item.quantity}) - ${lotLabel}`
-    : `${item.name} (Qté : ${item.quantity})`;
+  const lotLabel = entry.lot_id ? entry.lot_name ?? `Lot #${entry.lot_id}` : null;
+  const baseTitle = `${entry.name} (Qté : ${entry.quantity})${lotLabel ? ` - ${lotLabel}` : ""}`;
+  const markerTitle = entry.tooltip ? `${baseTitle}\n${entry.tooltip}` : baseTitle;
 
   return (
     <button
@@ -1769,11 +1800,12 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
         event.dataTransfer.setData(
           "application/json",
           JSON.stringify({
-            itemId: item.id,
-            categoryId: item.category_id,
-            remiseItemId: item.remise_item_id,
-            lotId: item.lot_id,
-            lotName: item.lot_name,
+            itemId: entry.primaryItemId ?? undefined,
+            categoryId: entry.category_id,
+            remiseItemId: entry.remise_item_id,
+            lotId: entry.lot_id,
+            lotName: entry.lot_name,
+            assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
             offsetX: event.clientX - rect.left,
             offsetY: event.clientY - rect.top,
             elementWidth: rect.width,
@@ -1788,7 +1820,7 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
         {hasImage ? (
           <img
             src={imageUrl ?? undefined}
-            alt={`Illustration de ${item.name}`}
+            alt={`Illustration de ${entry.name}`}
             className="h-10 w-10 rounded-md border border-white/60 object-cover shadow-sm"
           />
         ) : (
@@ -1798,10 +1830,10 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
         )}
         <div className="text-left">
           <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
-            {item.name}
+            {entry.name}
           </span>
           <span className="block text-[10px] text-slate-500 dark:text-slate-300">
-            Qté : {item.quantity}
+            Qté : {entry.quantity}
           </span>
           {lotLabel ? (
             <span className="mt-0.5 inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/60 dark:text-blue-200">
@@ -2405,6 +2437,117 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
   );
 }
 
+function buildVehicleMarkerEntries(items: VehicleItem[]): VehicleMarkerEntry[] {
+  if (items.length === 0) {
+    return [];
+  }
+  const groupedLots = new Map<number, VehicleItem[]>();
+  for (const item of items) {
+    if (item.lot_id === null) {
+      continue;
+    }
+    const existing = groupedLots.get(item.lot_id) ?? [];
+    existing.push(item);
+    groupedLots.set(item.lot_id, existing);
+  }
+
+  const renderedLots = new Set<number>();
+  const markers: VehicleMarkerEntry[] = [];
+  for (const item of items) {
+    if (item.lot_id === null) {
+      markers.push(createMarkerFromItem(item));
+      continue;
+    }
+    if (renderedLots.has(item.lot_id)) {
+      continue;
+    }
+    const group = groupedLots.get(item.lot_id) ?? [];
+    markers.push(createMarkerFromLotGroup(item.lot_id, group));
+    renderedLots.add(item.lot_id);
+  }
+
+  return markers;
+}
+
+function createMarkerFromItem(item: VehicleItem): VehicleMarkerEntry {
+  return {
+    key: `item-${item.id}`,
+    name: item.name,
+    quantity: item.quantity,
+    image_url: item.image_url,
+    position_x: item.position_x,
+    position_y: item.position_y,
+    lot_id: item.lot_id,
+    lot_name: item.lot_name,
+    lotItemIds: [item.id],
+    tooltip: null,
+    isLot: false,
+    primaryItemId: item.id,
+    category_id: item.category_id,
+    remise_item_id: item.remise_item_id
+  };
+}
+
+function createMarkerFromLotGroup(
+  lotId: number,
+  lotItems: VehicleItem[]
+): VehicleMarkerEntry {
+  const [representative] = lotItems;
+  const lotName = representative?.lot_name ?? `Lot #${lotId}`;
+  const totalQuantity = lotItems.reduce((sum, entry) => sum + entry.quantity, 0);
+  const tooltip =
+    lotItems.length > 0
+      ? lotItems.map((entry) => `${entry.quantity} × ${entry.name}`).join("\n")
+      : "Ce lot est encore vide.";
+  const { x, y } = computeLotAveragePosition(lotItems);
+
+  return {
+    key: `lot-${lotId}`,
+    name: lotName,
+    quantity: totalQuantity,
+    image_url: null,
+    position_x: x,
+    position_y: y,
+    lot_id: lotId,
+    lot_name: lotName,
+    lotItemIds: lotItems.map((entry) => entry.id),
+    tooltip,
+    isLot: true,
+    primaryItemId: representative?.id ?? null,
+    category_id: representative?.category_id ?? null,
+    remise_item_id: representative?.remise_item_id ?? null
+  };
+}
+
+function computeLotAveragePosition(
+  lotItems: VehicleItem[]
+): { x: number | null; y: number | null } {
+  if (lotItems.length === 0) {
+    return { x: 0.5, y: 0.5 };
+  }
+  let sumX = 0;
+  let sumY = 0;
+  let count = 0;
+  for (const entry of lotItems) {
+    if (
+      typeof entry.position_x === "number" &&
+      typeof entry.position_y === "number"
+    ) {
+      sumX += entry.position_x;
+      sumY += entry.position_y;
+      count += 1;
+    }
+  }
+  if (count === 0) {
+    const [first] = lotItems;
+    return {
+      x: first?.position_x ?? 0.5,
+      y: first?.position_y ?? 0.5
+    };
+  }
+  return { x: sumX / count, y: sumY / count };
+}
+
 function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | null {
   const rawData = event.dataTransfer.getData("application/json");
   if (!rawData) {
@@ -2435,6 +2578,11 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
             : undefined,
       lotId: hasLotId ? parsed.lotId : lotIdIsNull ? null : undefined,
       lotName: typeof parsed.lotName === "string" ? parsed.lotName : undefined,
+      assignedLotItemIds: Array.isArray(parsed.assignedLotItemIds)
+        ? parsed.assignedLotItemIds
+            .map((entry) => (typeof entry === "number" ? entry : null))
+            .filter((entry): entry is number => entry !== null)
+        : undefined,
       offsetX: typeof parsed.offsetX === "number" ? parsed.offsetX : undefined,
       offsetY: typeof parsed.offsetY === "number" ? parsed.offsetY : undefined,
       elementWidth: typeof parsed.elementWidth === "number" ? parsed.elementWidth : undefined,
