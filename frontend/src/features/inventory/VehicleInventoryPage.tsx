@@ -46,6 +46,8 @@ interface VehicleItem {
   image_url: string | null;
   position_x: number | null;
   position_y: number | null;
+  lot_id: number | null;
+  lot_name: string | null;
 }
 
 interface RemiseLot {
@@ -118,6 +120,8 @@ type DraggedItemData = {
   offsetY?: number;
   elementWidth?: number;
   elementHeight?: number;
+  lotId?: number | null;
+  lotName?: string | null;
 };
 
 type Feedback = { type: "success" | "error"; text: string };
@@ -359,7 +363,8 @@ export function VehicleInventoryPage() {
           quantity: item.quantity,
           position_x: null,
           position_y: null,
-          remise_item_id: item.remise_item_id
+          remise_item_id: item.remise_item_id,
+          lot_id: lot.id
         });
         created.push(response.data);
       }
@@ -367,10 +372,11 @@ export function VehicleInventoryPage() {
     },
     onSuccess: async (_, variables) => {
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
+      const lotName = variables.lot?.name ?? null;
       setFeedback({
         type: "success",
         text: vehicleName
-          ? `Le lot a été ajouté au véhicule ${vehicleName}.`
+          ? `Le lot${lotName ? ` ${lotName}` : ""} a été ajouté au véhicule ${vehicleName}.`
           : "Le lot a été ajouté au véhicule."
       });
       await Promise.all([
@@ -583,7 +589,10 @@ export function VehicleInventoryPage() {
   );
 
   const availableItems = useMemo(
-    () => items.filter((item) => item.category_id === null && (item.remise_quantity ?? 0) > 0),
+    () =>
+      items.filter(
+        (item) => item.category_id === null && item.lot_id === null && (item.remise_quantity ?? 0) > 0
+      ),
     [items]
   );
 
@@ -596,6 +605,12 @@ export function VehicleInventoryPage() {
       ),
     [remiseLots]
   );
+
+  const findLockedLotItem = (itemId: number) =>
+    items.find((entry) => entry.id === itemId && entry.lot_id !== null) ?? null;
+
+  const describeLot = (item: VehicleItem) =>
+    item.lot_name ?? (item.lot_id ? `Lot #${item.lot_id}` : "lot");
 
   const isLoading =
     isLoadingVehicles ||
@@ -1081,15 +1096,23 @@ export function VehicleInventoryPage() {
                   successMessage: options?.isReposition ? "Position enregistrée." : undefined
                 });
               }}
-              onRemoveItem={(itemId) =>
+              onRemoveItem={(itemId) => {
+                const lockedItem = findLockedLotItem(itemId);
+                if (lockedItem) {
+                  pushFeedback({
+                    type: "error",
+                    text: `Ce matériel appartient au ${describeLot(lockedItem)}. Ajustez le lot depuis la page dédiée.`,
+                  });
+                  return;
+                }
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
                   size: null,
                   position: null,
                   quantity: 0
-                })
-              }
+                });
+              }}
               onItemFeedback={pushFeedback}
               onBackgroundChange={(photoId) =>
                 updateViewBackground.mutate({
@@ -1684,6 +1707,10 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
   const positionY = clamp(item.position_y ?? 0.5, 0, 1);
   const imageUrl = resolveMediaUrl(item.image_url);
   const hasImage = Boolean(imageUrl);
+  const lotLabel = item.lot_id ? item.lot_name ?? `Lot #${item.lot_id}` : null;
+  const markerTitle = lotLabel
+    ? `${item.name} (Qté : ${item.quantity}) - ${lotLabel}`
+    : `${item.name} (Qté : ${item.quantity})`;
 
   return (
     <button
@@ -1699,6 +1726,8 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
             itemId: item.id,
             categoryId: item.category_id,
             remiseItemId: item.remise_item_id,
+            lotId: item.lot_id,
+            lotName: item.lot_name,
             offsetX: event.clientX - rect.left,
             offsetY: event.clientY - rect.top,
             elementWidth: rect.width,
@@ -1707,7 +1736,7 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
         );
         event.dataTransfer.effectAllowed = "move";
       }}
-      title={`${item.name} (Qté : ${item.quantity})`}
+      title={markerTitle}
     >
       <div className="flex items-center gap-2">
         {hasImage ? (
@@ -1728,6 +1757,11 @@ function VehicleItemMarker({ item }: VehicleItemMarkerProps) {
           <span className="block text-[10px] text-slate-500 dark:text-slate-300">
             Qté : {item.quantity}
           </span>
+          {lotLabel ? (
+            <span className="mt-0.5 inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/60 dark:text-blue-200">
+              {lotLabel}
+            </span>
+          ) : null}
         </div>
       </div>
     </button>
@@ -1843,6 +1877,14 @@ function DroppableLibrary({
         setIsHovering(false);
         const data = readDraggedItemData(event);
         if (data && data.categoryId !== null && data.categoryId !== undefined) {
+          if (data.lotId !== null && data.lotId !== undefined) {
+            const lotLabel = data.lotName ?? `Lot #${data.lotId}`;
+            onItemFeedback({
+              type: "error",
+              text: `Ce matériel appartient au ${lotLabel}. Retirez-le depuis la gestion des lots.`,
+            });
+            return;
+          }
           onDropItem(data.itemId);
         }
       }}
@@ -1896,16 +1938,22 @@ function DroppableLibrary({
               </p>
             ) : (
               <div className="space-y-2">
-                {lots.map((lot) => (
-                  <div
-                    key={lot.id}
-                    className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
-                  >
-                    <div className="flex items-start justify-between gap-2">
-                      <div className="space-y-1">
-                        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{lot.name}</p>
-                        {lot.description ? (
-                          <p className="text-[11px] text-slate-500 dark:text-slate-400">{lot.description}</p>
+                {lots.map((lot) => {
+                  const lotTooltip =
+                    lot.items.length > 0
+                      ? lot.items.map((entry) => `${entry.quantity} × ${entry.remise_name}`).join("\n")
+                      : "Ce lot est encore vide.";
+                  return (
+                    <div
+                      key={lot.id}
+                      title={lotTooltip}
+                      className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
+                    >
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="space-y-1">
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{lot.name}</p>
+                          {lot.description ? (
+                            <p className="text-[11px] text-slate-500 dark:text-slate-400">{lot.description}</p>
                         ) : null}
                         <p className="text-[11px] text-slate-500 dark:text-slate-400">
                           {lot.item_count} matériel(s) • {lot.total_quantity} pièce(s)
@@ -1920,18 +1968,19 @@ function DroppableLibrary({
                         {isAssigningLot ? "Ajout en cours..." : "Ajouter au véhicule"}
                       </button>
                     </div>
-                    <ul className="mt-2 space-y-1 text-[11px] text-slate-600 dark:text-slate-300">
-                      {lot.items.map((item) => (
-                        <li key={item.id} className="flex items-center justify-between gap-2">
-                          <span className="truncate">{item.remise_name}</span>
-                          <span className="text-[10px] text-slate-500 dark:text-slate-400">
-                            {item.quantity} prévu(s) • {item.available_quantity} en stock
-                          </span>
-                        </li>
-                      ))}
-                    </ul>
+                      <ul className="mt-2 space-y-1 text-[11px] text-slate-600 dark:text-slate-300">
+                        {lot.items.map((item) => (
+                          <li key={item.id} className="flex items-center justify-between gap-2">
+                            <span className="truncate">{item.remise_name}</span>
+                            <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                              {item.quantity} prévu(s) • {item.available_quantity} en stock
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             )}
           </div>
@@ -1980,6 +2029,8 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
     item.category_id === null
       ? `Stock remise : ${item.remise_quantity ?? 0}`
       : `Qté : ${item.quantity}`;
+  const isLockedByLot = item.lot_id !== null;
+  const lotLabel = isLockedByLot ? item.lot_name ?? `Lot #${item.lot_id}` : null;
 
   useEffect(() => {
     if (isEditingPosition) {
@@ -2052,6 +2103,13 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
   const handleRemoveItem = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    if (isLockedByLot) {
+      onFeedback?.({
+        type: "error",
+        text: `Ce matériel appartient au ${lotLabel ?? "lot"}. Retirez-le depuis la gestion des lots.`,
+      });
+      return;
+    }
     onRemove?.();
   };
 
@@ -2112,6 +2170,8 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
             itemId: item.id,
             categoryId: item.category_id,
             remiseItemId: item.remise_item_id,
+            lotId: item.lot_id,
+            lotName: item.lot_name,
             offsetX: event.clientX - rect.left,
             offsetY: event.clientY - rect.top,
             elementWidth: rect.width,
@@ -2146,6 +2206,11 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
           <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.name}</p>
           <p className="text-xs text-slate-500 dark:text-slate-400">SKU : {item.sku}</p>
           <p className="text-xs text-slate-500 dark:text-slate-400">{quantityLabel}</p>
+          {lotLabel ? (
+            <p className="mt-1 inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/40 dark:text-blue-200">
+              {lotLabel}
+            </p>
+          ) : null}
         </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -2171,7 +2236,13 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
           <button
             type="button"
             onClick={handleRemoveItem}
-            className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+            disabled={isLockedByLot}
+            title={
+              isLockedByLot
+                ? "Ce matériel est verrouillé car il appartient à un lot."
+                : undefined
+            }
+            className="rounded-full border border-slate-200 px-3 py-1 text-xs font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
           >
             Retirer
           </button>
@@ -2180,6 +2251,11 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
           <span className="text-[11px] text-slate-500 dark:text-slate-400">Enregistrement…</span>
         ) : null}
       </div>
+      {isLockedByLot ? (
+        <p className="rounded-lg border border-dashed border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/30 dark:text-blue-200">
+          Ce matériel est verrouillé car il dépend du {lotLabel}. Ajustez son contenu depuis la page des lots.
+        </p>
+      ) : null}
       {canEditPosition ? (
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600 dark:border-slate-600/70 dark:bg-slate-800/40 dark:text-slate-200">
           <div className="flex items-center justify-between gap-2">
@@ -2278,6 +2354,13 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
             : parsed.remiseItemId === null
               ? null
               : undefined,
+        lotId:
+          typeof parsed.lotId === "number"
+            ? parsed.lotId
+            : parsed.lotId === null
+              ? null
+              : undefined,
+        lotName: typeof parsed.lotName === "string" ? parsed.lotName : undefined,
         offsetX: typeof parsed.offsetX === "number" ? parsed.offsetX : undefined,
         offsetY: typeof parsed.offsetY === "number" ? parsed.offsetY : undefined,
         elementWidth: typeof parsed.elementWidth === "number" ? parsed.elementWidth : undefined,

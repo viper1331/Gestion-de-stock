@@ -413,6 +413,10 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
     if "shared_file_url" not in vehicle_item_columns:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN shared_file_url TEXT")
+    if "lot_id" not in vehicle_item_columns:
+        conn.execute(
+            "ALTER TABLE vehicle_items ADD COLUMN lot_id INTEGER REFERENCES remise_lots(id) ON DELETE SET NULL"
+        )
 
 
 def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
@@ -928,6 +932,10 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         qr_token = row["qr_token"]
     if "shared_file_url" in row.keys():
         shared_file_url = row["shared_file_url"]
+    lot_id = row["lot_id"] if "lot_id" in row.keys() else None
+    lot_name = None
+    if "lot_name" in row.keys():
+        lot_name = row["lot_name"]
     name = row["remise_name"] if "remise_name" in row.keys() and row["remise_name"] else row["name"]
     sku = row["remise_sku"] if "remise_sku" in row.keys() and row["remise_sku"] else row["sku"]
     supplier_id = row["supplier_id"] if "supplier_id" in row.keys() else None
@@ -959,6 +967,8 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         documentation_url=documentation_url,
         tutorial_url=tutorial_url,
         qr_token=qr_token,
+        lot_id=lot_id,
+        lot_name=lot_name,
     )
 
 
@@ -974,9 +984,11 @@ def _list_inventory_items_internal(
             "ri.name AS remise_name, "
             "ri.sku AS remise_sku, "
             "ri.supplier_id AS remise_supplier_id, "
-            "ri.quantity AS remise_quantity "
+            "ri.quantity AS remise_quantity, "
+            "rl.name AS lot_name "
             "FROM vehicle_items AS vi "
-            "LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id"
+            "LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id "
+            "LEFT JOIN remise_lots AS rl ON rl.id = vi.lot_id"
         )
         if search:
             query += " WHERE COALESCE(ri.name, vi.name) LIKE ? OR COALESCE(ri.sku, vi.sku) LIKE ?"
@@ -1006,9 +1018,10 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
             cur = conn.execute(
                 """
                 SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id,
-                       ri.quantity AS remise_quantity
+                       ri.quantity AS remise_quantity, rl.name AS lot_name
                 FROM vehicle_items AS vi
                 LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
+                LEFT JOIN remise_lots AS rl ON rl.id = vi.lot_id
                 WHERE vi.id = ?
                 """,
                 (item_id,),
@@ -1084,11 +1097,19 @@ def _create_inventory_item_internal(
         insert_sku = sku
         supplier_id = payload.supplier_id
         remise_item_id: int | None = None
+        lot_id: int | None = None
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
             remise_item_id = payload.remise_item_id
+            lot_id = payload.lot_id
             if remise_item_id is None:
                 raise ValueError("Un article de remise doit être sélectionné.")
+            if lot_id is not None:
+                if payload.category_id is None:
+                    raise ValueError(
+                        "Un lot ne peut être affecté qu'à un véhicule depuis l'inventaire véhicules."
+                    )
+                _require_remise_lot(conn, lot_id)
             source = conn.execute(
                 "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
                 (remise_item_id,),
@@ -1171,6 +1192,8 @@ def _create_inventory_item_internal(
         if module == "vehicle_inventory":
             columns.append("remise_item_id")
             values.append(remise_item_id)
+            columns.append("lot_id")
+            values.append(lot_id)
             columns.extend(["position_x", "position_y"])
             values.extend([payload.position_x, payload.position_y])
             columns.extend(["documentation_url", "tutorial_url", "shared_file_url", "qr_token"])
@@ -1202,6 +1225,7 @@ def _update_inventory_item_internal(
     fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
     fields.pop("image_url", None)
     fields.pop("qr_token", None)
+    fields.pop("lot_id", None)
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     if module == "vehicle_inventory":
@@ -1217,7 +1241,7 @@ def _update_inventory_item_internal(
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
             current_row = conn.execute(
-                f"SELECT quantity, remise_item_id, category_id, image_path FROM {config.tables.items} WHERE id = ?",
+                f"SELECT quantity, remise_item_id, category_id, image_path, lot_id FROM {config.tables.items} WHERE id = ?",
                 (item_id,),
             ).fetchone()
             if current_row is None:
@@ -1225,6 +1249,7 @@ def _update_inventory_item_internal(
             current_quantity = current_row["quantity"]
             current_remise_item_id = current_row["remise_item_id"]
             current_category_id = current_row["category_id"]
+            current_lot_id = current_row["lot_id"]
             target_category_id = fields.get("category_id", current_category_id)
             if "remise_item_id" in fields:
                 remise_item_id = fields["remise_item_id"]
@@ -1247,6 +1272,25 @@ def _update_inventory_item_internal(
             if target_remise_item_id is None:
                 raise ValueError("Un article de remise doit être sélectionné.")
             target_quantity = fields.get("quantity", current_quantity)
+            if current_lot_id is not None:
+                lock_message = (
+                    "Impossible de retirer ce matériel : il est rattaché à un lot. Modifiez le lot dans l'inventaire remises."
+                )
+                if "category_id" in fields:
+                    if fields["category_id"] != current_category_id:
+                        raise ValueError(lock_message)
+                    fields.pop("category_id", None)
+                    target_category_id = current_category_id
+                if "quantity" in fields:
+                    if fields["quantity"] != current_quantity:
+                        raise ValueError(lock_message)
+                    fields.pop("quantity", None)
+                    target_quantity = current_quantity
+                if "remise_item_id" in fields:
+                    if fields["remise_item_id"] != current_remise_item_id:
+                        raise ValueError(lock_message)
+                    fields.pop("remise_item_id", None)
+                    target_remise_item_id = current_remise_item_id
             should_restack_to_template = (
                 "category_id" in fields
                 and fields["category_id"] is None
@@ -1293,10 +1337,14 @@ def _delete_inventory_item_internal(module: str, item_id: int) -> None:
     with db.get_stock_connection() as conn:
         if module == "vehicle_inventory":
             cur = conn.execute(
-                f"SELECT image_path FROM {config.tables.items} WHERE id = ?",
+                f"SELECT image_path, lot_id FROM {config.tables.items} WHERE id = ?",
                 (item_id,),
             )
             row = cur.fetchone()
+            if row and row["lot_id"]:
+                raise ValueError(
+                    "Impossible de supprimer ce matériel depuis l'inventaire véhicules : il est rattaché à un lot."
+                )
             if row and row["image_path"]:
                 _delete_media_file(row["image_path"])
         conn.execute(

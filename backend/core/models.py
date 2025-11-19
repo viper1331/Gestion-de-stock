@@ -136,6 +136,8 @@ class Item(BaseModel):
     documentation_url: str | None = None
     tutorial_url: str | None = None
     qr_token: str | None = None
+    lot_id: int | None = None
+    lot_name: str | None = None
 
 
 class ItemCreate(BaseModel):
@@ -153,6 +155,7 @@ class ItemCreate(BaseModel):
     shared_file_url: Optional[str] = None
     documentation_url: Optional[str] = None
     tutorial_url: Optional[str] = None
+    lot_id: Optional[int] = None
 
 
 class ItemUpdate(BaseModel):
@@ -171,6 +174,7 @@ class ItemUpdate(BaseModel):
     shared_file_url: Optional[str] = None
     documentation_url: Optional[str] = None
     tutorial_url: Optional[str] = None
+    lot_id: Optional[int] = None
 
 
 class VehiclePhoto(BaseModel):
