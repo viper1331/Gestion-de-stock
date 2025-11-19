@@ -1563,6 +1563,7 @@ function VehicleCompartment({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const queryClient = useQueryClient();
   const markerEntries = useMemo(() => buildVehicleMarkerEntries(items), [items]);
+  const markerLayouts = useMemo(() => buildMarkerLayoutMap(markerEntries), [markerEntries]);
 
   useEffect(() => {
     if (!isPointerModeEnabled) {
@@ -1903,6 +1904,7 @@ function VehicleCompartment({
               <VehicleItemMarker
                 key={entry.key}
                 entry={entry}
+                layoutPosition={markerLayouts.get(entry.key)}
                 displayMode={isPointerModeEnabled ? "pointer" : "card"}
                 pointerTarget={pointerTarget}
                 onRequestPointerTarget={
@@ -2021,8 +2023,14 @@ interface VehicleMarkerEntry {
   remise_item_id: number | null;
 }
 
+interface MarkerLayoutPosition {
+  x: number;
+  y: number;
+}
+
 interface VehicleItemMarkerProps {
   entry: VehicleMarkerEntry;
+  layoutPosition?: MarkerLayoutPosition | null;
   displayMode?: "card" | "pointer";
   pointerTarget?: PointerTarget | null;
   onRequestPointerTarget?: (markerKey: string) => void;
@@ -2032,6 +2040,7 @@ interface VehicleItemMarkerProps {
 
 function VehicleItemMarker({
   entry,
+  layoutPosition,
   displayMode = "card",
   pointerTarget,
   onRequestPointerTarget,
@@ -2186,11 +2195,14 @@ function VehicleItemMarker({
     );
   }
 
+  const displayX = clamp(layoutPosition?.x ?? positionX, 0, 1);
+  const displayY = clamp(layoutPosition?.y ?? positionY, 0, 1);
+
   return (
     <button
       type="button"
       className="group absolute -translate-x-1/2 -translate-y-1/2 cursor-move rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-105 dark:bg-slate-900/80 dark:text-slate-200"
-      style={{ left: `${positionX * 100}%`, top: `${positionY * 100}%` }}
+      style={{ left: `${displayX * 100}%`, top: `${displayY * 100}%` }}
       draggable
       onDragStart={handleDragStart}
       title={markerTitle}
@@ -2841,6 +2853,53 @@ function buildVehicleMarkerEntries(items: VehicleItem[]): VehicleMarkerEntry[] {
   return markers;
 }
 
+function buildMarkerLayoutMap(entries: VehicleMarkerEntry[]): Map<string, MarkerLayoutPosition> {
+  const layout = new Map<string, MarkerLayoutPosition>();
+  if (entries.length === 0) {
+    return layout;
+  }
+
+  const clusters: {
+    base: MarkerLayoutPosition;
+    members: { entry: VehicleMarkerEntry; base: MarkerLayoutPosition }[];
+  }[] = [];
+
+  const DISTANCE_THRESHOLD = 0.07;
+
+  for (const entry of entries) {
+    const base = {
+      x: clamp(entry.position_x ?? 0.5, 0, 1),
+      y: clamp(entry.position_y ?? 0.5, 0, 1)
+    };
+    let cluster = clusters.find((candidate) =>
+      getMarkerDistance(candidate.base, base) <= DISTANCE_THRESHOLD
+    );
+    if (!cluster) {
+      cluster = { base, members: [] };
+      clusters.push(cluster);
+    }
+    cluster.members.push({ entry, base });
+  }
+
+  for (const cluster of clusters) {
+    if (cluster.members.length === 1) {
+      const [member] = cluster.members;
+      layout.set(member.entry.key, member.base);
+      continue;
+    }
+    const distributedPositions = [
+      cluster.base,
+      ...generateLotPositions(cluster.base, cluster.members.length - 1)
+    ];
+    cluster.members.forEach((member, index) => {
+      const coords = distributedPositions[index] ?? cluster.base;
+      layout.set(member.entry.key, coords);
+    });
+  }
+
+  return layout;
+}
+
 function createMarkerFromItem(item: VehicleItem): VehicleMarkerEntry {
   return {
     key: `item-${item.id}`,
@@ -3026,6 +3085,12 @@ function generateLotPositions(base: { x: number; y: number }, count: number): { 
       y: clamp(base.y + Math.sin(angle) * radius, 0, 1)
     };
   });
+}
+
+function getMarkerDistance(a: MarkerLayoutPosition, b: MarkerLayoutPosition): number {
+  const deltaX = a.x - b.x;
+  const deltaY = a.y - b.y;
+  return Math.sqrt(deltaX * deltaX + deltaY * deltaY);
 }
 
 function clamp(value: number, min: number, max: number): number {
