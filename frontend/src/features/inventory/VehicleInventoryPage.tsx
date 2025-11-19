@@ -573,6 +573,12 @@ export function VehicleInventoryPage() {
     return `vehicleInventory:backgroundPanel:${vehicleIdentifier}:${viewIdentifier}`;
   }, [selectedVehicle?.id, normalizedSelectedView]);
 
+  const itemsPanelStorageKey = useMemo(() => {
+    const vehicleIdentifier = selectedVehicle?.id ? `vehicle-${selectedVehicle.id}` : "no-vehicle";
+    const viewIdentifier = normalizeViewName(normalizedSelectedView).replace(/\s+/g, "-");
+    return `vehicleInventory:itemsPanel:${vehicleIdentifier}:${viewIdentifier}`;
+  }, [selectedVehicle?.id, normalizedSelectedView]);
+
   const selectedViewConfig = useMemo(() => {
     if (!selectedVehicle?.view_configs || !normalizedSelectedView) {
       return null;
@@ -1206,6 +1212,7 @@ export function VehicleInventoryPage() {
               }
               isUpdatingBackground={updateViewBackground.isPending}
               backgroundPanelStorageKey={backgroundPanelStorageKey}
+              itemsPanelStorageKey={itemsPanelStorageKey}
               onDropLot={handleDropLotOnView}
             />
 
@@ -1471,6 +1478,7 @@ interface VehicleCompartmentProps {
   onBackgroundChange: (photoId: number | null) => void;
   isUpdatingBackground: boolean;
   backgroundPanelStorageKey: string;
+  itemsPanelStorageKey: string;
   onDropLot?: (lotId: number, position: { x: number; y: number }) => void;
 }
 
@@ -1486,12 +1494,17 @@ function VehicleCompartment({
   onBackgroundChange,
   isUpdatingBackground,
   backgroundPanelStorageKey,
+  itemsPanelStorageKey,
   onDropLot
 }: VehicleCompartmentProps) {
   const [isHovering, setIsHovering] = useState(false);
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = usePersistentBoolean(
     backgroundPanelStorageKey,
     true
+  );
+  const [isItemsPanelCollapsed, setIsItemsPanelCollapsed] = usePersistentBoolean(
+    itemsPanelStorageKey,
+    false
   );
   const boardRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -1793,26 +1806,41 @@ function VehicleCompartment({
           )}
         </div>
 
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Faites glisser un matériel depuis la bibliothèque vers la zone ci-dessus pour l'affecter et le positionner. Vous pouvez déplacer les marqueurs existants pour affiner l'emplacement.
-        </p>
-
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-          {items.map((item) => (
-            <ItemCard
-              key={item.id}
-              item={item}
-              onRemove={() => onRemoveItem(item.id)}
-              onFeedback={onItemFeedback}
-              onUpdatePosition={(position) => onDropItem(item.id, position, { isReposition: true })}
-            />
-          ))}
-          {items.length === 0 && (
-            <p className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-              Déposez un matériel depuis la bibliothèque pour l'affecter à ce coffre.
-            </p>
-          )}
+        <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            {isItemsPanelCollapsed
+              ? "Cette section est masquée. Cliquez sur « Afficher » pour consulter les équipements associés à cette vue."
+              :
+                "Faites glisser un matériel depuis la bibliothèque vers la zone ci-dessus pour l'affecter et le positionner. Vous pouvez déplacer les marqueurs existants pour affiner l'emplacement."}
+          </p>
+          <button
+            type="button"
+            onClick={() => setIsItemsPanelCollapsed((value) => !value)}
+            aria-expanded={!isItemsPanelCollapsed}
+            className="self-start rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white sm:self-auto"
+          >
+            {isItemsPanelCollapsed ? "Afficher" : "Masquer"}
+          </button>
         </div>
+
+        {isItemsPanelCollapsed ? null : (
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+            {items.map((item) => (
+              <ItemCard
+                key={item.id}
+                item={item}
+                onRemove={() => onRemoveItem(item.id)}
+                onFeedback={onItemFeedback}
+                onUpdatePosition={(position) => onDropItem(item.id, position, { isReposition: true })}
+              />
+            ))}
+            {items.length === 0 && (
+              <p className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center text-sm text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                Déposez un matériel depuis la bibliothèque pour l'affecter à ce coffre.
+              </p>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );
