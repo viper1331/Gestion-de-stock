@@ -55,6 +55,7 @@ interface RemiseLot {
   name: string;
   description: string | null;
   created_at: string;
+  image_url: string | null;
   item_count: number;
   total_quantity: number;
 }
@@ -113,7 +114,7 @@ const VEHICLE_ILLUSTRATIONS = [
 const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
 type DraggedItemData = {
-  itemId: number;
+  itemId?: number;
   categoryId?: number | null;
   remiseItemId?: number | null;
   offsetX?: number;
@@ -348,21 +349,29 @@ export function VehicleInventoryPage() {
   const assignLotToVehicle = useMutation({
     mutationFn: async ({
       lot,
-      categoryId
+      categoryId,
+      view,
+      position
     }: {
       lot: RemiseLotWithItems;
       categoryId: number;
+      view: string;
+      position: { x: number; y: number } | null;
     }) => {
       const created: VehicleItem[] = [];
-      for (const item of lot.items) {
+      const normalizedView = normalizeViewName(view);
+      const basePosition = position ?? { x: 0.5, y: 0.5 };
+      const distributedPositions = generateLotPositions(basePosition, lot.items.length);
+      for (const [index, item] of lot.items.entries()) {
+        const coords = distributedPositions[index] ?? null;
         const response = await api.post<VehicleItem>("/vehicle-inventory/", {
           name: item.remise_name,
           sku: item.remise_sku,
           category_id: categoryId,
-          size: null,
+          size: normalizedView,
           quantity: item.quantity,
-          position_x: null,
-          position_y: null,
+          position_x: coords?.x ?? null,
+          position_y: coords?.y ?? null,
           remise_item_id: item.remise_item_id,
           lot_id: lot.id
         });
@@ -605,6 +614,20 @@ export function VehicleInventoryPage() {
       ),
     [remiseLots]
   );
+
+  const handleDropLotOnView = (lotId: number, position: { x: number; y: number }) => {
+    if (!selectedVehicle) {
+      setFeedback({ type: "error", text: "Sélectionnez un véhicule avant d'ajouter un lot." });
+      return;
+    }
+    const lot = availableLots.find((entry) => entry.id === lotId);
+    if (!lot) {
+      setFeedback({ type: "error", text: "Ce lot n'est plus disponible." });
+      return;
+    }
+    const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+    assignLotToVehicle.mutate({ lot, categoryId: selectedVehicle.id, view: targetView, position });
+  };
 
   const findLockedLotItem = (itemId: number) =>
     items.find((entry) => entry.id === itemId && entry.lot_id !== null) ?? null;
@@ -1123,6 +1146,7 @@ export function VehicleInventoryPage() {
               }
               isUpdatingBackground={updateViewBackground.isPending}
               backgroundPanelStorageKey={backgroundPanelStorageKey}
+              onDropLot={handleDropLotOnView}
             />
 
             <aside className="space-y-6">
@@ -1158,7 +1182,13 @@ export function VehicleInventoryPage() {
                     });
                     return;
                   }
-                  assignLotToVehicle.mutate({ lot, categoryId: selectedVehicle.id });
+                  const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                  assignLotToVehicle.mutate({
+                    lot,
+                    categoryId: selectedVehicle.id,
+                    view: targetView,
+                    position: null
+                  });
                 }}
                 onDropItem={(itemId) =>
                   updateItemLocation.mutate({
@@ -1377,6 +1407,7 @@ interface VehicleCompartmentProps {
   onBackgroundChange: (photoId: number | null) => void;
   isUpdatingBackground: boolean;
   backgroundPanelStorageKey: string;
+  onDropLot?: (lotId: number, position: { x: number; y: number }) => void;
 }
 
 function VehicleCompartment({
@@ -1390,7 +1421,8 @@ function VehicleCompartment({
   onItemFeedback,
   onBackgroundChange,
   isUpdatingBackground,
-  backgroundPanelStorageKey
+  backgroundPanelStorageKey,
+  onDropLot
 }: VehicleCompartmentProps) {
   const [isHovering, setIsHovering] = useState(false);
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = usePersistentBoolean(
@@ -1466,6 +1498,20 @@ function VehicleCompartment({
       x: clamp(centerX / rect.width, 0, 1),
       y: clamp(centerY / rect.height, 0, 1)
     };
+    if (data.lotId !== null && data.lotId !== undefined) {
+      if (onDropLot) {
+        onDropLot(data.lotId, position);
+      } else {
+        onItemFeedback({
+          type: "error",
+          text: "Sélectionnez un véhicule avant d'ajouter un lot."
+        });
+      }
+      return;
+    }
+    if (typeof data.itemId !== "number") {
+      return;
+    }
     const sourceCategoryId =
       data.categoryId === undefined ? undefined : data.categoryId;
     const isFromLibrary = sourceCategoryId === null;
@@ -1876,7 +1922,12 @@ function DroppableLibrary({
         event.preventDefault();
         setIsHovering(false);
         const data = readDraggedItemData(event);
-        if (data && data.categoryId !== null && data.categoryId !== undefined) {
+        if (
+          data &&
+          typeof data.itemId === "number" &&
+          data.categoryId !== null &&
+          data.categoryId !== undefined
+        ) {
           if (data.lotId !== null && data.lotId !== undefined) {
             const lotLabel = data.lotName ?? `Lot #${data.lotId}`;
             onItemFeedback({
@@ -1943,31 +1994,54 @@ function DroppableLibrary({
                     lot.items.length > 0
                       ? lot.items.map((entry) => `${entry.quantity} × ${entry.remise_name}`).join("\n")
                       : "Ce lot est encore vide.";
+                  const lotImageUrl = resolveMediaUrl(lot.image_url);
                   return (
                     <div
                       key={lot.id}
                       title={lotTooltip}
+                      draggable
+                      onDragStart={(event) => {
+                        event.dataTransfer.setData(
+                          "application/json",
+                          JSON.stringify({ lotId: lot.id, lotName: lot.name })
+                        );
+                        event.dataTransfer.effectAllowed = "copyMove";
+                      }}
                       className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
                     >
-                      <div className="flex items-start justify-between gap-2">
-                        <div className="space-y-1">
-                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{lot.name}</p>
-                          {lot.description ? (
-                            <p className="text-[11px] text-slate-500 dark:text-slate-400">{lot.description}</p>
-                        ) : null}
-                        <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                          {lot.item_count} matériel(s) • {lot.total_quantity} pièce(s)
-                        </p>
+                      <div className="flex items-start gap-3">
+                        <div className="h-16 w-16 overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-900">
+                          {lotImageUrl ? (
+                            <img src={lotImageUrl} alt={`Illustration du lot ${lot.name}`} className="h-full w-full object-cover" />
+                          ) : (
+                            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400 dark:text-slate-500">
+                              Aucune image
+                            </div>
+                          )}
+                        </div>
+                        <div className="flex-1 space-y-1">
+                          <div className="flex items-start justify-between gap-2">
+                            <div>
+                              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{lot.name}</p>
+                              {lot.description ? (
+                                <p className="text-[11px] text-slate-500 dark:text-slate-400">{lot.description}</p>
+                              ) : null}
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400">
+                                {lot.item_count} matériel(s) • {lot.total_quantity} pièce(s)
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => onAssignLot?.(lot)}
+                              disabled={!onAssignLot || isAssigningLot}
+                              className="rounded-full border border-blue-500 px-3 py-1 text-[11px] font-semibold text-blue-600 transition hover:border-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-400 dark:text-blue-200 dark:hover:border-blue-300"
+                            >
+                              {isAssigningLot ? "Ajout en cours..." : "Ajouter au véhicule"}
+                            </button>
+                          </div>
+                          <p className="text-[10px] text-slate-500 dark:text-slate-400">Glissez ce lot vers la vue sélectionnée pour l'affecter.</p>
+                        </div>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => onAssignLot?.(lot)}
-                        disabled={!onAssignLot || isAssigningLot}
-                        className="rounded-full border border-blue-500 px-3 py-1 text-[11px] font-semibold text-blue-600 transition hover:border-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-400 dark:text-blue-200 dark:hover:border-blue-300"
-                      >
-                        {isAssigningLot ? "Ajout en cours..." : "Ajouter au véhicule"}
-                      </button>
-                    </div>
                       <ul className="mt-2 space-y-1 text-[11px] text-slate-600 dark:text-slate-300">
                         {lot.items.map((item) => (
                           <li key={item.id} className="flex items-center justify-between gap-2">
@@ -2339,34 +2413,33 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
 
   try {
     const parsed = JSON.parse(rawData) as Partial<DraggedItemData>;
-    if (typeof parsed.itemId === "number") {
-      return {
-        itemId: parsed.itemId,
-        categoryId:
-          typeof parsed.categoryId === "number"
-            ? parsed.categoryId
-            : parsed.categoryId === null
-              ? null
-              : undefined,
-        remiseItemId:
-          typeof parsed.remiseItemId === "number"
-            ? parsed.remiseItemId
-            : parsed.remiseItemId === null
-              ? null
-              : undefined,
-        lotId:
-          typeof parsed.lotId === "number"
-            ? parsed.lotId
-            : parsed.lotId === null
-              ? null
-              : undefined,
-        lotName: typeof parsed.lotName === "string" ? parsed.lotName : undefined,
-        offsetX: typeof parsed.offsetX === "number" ? parsed.offsetX : undefined,
-        offsetY: typeof parsed.offsetY === "number" ? parsed.offsetY : undefined,
-        elementWidth: typeof parsed.elementWidth === "number" ? parsed.elementWidth : undefined,
-        elementHeight: typeof parsed.elementHeight === "number" ? parsed.elementHeight : undefined
-      };
+    const hasItemId = typeof parsed.itemId === "number";
+    const hasLotId = typeof parsed.lotId === "number";
+    const lotIdIsNull = parsed.lotId === null;
+    if (!hasItemId && !hasLotId && !lotIdIsNull) {
+      return null;
     }
+    return {
+      itemId: hasItemId ? parsed.itemId : undefined,
+      categoryId:
+        typeof parsed.categoryId === "number"
+          ? parsed.categoryId
+          : parsed.categoryId === null
+            ? null
+            : undefined,
+      remiseItemId:
+        typeof parsed.remiseItemId === "number"
+          ? parsed.remiseItemId
+          : parsed.remiseItemId === null
+            ? null
+            : undefined,
+      lotId: hasLotId ? parsed.lotId : lotIdIsNull ? null : undefined,
+      lotName: typeof parsed.lotName === "string" ? parsed.lotName : undefined,
+      offsetX: typeof parsed.offsetX === "number" ? parsed.offsetX : undefined,
+      offsetY: typeof parsed.offsetY === "number" ? parsed.offsetY : undefined,
+      elementWidth: typeof parsed.elementWidth === "number" ? parsed.elementWidth : undefined,
+      elementHeight: typeof parsed.elementHeight === "number" ? parsed.elementHeight : undefined
+    };
   } catch {
     return null;
   }
@@ -2410,6 +2483,29 @@ function normalizeViewName(view: string | null): string {
     return view.trim().toUpperCase();
   }
   return DEFAULT_VIEW_LABEL;
+}
+
+function generateLotPositions(base: { x: number; y: number }, count: number): { x: number; y: number }[] {
+  if (count <= 0) {
+    return [];
+  }
+  if (count === 1) {
+    return [
+      {
+        x: clamp(base.x, 0, 1),
+        y: clamp(base.y, 0, 1)
+      }
+    ];
+  }
+
+  const radius = Math.min(0.18, 0.04 + count * 0.015);
+  return Array.from({ length: count }, (_, index) => {
+    const angle = (index / count) * Math.PI * 2;
+    return {
+      x: clamp(base.x + Math.cos(angle) * radius, 0, 1),
+      y: clamp(base.y + Math.sin(angle) * radius, 0, 1)
+    };
+  });
 }
 
 function clamp(value: number, min: number, max: number): number {

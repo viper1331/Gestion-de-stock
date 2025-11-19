@@ -22,6 +22,7 @@ from reportlab.pdfgen import canvas
 from backend.core import db, models, security
 from backend.core.storage import (
     MEDIA_ROOT,
+    REMISE_LOT_MEDIA_DIR,
     VEHICLE_CATEGORY_MEDIA_DIR,
     VEHICLE_ITEM_MEDIA_DIR,
     VEHICLE_PHOTO_MEDIA_DIR,
@@ -429,6 +430,14 @@ def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
         )
 
 
+def _ensure_remise_lot_columns(conn: sqlite3.Connection) -> None:
+    lot_info = conn.execute("PRAGMA table_info(remise_lots)").fetchall()
+    lot_columns = {row["name"] for row in lot_info}
+
+    if "image_path" not in lot_columns:
+        conn.execute("ALTER TABLE remise_lots ADD COLUMN image_path TEXT")
+
+
 def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
     vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
     vehicle_item_columns = {row["name"] for row in vehicle_item_info}
@@ -677,6 +686,7 @@ def _apply_schema_migrations() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT NOT NULL,
                 description TEXT,
+                image_path TEXT,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name)
             );
@@ -692,6 +702,7 @@ def _apply_schema_migrations() -> None:
             """
         )
         _ensure_remise_item_columns(conn)
+        _ensure_remise_lot_columns(conn)
         _ensure_vehicle_item_columns(conn)
         _ensure_vehicle_item_qr_tokens(conn)
         conn.execute(
@@ -2359,6 +2370,7 @@ def _build_remise_lot(row: sqlite3.Row) -> models.RemiseLot:
         name=row["name"],
         description=row["description"],
         created_at=_coerce_datetime(row["created_at"]),
+        image_url=_build_media_url(row["image_path"]),
         item_count=row["item_count"],
         total_quantity=row["total_quantity"],
     )
@@ -2375,7 +2387,7 @@ def list_remise_lots() -> list[models.RemiseLot]:
     with db.get_stock_connection() as conn:
         rows = conn.execute(
             """
-            SELECT rl.id, rl.name, rl.description, rl.created_at,
+            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path,
                    COUNT(rli.id) AS item_count,
                    COALESCE(SUM(rli.quantity), 0) AS total_quantity
             FROM remise_lots AS rl
@@ -2392,7 +2404,7 @@ def get_remise_lot(lot_id: int) -> models.RemiseLot:
     with db.get_stock_connection() as conn:
         row = conn.execute(
             """
-            SELECT rl.id, rl.name, rl.description, rl.created_at,
+            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path,
                    COUNT(rli.id) AS item_count,
                    COALESCE(SUM(rli.quantity), 0) AS total_quantity
             FROM remise_lots AS rl
@@ -2412,7 +2424,7 @@ def list_remise_lots_with_items() -> list[models.RemiseLotWithItems]:
     with db.get_stock_connection() as conn:
         lot_rows = conn.execute(
             """
-            SELECT rl.id, rl.name, rl.description, rl.created_at,
+            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path,
                    COUNT(rli.id) AS item_count,
                    COALESCE(SUM(rli.quantity), 0) AS total_quantity
             FROM remise_lots AS rl
@@ -2493,13 +2505,65 @@ def update_remise_lot(lot_id: int, payload: models.RemiseLotUpdate) -> models.Re
     return get_remise_lot(lot_id)
 
 
+def attach_remise_lot_image(
+    lot_id: int, stream: BinaryIO, filename: str | None
+) -> models.RemiseLot:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_remise_lot_columns(conn)
+        row = conn.execute(
+            "SELECT image_path FROM remise_lots WHERE id = ?",
+            (lot_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Lot introuvable")
+        previous_path = row["image_path"]
+        stored_path = _store_media_file(REMISE_LOT_MEDIA_DIR, stream, filename)
+        conn.execute(
+            "UPDATE remise_lots SET image_path = ? WHERE id = ?",
+            (stored_path, lot_id),
+        )
+        _persist_after_commit(conn)
+    if previous_path and previous_path != stored_path:
+        _delete_media_file(previous_path)
+    return get_remise_lot(lot_id)
+
+
+def remove_remise_lot_image(lot_id: int) -> models.RemiseLot:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT image_path FROM remise_lots WHERE id = ?",
+            (lot_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Lot introuvable")
+        previous_path = row["image_path"]
+        if not previous_path:
+            return get_remise_lot(lot_id)
+        conn.execute(
+            "UPDATE remise_lots SET image_path = NULL WHERE id = ?",
+            (lot_id,),
+        )
+        _persist_after_commit(conn)
+    _delete_media_file(previous_path)
+    return get_remise_lot(lot_id)
+
+
 def delete_remise_lot(lot_id: int) -> None:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
-        _require_remise_lot(conn, lot_id)
+        row = conn.execute(
+            "SELECT image_path FROM remise_lots WHERE id = ?",
+            (lot_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Lot introuvable")
+        image_path = row["image_path"]
         conn.execute("DELETE FROM remise_lot_items WHERE lot_id = ?", (lot_id,))
         conn.execute("DELETE FROM remise_lots WHERE id = ?", (lot_id,))
         _persist_after_commit(conn)
+    _delete_media_file(image_path)
 
 
 def _build_remise_lot_item(row: sqlite3.Row) -> models.RemiseLotItem:

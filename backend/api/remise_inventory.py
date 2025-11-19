@@ -1,7 +1,7 @@
 """Routes pour la gestion de l'inventaire remises."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -143,6 +143,35 @@ async def update_remise_lot(
     _require_permission(user, action="edit")
     try:
         return services.update_remise_lot(lot_id, payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.post("/lots/{lot_id}/image", response_model=models.RemiseLot)
+async def upload_remise_lot_image(
+    lot_id: int,
+    file: UploadFile = File(...),
+    user: models.User = Depends(get_current_user),
+) -> models.RemiseLot:
+    _require_permission(user, action="edit")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        await file.close()
+        raise HTTPException(status_code=400, detail="Seules les images sont autorisées.")
+    try:
+        return services.attach_remise_lot_image(lot_id, file.file, file.filename)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    finally:
+        await file.close()
+
+
+@router.delete("/lots/{lot_id}/image", response_model=models.RemiseLot)
+async def remove_remise_lot_image(
+    lot_id: int, user: models.User = Depends(get_current_user)
+) -> models.RemiseLot:
+    _require_permission(user, action="edit")
+    try:
+        return services.remove_remise_lot_image(lot_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
