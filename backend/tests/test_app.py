@@ -2087,6 +2087,17 @@ def test_vehicle_inventory_pdf_export() -> None:
         headers=admin_headers,
     )
     assert assign_resp.status_code == 201, assign_resp.text
+    item_id = assign_resp.json()["id"]
+
+    item_image = io.BytesIO()
+    Image.new("RGB", (120, 80), color="red").save(item_image, format="PNG")
+    item_image.seek(0)
+    upload_resp = client.post(
+        f"/vehicle-inventory/{item_id}/image",
+        files={"file": ("materiel.png", item_image, "image/png")},
+        headers=admin_headers,
+    )
+    assert upload_resp.status_code == 200, upload_resp.text
 
     export_resp = client.get("/vehicle-inventory/export/pdf", headers=admin_headers)
     assert export_resp.status_code == 200, export_resp.text
