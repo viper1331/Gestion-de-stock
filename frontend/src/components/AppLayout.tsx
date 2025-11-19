@@ -40,6 +40,14 @@ export function AppLayout() {
   }, [initialize]);
 
   useEffect(() => {
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      document.body.style.overflow = previousOverflow;
+    };
+  }, []);
+
+  useEffect(() => {
     if (isReady && !user) {
       navigate("/login", { replace: true });
     }
