@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import io
 import json
+import math
 from collections import defaultdict
 import sqlite3
 from dataclasses import dataclass
@@ -3623,6 +3624,35 @@ def generate_vehicle_inventory_pdf(
                 pdf.circle(pointer_x, pointer_y, 2, stroke=0, fill=1)
                 pdf.setStrokeColor(bubble_border)
                 pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
+                direction_x = pointer_x - anchor_x
+                direction_y = pointer_y - anchor_y
+                direction_length = math.hypot(direction_x, direction_y)
+                if direction_length > 1e-3:
+                    unit_x = direction_x / direction_length
+                    unit_y = direction_y / direction_length
+                    arrow_length = 10
+                    arrow_width = 6
+                    base_x = pointer_x - unit_x * arrow_length
+                    base_y = pointer_y - unit_y * arrow_length
+                    perp_x = -unit_y
+                    perp_y = unit_x
+                    left_x = base_x + perp_x * (arrow_width / 2)
+                    left_y = base_y + perp_y * (arrow_width / 2)
+                    right_x = base_x - perp_x * (arrow_width / 2)
+                    right_y = base_y - perp_y * (arrow_width / 2)
+                    pdf.setFillColor(bubble_border)
+                    pdf.polygon(
+                        [
+                            pointer_x,
+                            pointer_y,
+                            left_x,
+                            left_y,
+                            right_x,
+                            right_y,
+                        ],
+                        stroke=0,
+                        fill=1,
+                    )
                 pdf.setFillColor(colors.black)
                 pdf.setFont("Helvetica", 9)
                 text_y = bubble_y + bubble_height - bubble_padding - line_height + 4
