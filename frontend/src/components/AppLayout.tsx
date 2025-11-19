@@ -442,71 +442,77 @@ export function AppLayout() {
             <span aria-hidden>{sidebarOpen ? "⟨" : "⟩"}</span>
           </button>
         </div>
-        <nav className={`mt-8 flex flex-col gap-3 text-sm ${sidebarOpen ? "" : "items-center"}`}>
-          <NavLink
-            to="/"
-            end
-            className={({ isActive }) => navClass(isActive, sidebarOpen)}
-            title="Accéder à la page d'accueil personnalisée"
+        <div className="mt-8 flex min-h-0 flex-1 flex-col overflow-hidden">
+          <nav
+            className={`flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-2 text-sm ${
+              sidebarOpen ? "" : "items-center"
+            }`}
+          >
+            <NavLink
+              to="/"
+              end
+              className={({ isActive }) => navClass(isActive, sidebarOpen)}
+              title="Accéder à la page d'accueil personnalisée"
           >
             <NavIcon symbol="🏠" label="Accueil" />
             <span className={sidebarOpen ? "block" : "sr-only"}>Accueil</span>
           </NavLink>
-          {navigationGroups.map((group) => {
-            const isOpen = openGroups[group.id] ?? false;
+            {navigationGroups.map((group) => {
+              const isOpen = openGroups[group.id] ?? false;
 
-            return (
-              <div key={group.id}>
-                <button
-                  type="button"
-                  onClick={() => toggleGroup(group.id)}
-                  className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
-                    sidebarOpen ? "justify-between px-3 py-2" : "h-11 justify-center"
-                  }`}
-                  aria-expanded={isOpen}
-                  title={group.tooltip}
-                >
-                  <span className="flex items-center gap-3">
-                    <NavIcon symbol={group.icon} label={group.label} />
-                    <span className={sidebarOpen ? "block text-left" : "sr-only"}>{group.label}</span>
-                  </span>
-                  {sidebarOpen ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
-                </button>
-                {sidebarOpen && isOpen ? (
-                  <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
-                    {group.sections.map((section) => (
-                      <div key={section.id}>
-                        <p
-                          className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                          title={section.tooltip}
-                        >
-                          {section.label}
-                        </p>
-                        <div className="mt-2 flex flex-col gap-1">
-                          {section.links.map((link) => (
-                            <NavLink
-                              key={link.to}
-                              to={link.to}
-                              end={link.to === "/" || link.to === "/inventory"}
-                              className={({ isActive }) => navClass(isActive, sidebarOpen)}
-                              title={link.tooltip}
-                            >
-                              <NavIcon symbol={link.icon} label={link.label} />
-                              <span>{link.label}</span>
-                            </NavLink>
-                          ))}
+              return (
+                <div key={group.id}>
+                  <button
+                    type="button"
+                    onClick={() => toggleGroup(group.id)}
+                    className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
+                      sidebarOpen ? "justify-between px-3 py-2" : "h-11 justify-center"
+                    }`}
+                    aria-expanded={isOpen}
+                    title={group.tooltip}
+                  >
+                    <span className="flex items-center gap-3">
+                      <NavIcon symbol={group.icon} label={group.label} />
+                      <span className={sidebarOpen ? "block text-left" : "sr-only"}>{group.label}</span>
+                    </span>
+                    {sidebarOpen ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
+                  </button>
+                  {sidebarOpen && isOpen ? (
+                    <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
+                      {group.sections.map((section) => (
+                        <div key={section.id}>
+                          <p
+                            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                            title={section.tooltip}
+                          >
+                            {section.label}
+                          </p>
+                          <div className="mt-2 flex flex-col gap-1">
+                            {section.links.map((link) => (
+                              <NavLink
+                                key={link.to}
+                                to={link.to}
+                                end={link.to === "/" || link.to === "/inventory"}
+                                className={({ isActive }) => navClass(isActive, sidebarOpen)}
+                                title={link.tooltip}
+                              >
+                                <NavIcon symbol={link.icon} label={link.label} />
+                                <span>{link.label}</span>
+                              </NavLink>
+                            ))}
+                          </div>
                         </div>
-                      </div>
-                    ))}
-                  </div>
-                ) : null}
-              </div>
-            );
-          })}
-        </nav>
-        {modulePermissions.isLoading && user?.role !== "admin" ? (
-          <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
-        ) : null}
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              );
+            })}
+          </nav>
+          {modulePermissions.isLoading && user?.role !== "admin" ? (
+            <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
+          ) : null}
+        </div>
         <div className="mt-auto flex w-full flex-col gap-3 pt-6">
           <div
             className={`flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
