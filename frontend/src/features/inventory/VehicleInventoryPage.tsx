@@ -1573,7 +1573,7 @@ function VehicleCompartment({
                     <img
                       src={resolveMediaUrl(selectedBackground.image_url) ?? undefined}
                       alt="Photo de fond sélectionnée"
-                      className="h-36 w-full object-cover"
+                      className="h-36 w-full object-contain"
                     />
                   ) : (
                     <div className="flex h-36 items-center justify-center px-4 text-center text-[11px] text-slate-500 dark:text-slate-400">
@@ -1621,7 +1621,7 @@ function VehicleCompartment({
                         <img
                           src={photoUrl ?? undefined}
                           alt={`Photo du véhicule ${photo.id}`}
-                          className="h-20 w-full object-cover"
+                          className="h-20 w-full object-contain"
                         />
                         {selectedBackgroundId === photo.id ? (
                           <div className="absolute inset-0 bg-blue-500/20" aria-hidden />
