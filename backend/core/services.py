@@ -3641,18 +3641,12 @@ def generate_vehicle_inventory_pdf(
                     right_x = base_x - perp_x * (arrow_width / 2)
                     right_y = base_y - perp_y * (arrow_width / 2)
                     pdf.setFillColor(bubble_border)
-                    pdf.polygon(
-                        [
-                            pointer_x,
-                            pointer_y,
-                            left_x,
-                            left_y,
-                            right_x,
-                            right_y,
-                        ],
-                        stroke=0,
-                        fill=1,
-                    )
+                    path = pdf.beginPath()
+                    path.moveTo(pointer_x, pointer_y)
+                    path.lineTo(left_x, left_y)
+                    path.lineTo(right_x, right_y)
+                    path.close()
+                    pdf.drawPath(path, stroke=0, fill=1)
                 pdf.setFillColor(colors.black)
                 pdf.setFont("Helvetica", 9)
                 text_y = bubble_y + bubble_height - bubble_padding - line_height + 4
