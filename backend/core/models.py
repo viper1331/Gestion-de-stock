@@ -218,6 +218,7 @@ class RemiseLotUpdate(BaseModel):
 class RemiseLot(RemiseLotBase):
     id: int
     created_at: datetime
+    image_url: str | None = None
     item_count: int = 0
     total_quantity: int = 0
 

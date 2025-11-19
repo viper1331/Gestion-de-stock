@@ -1,13 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../lib/api";
+import { resolveMediaUrl } from "../../lib/media";
 
 interface RemiseLot {
   id: number;
   name: string;
   description: string | null;
   created_at: string;
+  image_url: string | null;
   item_count: number;
   total_quantity: number;
 }
@@ -61,6 +63,7 @@ export function RemiseLotsPanel() {
   const [editQuantities, setEditQuantities] = useState<Record<number, number>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const lotImageInputRef = useRef<HTMLInputElement | null>(null);
 
   const lotsQuery = useQuery({
     queryKey: ["remise-lots"],
@@ -92,6 +95,8 @@ export function RemiseLotsPanel() {
     () => lots.find((lot) => lot.id === selectedLotId) ?? null,
     [lots, selectedLotId]
   );
+
+  const selectedLotImageUrl = resolveMediaUrl(selectedLot?.image_url);
 
   const lotItemsQuery = useQuery({
     queryKey: ["remise-lot-items", selectedLotId],
@@ -241,6 +246,41 @@ export function RemiseLotsPanel() {
     onError: () => setError("Impossible de retirer le matériel.")
   });
 
+  const uploadLotImage = useMutation({
+    mutationFn: async ({ lotId, file }: { lotId: number; file: File }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api.post<RemiseLot>(`/remise-inventory/lots/${lotId}/image`, formData, {
+        headers: { "Content-Type": "multipart/form-data" }
+      });
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Image du lot mise à jour.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lot-items"] })
+      ]);
+    },
+    onError: () => setError("Impossible de mettre à jour l'image du lot.")
+  });
+
+  const removeLotImage = useMutation({
+    mutationFn: async (lotId: number) => {
+      await api.delete(`/remise-inventory/lots/${lotId}/image`);
+    },
+    onSuccess: async () => {
+      setMessage("Image du lot supprimée.");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lot-items"] })
+      ]);
+    },
+    onError: () => setError("Impossible de supprimer l'image du lot.")
+  });
+
   const handleSubmitLot = async (event: FormEvent) => {
     event.preventDefault();
     setMessage(null);
@@ -286,6 +326,40 @@ export function RemiseLotsPanel() {
     setMessage(null);
     setError(null);
     await removeLotItem.mutateAsync({ lotId: selectedLotId, lotItemId });
+  };
+
+  const isUpdatingLotImage = uploadLotImage.isPending || removeLotImage.isPending;
+
+  const handleLotImageChange = (event: ChangeEvent<HTMLInputElement>) => {
+    if (!selectedLotId) {
+      event.currentTarget.value = "";
+      return;
+    }
+    const file = (event.currentTarget.files ?? [])[0];
+    if (!file) {
+      return;
+    }
+    if (!file.type.startsWith("image/")) {
+      setError("Seules les images sont autorisées.");
+      event.currentTarget.value = "";
+      return;
+    }
+    setMessage(null);
+    setError(null);
+    uploadLotImage.mutate({ lotId: selectedLotId, file });
+    event.currentTarget.value = "";
+  };
+
+  const handleSelectLotImage = () => {
+    if (!selectedLotId || isUpdatingLotImage) return;
+    lotImageInputRef.current?.click();
+  };
+
+  const handleRemoveLotImage = () => {
+    if (!selectedLotId || isUpdatingLotImage) return;
+    setMessage(null);
+    setError(null);
+    removeLotImage.mutate(selectedLotId);
   };
 
   const availableForForm = useMemo(
@@ -455,6 +529,61 @@ export function RemiseLotsPanel() {
 
             {selectedLot ? (
               <>
+                <div className="rounded-md border border-slate-800 bg-slate-900/60 p-3">
+                  <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+                    <div>
+                      <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Image du lot
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Ajoutez une photo de référence pour reconnaître rapidement ce lot.
+                      </p>
+                    </div>
+                    <div className="flex flex-wrap items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={handleSelectLotImage}
+                        disabled={isUpdatingLotImage}
+                        className="rounded-full border border-indigo-400 px-3 py-1 text-[11px] font-semibold text-indigo-200 transition hover:border-indigo-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                      >
+                        {isUpdatingLotImage
+                          ? "Téléversement..."
+                          : selectedLot.image_url
+                            ? "Changer d'image"
+                            : "Ajouter une image"}
+                      </button>
+                      {selectedLot.image_url ? (
+                        <button
+                          type="button"
+                          onClick={handleRemoveLotImage}
+                          disabled={isUpdatingLotImage}
+                          className="rounded-full border border-rose-400 px-3 py-1 text-[11px] font-semibold text-rose-200 transition hover:border-rose-300 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Supprimer
+                        </button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div className="mt-3 flex h-40 items-center justify-center overflow-hidden rounded-md border border-dashed border-slate-800 bg-slate-950/40">
+                    {selectedLotImageUrl ? (
+                      <img
+                        src={selectedLotImageUrl}
+                        alt={`Illustration du lot ${selectedLot.name}`}
+                        className="h-full w-full object-cover"
+                      />
+                    ) : (
+                      <p className="text-xs text-slate-500">Aucune image n'est associée à ce lot.</p>
+                    )}
+                  </div>
+                  <input
+                    ref={lotImageInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={handleLotImageChange}
+                  />
+                </div>
+
                 <form className="grid gap-3 rounded-md border border-slate-800 bg-slate-900/60 p-3 md:grid-cols-3" onSubmit={handleAddItem}>
                   <div className="md:col-span-2">
                     <label className="mb-1 block text-xs font-semibold text-slate-300" htmlFor="lot-item">
@@ -619,6 +748,19 @@ export function RemiseLotsPanel() {
                 key={lot.id}
                 className="space-y-3 rounded-md border border-slate-800 bg-slate-900/60 p-3"
               >
+                <div className="overflow-hidden rounded-md border border-slate-800">
+                  {lot.image_url ? (
+                    <img
+                      src={resolveMediaUrl(lot.image_url) ?? undefined}
+                      alt={`Illustration du lot ${lot.name}`}
+                      className="h-32 w-full object-cover"
+                    />
+                  ) : (
+                    <div className="flex h-32 items-center justify-center text-xs text-slate-500">
+                      Aucune image enregistrée
+                    </div>
+                  )}
+                </div>
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <p className="text-sm font-semibold text-slate-100">{lot.name}</p>
