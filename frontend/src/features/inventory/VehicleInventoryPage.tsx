@@ -3,6 +3,7 @@ import {
   DragEvent,
   FormEvent,
   MouseEvent,
+  useCallback,
   useEffect,
   useMemo,
   useRef,
@@ -128,6 +129,28 @@ type DraggedItemData = {
 };
 
 type Feedback = { type: "success" | "error"; text: string };
+
+type PointerTarget = { x: number; y: number };
+type PointerTargetMap = Record<string, PointerTarget>;
+
+function readPointerTargetsFromStorage(storageKey: string): PointerTargetMap {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  try {
+    const rawValue = window.localStorage.getItem(storageKey);
+    if (!rawValue) {
+      return {};
+    }
+    const parsed = JSON.parse(rawValue) as PointerTargetMap;
+    if (parsed && typeof parsed === "object") {
+      return parsed;
+    }
+  } catch {
+    return {};
+  }
+  return {};
+}
 
 export function VehicleInventoryPage() {
   const queryClient = useQueryClient();
@@ -1507,10 +1530,45 @@ function VehicleCompartment({
     itemsPanelStorageKey,
     false
   );
+  const [isPointerModeEnabled, setIsPointerModeEnabled] = usePersistentBoolean(
+    `${itemsPanelStorageKey}:pointer-mode`,
+    false
+  );
+  const pointerTargetStorageKey = `${itemsPanelStorageKey}:pointer-targets`;
+  const [pointerTargets, setPointerTargets] = useState<PointerTargetMap>(() =>
+    readPointerTargetsFromStorage(pointerTargetStorageKey)
+  );
+  useEffect(() => {
+    setPointerTargets(readPointerTargetsFromStorage(pointerTargetStorageKey));
+  }, [pointerTargetStorageKey]);
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(pointerTargetStorageKey, JSON.stringify(pointerTargets));
+    } catch {
+      /* ignore storage errors */
+    }
+  }, [pointerTargets, pointerTargetStorageKey]);
+  const updatePointerTargets = useCallback(
+    (updater: (previous: PointerTargetMap) => PointerTargetMap) => {
+      setPointerTargets((previous) => updater(previous));
+    },
+    []
+  );
+  const [pendingPointerKey, setPendingPointerKey] = useState<string | null>(null);
+  const isSelectingPointerTarget = pendingPointerKey !== null;
   const boardRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const queryClient = useQueryClient();
   const markerEntries = useMemo(() => buildVehicleMarkerEntries(items), [items]);
+
+  useEffect(() => {
+    if (!isPointerModeEnabled) {
+      setPendingPointerKey(null);
+    }
+  }, [isPointerModeEnabled]);
 
   const uploadBackground = useMutation({
     mutationFn: async (file: File) => {
@@ -1611,6 +1669,44 @@ function VehicleCompartment({
       remiseItemId:
         data.remiseItemId === undefined ? undefined : data.remiseItemId ?? null
     });
+  };
+
+  const handlePointerTargetRequest = useCallback((markerKey: string) => {
+    setPendingPointerKey(markerKey);
+  }, []);
+
+  const handlePointerTargetClear = useCallback(
+    (markerKey: string) => {
+      updatePointerTargets((previous) => {
+        if (!previous[markerKey]) {
+          return previous;
+        }
+        const nextTargets = { ...previous };
+        delete nextTargets[markerKey];
+        return nextTargets;
+      });
+    },
+    [updatePointerTargets]
+  );
+
+  const handleCancelPointerSelection = () => {
+    setPendingPointerKey(null);
+  };
+
+  const handleBoardClick = (event: MouseEvent<HTMLDivElement>) => {
+    if (!isPointerModeEnabled || !pendingPointerKey || !boardRef.current) {
+      return;
+    }
+    const rect = boardRef.current.getBoundingClientRect();
+    const pointerX = clamp((event.clientX - rect.left) / rect.width, 0, 1);
+    const pointerY = clamp((event.clientY - rect.top) / rect.height, 0, 1);
+    const targetKey = pendingPointerKey;
+    updatePointerTargets((previous) => ({
+      ...previous,
+      [targetKey]: { x: pointerX, y: pointerY }
+    }));
+    setPendingPointerKey(null);
+    onItemFeedback({ type: "success", text: "Point de référence défini." });
   };
 
   const handleBackgroundUploadChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -1789,22 +1885,83 @@ function VehicleCompartment({
           className={clsx(
             "relative min-h-[320px] w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 transition dark:border-slate-700 dark:bg-slate-800",
             isHovering &&
-              "border-blue-400 ring-4 ring-blue-200/60 dark:border-blue-500 dark:ring-blue-900/50"
+              "border-blue-400 ring-4 ring-blue-200/60 dark:border-blue-500 dark:ring-blue-900/50",
+            isPointerModeEnabled &&
+              isSelectingPointerTarget &&
+              "border-blue-500 ring-4 ring-blue-400/60"
           )}
           style={boardStyle}
           onDragOver={handleDragOver}
           onDragLeave={handleDragLeave}
           onDrop={handleDrop}
+          onClick={handleBoardClick}
         >
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-slate-900/5 via-transparent to-white/10 dark:from-slate-950/20 dark:to-slate-900/10" />
-          {markerEntries.map((entry) => (
-            <VehicleItemMarker key={entry.key} entry={entry} />
-          ))}
+          {markerEntries.map((entry) => {
+            const pointerTarget = pointerTargets[entry.key] ?? null;
+            return (
+              <VehicleItemMarker
+                key={entry.key}
+                entry={entry}
+                displayMode={isPointerModeEnabled ? "pointer" : "card"}
+                pointerTarget={pointerTarget}
+                onRequestPointerTarget={
+                  isPointerModeEnabled
+                    ? () => handlePointerTargetRequest(entry.key)
+                    : undefined
+                }
+                onClearPointerTarget={
+                  isPointerModeEnabled ? () => handlePointerTargetClear(entry.key) : undefined
+                }
+                isPointerTargetPending={pendingPointerKey === entry.key}
+              />
+            );
+          })}
           {items.length === 0 && (
             <div className="pointer-events-none absolute inset-0 flex items-center justify-center text-center text-sm font-medium text-slate-600 dark:text-slate-300">
               Glissez un équipement sur la photo pour enregistrer son emplacement.
             </div>
           )}
+        </div>
+
+        <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
+          <label className="flex items-start gap-3 font-semibold text-slate-700 dark:text-slate-100">
+            <input
+              type="checkbox"
+              className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900"
+              checked={isPointerModeEnabled}
+              onChange={() => setIsPointerModeEnabled((value) => !value)}
+            />
+            <span>
+              Activer le mode pointeur pour afficher un point précis et une flèche reliant chaque
+              matériel à sa vignette.
+            </span>
+          </label>
+          <p className="mt-2 text-[11px] font-normal text-slate-500 dark:text-slate-400">
+            Ce mode décale les étiquettes afin de libérer la vue sur la photo tout en conservant un
+            repère visuel clair.
+          </p>
+          {isPointerModeEnabled ? (
+            <div className="mt-3 space-y-2 text-[11px] text-slate-500 dark:text-slate-400">
+              <p>
+                Utilisez le bouton « Définir le point » sur une étiquette puis cliquez sur la photo
+                pour relier la flèche à l'endroit exact souhaité. Vous pouvez réinitialiser un point à
+                tout moment.
+              </p>
+              {isSelectingPointerTarget ? (
+                <div className="flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-[11px] font-semibold text-blue-800 shadow-sm dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
+                  <span>Cliquez sur la photo pour positionner le point de référence.</span>
+                  <button
+                    type="button"
+                    className="rounded-full border border-blue-500 px-3 py-1 text-[11px] font-semibold text-blue-600 transition hover:bg-blue-50 dark:border-blue-400 dark:text-blue-200 dark:hover:bg-blue-900/20"
+                    onClick={handleCancelPointerSelection}
+                  >
+                    Annuler
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -1866,9 +2023,21 @@ interface VehicleMarkerEntry {
 
 interface VehicleItemMarkerProps {
   entry: VehicleMarkerEntry;
+  displayMode?: "card" | "pointer";
+  pointerTarget?: PointerTarget | null;
+  onRequestPointerTarget?: (markerKey: string) => void;
+  onClearPointerTarget?: (markerKey: string) => void;
+  isPointerTargetPending?: boolean;
 }
 
-function VehicleItemMarker({ entry }: VehicleItemMarkerProps) {
+function VehicleItemMarker({
+  entry,
+  displayMode = "card",
+  pointerTarget,
+  onRequestPointerTarget,
+  onClearPointerTarget,
+  isPointerTargetPending
+}: VehicleItemMarkerProps) {
   const positionX = clamp(entry.position_x ?? 0.5, 0, 1);
   const positionY = clamp(entry.position_y ?? 0.5, 0, 1);
   const imageUrl = resolveMediaUrl(entry.image_url);
@@ -1877,59 +2046,156 @@ function VehicleItemMarker({ entry }: VehicleItemMarkerProps) {
   const baseTitle = `${entry.name} (Qté : ${entry.quantity})${lotLabel ? ` - ${lotLabel}` : ""}`;
   const markerTitle = entry.tooltip ? `${baseTitle}\n${entry.tooltip}` : baseTitle;
 
+  const handleDragStart = (event: DragEvent<HTMLElement>) => {
+    const rect = event.currentTarget.getBoundingClientRect();
+    event.dataTransfer.setData(
+      "application/json",
+      JSON.stringify({
+        itemId: entry.primaryItemId ?? undefined,
+        categoryId: entry.category_id,
+        remiseItemId: entry.remise_item_id,
+        lotId: entry.lot_id,
+        lotName: entry.lot_name,
+        assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
+        offsetX: event.clientX - rect.left,
+        offsetY: event.clientY - rect.top,
+        elementWidth: rect.width,
+        elementHeight: rect.height
+      })
+    );
+    event.dataTransfer.effectAllowed = "move";
+  };
+
+  const markerContent = (
+    <div className="flex items-center gap-2">
+      {hasImage ? (
+        <img
+          src={imageUrl ?? undefined}
+          alt={`Illustration de ${entry.name}`}
+          className="h-10 w-10 rounded-md border border-white/60 object-cover shadow-sm"
+        />
+      ) : (
+        <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
+          N/A
+        </div>
+      )}
+      <div className="text-left">
+        <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
+          {entry.name}
+        </span>
+        <span className="block text-[10px] text-slate-500 dark:text-slate-300">Qté : {entry.quantity}</span>
+        {lotLabel ? (
+          <span className="mt-0.5 inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/60 dark:text-blue-200">
+            {lotLabel}
+          </span>
+        ) : null}
+      </div>
+    </div>
+  );
+
+  if (displayMode === "pointer") {
+    const anchorX = clamp(pointerTarget?.x ?? positionX, 0, 1);
+    const anchorY = clamp(pointerTarget?.y ?? positionY, 0, 1);
+    const showPointerOnLeft = anchorX > 0.5;
+    const canDefinePointerTarget = Boolean(onRequestPointerTarget);
+    const pointerButtonLabel = isPointerTargetPending
+      ? "Cliquez sur la photo"
+      : pointerTarget
+        ? "Modifier le point"
+        : "Définir le point";
+
+    const handleDefinePointerTarget = (event: MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      event.preventDefault();
+      if (!onRequestPointerTarget) {
+        return;
+      }
+      onRequestPointerTarget(entry.key);
+    };
+
+    const handleClearPointerTarget = (event: MouseEvent<HTMLButtonElement>) => {
+      event.stopPropagation();
+      event.preventDefault();
+      if (!onClearPointerTarget) {
+        return;
+      }
+      onClearPointerTarget(entry.key);
+    };
+
+    return (
+      <div
+        className="group absolute -translate-x-1/2 -translate-y-1/2"
+        style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%` }}
+      >
+        <span className="pointer-events-none block h-3 w-3 rounded-full border-2 border-white bg-blue-500 shadow-lg" />
+        <div
+          className={clsx(
+            "absolute top-1/2 flex -translate-y-1/2 items-center gap-1",
+            showPointerOnLeft ? "right-6 flex-row-reverse" : "left-6"
+          )}
+        >
+          <div className="flex flex-col gap-1">
+            <button
+              type="button"
+              title={markerTitle}
+              draggable
+              onDragStart={handleDragStart}
+              className="cursor-move rounded-lg bg-white/95 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-[1.02] dark:bg-slate-900/85 dark:text-slate-200"
+            >
+              {markerContent}
+            </button>
+            <div
+              className={clsx(
+                "flex flex-wrap items-center gap-2 text-[10px] font-semibold",
+                showPointerOnLeft ? "justify-end" : "justify-start"
+              )}
+            >
+              <button
+                type="button"
+                onClick={handleDefinePointerTarget}
+                disabled={!canDefinePointerTarget || Boolean(isPointerTargetPending)}
+                className={clsx(
+                  "rounded-full border px-2 py-0.5",
+                  isPointerTargetPending
+                    ? "border-amber-500 text-amber-600"
+                    : "border-blue-400 text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-200"
+                )}
+              >
+                {pointerButtonLabel}
+              </button>
+              {pointerTarget ? (
+                <button
+                  type="button"
+                  onClick={handleClearPointerTarget}
+                  className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-500 dark:text-slate-200 dark:hover:bg-slate-800"
+                >
+                  Réinitialiser
+                </button>
+              ) : null}
+            </div>
+          </div>
+          <span
+            className={clsx(
+              "pointer-events-none h-2 w-2 bg-white/80",
+              showPointerOnLeft ? "-rotate-45" : "rotate-45"
+            )}
+          />
+          <span className="pointer-events-none h-px w-10 bg-white/70" />
+        </div>
+      </div>
+    );
+  }
+
   return (
     <button
       type="button"
       className="group absolute -translate-x-1/2 -translate-y-1/2 cursor-move rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-105 dark:bg-slate-900/80 dark:text-slate-200"
       style={{ left: `${positionX * 100}%`, top: `${positionY * 100}%` }}
       draggable
-      onDragStart={(event) => {
-        const rect = event.currentTarget.getBoundingClientRect();
-        event.dataTransfer.setData(
-          "application/json",
-          JSON.stringify({
-            itemId: entry.primaryItemId ?? undefined,
-            categoryId: entry.category_id,
-            remiseItemId: entry.remise_item_id,
-            lotId: entry.lot_id,
-            lotName: entry.lot_name,
-            assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
-            offsetX: event.clientX - rect.left,
-            offsetY: event.clientY - rect.top,
-            elementWidth: rect.width,
-            elementHeight: rect.height
-          })
-        );
-        event.dataTransfer.effectAllowed = "move";
-      }}
+      onDragStart={handleDragStart}
       title={markerTitle}
     >
-      <div className="flex items-center gap-2">
-        {hasImage ? (
-          <img
-            src={imageUrl ?? undefined}
-            alt={`Illustration de ${entry.name}`}
-            className="h-10 w-10 rounded-md border border-white/60 object-cover shadow-sm"
-          />
-        ) : (
-          <div className="flex h-10 w-10 items-center justify-center rounded-md border border-slate-200 bg-slate-100 text-[9px] font-semibold uppercase tracking-wide text-slate-500 dark:border-slate-700 dark:bg-slate-800 dark:text-slate-300">
-            N/A
-          </div>
-        )}
-        <div className="text-left">
-          <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
-            {entry.name}
-          </span>
-          <span className="block text-[10px] text-slate-500 dark:text-slate-300">
-            Qté : {entry.quantity}
-          </span>
-          {lotLabel ? (
-            <span className="mt-0.5 inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/60 dark:text-blue-200">
-              {lotLabel}
-            </span>
-          ) : null}
-        </div>
-      </div>
+      {markerContent}
     </button>
   );
 }
