@@ -74,14 +74,37 @@ export function VehicleQrManagerPage() {
     const getGroupKey = (item: VehicleItem) => `${item.category_id ?? "none"}::${item.name.trim().toLowerCase()}`;
 
     itemsWithVehicle.forEach((item) => {
-      nextDrafts[item.id] = {
-        shared_file_url: item.shared_file_url ?? "",
-        documentation_url: item.documentation_url ?? "",
-        tutorial_url: item.tutorial_url ?? "",
-        show_in_qr: item.show_in_qr
-      };
+      const key = getGroupKey(item);
+      const existing = groups.get(key);
+      if (existing) {
+        existing.items.push(item);
+      } else {
+        groups.set(key, {
+          key,
+          items: [item],
+          representative: item
+        });
+      }
     });
-    setDrafts(nextDrafts);
+
+    return Array.from(groups.values());
+  }, [itemsWithVehicle]);
+
+  useEffect(() => {
+    setDrafts((previous) => {
+      const next: Record<string, ResourceDraft> = {};
+      materialGroups.forEach((group) => {
+        const representative = group.representative;
+        next[group.key] =
+          previous[group.key] ?? {
+            shared_file_url: representative.shared_file_url ?? "",
+            documentation_url: representative.documentation_url ?? "",
+            tutorial_url: representative.tutorial_url ?? "",
+            show_in_qr: representative.show_in_qr
+          };
+      });
+      return next;
+    });
   }, [materialGroups]);
 
   const vehicleLookup = useMemo(() => {
@@ -165,12 +188,16 @@ export function VehicleQrManagerPage() {
       tutorial_url: string;
       show_in_qr: boolean;
     }) => {
-      await api.put(`/vehicle-inventory/${payload.itemId}`, {
-        shared_file_url: payload.shared_file_url || null,
-        documentation_url: payload.documentation_url || null,
-        tutorial_url: payload.tutorial_url || null,
-        show_in_qr: payload.show_in_qr
-      });
+      await Promise.all(
+        payload.itemIds.map((itemId) =>
+          api.put(`/vehicle-inventory/${itemId}`, {
+            shared_file_url: payload.shared_file_url || null,
+            documentation_url: payload.documentation_url || null,
+            tutorial_url: payload.tutorial_url || null,
+            show_in_qr: payload.show_in_qr
+          })
+        )
+      );
     },
     onSuccess: async () => {
       setFeedback("Liens mis à jour avec succès.");
@@ -219,9 +246,9 @@ export function VehicleQrManagerPage() {
     }
   });
 
-  const handleUpdateDraft = (itemId: number, patch: Partial<ResourceDraft>) => {
+  const handleUpdateDraft = (groupKey: string, patch: Partial<ResourceDraft>) => {
     setDrafts((previous) => {
-      const current = previous[itemId] ?? {
+      const current = previous[groupKey] ?? {
         shared_file_url: "",
         documentation_url: "",
         tutorial_url: "",
@@ -229,7 +256,7 @@ export function VehicleQrManagerPage() {
       };
       return {
         ...previous,
-        [itemId]: {
+        [groupKey]: {
           ...current,
           ...patch
         }
@@ -256,13 +283,19 @@ export function VehicleQrManagerPage() {
     return `${base}/vehicle-inventory/public/${item.qr_token}/page`;
   };
 
-  const renderItemCard = (item: VehicleItem) => {
+  const renderItemCard = (group: VehicleItemGroup) => {
+    const primaryItem = group.representative;
     const draft =
-      drafts[item.id] ?? { shared_file_url: "", documentation_url: "", tutorial_url: "", show_in_qr: true };
-    const shareUrl = buildShareUrl(item);
-    const vehicleName = getVehicleName(item);
-    const cover = resolveMediaUrl(item.image_url);
-    const hasVehicle = Boolean(item.category_id);
+      drafts[group.key] ?? {
+        shared_file_url: "",
+        documentation_url: "",
+        tutorial_url: "",
+        show_in_qr: true
+      };
+    const shareUrl = buildShareUrl(primaryItem);
+    const vehicleName = getVehicleName(primaryItem);
+    const cover = resolveMediaUrl(primaryItem.image_url);
+    const hasVehicle = Boolean(primaryItem.category_id);
     const isHidden = !draft.show_in_qr;
 
     return (
@@ -280,8 +313,8 @@ export function VehicleQrManagerPage() {
           </div>
           <div className="flex-1">
             <p className="text-xs uppercase tracking-wide text-slate-500 dark:text-slate-400">{vehicleName}</p>
-            <h2 className="text-base font-semibold text-slate-900 dark:text-white">{item.name}</h2>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Réf. {item.sku}</p>
+            <h2 className="text-base font-semibold text-slate-900 dark:text-white">{primaryItem.name}</h2>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Réf. {primaryItem.sku}</p>
             <div className="mt-2 flex flex-wrap gap-2">
               {isHidden ? (
                 <span className="inline-flex items-center rounded-full bg-slate-200 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-100">
@@ -301,7 +334,7 @@ export function VehicleQrManagerPage() {
           <input
             type="url"
             value={draft.shared_file_url}
-            onChange={(event) => handleUpdateDraft(item.id, { shared_file_url: event.target.value })}
+            onChange={(event) => handleUpdateDraft(group.key, { shared_file_url: event.target.value })}
             placeholder="https://onedrive.live.com/..."
             className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           />
@@ -315,7 +348,7 @@ export function VehicleQrManagerPage() {
           <input
             type="url"
             value={draft.documentation_url}
-            onChange={(event) => handleUpdateDraft(item.id, { documentation_url: event.target.value })}
+            onChange={(event) => handleUpdateDraft(group.key, { documentation_url: event.target.value })}
             placeholder="https://..."
             className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           />
@@ -326,7 +359,7 @@ export function VehicleQrManagerPage() {
           <input
             type="url"
             value={draft.tutorial_url}
-            onChange={(event) => handleUpdateDraft(item.id, { tutorial_url: event.target.value })}
+            onChange={(event) => handleUpdateDraft(group.key, { tutorial_url: event.target.value })}
             placeholder="https://..."
             className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
           />
@@ -346,7 +379,7 @@ export function VehicleQrManagerPage() {
                 type="checkbox"
                 className="h-4 w-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
                 checked={draft.show_in_qr}
-                onChange={(event) => handleUpdateDraft(item.id, { show_in_qr: event.target.checked })}
+                onChange={(event) => handleUpdateDraft(group.key, { show_in_qr: event.target.checked })}
               />
             </label>
           </div>
