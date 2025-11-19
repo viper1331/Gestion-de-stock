@@ -133,6 +133,36 @@ type Feedback = { type: "success" | "error"; text: string };
 type PointerTarget = { x: number; y: number };
 type PointerTargetMap = Record<string, PointerTarget>;
 
+function collectPointerTargetsPayload(): PointerTargetMap {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  const collected: PointerTargetMap = {};
+  const prefix = "vehicleInventory:itemsPanel:";
+  const suffix = ":pointer-targets";
+
+  for (let index = 0; index < window.localStorage.length; index += 1) {
+    const key = window.localStorage.key(index);
+    if (!key || !key.startsWith(prefix) || !key.endsWith(suffix)) {
+      continue;
+    }
+    const parsed = readPointerTargetsFromStorage(key);
+    Object.entries(parsed).forEach(([markerKey, target]) => {
+      if (
+        target &&
+        typeof target.x === "number" &&
+        typeof target.y === "number"
+      ) {
+        const clampedX = Math.min(1, Math.max(0, target.x));
+        const clampedY = Math.min(1, Math.max(0, target.y));
+        collected[markerKey] = { x: clampedX, y: clampedY };
+      }
+    });
+  }
+
+  return collected;
+}
+
 function readPointerTargetsFromStorage(storageKey: string): PointerTargetMap {
   if (typeof window === "undefined") {
     return {};
@@ -531,9 +561,14 @@ export function VehicleInventoryPage() {
 
   const exportInventoryPdf = useMutation({
     mutationFn: async () => {
-      const response = await api.get("/vehicle-inventory/export/pdf", {
-        responseType: "arraybuffer"
-      });
+      const pointerTargets = collectPointerTargetsPayload();
+      const response = await api.post(
+        "/vehicle-inventory/export/pdf",
+        { pointer_targets: pointerTargets },
+        {
+          responseType: "arraybuffer"
+        }
+      );
       return response.data as ArrayBuffer;
     },
     onSuccess: (data) => {

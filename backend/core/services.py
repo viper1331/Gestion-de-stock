@@ -3233,7 +3233,9 @@ def generate_pharmacy_purchase_order_pdf(
     )
 
 
-def generate_vehicle_inventory_pdf() -> bytes:
+def generate_vehicle_inventory_pdf(
+    *, pointer_targets: dict[str, models.PointerTarget] | None = None
+) -> bytes:
     """Export the complete vehicle inventory as a PDF document."""
 
     ensure_database_ready()
@@ -3244,11 +3246,14 @@ def generate_vehicle_inventory_pdf() -> bytes:
 
     @dataclass
     class _VehicleViewEntry:
+        key: str
         representative: models.Item
         items: list[models.Item]
         total_quantity: int
         position_x: float | None
         position_y: float | None
+        pointer_x: float | None
+        pointer_y: float | None
 
         @property
         def is_lot(self) -> bool:
@@ -3299,17 +3304,34 @@ def generate_vehicle_inventory_pdf() -> bytes:
     def _build_view_entry(group_items: list[models.Item]) -> _VehicleViewEntry:
         representative = group_items[0]
         total_quantity = sum(item.quantity for item in group_items)
+        entry_key = (
+            f"lot-{representative.lot_id}"
+            if representative.lot_id is not None
+            else f"item-{representative.id}"
+        )
+        clamp01 = lambda value: max(0.0, min(1.0, value))
+
         if representative.lot_id is not None:
             position_x, position_y = _compute_entry_position(group_items)
         else:
             position_x = representative.position_x
             position_y = representative.position_y
+        pointer_x = position_x
+        pointer_y = position_y
+        if pointer_targets:
+            pointer_override = pointer_targets.get(entry_key)
+            if pointer_override:
+                pointer_x = clamp01(pointer_override.x)
+                pointer_y = clamp01(pointer_override.y)
         return _VehicleViewEntry(
+            key=entry_key,
             representative=representative,
             items=group_items,
             total_quantity=total_quantity,
             position_x=position_x,
             position_y=position_y,
+            pointer_x=pointer_x,
+            pointer_y=pointer_y,
         )
 
     def _summarize_view_entries(view_items: list[models.Item]) -> list[_VehicleViewEntry]:
@@ -3673,8 +3695,8 @@ def generate_vehicle_inventory_pdf() -> bytes:
 
                     for entry in view_entries:
                         if (
-                            entry.position_x is not None
-                            and entry.position_y is not None
+                            entry.pointer_x is not None
+                            and entry.pointer_y is not None
                         ):
                             located_entries.append(entry)
                         else:
@@ -3682,8 +3704,8 @@ def generate_vehicle_inventory_pdf() -> bytes:
 
                     bounds = (image_x, image_y, drawn_width, drawn_height)
                     for entry in located_entries:
-                        pos_x = _clamp(entry.position_x or 0.0, 0.0, 1.0)
-                        pos_y = _clamp(entry.position_y or 0.0, 0.0, 1.0)
+                        pos_x = _clamp(entry.pointer_x or 0.0, 0.0, 1.0)
+                        pos_y = _clamp(entry.pointer_y or 0.0, 0.0, 1.0)
                         pointer_x = image_x + pos_x * drawn_width
                         pointer_y = image_y + drawn_height * (1.0 - pos_y)
                         _draw_item_bubble(
