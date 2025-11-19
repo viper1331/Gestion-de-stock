@@ -632,12 +632,34 @@ export function VehicleInventoryPage() {
     [vehicleItems, normalizedSelectedView]
   );
 
+  const lotRemiseItemIds = useMemo(() => {
+    const ids = new Set<number>();
+    for (const lot of remiseLots) {
+      for (const entry of lot.items) {
+        ids.add(entry.remise_item_id);
+      }
+    }
+    return ids;
+  }, [remiseLots]);
+
   const availableItems = useMemo(
     () =>
-      items.filter(
-        (item) => item.category_id === null && item.lot_id === null && (item.remise_quantity ?? 0) > 0
-      ),
-    [items]
+      items.filter((item) => {
+        if (item.category_id !== null) {
+          return false;
+        }
+        if (item.lot_id !== null) {
+          return false;
+        }
+        if ((item.remise_quantity ?? 0) <= 0) {
+          return false;
+        }
+        if (item.remise_item_id && lotRemiseItemIds.has(item.remise_item_id)) {
+          return false;
+        }
+        return true;
+      }),
+    [items, lotRemiseItemIds]
   );
 
   const availableLots = useMemo(
