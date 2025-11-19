@@ -403,10 +403,20 @@ export function AppLayout() {
   }, [navigationGroups]);
 
   const toggleGroup = (groupId: string) => {
-    setOpenGroups((prev) => ({
-      ...prev,
-      [groupId]: !prev[groupId]
-    }));
+    setOpenGroups((prev) => {
+      const isCurrentlyOpen = prev[groupId] ?? false;
+      const next: Record<string, boolean> = {};
+
+      Object.keys(prev).forEach((key) => {
+        next[key] = false;
+      });
+
+      if (!isCurrentlyOpen) {
+        next[groupId] = true;
+      }
+
+      return next;
+    });
   };
 
   if (!isReady || isCheckingSession) {
