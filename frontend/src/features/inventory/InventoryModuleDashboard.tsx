@@ -1030,6 +1030,7 @@ function ItemForm({
         size: "",
         quantity: 0,
         low_stock_threshold: 0,
+        track_low_stock: true,
         supplier_id: null
       });
       setIsSkuAuto(true);

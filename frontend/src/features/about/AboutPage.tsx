@@ -1,46 +1,24 @@
 import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import voiceCommandConfig from "../../../../shared/voice_commands.json";
 import { fetchAboutInfo } from "./api";
 
-const voiceCommands = [
-  {
-    label: "Ajouter des articles",
-    phrases: ["ajouter [nombre] [nom]", "ajoute [nombre] [nom]"],
-    description: "Augmente la quantité d'un article en stock.",
-    example: "Ex. : 'ajouter 5 gants anti-feu'"
-  },
-  {
-    label: "Retirer des articles",
-    phrases: ["retirer [nombre] [nom]"],
-    description: "Décrémente un article sans ouvrir l'interface.",
-    example: "Ex. : 'retirer 2 bouteilles oxygène'"
-  },
-  {
-    label: "Consulter une quantité",
-    phrases: ["quantité de [nom]"],
-    description: "Annonce la quantité disponible pour l'article demandé.",
-    example: "Ex. : 'quantité de casque F1'"
-  },
-  {
-    label: "Générer un code-barres",
-    phrases: ["générer codebarre pour [nom]", "générer code-barres pour [nom]"],
-    description: "Crée à la volée le code-barres de l'article ciblé.",
-    example: "Ex. : 'générer codebarre pour radio portative'"
-  },
-  {
-    label: "Obtenir de l'aide",
-    phrases: ["aide", "aide vocale"],
-    description: "Ré-explique les commandes et relit la liste disponible.",
-    example: "Ex. : 'aide vocale'"
-  },
-  {
-    label: "Arrêter l'écoute",
-    phrases: ["stop voice", "arrête écoute", "arrete écoute"],
-    description: "Désactive temporairement la reconnaissance vocale.",
-    example: "Ex. : 'arrête écoute'"
-  }
-];
+type VoiceCommandEntry = {
+  label: string;
+  phrases: string[];
+  description: string;
+  example: string;
+};
+
+type VoiceCommandModule = {
+  id: string;
+  label: string;
+  description?: string;
+  commands: VoiceCommandEntry[];
+};
+
+const voiceModules: VoiceCommandModule[] = (voiceCommandConfig.modules ?? []) as VoiceCommandModule[];
 
 function formatDate(value: string | null): string | null {
   if (!value) {
@@ -140,22 +118,39 @@ export function AboutPage() {
             Liste des phrases reconnues par l'assistant vocal embarqué et de leurs effets dans le stock.
           </p>
         </header>
-        <div className="grid gap-4 md:grid-cols-2">
-          {voiceCommands.map((command) => (
-            <article key={command.label} className="space-y-2 rounded-md border border-slate-800 bg-slate-950/40 p-4">
-              <div>
-                <p className="text-sm font-semibold text-white">{command.label}</p>
-                <p className="text-xs text-slate-400">{command.description}</p>
-              </div>
-              <ul className="space-y-1 text-sm text-slate-200">
-                {command.phrases.map((phrase) => (
-                  <li key={phrase} className="font-mono text-xs text-amber-200">{phrase}</li>
-                ))}
-              </ul>
-              <p className="text-xs italic text-slate-400">{command.example}</p>
-            </article>
-          ))}
-        </div>
+        {voiceModules.length === 0 ? (
+          <p className="text-sm text-slate-400">Aucune commande vocale n'est déclarée dans la configuration.</p>
+        ) : (
+          <div className="space-y-4">
+            {voiceModules.map((module) => (
+              <article key={module.id} className="space-y-3 rounded-md border border-slate-800 bg-slate-950/40 p-4">
+                <div>
+                  <p className="text-sm font-semibold text-white">{module.label}</p>
+                  {module.description ? <p className="text-xs text-slate-400">{module.description}</p> : null}
+                </div>
+                <div className="grid gap-3 md:grid-cols-2">
+                  {module.commands.map((command) => (
+                    <div
+                      key={`${module.id}-${command.label}`}
+                      className="space-y-2 rounded-md border border-slate-800/70 bg-slate-950/20 p-3"
+                    >
+                      <div>
+                        <p className="text-sm font-semibold text-white">{command.label}</p>
+                        <p className="text-xs text-slate-400">{command.description}</p>
+                      </div>
+                      <ul className="space-y-1 text-xs font-mono text-amber-200">
+                        {command.phrases.map((phrase) => (
+                          <li key={`${command.label}-${phrase}`}>{phrase}</li>
+                        ))}
+                      </ul>
+                      <p className="text-xs italic text-slate-400">Ex. : '{command.example}'</p>
+                    </div>
+                  ))}
+                </div>
+              </article>
+            ))}
+          </div>
+        )}
       </section>
     </section>
   );

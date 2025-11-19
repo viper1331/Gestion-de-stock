@@ -1,9 +1,16 @@
+import path from "node:path";
+
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
+
+const workspaceRoot = path.resolve(new URL("..", import.meta.url).pathname);
 
 export default defineConfig({
   plugins: [react()],
   server: {
+    fs: {
+      allow: [workspaceRoot]
+    },
     port: 5151,
     proxy: {
       "/api": {
