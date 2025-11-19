@@ -3664,17 +3664,15 @@ def generate_vehicle_inventory_pdf(
 
                 if icon_reader:
                     pdf.saveState()
-                    pdf.clipPath(
-                        pdf.beginPath().roundRect(
-                            bubble_x + bubble_padding,
-                            bubble_y + bubble_height - bubble_padding - icon_size,
-                            icon_size,
-                            icon_size,
-                            6,
-                        ),
-                        stroke=0,
-                        fill=0,
+                    icon_clip_path = pdf.beginPath()
+                    icon_clip_path.roundRect(
+                        bubble_x + bubble_padding,
+                        bubble_y + bubble_height - bubble_padding - icon_size,
+                        icon_size,
+                        icon_size,
+                        6,
                     )
+                    pdf.clipPath(icon_clip_path, stroke=0, fill=0)
                     pdf.drawImage(
                         icon_reader,
                         bubble_x + bubble_padding,
