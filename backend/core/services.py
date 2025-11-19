@@ -3384,6 +3384,51 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     details.append(f"Réf. : {item.sku}")
                 return base_lines + details
 
+            def _rects_overlap(
+                rect_a: tuple[float, float, float, float],
+                rect_b: tuple[float, float, float, float],
+            ) -> bool:
+                ax, ay, aw, ah = rect_a
+                bx, by, bw, bh = rect_b
+                return not (
+                    ax + aw <= bx
+                    or bx + bw <= ax
+                    or ay + ah <= by
+                    or by + bh <= ay
+                )
+
+            def _find_available_bubble_y(
+                bubble_x: float,
+                bubble_width: float,
+                bubble_height: float,
+                initial_y: float,
+                min_y: float,
+                max_y: float,
+            ) -> float:
+                candidate = initial_y
+                step = 6.0
+
+                def fits(y: float) -> bool:
+                    rect = (bubble_x, y, bubble_width, bubble_height)
+                    return not any(_rects_overlap(rect, existing) for existing in bubble_rects)
+
+                if fits(candidate):
+                    return candidate
+
+                y = candidate
+                while y < max_y:
+                    y = min(max_y, y + step)
+                    if fits(y):
+                        return y
+
+                y = candidate
+                while y > min_y:
+                    y = max(min_y, y - step)
+                    if fits(y):
+                        return y
+
+                return _clamp(candidate, min_y, max_y)
+
             def _draw_item_bubble(
                 pointer_x: float,
                 pointer_y: float,
@@ -3409,7 +3454,17 @@ def generate_vehicle_inventory_pdf() -> bytes:
                 bubble_x = _clamp(bubble_x, margin, page_width - margin - bubble_width)
                 min_y = bounds[1]
                 max_y = max(min_y, bounds[1] + bounds[3] - bubble_height)
-                bubble_y = _clamp(pointer_y - bubble_height / 2, min_y, max_y)
+                initial_bubble_y = _clamp(
+                    pointer_y - bubble_height / 2, min_y, max_y
+                )
+                bubble_y = _find_available_bubble_y(
+                    bubble_x,
+                    bubble_width,
+                    bubble_height,
+                    initial_bubble_y,
+                    min_y,
+                    max_y,
+                )
                 if anchor_side == "left":
                     anchor_x = bubble_x + bubble_width
                 else:
@@ -3442,6 +3497,7 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     pdf.drawString(bubble_x + bubble_padding, text_y, line)
                     text_y -= line_height
                 pdf.restoreState()
+                bubble_rects.append((bubble_x, bubble_y, bubble_width, bubble_height))
 
             quantity_column_x = page_width - margin - 90
             reference_column_x = page_width - margin
@@ -3449,6 +3505,7 @@ def generate_vehicle_inventory_pdf() -> bytes:
 
             located_items: list[models.Item] = []
             table_items: list[models.Item] = []
+            bubble_rects: list[tuple[float, float, float, float]] = []
 
             background_drawn = False
             drawn_width = 0.0
