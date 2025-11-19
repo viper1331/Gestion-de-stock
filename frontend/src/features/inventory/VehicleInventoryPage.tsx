@@ -408,6 +408,40 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const removeLotFromVehicle = useMutation({
+    mutationFn: async ({ lotId, categoryId }: { lotId: number; categoryId: number }) => {
+      await api.post(`/vehicle-inventory/lots/${lotId}/unassign`, {
+        category_id: categoryId
+      });
+    },
+    onSuccess: async (_, variables) => {
+      const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
+      const lotName = remiseLots.find((lot) => lot.id === variables.lotId)?.name ?? null;
+      setFeedback({
+        type: "success",
+        text: vehicleName
+          ? `Le lot${lotName ? ` ${lotName}` : ""} a été retiré du véhicule ${vehicleName}.`
+          : "Le lot a été retiré du véhicule."
+      });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vehicle-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["items"] })
+      ]);
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.data?.detail) {
+        setFeedback({ type: "error", text: error.response.data.detail });
+        return;
+      }
+      setFeedback({
+        type: "error",
+        text: "Impossible de retirer ce lot du véhicule."
+      });
+    }
+  });
+
   const uploadVehicleImage = useMutation({
     mutationFn: async ({ categoryId, file }: UploadVehicleImagePayload) => {
       const formData = new FormData();
@@ -1203,6 +1237,9 @@ export function VehicleInventoryPage() {
                     quantity: 0
                   })
                 }
+                onDropLot={(lotId, categoryId) =>
+                  removeLotFromVehicle.mutate({ lotId, categoryId })
+                }
                 onRemoveFromVehicle={(itemId) =>
                   updateItemLocation.mutate({
                     itemId,
@@ -1909,6 +1946,7 @@ interface DroppableLibraryProps {
   vehicleName: string | null;
   onAssignLot?: (lot: RemiseLotWithItems) => void;
   onDropItem: (itemId: number) => void;
+  onDropLot?: (lotId: number, categoryId: number) => void;
   onRemoveFromVehicle: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
 }
@@ -1921,6 +1959,7 @@ function DroppableLibrary({
   vehicleName,
   onAssignLot,
   onDropItem,
+  onDropLot,
   onRemoveFromVehicle,
   onItemFeedback
 }: DroppableLibraryProps) {
@@ -1954,21 +1993,37 @@ function DroppableLibrary({
         event.preventDefault();
         setIsHovering(false);
         const data = readDraggedItemData(event);
+        if (!data) {
+          return;
+        }
         if (
-          data &&
+          typeof data.lotId === "number" &&
+          data.categoryId !== null &&
+          data.categoryId !== undefined
+        ) {
+          if (onDropLot) {
+            onDropLot(data.lotId, data.categoryId);
+          } else {
+            onItemFeedback({
+              type: "error",
+              text: "Impossible de retirer ce lot depuis cette bibliothèque."
+            });
+          }
+          return;
+        }
+        if (
           typeof data.itemId === "number" &&
           data.categoryId !== null &&
           data.categoryId !== undefined
         ) {
-          if (data.lotId !== null && data.lotId !== undefined) {
-            const lotLabel = data.lotName ?? `Lot #${data.lotId}`;
-            onItemFeedback({
-              type: "error",
-              text: `Ce matériel appartient au ${lotLabel}. Retirez-le depuis la gestion des lots.`,
-            });
-            return;
-          }
           onDropItem(data.itemId);
+          return;
+        }
+        if (typeof data.lotId === "number") {
+          onItemFeedback({
+            type: "error",
+            text: "Sélectionnez le véhicule concerné avant de retirer un lot."
+          });
         }
       }}
     >

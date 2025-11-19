@@ -163,6 +163,21 @@ async def record_vehicle_movement(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post("/lots/{lot_id}/unassign", status_code=204)
+async def unassign_vehicle_lot(
+    lot_id: int,
+    payload: models.VehicleLotUnassign,
+    user: models.User = Depends(get_current_user),
+) -> None:
+    _require_permission(user, action="edit")
+    try:
+        services.unassign_vehicle_lot(lot_id, payload.category_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "aucun" in detail.lower() or "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @router.get("/{item_id}/movements", response_model=list[models.Movement])
 async def fetch_vehicle_movements(
     item_id: int, user: models.User = Depends(get_current_user)
