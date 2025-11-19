@@ -19,6 +19,12 @@ interface VehicleItem {
   show_in_qr: boolean;
 }
 
+interface VehicleItemGroup {
+  key: string;
+  items: VehicleItem[];
+  representative: VehicleItem;
+}
+
 interface VehicleCategory {
   id: number;
   name: string;
@@ -35,7 +41,7 @@ export function VehicleQrManagerPage() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"vehicle" | "name">("vehicle");
-  const [drafts, setDrafts] = useState<Record<number, ResourceDraft>>({});
+  const [drafts, setDrafts] = useState<Record<string, ResourceDraft>>({});
   const [selectedMaterialName, setSelectedMaterialName] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -62,8 +68,11 @@ export function VehicleQrManagerPage() {
     [items]
   );
 
-  useEffect(() => {
-    const nextDrafts: Record<number, ResourceDraft> = {};
+  const materialGroups = useMemo(() => {
+    const groups = new Map<string, VehicleItemGroup>();
+
+    const getGroupKey = (item: VehicleItem) => `${item.category_id ?? "none"}::${item.name.trim().toLowerCase()}`;
+
     itemsWithVehicle.forEach((item) => {
       nextDrafts[item.id] = {
         shared_file_url: item.shared_file_url ?? "",
@@ -73,7 +82,7 @@ export function VehicleQrManagerPage() {
       };
     });
     setDrafts(nextDrafts);
-  }, [itemsWithVehicle]);
+  }, [materialGroups]);
 
   const vehicleLookup = useMemo(() => {
     const map = new Map<number, string>();
@@ -91,39 +100,40 @@ export function VehicleQrManagerPage() {
 
   const materialTypes = useMemo(() => {
     const unique = new Set<string>();
-    itemsWithVehicle.forEach((item) => unique.add(item.name));
+    materialGroups.forEach((group) => unique.add(group.representative.name));
     return Array.from(unique).sort((a, b) => collator.compare(a, b));
-  }, [collator, itemsWithVehicle]);
+  }, [collator, materialGroups]);
 
   const filteredItems = useMemo(() => {
     const filteredByMaterial = selectedMaterialName
-      ? itemsWithVehicle.filter((item) => item.name === selectedMaterialName)
-      : itemsWithVehicle;
+      ? materialGroups.filter((group) => group.representative.name === selectedMaterialName)
+      : materialGroups;
     const term = search.trim().toLowerCase();
     if (!term) return filteredByMaterial;
-    return filteredByMaterial.filter((item) => {
-      const vehicleName = getVehicleName(item);
+    return filteredByMaterial.filter((group) => {
+      const vehicleName = getVehicleName(group.representative);
+      const skus = group.items.map((item) => item.sku.toLowerCase()).join(" ");
       return (
-        item.name.toLowerCase().includes(term) ||
-        item.sku.toLowerCase().includes(term) ||
+        group.representative.name.toLowerCase().includes(term) ||
+        skus.includes(term) ||
         vehicleName.toLowerCase().includes(term)
       );
     });
-  }, [getVehicleName, itemsWithVehicle, search, selectedMaterialName]);
+  }, [getVehicleName, materialGroups, search, selectedMaterialName]);
 
   const sortedItems = useMemo(() => {
     const itemsToSort = [...filteredItems];
     itemsToSort.sort((a, b) => {
-      const vehicleA = getVehicleName(a);
-      const vehicleB = getVehicleName(b);
+      const vehicleA = getVehicleName(a.representative);
+      const vehicleB = getVehicleName(b.representative);
 
       if (sortBy === "vehicle") {
         const byVehicle = collator.compare(vehicleA, vehicleB);
         if (byVehicle !== 0) return byVehicle;
-        return collator.compare(a.name, b.name);
+        return collator.compare(a.representative.name, b.representative.name);
       }
 
-      const byName = collator.compare(a.name, b.name);
+      const byName = collator.compare(a.representative.name, b.representative.name);
       if (byName !== 0) return byName;
       return collator.compare(vehicleA, vehicleB);
     });
@@ -131,14 +141,14 @@ export function VehicleQrManagerPage() {
   }, [collator, filteredItems, getVehicleName, sortBy]);
 
   const groupedItems = useMemo(() => {
-    const groups = new Map<string, VehicleItem[]>();
-    sortedItems.forEach((item) => {
-      const vehicleName = getVehicleName(item);
+    const groups = new Map<string, VehicleItemGroup[]>();
+    sortedItems.forEach((group) => {
+      const vehicleName = getVehicleName(group.representative);
       const existing = groups.get(vehicleName);
       if (existing) {
-        existing.push(item);
+        existing.push(group);
       } else {
-        groups.set(vehicleName, [item]);
+        groups.set(vehicleName, [group]);
       }
     });
 
@@ -149,7 +159,7 @@ export function VehicleQrManagerPage() {
 
   const updateResources = useMutation({
     mutationFn: async (payload: {
-      itemId: number;
+      itemIds: number[];
       shared_file_url: string;
       documentation_url: string;
       tutorial_url: string;
@@ -227,11 +237,11 @@ export function VehicleQrManagerPage() {
     });
   };
 
-  const handleSave = (itemId: number) => {
-    const draft = drafts[itemId];
+  const handleSave = (group: VehicleItemGroup) => {
+    const draft = drafts[group.key];
     if (!draft) return;
     updateResources.mutate({
-      itemId,
+      itemIds: group.items.map((item) => item.id),
       shared_file_url: draft.shared_file_url,
       documentation_url: draft.documentation_url,
       tutorial_url: draft.tutorial_url,
@@ -257,13 +267,13 @@ export function VehicleQrManagerPage() {
 
     return (
       <article
-        key={item.id}
+        key={group.key}
         className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900"
       >
         <div className="flex items-start gap-3">
           <div className="h-16 w-16 overflow-hidden rounded-lg bg-slate-100 dark:bg-slate-800">
             {cover ? (
-              <img src={cover} alt={item.name} className="h-full w-full object-cover" />
+              <img src={cover} alt={group.representative.name} className="h-full w-full object-cover" />
             ) : (
               <div className="flex h-full w-full items-center justify-center text-xs text-slate-400">Aucune image</div>
             )}
@@ -350,7 +360,7 @@ export function VehicleQrManagerPage() {
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
           <button
             type="button"
-            onClick={() => handleSave(item.id)}
+            onClick={() => handleSave(group)}
             disabled={updateResources.isPending}
             className="inline-flex items-center gap-2 rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
           >
@@ -360,14 +370,14 @@ export function VehicleQrManagerPage() {
             <>
               <button
                 type="button"
-                onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: false })}
+                onClick={() => downloadQr.mutate({ itemId: primaryItem.id, regenerate: false })}
                 className="inline-flex items-center gap-2 rounded-md border border-slate-300 px-3 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
               >
                 Télécharger le QR
               </button>
               <button
                 type="button"
-                onClick={() => downloadQr.mutate({ itemId: item.id, regenerate: true })}
+                onClick={() => downloadQr.mutate({ itemId: primaryItem.id, regenerate: true })}
                 className="inline-flex items-center gap-2 rounded-md border border-amber-300 px-3 py-2 text-xs font-semibold text-amber-700 transition hover:bg-amber-50 dark:border-amber-400/60 dark:text-amber-200 dark:hover:bg-amber-500/10"
               >
                 Régénérer le lien
