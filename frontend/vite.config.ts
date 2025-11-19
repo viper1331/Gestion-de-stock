@@ -1,9 +1,10 @@
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-const workspaceRoot = path.resolve(new URL("..", import.meta.url).pathname);
+const workspaceRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url)));
 
 export default defineConfig({
   plugins: [react()],
