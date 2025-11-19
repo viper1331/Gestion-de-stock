@@ -39,13 +39,11 @@ class VehicleInventoryExportOptions(models.BaseModel):
     pointer_targets: dict[str, models.PointerTarget] | None = None
 
 
-@router.post("/export/pdf")
-async def export_vehicle_inventory_pdf(
-    payload: VehicleInventoryExportOptions | None = None,
-    user: models.User = Depends(get_current_user),
+def _vehicle_inventory_pdf_response(
+    *, pointer_targets: dict[str, models.PointerTarget] | None,
+    user: models.User,
 ):
     _require_permission(user, action="view")
-    pointer_targets = payload.pointer_targets if payload else None
     pdf_bytes = services.generate_vehicle_inventory_pdf(
         pointer_targets=pointer_targets
     )
@@ -57,6 +55,22 @@ async def export_vehicle_inventory_pdf(
             "Content-Disposition": f"attachment; filename=\"{filename}\"",
         },
     )
+
+
+@router.post("/export/pdf")
+async def export_vehicle_inventory_pdf(
+    payload: VehicleInventoryExportOptions | None = None,
+    user: models.User = Depends(get_current_user),
+):
+    pointer_targets = payload.pointer_targets if payload else None
+    return _vehicle_inventory_pdf_response(pointer_targets=pointer_targets, user=user)
+
+
+@router.get("/export/pdf")
+async def export_vehicle_inventory_pdf_legacy(
+    user: models.User = Depends(get_current_user),
+):
+    return _vehicle_inventory_pdf_response(pointer_targets=None, user=user)
 
 
 @router.get("/{item_id}/qr-code")
