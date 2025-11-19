@@ -2148,14 +2148,14 @@ function VehicleItemMarker({
               <defs>
                 <marker
                   id={arrowMarkerId}
-                  viewBox="0 0 6 6"
-                  refX="3"
-                  refY="3"
-                  markerWidth="6"
-                  markerHeight="6"
+                  viewBox="0 0 12 12"
+                  refX="6"
+                  refY="6"
+                  markerWidth="4"
+                  markerHeight="4"
                   orient="auto"
                 >
-                  <path d="M0,0 L6,3 L0,6 Z" fill="rgba(59,130,246,0.85)" />
+                  <path d="M0,0 L12,6 L0,12 Z" fill="rgba(59,130,246,0.85)" />
                 </marker>
               </defs>
               <line
@@ -2164,7 +2164,7 @@ function VehicleItemMarker({
                 x2={`${anchorX * 100}`}
                 y2={`${anchorY * 100}`}
                 stroke="rgba(255,255,255,0.85)"
-                strokeWidth="4"
+                strokeWidth="2.5"
                 strokeLinecap="round"
               />
               <line
@@ -2173,14 +2173,14 @@ function VehicleItemMarker({
                 x2={`${anchorX * 100}`}
                 y2={`${anchorY * 100}`}
                 stroke="rgba(59,130,246,0.85)"
-                strokeWidth="2.5"
+                strokeWidth="1.5"
                 strokeLinecap="round"
                 markerEnd={`url(#${arrowMarkerId})`}
               />
             </svg>
             <span
               className="pointer-events-none absolute block -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow-lg"
-              style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%`, width: "12px", height: "12px" }}
+              style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%`, width: "10px", height: "10px" }}
             />
           </>
         ) : null}
