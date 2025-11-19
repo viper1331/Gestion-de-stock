@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "react-router-dom";
+import { isAxiosError } from "axios";
 
 import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
@@ -27,9 +28,14 @@ export function VehicleGuidePage() {
         const response = await api.get<VehicleQrInfo>(`/vehicle-inventory/public/${qrToken}`);
         setInfo(response.data);
       } catch (err) {
-        setError(
-          "Impossible de charger les informations liées à ce QR code. Le lien a peut-être expiré."
-        );
+        let message = "Impossible de charger les informations liées à ce QR code. Le lien a peut-être expiré.";
+        if (isAxiosError(err)) {
+          const detail = err.response?.data?.detail;
+          if (typeof detail === "string" && detail.trim().length > 0) {
+            message = detail;
+          }
+        }
+        setError(message);
       } finally {
         setIsLoading(false);
       }

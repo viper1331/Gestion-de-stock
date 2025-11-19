@@ -2327,6 +2327,85 @@ def test_vehicle_items_detached_when_lot_deleted() -> None:
     assert updated_entry["lot_id"] is None
 
 
+def test_vehicle_qr_visibility_toggle() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Remise-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot masquable",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 2,
+            "category_id": remise_category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert remise_item_resp.status_code == 201, remise_item_resp.text
+    remise_item_id = remise_item_resp.json()["id"]
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": f"Vehicule-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    vehicle_item_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Camion masquable",
+            "sku": f"VEH-{uuid4().hex[:6]}",
+            "quantity": 1,
+            "category_id": vehicle_category_id,
+            "remise_item_id": remise_item_id,
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_item_resp.status_code == 201, vehicle_item_resp.text
+    vehicle_item = vehicle_item_resp.json()
+    vehicle_item_id = vehicle_item["id"]
+    assert vehicle_item["show_in_qr"] is True
+    qr_token = vehicle_item["qr_token"]
+    assert qr_token
+
+    public_resp = client.get(f"/vehicle-inventory/public/{qr_token}")
+    assert public_resp.status_code == 200, public_resp.text
+
+    hide_resp = client.put(
+        f"/vehicle-inventory/{vehicle_item_id}",
+        json={"show_in_qr": False},
+        headers=admin_headers,
+    )
+    assert hide_resp.status_code == 200, hide_resp.text
+    assert hide_resp.json()["show_in_qr"] is False
+
+    hidden_public_resp = client.get(f"/vehicle-inventory/public/{qr_token}")
+    assert hidden_public_resp.status_code == 404
+    assert "masqué" in hidden_public_resp.json()["detail"].lower()
+
+    show_resp = client.put(
+        f"/vehicle-inventory/{vehicle_item_id}",
+        json={"show_in_qr": True},
+        headers=admin_headers,
+    )
+    assert show_resp.status_code == 200, show_resp.text
+    assert show_resp.json()["show_in_qr"] is True
+
+    visible_public_resp = client.get(f"/vehicle-inventory/public/{qr_token}")
+    assert visible_public_resp.status_code == 200, visible_public_resp.text
+
+
 def test_remise_lot_listing_with_items() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

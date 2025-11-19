@@ -418,6 +418,8 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE vehicle_items ADD COLUMN lot_id INTEGER REFERENCES remise_lots(id) ON DELETE SET NULL"
         )
+    if "show_in_qr" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN show_in_qr INTEGER NOT NULL DEFAULT 1")
 
 
 def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
@@ -631,7 +633,8 @@ def _apply_schema_migrations() -> None:
                 documentation_url TEXT,
                 tutorial_url TEXT,
                 shared_file_url TEXT,
-                qr_token TEXT
+                qr_token TEXT,
+                show_in_qr INTEGER NOT NULL DEFAULT 1
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -935,6 +938,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     tutorial_url = None
     qr_token = None
     shared_file_url = None
+    show_in_qr = True
     if "documentation_url" in row.keys():
         documentation_url = row["documentation_url"]
     if "tutorial_url" in row.keys():
@@ -943,6 +947,8 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         qr_token = row["qr_token"]
     if "shared_file_url" in row.keys():
         shared_file_url = row["shared_file_url"]
+    if "show_in_qr" in row.keys():
+        show_in_qr = bool(row["show_in_qr"])
     lot_id = row["lot_id"] if "lot_id" in row.keys() else None
     lot_name = None
     if "lot_name" in row.keys():
@@ -980,6 +986,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         qr_token=qr_token,
         lot_id=lot_id,
         lot_name=lot_name,
+        show_in_qr=show_in_qr,
     )
 
 
@@ -1216,6 +1223,8 @@ def _create_inventory_item_internal(
                     uuid4().hex,
                 ]
             )
+            columns.append("show_in_qr")
+            values.append(int(payload.show_in_qr))
         placeholders = ",".join("?" for _ in columns)
         cur = conn.execute(
             f"INSERT INTO {config.tables.items} ({', '.join(columns)}) VALUES ({placeholders})",
@@ -1237,12 +1246,16 @@ def _update_inventory_item_internal(
     fields.pop("image_url", None)
     fields.pop("qr_token", None)
     fields.pop("lot_id", None)
+    if module != "vehicle_inventory":
+        fields.pop("show_in_qr", None)
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     if module == "vehicle_inventory":
         # Vehicle inventory items mirror remise inventory metadata.
         fields.pop("name", None)
         fields.pop("sku", None)
+        if "show_in_qr" in fields and fields["show_in_qr"] is not None:
+            fields["show_in_qr"] = int(bool(fields["show_in_qr"]))
     result_item_id = item_id
     should_restack_to_template = False
     with db.get_stock_connection() as conn:
@@ -2337,6 +2350,7 @@ def get_vehicle_item_public_info(qr_token: str) -> models.VehicleQrInfo:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
         _ensure_vehicle_item_qr_tokens(conn)
+        _ensure_vehicle_item_columns(conn)
         row = conn.execute(
             """
             SELECT vi.id,
@@ -2346,7 +2360,8 @@ def get_vehicle_item_public_info(qr_token: str) -> models.VehicleQrInfo:
                    vi.tutorial_url,
                    vi.shared_file_url,
                    vi.image_path,
-                   vc.name AS category_name
+                   vc.name AS category_name,
+                   vi.show_in_qr
             FROM vehicle_items AS vi
             LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
             LEFT JOIN vehicle_categories AS vc ON vc.id = vi.category_id
@@ -2356,6 +2371,8 @@ def get_vehicle_item_public_info(qr_token: str) -> models.VehicleQrInfo:
         ).fetchone()
     if row is None:
         raise ValueError("QR code invalide ou expiré")
+    if "show_in_qr" in row.keys() and not row["show_in_qr"]:
+        raise ValueError("Ce matériel a été masqué pour le QR code.")
     image_url = _build_media_url(row["image_path"]) if "image_path" in row.keys() else None
     return models.VehicleQrInfo(
         item_id=row["id"],
