@@ -3,6 +3,45 @@ import { useQuery } from "@tanstack/react-query";
 
 import { fetchAboutInfo } from "./api";
 
+const voiceCommands = [
+  {
+    label: "Ajouter des articles",
+    phrases: ["ajouter [nombre] [nom]", "ajoute [nombre] [nom]"],
+    description: "Augmente la quantité d'un article en stock.",
+    example: "Ex. : 'ajouter 5 gants anti-feu'"
+  },
+  {
+    label: "Retirer des articles",
+    phrases: ["retirer [nombre] [nom]"],
+    description: "Décrémente un article sans ouvrir l'interface.",
+    example: "Ex. : 'retirer 2 bouteilles oxygène'"
+  },
+  {
+    label: "Consulter une quantité",
+    phrases: ["quantité de [nom]"],
+    description: "Annonce la quantité disponible pour l'article demandé.",
+    example: "Ex. : 'quantité de casque F1'"
+  },
+  {
+    label: "Générer un code-barres",
+    phrases: ["générer codebarre pour [nom]", "générer code-barres pour [nom]"],
+    description: "Crée à la volée le code-barres de l'article ciblé.",
+    example: "Ex. : 'générer codebarre pour radio portative'"
+  },
+  {
+    label: "Obtenir de l'aide",
+    phrases: ["aide", "aide vocale"],
+    description: "Ré-explique les commandes et relit la liste disponible.",
+    example: "Ex. : 'aide vocale'"
+  },
+  {
+    label: "Arrêter l'écoute",
+    phrases: ["stop voice", "arrête écoute", "arrete écoute"],
+    description: "Désactive temporairement la reconnaissance vocale.",
+    example: "Ex. : 'arrête écoute'"
+  }
+];
+
 function formatDate(value: string | null): string | null {
   if (!value) {
     return null;
@@ -93,6 +132,31 @@ export function AboutPage() {
           </div>
         </section>
       ) : null}
+
+      <section className="space-y-4 rounded-lg border border-slate-700 bg-slate-900/70 p-5">
+        <header className="space-y-1">
+          <h3 className="text-lg font-semibold text-white">Commandes vocales disponibles</h3>
+          <p className="text-xs text-slate-400">
+            Liste des phrases reconnues par l'assistant vocal embarqué et de leurs effets dans le stock.
+          </p>
+        </header>
+        <div className="grid gap-4 md:grid-cols-2">
+          {voiceCommands.map((command) => (
+            <article key={command.label} className="space-y-2 rounded-md border border-slate-800 bg-slate-950/40 p-4">
+              <div>
+                <p className="text-sm font-semibold text-white">{command.label}</p>
+                <p className="text-xs text-slate-400">{command.description}</p>
+              </div>
+              <ul className="space-y-1 text-sm text-slate-200">
+                {command.phrases.map((phrase) => (
+                  <li key={phrase} className="font-mono text-xs text-amber-200">{phrase}</li>
+                ))}
+              </ul>
+              <p className="text-xs italic text-slate-400">{command.example}</p>
+            </article>
+          ))}
+        </div>
+      </section>
     </section>
   );
 }
