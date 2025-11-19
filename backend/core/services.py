@@ -3246,12 +3246,21 @@ def generate_vehicle_inventory_pdf() -> bytes:
         photo_rows = conn.execute(
             "SELECT id, file_path FROM vehicle_photos"
         ).fetchall()
+        item_photo_rows = conn.execute(
+            "SELECT id, image_path FROM vehicle_items WHERE image_path IS NOT NULL"
+        ).fetchall()
     photo_paths: dict[int, Path] = {}
     for row in photo_rows:
         file_path = row["file_path"]
         if not file_path:
             continue
         photo_paths[row["id"]] = MEDIA_ROOT / Path(file_path)
+    item_image_paths: dict[int, Path] = {}
+    for row in item_photo_rows:
+        file_path = row["image_path"]
+        if not file_path:
+            continue
+        item_image_paths[row["id"]] = MEDIA_ROOT / Path(file_path)
 
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
@@ -3259,6 +3268,9 @@ def generate_vehicle_inventory_pdf() -> bytes:
     margin = 36
     bottom_margin = 40
     image_max_height = 260
+    item_thumbnail_max_width = 140
+    item_thumbnail_max_height = 90
+    item_thumbnail_spacing = 8
 
     if not categories:
         pdf.setFont("Helvetica-Bold", 18)
@@ -3561,7 +3573,31 @@ def generate_vehicle_inventory_pdf() -> bytes:
                 y_position = draw_table_header(y_position)
                 for item in table_items:
                     wrapped_name = wrap(item.name, 70) or ["-"]
-                    required_height = line_height * len(wrapped_name) + 4
+                    image_reader: ImageReader | None = None
+                    image_drawn_width = 0.0
+                    image_drawn_height = 0.0
+                    image_path = item_image_paths.get(item.id)
+                    if image_path and image_path.exists():
+                        try:
+                            image_reader = ImageReader(str(image_path))
+                            image_width, image_height = image_reader.getSize()
+                            scale = min(
+                                item_thumbnail_max_width / image_width,
+                                item_thumbnail_max_height / image_height,
+                                1.0,
+                            )
+                            image_drawn_width = image_width * scale
+                            image_drawn_height = image_height * scale
+                        except Exception:  # pragma: no cover - corrupted image fallback
+                            image_reader = None
+                            image_drawn_width = 0.0
+                            image_drawn_height = 0.0
+                    extra_height = (
+                        image_drawn_height + item_thumbnail_spacing
+                        if image_reader is not None and image_drawn_height > 0
+                        else 0.0
+                    )
+                    required_height = line_height * len(wrapped_name) + 4 + extra_height
                     y_position = ensure_space(y_position, required_height)
                     for index, line in enumerate(wrapped_name):
                         pdf.drawString(margin, y_position, line)
@@ -3576,6 +3612,18 @@ def generate_vehicle_inventory_pdf() -> bytes:
                             )
                         y_position -= line_height
                     y_position -= 4
+                    if image_reader is not None and image_drawn_height > 0:
+                        image_y = y_position - image_drawn_height
+                        pdf.drawImage(
+                            image_reader,
+                            margin,
+                            image_y,
+                            width=image_drawn_width,
+                            height=image_drawn_height,
+                            preserveAspectRatio=True,
+                            mask="auto",
+                        )
+                        y_position = image_y - item_thumbnail_spacing
             elif background_drawn and located_items:
                 y_position = ensure_space(y_position, 20, continued_header=False)
                 pdf.setFont("Helvetica-Oblique", 10)
