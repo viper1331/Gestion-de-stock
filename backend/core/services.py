@@ -3563,24 +3563,68 @@ def generate_vehicle_inventory_pdf(
 
                 return _clamp(candidate, min_y, max_y)
 
+            def _bubble_icon_reader(entry: _VehicleViewEntry) -> ImageReader | None:
+                """Récupère une miniature à afficher dans la bulle, si disponible."""
+
+                def _path_for_item(item: models.Item) -> Path | None:
+                    path = item_image_paths.get(item.id)
+                    if path and path.exists():
+                        return path
+                    return None
+
+                target_path = _path_for_item(entry.representative)
+                if target_path is None and entry.is_lot:
+                    for child in entry.items:
+                        target_path = _path_for_item(child)
+                        if target_path:
+                            break
+                if target_path is None:
+                    return None
+                try:
+                    return ImageReader(str(target_path))
+                except Exception:  # pragma: no cover - image fallback
+                    return None
+
             def _draw_item_bubble(
                 pointer_x: float,
                 pointer_y: float,
+                entry: _VehicleViewEntry,
                 item_lines: list[str],
                 *,
                 bounds: tuple[float, float, float, float],
             ) -> None:
                 pdf.saveState()
-                pdf.setFont("Helvetica", 9)
-                bubble_padding = 6
+                bubble_padding = 8
                 line_height = 12
-                text_widths = [
-                    pdf.stringWidth(line, "Helvetica", 9) for line in item_lines
-                ] or [0.0]
-                bubble_width = max(text_widths) + 2 * bubble_padding
-                bubble_height = line_height * len(item_lines) + 2 * bubble_padding
+                accent_color = colors.HexColor("#3B82F6")
+                bubble_background = colors.HexColor("#0F172A")
+                bubble_border = colors.HexColor("#1E293B")
+                text_primary = colors.white
+                text_secondary = colors.HexColor("#E2E8F0")
+                muted_text = colors.HexColor("#CBD5E1")
+
+                icon_reader = _bubble_icon_reader(entry)
+                icon_size = 34 if icon_reader else 0
+                icon_spacing = 6 if icon_reader else 0
+                icon_block_width = icon_size + icon_spacing if icon_reader else 0
+
+                text_widths: list[float] = []
+                for index, line in enumerate(item_lines):
+                    font_name = "Helvetica-Bold" if index == 0 else "Helvetica"
+                    text_widths.append(pdf.stringWidth(line, font_name, 9))
+                quantity_label = f"Qté : {entry.total_quantity}"
+                reference_label = entry.reference_label()
+                quantity_width = pdf.stringWidth(quantity_label, "Helvetica-Bold", 8) + 14
+                reference_width = pdf.stringWidth(reference_label, "Helvetica", 8) + 14
+                content_width = max(text_widths or [0.0]) + icon_block_width
+                bubble_width = max(content_width + 2 * bubble_padding, quantity_width + 2 * bubble_padding, 160)
+                bubble_height = (
+                    line_height * len(item_lines)
+                    + 3 * bubble_padding
+                    + 16  # espace pour les badges
+                )
                 anchor_side = "left" if pointer_x > (page_width / 2) else "right"
-                bubble_offset = 28
+                bubble_offset = 30
                 if anchor_side == "left":
                     bubble_x = pointer_x - bubble_offset - bubble_width
                 else:
@@ -3603,26 +3647,51 @@ def generate_vehicle_inventory_pdf(
                     anchor_x = bubble_x + bubble_width
                 else:
                     anchor_x = bubble_x
-                anchor_y = _clamp(pointer_y, bubble_y + 8, bubble_y + bubble_height - 8)
+                anchor_y = _clamp(pointer_y, bubble_y + 10, bubble_y + bubble_height - 10)
 
-                bubble_border = colors.HexColor("#1E40AF")
                 pdf.setLineWidth(1.2)
-                pdf.setStrokeColor(bubble_border)
-                pdf.setFillColor(colors.white)
+                pdf.setStrokeColor(accent_color)
+                pdf.setFillColor(bubble_background)
                 pdf.roundRect(
                     bubble_x,
                     bubble_y,
                     bubble_width,
                     bubble_height,
-                    8,
+                    10,
                     stroke=1,
                     fill=1,
                 )
-                pdf.setFillColor(bubble_border)
+
+                if icon_reader:
+                    pdf.saveState()
+                    pdf.clipPath(
+                        pdf.beginPath().roundRect(
+                            bubble_x + bubble_padding,
+                            bubble_y + bubble_height - bubble_padding - icon_size,
+                            icon_size,
+                            icon_size,
+                            6,
+                        ),
+                        stroke=0,
+                        fill=0,
+                    )
+                    pdf.drawImage(
+                        icon_reader,
+                        bubble_x + bubble_padding,
+                        bubble_y + bubble_height - bubble_padding - icon_size,
+                        width=icon_size,
+                        height=icon_size,
+                        preserveAspectRatio=True,
+                        mask="auto",
+                    )
+                    pdf.restoreState()
+
+                pdf.setStrokeColor(accent_color)
+                pdf.setFillColor(accent_color)
                 pdf.circle(pointer_x, pointer_y, 4, stroke=0, fill=1)
                 pdf.setFillColor(colors.white)
                 pdf.circle(pointer_x, pointer_y, 2, stroke=0, fill=1)
-                pdf.setStrokeColor(bubble_border)
+                pdf.setStrokeColor(accent_color)
                 pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
                 direction_x = pointer_x - anchor_x
                 direction_y = pointer_y - anchor_y
@@ -3640,19 +3709,59 @@ def generate_vehicle_inventory_pdf(
                     left_y = base_y + perp_y * (arrow_width / 2)
                     right_x = base_x - perp_x * (arrow_width / 2)
                     right_y = base_y - perp_y * (arrow_width / 2)
-                    pdf.setFillColor(bubble_border)
                     path = pdf.beginPath()
                     path.moveTo(pointer_x, pointer_y)
                     path.lineTo(left_x, left_y)
                     path.lineTo(right_x, right_y)
                     path.close()
+                    pdf.setFillColor(accent_color)
                     pdf.drawPath(path, stroke=0, fill=1)
-                pdf.setFillColor(colors.black)
-                pdf.setFont("Helvetica", 9)
+
+                content_x = bubble_x + bubble_padding + icon_block_width
                 text_y = bubble_y + bubble_height - bubble_padding - line_height + 4
-                for line in item_lines:
-                    pdf.drawString(bubble_x + bubble_padding, text_y, line)
+                for index, line in enumerate(item_lines):
+                    font_name = "Helvetica-Bold" if index == 0 else "Helvetica"
+                    font_color = text_primary if index == 0 else muted_text
+                    pdf.setFont(font_name, 9)
+                    pdf.setFillColor(font_color)
+                    pdf.drawString(content_x, text_y, line)
                     text_y -= line_height
+
+                badge_y = bubble_y + bubble_padding + 4
+                pdf.setFillColor(accent_color)
+                pdf.setStrokeColor(accent_color)
+                pdf.roundRect(
+                    bubble_x + bubble_padding,
+                    badge_y,
+                    quantity_width,
+                    14,
+                    6,
+                    stroke=0,
+                    fill=1,
+                )
+                pdf.setFont("Helvetica-Bold", 8)
+                pdf.setFillColor(colors.white)
+                pdf.drawString(bubble_x + bubble_padding + 6, badge_y + 4, quantity_label)
+
+                pdf.setStrokeColor(bubble_border)
+                pdf.setFillColor(bubble_border)
+                pdf.roundRect(
+                    bubble_x + bubble_width - reference_width - bubble_padding,
+                    badge_y,
+                    reference_width,
+                    14,
+                    6,
+                    stroke=0,
+                    fill=1,
+                )
+                pdf.setFillColor(text_secondary)
+                pdf.setFont("Helvetica", 8)
+                pdf.drawRightString(
+                    bubble_x + bubble_width - bubble_padding - 6,
+                    badge_y + 4,
+                    reference_label,
+                )
+
                 pdf.restoreState()
                 bubble_rects.append((bubble_x, bubble_y, bubble_width, bubble_height))
 
@@ -3735,6 +3844,7 @@ def generate_vehicle_inventory_pdf(
                         _draw_item_bubble(
                             pointer_x,
                             pointer_y,
+                            entry,
                             _wrap_bubble_lines(entry),
                             bounds=bounds,
                         )
