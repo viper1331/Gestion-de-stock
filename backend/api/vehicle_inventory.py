@@ -35,12 +35,20 @@ async def list_vehicle_items(
     return services.list_vehicle_items(search)
 
 
-@router.get("/export/pdf")
+class VehicleInventoryExportOptions(models.BaseModel):
+    pointer_targets: dict[str, models.PointerTarget] | None = None
+
+
+@router.post("/export/pdf")
 async def export_vehicle_inventory_pdf(
+    payload: VehicleInventoryExportOptions | None = None,
     user: models.User = Depends(get_current_user),
 ):
     _require_permission(user, action="view")
-    pdf_bytes = services.generate_vehicle_inventory_pdf()
+    pointer_targets = payload.pointer_targets if payload else None
+    pdf_bytes = services.generate_vehicle_inventory_pdf(
+        pointer_targets=pointer_targets
+    )
     filename = f"inventaire_vehicules_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),

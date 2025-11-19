@@ -141,6 +141,11 @@ class Item(BaseModel):
     show_in_qr: bool = True
 
 
+class PointerTarget(BaseModel):
+    x: float = Field(..., ge=0.0, le=1.0)
+    y: float = Field(..., ge=0.0, le=1.0)
+
+
 class ItemCreate(BaseModel):
     name: str
     sku: str
