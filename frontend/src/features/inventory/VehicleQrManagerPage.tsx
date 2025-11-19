@@ -34,6 +34,7 @@ export function VehicleQrManagerPage() {
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"vehicle" | "name">("vehicle");
   const [drafts, setDrafts] = useState<Record<number, ResourceDraft>>({});
+  const [selectedMaterialName, setSelectedMaterialName] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
   const collator = useMemo(() => new Intl.Collator("fr", { sensitivity: "base" }), []);
@@ -85,10 +86,19 @@ export function VehicleQrManagerPage() {
     [vehicleLookup]
   );
 
+  const materialTypes = useMemo(() => {
+    const unique = new Set<string>();
+    itemsWithVehicle.forEach((item) => unique.add(item.name));
+    return Array.from(unique).sort((a, b) => collator.compare(a, b));
+  }, [collator, itemsWithVehicle]);
+
   const filteredItems = useMemo(() => {
+    const filteredByMaterial = selectedMaterialName
+      ? itemsWithVehicle.filter((item) => item.name === selectedMaterialName)
+      : itemsWithVehicle;
     const term = search.trim().toLowerCase();
-    if (!term) return itemsWithVehicle;
-    return itemsWithVehicle.filter((item) => {
+    if (!term) return filteredByMaterial;
+    return filteredByMaterial.filter((item) => {
       const vehicleName = getVehicleName(item);
       return (
         item.name.toLowerCase().includes(term) ||
@@ -96,7 +106,7 @@ export function VehicleQrManagerPage() {
         vehicleName.toLowerCase().includes(term)
       );
     });
-  }, [getVehicleName, itemsWithVehicle, search]);
+  }, [getVehicleName, itemsWithVehicle, search, selectedMaterialName]);
 
   const sortedItems = useMemo(() => {
     const itemsToSort = [...filteredItems];
@@ -358,6 +368,24 @@ export function VehicleQrManagerPage() {
             placeholder="Rechercher par nom, référence ou véhicule"
             className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100 sm:max-w-sm"
           />
+          <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
+            <span className="whitespace-nowrap">Type de matériel</span>
+            <select
+              value={selectedMaterialName ?? "all"}
+              onChange={(event) => {
+                const nextValue = event.target.value;
+                setSelectedMaterialName(nextValue === "all" ? null : nextValue);
+              }}
+              className="rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 shadow-sm focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+            >
+              <option value="all">Tous les types</option>
+              {materialTypes.map((material) => (
+                <option key={material} value={material}>
+                  {material}
+                </option>
+              ))}
+            </select>
+          </label>
           <label className="flex items-center gap-2 text-sm font-medium text-slate-700 dark:text-slate-200">
             <span className="whitespace-nowrap">Trier par</span>
             <select
