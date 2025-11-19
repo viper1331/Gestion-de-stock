@@ -3684,12 +3684,16 @@ def generate_vehicle_inventory_pdf(
                     )
                     pdf.restoreState()
 
+                pdf.setStrokeColor(colors.Color(1, 1, 1, alpha=0.85))
+                pdf.setLineWidth(2.4)
+                pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
                 pdf.setStrokeColor(accent_color)
                 pdf.setFillColor(accent_color)
                 pdf.circle(pointer_x, pointer_y, 4, stroke=0, fill=1)
                 pdf.setFillColor(colors.white)
                 pdf.circle(pointer_x, pointer_y, 2, stroke=0, fill=1)
                 pdf.setStrokeColor(accent_color)
+                pdf.setLineWidth(1.6)
                 pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
                 direction_x = pointer_x - anchor_x
                 direction_y = pointer_y - anchor_y
@@ -3822,6 +3826,17 @@ def generate_vehicle_inventory_pdf(
                         preserveAspectRatio=False,
                         mask="auto",
                     )
+                    pdf.saveState()
+                    pdf.setFillColor(colors.Color(0.02, 0.06, 0.15, alpha=0.15))
+                    pdf.rect(
+                        image_x,
+                        image_y,
+                        drawn_width,
+                        drawn_height,
+                        stroke=0,
+                        fill=1,
+                    )
+                    pdf.restoreState()
                     background_drawn = True
 
                     for entry in view_entries:
