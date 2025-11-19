@@ -2091,13 +2091,21 @@ def test_remise_lot_allocation_cycle() -> None:
     )
     assert lot_items_resp.status_code == 200, lot_items_resp.text
     lot_items = lot_items_resp.json()
-    assert lot_items and lot_items[0]["available_quantity"] == 6
+    assert lot_items and lot_items[0]["available_quantity"] == 10
 
     lots_listing = client.get("/remise-inventory/lots/", headers=admin_headers)
     assert lots_listing.status_code == 200, lots_listing.text
     lot_entry = next(entry for entry in lots_listing.json() if entry["id"] == lot_id)
     assert lot_entry["item_count"] == 1
     assert lot_entry["total_quantity"] == 4
+
+    over_alloc = client.put(
+        f"/remise-inventory/lots/{lot_id}/items/{assigned['id']}",
+        json={"quantity": 11},
+        headers=admin_headers,
+    )
+    assert over_alloc.status_code == 404
+    assert "Stock insuffisant" in over_alloc.json()["detail"]
 
     update_resp = client.put(
         f"/remise-inventory/lots/{lot_id}/items/{assigned['id']}",
@@ -2107,7 +2115,7 @@ def test_remise_lot_allocation_cycle() -> None:
     assert update_resp.status_code == 200, update_resp.text
     updated = update_resp.json()
     assert updated["quantity"] == 2
-    assert updated["available_quantity"] == 8
+    assert updated["available_quantity"] == 10
 
     removal_resp = client.delete(
         f"/remise-inventory/lots/{lot_id}/items/{assigned['id']}",
@@ -2182,7 +2190,7 @@ def test_remise_lot_listing_with_items() -> None:
     assert lot_entry["items"]
     assert lot_entry["items"][0]["remise_item_id"] == item_id
     assert lot_entry["items"][0]["quantity"] == 3
-    assert lot_entry["items"][0]["available_quantity"] == 7
+    assert lot_entry["items"][0]["available_quantity"] == 10
 
     client.delete(f"/remise-inventory/lots/{lot_id}", headers=admin_headers)
     client.delete(f"/remise-inventory/{item_id}", headers=admin_headers)
