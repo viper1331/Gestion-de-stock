@@ -1,4 +1,4 @@
-import axios from "axios";
+import axios, { AxiosError, AxiosRequestConfig } from "axios";
 
 import { API_BASE_URL } from "./env";
 import { resetApiConfigCache, resolveApiBaseUrl } from "./apiConfig";
@@ -40,13 +40,44 @@ export async function refreshApiBaseUrl() {
   await ensureBaseUrl();
 }
 
+interface RetriableRequestConfig extends AxiosRequestConfig {
+  _retry?: boolean;
+}
+
 api.interceptors.response.use(
   (response) => response,
   async (error) => {
-    if (error.response?.status === 401) {
+    const originalRequest = error.config as RetriableRequestConfig | undefined;
+    const isUnauthorized = (error as AxiosError).response?.status === 401;
+    const storedRefresh = localStorage.getItem("gsp/token");
+
+    if (isUnauthorized && storedRefresh && originalRequest && !originalRequest._retry) {
+      try {
+        originalRequest._retry = true;
+        const baseURL = await ensureBaseUrl();
+        const refreshClient = axios.create({ baseURL });
+        const { data } = await refreshClient.post("/auth/refresh", { refresh_token: storedRefresh });
+
+        localStorage.setItem("gsp/token", data.refresh_token);
+        setAccessToken(data.access_token);
+        originalRequest.headers = {
+          ...originalRequest.headers,
+          Authorization: `Bearer ${data.access_token}`
+        };
+
+        return api(originalRequest);
+      } catch (refreshError) {
+        localStorage.removeItem("gsp/token");
+        setAccessToken(null);
+        return Promise.reject(refreshError);
+      }
+    }
+
+    if (isUnauthorized) {
       localStorage.removeItem("gsp/token");
       setAccessToken(null);
     }
+
     return Promise.reject(error);
   }
 );
