@@ -2,15 +2,43 @@
 
 Ce dépôt contient la refonte moderne de Gestion Stock Pro articulée autour d'un backend FastAPI, d'un frontend React/Vite et d'un empaquetage desktop via Tauri. L'objectif est de conserver la richesse fonctionnelle de l'application Tkinter historique tout en fournissant une architecture maintenable, testable et prête pour le web.
 
+## Table des matières
+1. [Structure du projet](#structure-du-projet)
+2. [Aperçu des évolutions 2.0](#aperçu-des-évolutions-20)
+3. [Backend](#backend-backend)
+4. [Frontend](#frontend-frontend)
+5. [Desktop](#desktop-desktoptauri)
+6. [Scripts & automatisation](#scripts--automatisation-scripts)
+7. [Prérequis](#prérequis)
+8. [Installation rapide](#installation-rapide)
+9. [Commandes de lancement](#commandes-de-lancement-simplifiées)
+10. [Tests & qualité](#tests--qualité)
+11. [Fonctionnalités couvertes](#fonctionnalités-couvertes)
+12. [Héritage Tkinter & compatibilité](#héritage-tkinter--compatibilité)
+13. [Documentation & idées futures](#documentation--idées-futures)
+14. [Données de démonstration](#données-de-démonstration)
+15. [Roadmap](#roadmap--todo)
+16. [Licence](#licence)
+
 ## Structure du projet
 ```
 gestion-stock-pro/
 ├─ backend/            # API FastAPI + WebSocket + services SQLite
 ├─ frontend/           # SPA React/TypeScript (Vite, Tailwind, shadcn/ui ready)
 ├─ desktop/tauri/      # Client desktop Tauri lançant le backend local
+├─ gestion_stock/      # Version Tkinter historique maintenue pour compatibilité
+├─ tests/              # Suite de tests unitaires couvrant l'héritage Tkinter
+├─ docs/               # Notes fonctionnelles et suggestions d'évolution
 ├─ scripts/            # Scripts d'aide au développement et au build
 └─ README.md           # Ce document
 ```
+
+## Aperçu des évolutions 2.0
+- **Architecture découplée** : séparation nette des couches backend FastAPI, frontend React/Vite et client desktop Tauri afin de couvrir les usages web, desktop et embarqués.
+- **API modernisée** : authentification JWT, WebSockets (caméra/voix) et services spécialisés (stock, fournisseurs, dotations, pharmacie) livrés dans `backend/`.
+- **Frontend réactif** : UI sombre, composants modulaires et store Zustand pour une expérience cohérente, responsive et testée avec Vitest.
+- **Automatisation renforcée** : scripts Python/Bash/PowerShell pour lancer, tester et packager l'application, plus des workflows de sauvegarde et d'export.
+- **Qualité garantie** : suites de tests `backend/tests`, `tests/` (héritage Tkinter) et `frontend` assurant la non-régression des logiques métiers clés.
 
 ### Backend (`backend/`)
 - `app.py` : application FastAPI, configuration CORS et enregistrement des routes.
@@ -34,7 +62,7 @@ gestion-stock-pro/
 - `src/main.rs` : lance le backend FastAPI comme processus enfant et le termine proprement.
 - Scripts `pnpm tauri dev/build` pour l'intégration continue.
 
-### Scripts (`scripts/`)
+### Scripts & automatisation (`scripts/`)
 - `dev.ps1` : bootstrap automatique backend + frontend en développement.
 - `build_all.ps1` : pipeline de build (backend tests + build frontend + package Tauri).
 
@@ -92,9 +120,11 @@ comportement, mais un simple appel suffit pour lancer les serveurs avec les para
 - `pwsh scripts/dev.ps1` : lance FastAPI en mode reload et Vite en parallèle.
 - `pwsh scripts/build_all.ps1` : exécute les tests backend, build la SPA et package l'app Tauri.
 
-## Tests
-- Backend : `pytest`.
-- Frontend : `npm run test` (Vitest, environnement jsdom).
+## Tests & qualité
+- **Backend FastAPI** : `cd backend && pytest` pour couvrir les routes d'authentification, permissions, inventaire, sauvegardes et WebSockets.
+- **Frontend React** : `cd frontend && npm run test` (Vitest + Testing Library) pour garantir la stabilité des composants et hooks partagés.
+- **Héritage Tkinter** : `python -m pytest tests` vérifie les fonctions critiques (`adjust_item_quantity`, gestion utilisateurs, fournisseurs habillement) du module `gestion_stock`. Les tests `tests/test_inventory.py`, `tests/test_backup_manager.py` ou `tests/test_cli.py` servent de documentation vivante sur l'API historique.
+- **Linting facultatif** : exécutez `ruff`/`black` côté backend ou `npm run lint` côté frontend si vous souhaitez aligner le style avant contribution.
 
 ## Données & configuration
 - Bases SQLite créées automatiquement dans `backend/data/` (utilisateurs + stock).
@@ -138,6 +168,15 @@ comportement, mais un simple appel suffit pour lancer les serveurs avec les para
 ### Frontend & expérience utilisateur
 - SPA React/TypeScript avec thème sombre persistant, store Zustand et helpers Axios/WebSocket centralisés.【F:frontend/src/app/theme.tsx†L1-L36】【F:frontend/src/app/store.ts†L1-L11】【F:frontend/src/lib/api.ts†L1-L23】【F:frontend/src/lib/ws.ts†L1-L6】
 - Tests unitaires front (Vitest + Testing Library) et couverture backend (pytest) pour sécuriser les régressions.【F:frontend/package.json†L7-L33】【F:backend/tests/test_app.py†L1-L520】
+
+## Héritage Tkinter & compatibilité
+- Le dossier `gestion_stock/` conserve l'application Tkinter d'origine (menus, dialogues, gestion SQLite). Lancez-la directement via `python -m gestion_stock` pour tester une interface poste fixe ou pour comparer le comportement avec la nouvelle stack web.
+- Les scripts `build_exe.py` + `GestionStockPro.spec` automatisent la création d'un exécutable Windows via PyInstaller pour cette version historique.
+- La suite `tests/` illustre comment piloter les API Tkinter côté Python pur (ex. `tests/test_inventory.py` pour `adjust_item_quantity`, `tests/test_backup_manager.py` pour les sauvegardes locales et `tests/test_cli.py` pour la CLI). Cela garantit que les correctifs appliqués à la refonte n'introduisent pas de régressions dans les installations existantes.
+
+## Documentation & idées futures
+- `docs/feature_suggestions.md` centralise les prochaines grosses fonctionnalités (commandes fournisseurs, approbations multi-utilisateurs, alertes multicanal, dashboard temps réel). Inspirez-vous-en pour prioriser les itérations produit.
+- `REVIEW.md` décrit les points déjà analysés (typos, robustesse de `init_user_db`, alignement doc/code) et peut servir de check-list lors des revues de code.
 
 ## Données de démonstration
 Un administrateur `admin/admin123` est généré automatiquement au premier lancement. Créez vos propres comptes via l'API `/auth`.
