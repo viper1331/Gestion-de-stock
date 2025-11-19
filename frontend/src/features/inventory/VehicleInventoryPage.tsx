@@ -2103,15 +2103,19 @@ function VehicleItemMarker({
   );
 
   if (displayMode === "pointer") {
+    const cardX = clamp(layoutPosition?.x ?? positionX, 0, 1);
+    const cardY = clamp(layoutPosition?.y ?? positionY, 0, 1);
     const anchorX = clamp(pointerTarget?.x ?? positionX, 0, 1);
     const anchorY = clamp(pointerTarget?.y ?? positionY, 0, 1);
-    const showPointerOnLeft = anchorX > 0.5;
+    const hasPointerTarget = Boolean(pointerTarget);
+    const pointerComesFromLeft = hasPointerTarget ? anchorX < cardX : false;
     const canDefinePointerTarget = Boolean(onRequestPointerTarget);
     const pointerButtonLabel = isPointerTargetPending
       ? "Cliquez sur la photo"
       : pointerTarget
         ? "Modifier le point"
         : "Définir le point";
+    const arrowMarkerId = `pointer-arrow-${entry.key.replace(/[^a-zA-Z0-9_-]/g, "-")}`;
 
     const handleDefinePointerTarget = (event: MouseEvent<HTMLButtonElement>) => {
       event.stopPropagation();
@@ -2132,66 +2136,98 @@ function VehicleItemMarker({
     };
 
     return (
-      <div
-        className="group absolute -translate-x-1/2 -translate-y-1/2"
-        style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%` }}
-      >
-        <span className="pointer-events-none block h-3 w-3 rounded-full border-2 border-white bg-blue-500 shadow-lg" />
+      <>
+        {hasPointerTarget ? (
+          <>
+            <svg
+              className="pointer-events-none absolute inset-0 h-full w-full"
+              viewBox="0 0 100 100"
+              preserveAspectRatio="none"
+              aria-hidden
+            >
+              <defs>
+                <marker
+                  id={arrowMarkerId}
+                  viewBox="0 0 6 6"
+                  refX="3"
+                  refY="3"
+                  markerWidth="6"
+                  markerHeight="6"
+                  orient="auto"
+                >
+                  <path d="M0,0 L6,3 L0,6 Z" fill="rgba(59,130,246,0.85)" />
+                </marker>
+              </defs>
+              <line
+                x1={`${cardX * 100}`}
+                y1={`${cardY * 100}`}
+                x2={`${anchorX * 100}`}
+                y2={`${anchorY * 100}`}
+                stroke="rgba(255,255,255,0.85)"
+                strokeWidth="4"
+                strokeLinecap="round"
+              />
+              <line
+                x1={`${cardX * 100}`}
+                y1={`${cardY * 100}`}
+                x2={`${anchorX * 100}`}
+                y2={`${anchorY * 100}`}
+                stroke="rgba(59,130,246,0.85)"
+                strokeWidth="2.5"
+                strokeLinecap="round"
+                markerEnd={`url(#${arrowMarkerId})`}
+              />
+            </svg>
+            <span
+              className="pointer-events-none absolute block -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow-lg"
+              style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%`, width: "12px", height: "12px" }}
+            />
+          </>
+        ) : null}
         <div
-          className={clsx(
-            "absolute top-1/2 flex -translate-y-1/2 items-center gap-1",
-            showPointerOnLeft ? "right-6 flex-row-reverse" : "left-6"
-          )}
+          className="group absolute -translate-x-1/2 -translate-y-1/2"
+          style={{ left: `${cardX * 100}%`, top: `${cardY * 100}%` }}
         >
-          <div className="flex flex-col gap-1">
+          <button
+            type="button"
+            title={markerTitle}
+            draggable
+            onDragStart={handleDragStart}
+            className="cursor-move rounded-lg bg-white/95 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-[1.02] dark:bg-slate-900/85 dark:text-slate-200"
+          >
+            {markerContent}
+          </button>
+          <div
+            className={clsx(
+              "mt-1 flex flex-wrap items-center gap-2 text-[10px] font-semibold",
+              pointerComesFromLeft ? "justify-start" : "justify-end"
+            )}
+          >
             <button
               type="button"
-              title={markerTitle}
-              draggable
-              onDragStart={handleDragStart}
-              className="cursor-move rounded-lg bg-white/95 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-[1.02] dark:bg-slate-900/85 dark:text-slate-200"
-            >
-              {markerContent}
-            </button>
-            <div
+              onClick={handleDefinePointerTarget}
+              disabled={!canDefinePointerTarget || Boolean(isPointerTargetPending)}
               className={clsx(
-                "flex flex-wrap items-center gap-2 text-[10px] font-semibold",
-                showPointerOnLeft ? "justify-end" : "justify-start"
+                "rounded-full border px-2 py-0.5",
+                isPointerTargetPending
+                  ? "border-amber-500 text-amber-600"
+                  : "border-blue-400 text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-200"
               )}
             >
+              {pointerButtonLabel}
+            </button>
+            {pointerTarget ? (
               <button
                 type="button"
-                onClick={handleDefinePointerTarget}
-                disabled={!canDefinePointerTarget || Boolean(isPointerTargetPending)}
-                className={clsx(
-                  "rounded-full border px-2 py-0.5",
-                  isPointerTargetPending
-                    ? "border-amber-500 text-amber-600"
-                    : "border-blue-400 text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-200"
-                )}
+                onClick={handleClearPointerTarget}
+                className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-500 dark:text-slate-200 dark:hover:bg-slate-800"
               >
-                {pointerButtonLabel}
+                Réinitialiser
               </button>
-              {pointerTarget ? (
-                <button
-                  type="button"
-                  onClick={handleClearPointerTarget}
-                  className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-500 dark:text-slate-200 dark:hover:bg-slate-800"
-                >
-                  Réinitialiser
-                </button>
-              ) : null}
-            </div>
+            ) : null}
           </div>
-          <span
-            className={clsx(
-              "pointer-events-none h-2 w-2 bg-white/80",
-              showPointerOnLeft ? "-rotate-45" : "rotate-45"
-            )}
-          />
-          <span className="pointer-events-none h-px w-10 bg-white/70" />
         </div>
-      </div>
+      </>
     );
   }
 
