@@ -442,10 +442,14 @@ export function AppLayout() {
             <span aria-hidden>{sidebarOpen ? "⟨" : "⟩"}</span>
           </button>
         </div>
-        <div className="mt-8 flex min-h-0 flex-1 flex-col overflow-hidden">
+        <div
+          className={`mt-8 flex min-h-0 flex-1 flex-col ${
+            sidebarOpen ? "overflow-hidden" : "overflow-visible"
+          }`}
+        >
           <nav
-            className={`flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-2 text-sm ${
-              sidebarOpen ? "" : "items-center"
+            className={`flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto text-sm ${
+              sidebarOpen ? "pr-2" : "items-center"
             }`}
           >
             <NavLink
@@ -461,7 +465,7 @@ export function AppLayout() {
               const isOpen = openGroups[group.id] ?? false;
 
               return (
-                <div key={group.id}>
+                <div key={group.id} className="relative w-full">
                   <button
                     type="button"
                     onClick={() => toggleGroup(group.id)}
@@ -477,33 +481,63 @@ export function AppLayout() {
                     </span>
                     {sidebarOpen ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
                   </button>
-                  {sidebarOpen && isOpen ? (
-                    <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
-                      {group.sections.map((section) => (
-                        <div key={section.id}>
-                          <p
-                            className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                            title={section.tooltip}
-                          >
-                            {section.label}
-                          </p>
-                          <div className="mt-2 flex flex-col gap-1">
-                            {section.links.map((link) => (
-                              <NavLink
-                                key={link.to}
-                                to={link.to}
-                                end={link.to === "/" || link.to === "/inventory"}
-                                className={({ isActive }) => navClass(isActive, sidebarOpen)}
-                                title={link.tooltip}
-                              >
-                                <NavIcon symbol={link.icon} label={link.label} />
-                                <span>{link.label}</span>
-                              </NavLink>
-                            ))}
+                  {isOpen ? (
+                    sidebarOpen ? (
+                      <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
+                        {group.sections.map((section) => (
+                          <div key={section.id}>
+                            <p
+                              className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                              title={section.tooltip}
+                            >
+                              {section.label}
+                            </p>
+                            <div className="mt-2 flex flex-col gap-1">
+                              {section.links.map((link) => (
+                                <NavLink
+                                  key={link.to}
+                                  to={link.to}
+                                  end={link.to === "/" || link.to === "/inventory"}
+                                  className={({ isActive }) => navClass(isActive, sidebarOpen)}
+                                  title={link.tooltip}
+                                >
+                                  <NavIcon symbol={link.icon} label={link.label} />
+                                  <span>{link.label}</span>
+                                </NavLink>
+                              ))}
+                            </div>
                           </div>
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="absolute left-full top-0 z-20 ml-3 w-64 space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
+                        {group.sections.map((section) => (
+                          <div key={section.id}>
+                            <p
+                              className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                              title={section.tooltip}
+                            >
+                              {section.label}
+                            </p>
+                            <div className="mt-2 flex flex-col gap-1">
+                              {section.links.map((link) => (
+                                <NavLink
+                                  key={link.to}
+                                  to={link.to}
+                                  end={link.to === "/" || link.to === "/inventory"}
+                                  className={({ isActive }) => navClass(isActive, true)}
+                                  title={link.tooltip}
+                                  onClick={() => toggleGroup(group.id)}
+                                >
+                                  <NavIcon symbol={link.icon} label={link.label} />
+                                  <span>{link.label}</span>
+                                </NavLink>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )
                   ) : null}
                 </div>
               );
