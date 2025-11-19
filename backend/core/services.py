@@ -3242,6 +3242,96 @@ def generate_vehicle_inventory_pdf() -> bytes:
     generated_at = datetime.now()
     timestamp_label = generated_at.strftime("Généré le %d/%m/%Y %H:%M")
 
+    @dataclass
+    class _VehicleViewEntry:
+        representative: models.Item
+        items: list[models.Item]
+        total_quantity: int
+        position_x: float | None
+        position_y: float | None
+
+        @property
+        def is_lot(self) -> bool:
+            return self.representative.lot_id is not None
+
+        def lot_label(self) -> str | None:
+            if self.representative.lot_id is None:
+                return None
+            if self.representative.lot_name:
+                return self.representative.lot_name
+            return f"Lot #{self.representative.lot_id}"
+
+        def display_name(self) -> str:
+            if self.is_lot:
+                base = self.lot_label() or "Lot"
+                return f"{base} (Lot)"
+            return self.representative.name
+
+        def reference_label(self) -> str:
+            if self.is_lot:
+                return self.lot_label() or "Lot"
+            return self.representative.sku or "-"
+
+        def component_descriptions(self) -> list[str]:
+            if not self.is_lot:
+                return []
+            descriptions: list[str] = []
+            for child in self.items:
+                detail = f"• {child.quantity} × {child.name}"
+                if child.sku:
+                    detail += f" (réf. {child.sku})"
+                descriptions.append(detail)
+            return descriptions
+
+    def _compute_entry_position(group_items: list[models.Item]) -> tuple[float | None, float | None]:
+        coords = [
+            (entry.position_x, entry.position_y)
+            for entry in group_items
+            if entry.position_x is not None and entry.position_y is not None
+        ]
+        if coords:
+            avg_x = sum(x for x, _ in coords) / len(coords)
+            avg_y = sum(y for _, y in coords) / len(coords)
+            return avg_x, avg_y
+        first = group_items[0]
+        return first.position_x, first.position_y
+
+    def _build_view_entry(group_items: list[models.Item]) -> _VehicleViewEntry:
+        representative = group_items[0]
+        total_quantity = sum(item.quantity for item in group_items)
+        if representative.lot_id is not None:
+            position_x, position_y = _compute_entry_position(group_items)
+        else:
+            position_x = representative.position_x
+            position_y = representative.position_y
+        return _VehicleViewEntry(
+            representative=representative,
+            items=group_items,
+            total_quantity=total_quantity,
+            position_x=position_x,
+            position_y=position_y,
+        )
+
+    def _summarize_view_entries(view_items: list[models.Item]) -> list[_VehicleViewEntry]:
+        lot_groups: dict[int, list[models.Item]] = {}
+        for item in view_items:
+            if item.lot_id is None:
+                continue
+            lot_groups.setdefault(item.lot_id, []).append(item)
+        entries: list[_VehicleViewEntry] = []
+        rendered_lots: set[int] = set()
+        for item in view_items:
+            if item.lot_id is None:
+                entries.append(_build_view_entry([item]))
+            else:
+                lot_id = item.lot_id
+                if lot_id in rendered_lots:
+                    continue
+                group = lot_groups.get(lot_id, [item])
+                entries.append(_build_view_entry(group))
+                rendered_lots.add(lot_id)
+        return entries
+
     with db.get_stock_connection() as conn:
         photo_rows = conn.execute(
             "SELECT id, file_path FROM vehicle_photos"
@@ -3359,6 +3449,7 @@ def generate_vehicle_inventory_pdf() -> bytes:
                 if skip_background and view_key is None
                 else "Matériel associé"
             )
+            view_entries = _summarize_view_entries(view_items)
 
             def start_view_page(*, continued: bool) -> float:
                 nonlocal is_first_page
@@ -3389,11 +3480,19 @@ def generate_vehicle_inventory_pdf() -> bytes:
             def _clamp(value: float, lower: float, upper: float) -> float:
                 return max(lower, min(upper, value))
 
-            def _wrap_bubble_lines(item: models.Item) -> list[str]:
-                base_lines = wrap(item.name, 28) or ["-"]
-                details = [f"Qté : {item.quantity}"]
-                if item.sku:
-                    details.append(f"Réf. : {item.sku}")
+            def _wrap_bubble_lines(entry: _VehicleViewEntry) -> list[str]:
+                if entry.is_lot:
+                    lot_label = entry.lot_label() or "Lot"
+                    base_lines = wrap(f"{lot_label} (Lot)", 28) or ["Lot"]
+                    details = [
+                        f"Qté totale : {entry.total_quantity}",
+                        f"{len(entry.items)} matériel(s) dans le lot",
+                    ]
+                    return base_lines + details
+                base_lines = wrap(entry.representative.name, 28) or ["-"]
+                details = [f"Qté : {entry.total_quantity}"]
+                if entry.representative.sku:
+                    details.append(f"Réf. : {entry.representative.sku}")
                 return base_lines + details
 
             def _rects_overlap(
@@ -3515,8 +3614,8 @@ def generate_vehicle_inventory_pdf() -> bytes:
             reference_column_x = page_width - margin
             line_height = 12
 
-            located_items: list[models.Item] = []
-            table_items: list[models.Item] = []
+            located_entries: list[_VehicleViewEntry] = []
+            table_entries: list[_VehicleViewEntry] = []
             bubble_rects: list[tuple[float, float, float, float]] = []
 
             background_drawn = False
@@ -3533,7 +3632,7 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     "Liste des matériels non affectés à une vue spécifique.",
                 )
                 y_position -= 18
-                table_items = list(view_items)
+                table_entries = list(view_entries)
             else:
                 background_path = None
                 if view_config.background_photo_id is not None:
@@ -3572,25 +3671,25 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     )
                     background_drawn = True
 
-                    for item in view_items:
+                    for entry in view_entries:
                         if (
-                            item.position_x is not None
-                            and item.position_y is not None
+                            entry.position_x is not None
+                            and entry.position_y is not None
                         ):
-                            located_items.append(item)
+                            located_entries.append(entry)
                         else:
-                            table_items.append(item)
+                            table_entries.append(entry)
 
                     bounds = (image_x, image_y, drawn_width, drawn_height)
-                    for item in located_items:
-                        pointer_x = image_x + _clamp(item.position_x, 0.0, 1.0) * drawn_width
-                        pointer_y = image_y + drawn_height * (
-                            1.0 - _clamp(item.position_y, 0.0, 1.0)
-                        )
+                    for entry in located_entries:
+                        pos_x = _clamp(entry.position_x or 0.0, 0.0, 1.0)
+                        pos_y = _clamp(entry.position_y or 0.0, 0.0, 1.0)
+                        pointer_x = image_x + pos_x * drawn_width
+                        pointer_y = image_y + drawn_height * (1.0 - pos_y)
                         _draw_item_bubble(
                             pointer_x,
                             pointer_y,
-                            _wrap_bubble_lines(item),
+                            _wrap_bubble_lines(entry),
                             bounds=bounds,
                         )
 
@@ -3600,7 +3699,7 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     pdf.drawString(margin, y_position, background_message or "")
                     pdf.setFont("Helvetica", 10)
                     y_position -= 18
-                    table_items = list(view_items)
+                    table_entries = list(view_entries)
 
             def draw_table_header(y_pos: float, *, suffix: str = "") -> float:
                 pdf.setFont("Helvetica-Bold", 12)
@@ -3626,14 +3725,16 @@ def generate_vehicle_inventory_pdf() -> bytes:
                     return y_new
                 return y_pos
 
-            if table_items:
+            if table_entries:
                 y_position = draw_table_header(y_position)
-                for item in table_items:
-                    wrapped_name = wrap(item.name, 70) or ["-"]
+                for entry in table_entries:
+                    wrapped_name = wrap(entry.display_name(), 70) or ["-"]
                     image_reader: ImageReader | None = None
                     image_drawn_width = 0.0
                     image_drawn_height = 0.0
-                    image_path = item_image_paths.get(item.id)
+                    image_path = None
+                    if not entry.is_lot:
+                        image_path = item_image_paths.get(entry.representative.id)
                     if image_path and image_path.exists():
                         try:
                             image_reader = ImageReader(str(image_path))
@@ -3654,19 +3755,32 @@ def generate_vehicle_inventory_pdf() -> bytes:
                         if image_reader is not None and image_drawn_height > 0
                         else 0.0
                     )
-                    required_height = line_height * len(wrapped_name) + 4 + extra_height
+                    lot_detail_lines: list[str] = []
+                    if entry.is_lot:
+                        for detail in entry.component_descriptions():
+                            lot_detail_lines.extend(wrap(detail, 64) or [detail])
+                    required_height = (
+                        line_height * (len(wrapped_name) + len(lot_detail_lines))
+                        + 4
+                        + extra_height
+                    )
                     y_position = ensure_space(y_position, required_height)
                     for index, line in enumerate(wrapped_name):
                         pdf.drawString(margin, y_position, line)
                         if index == 0:
                             pdf.drawRightString(
-                                quantity_column_x, y_position, str(item.quantity)
+                                quantity_column_x,
+                                y_position,
+                                str(entry.total_quantity),
                             )
                             pdf.drawRightString(
                                 reference_column_x,
                                 y_position,
-                                item.sku or "-",
+                                entry.reference_label(),
                             )
+                        y_position -= line_height
+                    for detail_line in lot_detail_lines:
+                        pdf.drawString(margin + 12, y_position, detail_line)
                         y_position -= line_height
                     y_position -= 4
                     if image_reader is not None and image_drawn_height > 0:
@@ -3681,7 +3795,7 @@ def generate_vehicle_inventory_pdf() -> bytes:
                             mask="auto",
                         )
                         y_position = image_y - item_thumbnail_spacing
-            elif background_drawn and located_items:
+            elif background_drawn and located_entries:
                 y_position = ensure_space(y_position, 20, continued_header=False)
                 pdf.setFont("Helvetica-Oblique", 10)
                 pdf.drawString(
