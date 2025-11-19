@@ -48,6 +48,7 @@ interface VehicleItem {
   position_y: number | null;
   lot_id: number | null;
   lot_name: string | null;
+  show_in_qr: boolean;
 }
 
 interface RemiseLot {
