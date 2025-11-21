@@ -15,7 +15,7 @@ from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional
 from uuid import uuid4
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4
+from reportlab.lib.pagesizes import A4, landscape
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -3251,10 +3251,10 @@ def generate_vehicle_inventory_pdf(
         representative: models.Item
         items: list[models.Item]
         total_quantity: int
-        position_x: float | None
-        position_y: float | None
-        pointer_x: float | None
-        pointer_y: float | None
+        bubble_x: float | None
+        bubble_y: float | None
+        anchor_x: float | None
+        anchor_y: float | None
 
         @property
         def is_lot(self) -> bool:
@@ -3289,18 +3289,18 @@ def generate_vehicle_inventory_pdf(
                 descriptions.append(detail)
             return descriptions
 
-    def _compute_entry_position(group_items: list[models.Item]) -> tuple[float | None, float | None]:
-        coords = [
-            (entry.position_x, entry.position_y)
-            for entry in group_items
-            if entry.position_x is not None and entry.position_y is not None
-        ]
-        if coords:
-            avg_x = sum(x for x, _ in coords) / len(coords)
-            avg_y = sum(y for _, y in coords) / len(coords)
-            return avg_x, avg_y
-        first = group_items[0]
-        return first.position_x, first.position_y
+        def _compute_entry_position(group_items: list[models.Item]) -> tuple[float | None, float | None]:
+            coords = [
+                (entry.position_x, entry.position_y)
+                for entry in group_items
+                if entry.position_x is not None and entry.position_y is not None
+            ]
+            if coords:
+                avg_x = sum(x for x, _ in coords) / len(coords)
+                avg_y = sum(y for _, y in coords) / len(coords)
+                return avg_x, avg_y
+            first = group_items[0]
+            return first.position_x, first.position_y
 
     def _build_view_entry(group_items: list[models.Item]) -> _VehicleViewEntry:
         representative = group_items[0]
@@ -3317,22 +3317,25 @@ def generate_vehicle_inventory_pdf(
         else:
             position_x = representative.position_x
             position_y = representative.position_y
-        pointer_x = position_x
-        pointer_y = position_y
+
+        bubble_x = position_x
+        bubble_y = position_y
+        anchor_x = position_x
+        anchor_y = position_y
         if pointer_targets:
             pointer_override = pointer_targets.get(entry_key)
             if pointer_override:
-                pointer_x = clamp01(pointer_override.x)
-                pointer_y = clamp01(pointer_override.y)
+                anchor_x = clamp01(pointer_override.x)
+                anchor_y = clamp01(pointer_override.y)
         return _VehicleViewEntry(
             key=entry_key,
             representative=representative,
             items=group_items,
             total_quantity=total_quantity,
-            position_x=position_x,
-            position_y=position_y,
-            pointer_x=pointer_x,
-            pointer_y=pointer_y,
+            bubble_x=bubble_x,
+            bubble_y=bubble_y,
+            anchor_x=anchor_x,
+            anchor_y=anchor_y,
         )
 
     def _summarize_view_entries(view_items: list[models.Item]) -> list[_VehicleViewEntry]:
@@ -3376,11 +3379,11 @@ def generate_vehicle_inventory_pdf(
         item_image_paths[row["id"]] = MEDIA_ROOT / Path(file_path)
 
     buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    page_width, page_height = A4
+    pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
+    page_width, page_height = landscape(A4)
     margin = 36
     bottom_margin = 40
-    image_max_height = 260
+    image_max_height = page_height - margin - bottom_margin - 40
     item_thumbnail_max_width = 140
     item_thumbnail_max_height = 90
     item_thumbnail_spacing = 8
@@ -3841,7 +3844,7 @@ def generate_vehicle_inventory_pdf(
 
                 if image_reader is not None:
                     image_width, image_height = image_reader.getSize()
-                    available_width = page_width * 0.75
+                    available_width = page_width - 2 * margin
                     available_height = image_max_height
                     scale = min(
                         available_width / image_width,
@@ -3876,24 +3879,25 @@ def generate_vehicle_inventory_pdf(
 
                     for entry in view_entries:
                         if (
-                            entry.pointer_x is not None
-                            and entry.pointer_y is not None
+                            entry.bubble_x is not None
+                            and entry.bubble_y is not None
                         ):
                             located_entries.append(entry)
                         else:
                             table_entries.append(entry)
 
                     bounds = (image_x, image_y, drawn_width, drawn_height)
+                    pointer_mode_enabled = bool(pointer_targets)
                     for entry in located_entries:
-                        bubble_ratio_x = _clamp(entry.pointer_x or 0.0, 0.0, 1.0)
-                        bubble_ratio_y = _clamp(entry.pointer_y or 0.0, 0.0, 1.0)
+                        bubble_ratio_x = _clamp(entry.bubble_x or 0.0, 0.0, 1.0)
+                        bubble_ratio_y = _clamp(entry.bubble_y or 0.0, 0.0, 1.0)
                         anchor_ratio_x = _clamp(
-                            entry.position_x if entry.position_x is not None else bubble_ratio_x,
+                            entry.anchor_x if entry.anchor_x is not None else bubble_ratio_x,
                             0.0,
                             1.0,
                         )
                         anchor_ratio_y = _clamp(
-                            entry.position_y if entry.position_y is not None else bubble_ratio_y,
+                            entry.anchor_y if entry.anchor_y is not None else bubble_ratio_y,
                             0.0,
                             1.0,
                         )
@@ -3909,7 +3913,7 @@ def generate_vehicle_inventory_pdf(
                             entry,
                             _wrap_bubble_lines(entry),
                             bounds=bounds,
-                            pointer_mode=pointer_targets is not None,
+                            pointer_mode=pointer_mode_enabled,
                         )
 
                     y_position = image_y - 18
