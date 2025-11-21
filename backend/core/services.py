@@ -3671,15 +3671,15 @@ def generate_vehicle_inventory_pdf(
                 end_y: float,
             ) -> None:
                 pdf_canvas.saveState()
-                pdf_canvas.setStrokeColor(colors.Color(0.423, 0.714, 1.0, alpha=0.85))
-                pdf_canvas.setLineWidth(4.0)
+                pdf_canvas.setStrokeColor(colors.Color(59 / 255, 130 / 255, 246 / 255, alpha=0.85))
+                pdf_canvas.setLineWidth(3.0)
                 pdf_canvas.setLineCap(1)
                 pdf_canvas.line(start_x, start_y, end_x, end_y)
                 pdf_canvas.restoreState()
 
             def _draw_item_bubble(
-                bubble_px: float,
-                bubble_py: float,
+                bubble_cx: float,
+                bubble_cy: float,
                 anchor_px: float,
                 anchor_py: float,
                 entry: _VehicleViewEntry,
@@ -3719,22 +3719,21 @@ def generate_vehicle_inventory_pdf(
                     + 16
                 )
 
-                bubble_x = _clamp(
-                    bubble_px,
-                    bounds[0],
-                    bounds[0] + bounds[2] - bubble_width,
-                )
-                bubble_y = _clamp(
-                    bubble_py,
-                    bounds[1],
-                    bounds[1] + bounds[3] - bubble_height,
-                )
+                inset = 6.0
+                bounds_x, bounds_y, bounds_w, bounds_h = bounds
+                min_cx = bounds_x + inset + bubble_width / 2
+                max_cx = bounds_x + bounds_w - inset - bubble_width / 2
+                min_cy = bounds_y + inset + bubble_height / 2
+                max_cy = bounds_y + bounds_h - inset - bubble_height / 2
+                clamped_cx = _clamp(bubble_cx, min_cx, max_cx)
+                clamped_cy = _clamp(bubble_cy, min_cy, max_cy)
+
+                bubble_x = clamped_cx - bubble_width / 2
+                bubble_y = clamped_cy - bubble_height / 2
 
                 if pointer_mode:
                     drawPoint(pdf, anchor_px, anchor_py, 14)
-                connection_start_x = bubble_x + bubble_width / 2
-                connection_start_y = bubble_y
-                drawConnection(pdf, connection_start_x, connection_start_y, anchor_px, anchor_py)
+                    drawConnection(pdf, clamped_cx, clamped_cy, anchor_px, anchor_py)
 
                 drawRoundedBubble(
                     pdf,
@@ -3889,7 +3888,6 @@ def generate_vehicle_inventory_pdf(
                             table_entries.append(entry)
 
                     bounds = (image_x, image_y, drawn_width, drawn_height)
-                    pointer_mode_enabled = bool(pointer_targets)
                     for entry in located_entries:
                         bubble_ratio_x = _clamp(entry.bubble_x or 0.0, 0.0, 1.0)
                         bubble_ratio_y = _clamp(entry.bubble_y or 0.0, 0.0, 1.0)
@@ -3903,13 +3901,25 @@ def generate_vehicle_inventory_pdf(
                             0.0,
                             1.0,
                         )
-                        bubble_x = image_x + bubble_ratio_x * drawn_width
-                        bubble_y = image_y + drawn_height * (1.0 - bubble_ratio_y)
-                        anchor_x = image_x + anchor_ratio_x * drawn_width
-                        anchor_y = image_y + drawn_height * (1.0 - anchor_ratio_y)
+                        bubble_center_x = image_x + bubble_ratio_x * drawn_width
+                        bubble_center_y = image_y + drawn_height * bubble_ratio_y
+                        anchor_x = _clamp(
+                            image_x + anchor_ratio_x * drawn_width,
+                            image_x,
+                            image_x + drawn_width,
+                        )
+                        anchor_y = _clamp(
+                            image_y + anchor_ratio_y * drawn_height,
+                            image_y,
+                            image_y + drawn_height,
+                        )
+                        pointer_mode_enabled = (
+                            bool(pointer_targets)
+                            and entry.key in (pointer_targets or {})
+                        )
                         _draw_item_bubble(
-                            bubble_x,
-                            bubble_y,
+                            bubble_center_x,
+                            bubble_center_y,
                             anchor_x,
                             anchor_y,
                             entry,
