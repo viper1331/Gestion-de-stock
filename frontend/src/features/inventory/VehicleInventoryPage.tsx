@@ -1569,6 +1569,10 @@ function VehicleCompartment({
     `${itemsPanelStorageKey}:pointer-mode`,
     false
   );
+  const [hidePointerActions, setHidePointerActions] = usePersistentBoolean(
+    `${itemsPanelStorageKey}:pointer-actions-hidden`,
+    false
+  );
   const pointerTargetStorageKey = `${itemsPanelStorageKey}:pointer-targets`;
   const [pointerTargets, setPointerTargets] = useState<PointerTargetMap>(() =>
     readPointerTargetsFromStorage(pointerTargetStorageKey)
@@ -1951,6 +1955,7 @@ function VehicleCompartment({
                   isPointerModeEnabled ? () => handlePointerTargetClear(entry.key) : undefined
                 }
                 isPointerTargetPending={pendingPointerKey === entry.key}
+                hidePointerActions={hidePointerActions}
               />
             );
           })}
@@ -1985,6 +1990,18 @@ function VehicleCompartment({
                 pour relier la flèche à l'endroit exact souhaité. Vous pouvez réinitialiser un point à
                 tout moment.
               </p>
+              <label className="flex items-start gap-2">
+                <input
+                  type="checkbox"
+                  className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900"
+                  checked={hidePointerActions}
+                  onChange={() => setHidePointerActions((value) => !value)}
+                />
+                <span>
+                  Masquer les boutons « Modifier le point » et « Réinitialiser » sur les étiquettes afin
+                  de désencombrer l'affichage.
+                </span>
+              </label>
               {isSelectingPointerTarget ? (
                 <div className="flex flex-wrap items-center gap-3 rounded-lg border border-blue-200 bg-white/80 px-3 py-2 text-[11px] font-semibold text-blue-800 shadow-sm dark:border-blue-800 dark:bg-blue-950/30 dark:text-blue-200">
                   <span>Cliquez sur la photo pour positionner le point de référence.</span>
@@ -2071,6 +2088,7 @@ interface VehicleItemMarkerProps {
   onRequestPointerTarget?: (markerKey: string) => void;
   onClearPointerTarget?: (markerKey: string) => void;
   isPointerTargetPending?: boolean;
+  hidePointerActions?: boolean;
 }
 
 function VehicleItemMarker({
@@ -2080,7 +2098,8 @@ function VehicleItemMarker({
   pointerTarget,
   onRequestPointerTarget,
   onClearPointerTarget,
-  isPointerTargetPending
+  isPointerTargetPending,
+  hidePointerActions = false
 }: VehicleItemMarkerProps) {
   const positionX = clamp(entry.position_x ?? 0.5, 0, 1);
   const positionY = clamp(entry.position_y ?? 0.5, 0, 1);
@@ -2238,28 +2257,32 @@ function VehicleItemMarker({
               pointerComesFromLeft ? "justify-start" : "justify-end"
             )}
           >
-            <button
-              type="button"
-              onClick={handleDefinePointerTarget}
-              disabled={!canDefinePointerTarget || Boolean(isPointerTargetPending)}
-              className={clsx(
-                "rounded-full border px-2 py-0.5",
-                isPointerTargetPending
-                  ? "border-amber-500 text-amber-600"
-                  : "border-blue-400 text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-200"
-              )}
-            >
-              {pointerButtonLabel}
-            </button>
-            {pointerTarget ? (
-              <button
-                type="button"
-                onClick={handleClearPointerTarget}
-                className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-500 dark:text-slate-200 dark:hover:bg-slate-800"
-              >
-                Réinitialiser
-              </button>
-            ) : null}
+            {hidePointerActions ? null : (
+              <>
+                <button
+                  type="button"
+                  onClick={handleDefinePointerTarget}
+                  disabled={!canDefinePointerTarget || Boolean(isPointerTargetPending)}
+                  className={clsx(
+                    "rounded-full border px-2 py-0.5",
+                    isPointerTargetPending
+                      ? "border-amber-500 text-amber-600"
+                      : "border-blue-400 text-blue-600 hover:bg-blue-50 dark:border-blue-500 dark:text-blue-200"
+                  )}
+                >
+                  {pointerButtonLabel}
+                </button>
+                {pointerTarget ? (
+                  <button
+                    type="button"
+                    onClick={handleClearPointerTarget}
+                    className="rounded-full border border-slate-300 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-500 dark:text-slate-200 dark:hover:bg-slate-800"
+                  >
+                    Réinitialiser
+                  </button>
+                ) : null}
+              </>
+            )}
           </div>
         </div>
       </>
