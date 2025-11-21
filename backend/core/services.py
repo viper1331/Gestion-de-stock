@@ -3289,7 +3289,19 @@ def generate_vehicle_inventory_pdf(
                 descriptions.append(detail)
             return descriptions
 
-        def _compute_entry_position(group_items: list[models.Item]) -> tuple[float | None, float | None]:
+    def _build_view_entry(group_items: list[models.Item]) -> _VehicleViewEntry:
+        representative = group_items[0]
+        total_quantity = sum(item.quantity for item in group_items)
+        entry_key = (
+            f"lot-{representative.lot_id}"
+            if representative.lot_id is not None
+            else f"item-{representative.id}"
+        )
+        clamp01 = lambda value: max(0.0, min(1.0, value))
+
+        def _compute_entry_position(
+            group_items: list[models.Item],
+        ) -> tuple[float | None, float | None]:
             coords = [
                 (entry.position_x, entry.position_y)
                 for entry in group_items
@@ -3301,16 +3313,6 @@ def generate_vehicle_inventory_pdf(
                 return avg_x, avg_y
             first = group_items[0]
             return first.position_x, first.position_y
-
-    def _build_view_entry(group_items: list[models.Item]) -> _VehicleViewEntry:
-        representative = group_items[0]
-        total_quantity = sum(item.quantity for item in group_items)
-        entry_key = (
-            f"lot-{representative.lot_id}"
-            if representative.lot_id is not None
-            else f"item-{representative.id}"
-        )
-        clamp01 = lambda value: max(0.0, min(1.0, value))
 
         if representative.lot_id is not None:
             position_x, position_y = _compute_entry_position(group_items)
