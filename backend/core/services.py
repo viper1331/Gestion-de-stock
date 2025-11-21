@@ -3585,16 +3585,106 @@ def generate_vehicle_inventory_pdf(
                 except Exception:  # pragma: no cover - image fallback
                     return None
 
+            def drawRoundedBubble(
+                pdf_canvas: canvas.Canvas,
+                x: float,
+                y: float,
+                width: float,
+                height: float,
+                *,
+                radius: float = 12.0,
+                fill_color: colors.Color = colors.white,
+                border_color: colors.Color | None = None,
+                shadow: bool = False,
+            ) -> None:
+                pdf_canvas.saveState()
+                if shadow:
+                    pdf_canvas.setFillColor(colors.Color(0, 0, 0, alpha=0.35))
+                    pdf_canvas.roundRect(
+                        x + 1.5,
+                        y - 1.5,
+                        width,
+                        height,
+                        radius,
+                        stroke=0,
+                        fill=1,
+                    )
+                pdf_canvas.setFillColor(fill_color)
+                if border_color:
+                    pdf_canvas.setStrokeColor(border_color)
+                    pdf_canvas.setLineWidth(1.2)
+                    stroke_flag = 1
+                else:
+                    stroke_flag = 0
+                pdf_canvas.roundRect(
+                    x,
+                    y,
+                    width,
+                    height,
+                    radius,
+                    stroke=stroke_flag,
+                    fill=1,
+                )
+                pdf_canvas.restoreState()
+
+            def drawIcon(
+                pdf_canvas: canvas.Canvas,
+                icon_reader: ImageReader,
+                x: float,
+                y: float,
+                size: float,
+            ) -> None:
+                pdf_canvas.saveState()
+                clip_path = pdf_canvas.beginPath()
+                clip_path.roundRect(x, y, size, size, 6)
+                pdf_canvas.clipPath(clip_path, stroke=0, fill=0)
+                pdf_canvas.drawImage(
+                    icon_reader,
+                    x,
+                    y,
+                    width=size,
+                    height=size,
+                    preserveAspectRatio=True,
+                    mask="auto",
+                )
+                pdf_canvas.restoreState()
+
+            def drawPoint(pdf_canvas: canvas.Canvas, x: float, y: float, diameter: float) -> None:
+                radius = diameter / 2
+                pdf_canvas.saveState()
+                pdf_canvas.setFillColor(colors.HexColor("#5EA7FF"))
+                pdf_canvas.setStrokeColor(colors.white)
+                pdf_canvas.setLineWidth(0.8)
+                pdf_canvas.circle(x, y, radius, stroke=1, fill=1)
+                pdf_canvas.restoreState()
+
+            def drawConnection(
+                pdf_canvas: canvas.Canvas,
+                start_x: float,
+                start_y: float,
+                end_x: float,
+                end_y: float,
+            ) -> None:
+                pdf_canvas.saveState()
+                pdf_canvas.setStrokeColor(colors.Color(0.423, 0.714, 1.0, alpha=0.85))
+                pdf_canvas.setLineWidth(4.0)
+                pdf_canvas.setLineCap(1)
+                pdf_canvas.line(start_x, start_y, end_x, end_y)
+                pdf_canvas.restoreState()
+
             def _draw_item_bubble(
-                pointer_x: float,
-                pointer_y: float,
+                bubble_px: float,
+                bubble_py: float,
+                anchor_px: float,
+                anchor_py: float,
                 entry: _VehicleViewEntry,
                 item_lines: list[str],
                 *,
                 bounds: tuple[float, float, float, float],
+                pointer_mode: bool,
             ) -> None:
                 pdf.saveState()
-                bubble_padding = 8
+                bubble_padding = 10
                 line_height = 12
                 accent_color = colors.HexColor("#3B82F6")
                 bubble_background = colors.HexColor("#0F172A")
@@ -3605,126 +3695,70 @@ def generate_vehicle_inventory_pdf(
 
                 icon_reader = _bubble_icon_reader(entry)
                 icon_size = 34 if icon_reader else 0
-                icon_spacing = 6 if icon_reader else 0
+                icon_spacing = 8 if icon_reader else 0
                 icon_block_width = icon_size + icon_spacing if icon_reader else 0
 
                 text_widths: list[float] = []
                 for index, line in enumerate(item_lines):
                     font_name = "Helvetica-Bold" if index == 0 else "Helvetica"
-                    text_widths.append(pdf.stringWidth(line, font_name, 9))
+                    text_widths.append(pdf.stringWidth(line, font_name, 10 if index == 0 else 9))
                 quantity_label = f"Qté : {entry.total_quantity}"
                 reference_label = entry.reference_label()
-                quantity_width = pdf.stringWidth(quantity_label, "Helvetica-Bold", 8) + 14
-                reference_width = pdf.stringWidth(reference_label, "Helvetica", 8) + 14
+                quantity_width = pdf.stringWidth(quantity_label, "Helvetica-Bold", 8) + 16
+                reference_width = pdf.stringWidth(reference_label, "Helvetica", 8) + 16
                 content_width = max(text_widths or [0.0]) + icon_block_width
-                bubble_width = max(content_width + 2 * bubble_padding, quantity_width + 2 * bubble_padding, 160)
+                bubble_width = max(content_width + 2 * bubble_padding, quantity_width + 2 * bubble_padding, 170)
                 bubble_height = (
                     line_height * len(item_lines)
                     + 3 * bubble_padding
-                    + 16  # espace pour les badges
+                    + 16
                 )
-                anchor_side = "left" if pointer_x > (page_width / 2) else "right"
-                bubble_offset = 30
-                if anchor_side == "left":
-                    bubble_x = pointer_x - bubble_offset - bubble_width
-                else:
-                    bubble_x = pointer_x + bubble_offset
-                bubble_x = _clamp(bubble_x, margin, page_width - margin - bubble_width)
-                min_y = bounds[1]
-                max_y = max(min_y, bounds[1] + bounds[3] - bubble_height)
-                initial_bubble_y = _clamp(
-                    pointer_y - bubble_height / 2, min_y, max_y
-                )
-                bubble_y = _find_available_bubble_y(
-                    bubble_x,
-                    bubble_width,
-                    bubble_height,
-                    initial_bubble_y,
-                    min_y,
-                    max_y,
-                )
-                if anchor_side == "left":
-                    anchor_x = bubble_x + bubble_width
-                else:
-                    anchor_x = bubble_x
-                anchor_y = _clamp(pointer_y, bubble_y + 10, bubble_y + bubble_height - 10)
 
-                pdf.setLineWidth(1.2)
-                pdf.setStrokeColor(accent_color)
-                pdf.setFillColor(bubble_background)
-                pdf.roundRect(
+                bubble_x = _clamp(
+                    bubble_px,
+                    bounds[0],
+                    bounds[0] + bounds[2] - bubble_width,
+                )
+                bubble_y = _clamp(
+                    bubble_py,
+                    bounds[1],
+                    bounds[1] + bounds[3] - bubble_height,
+                )
+
+                if pointer_mode:
+                    drawPoint(pdf, anchor_px, anchor_py, 14)
+                connection_start_x = bubble_x + bubble_width / 2
+                connection_start_y = bubble_y
+                drawConnection(pdf, connection_start_x, connection_start_y, anchor_px, anchor_py)
+
+                drawRoundedBubble(
+                    pdf,
                     bubble_x,
                     bubble_y,
                     bubble_width,
                     bubble_height,
-                    10,
-                    stroke=1,
-                    fill=1,
+                    radius=12,
+                    fill_color=bubble_background,
+                    border_color=bubble_border,
+                    shadow=True,
                 )
 
                 if icon_reader:
-                    pdf.saveState()
-                    icon_clip_path = pdf.beginPath()
-                    icon_clip_path.roundRect(
-                        bubble_x + bubble_padding,
-                        bubble_y + bubble_height - bubble_padding - icon_size,
-                        icon_size,
-                        icon_size,
-                        6,
-                    )
-                    pdf.clipPath(icon_clip_path, stroke=0, fill=0)
-                    pdf.drawImage(
+                    drawIcon(
+                        pdf,
                         icon_reader,
                         bubble_x + bubble_padding,
                         bubble_y + bubble_height - bubble_padding - icon_size,
-                        width=icon_size,
-                        height=icon_size,
-                        preserveAspectRatio=True,
-                        mask="auto",
+                        icon_size,
                     )
-                    pdf.restoreState()
-
-                pdf.setStrokeColor(colors.Color(1, 1, 1, alpha=0.85))
-                pdf.setLineWidth(2.4)
-                pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
-                pdf.setStrokeColor(accent_color)
-                pdf.setFillColor(accent_color)
-                pdf.circle(pointer_x, pointer_y, 4, stroke=0, fill=1)
-                pdf.setFillColor(colors.white)
-                pdf.circle(pointer_x, pointer_y, 2, stroke=0, fill=1)
-                pdf.setStrokeColor(accent_color)
-                pdf.setLineWidth(1.6)
-                pdf.line(pointer_x, pointer_y, anchor_x, anchor_y)
-                direction_x = pointer_x - anchor_x
-                direction_y = pointer_y - anchor_y
-                direction_length = math.hypot(direction_x, direction_y)
-                if direction_length > 1e-3:
-                    unit_x = direction_x / direction_length
-                    unit_y = direction_y / direction_length
-                    arrow_length = 10
-                    arrow_width = 6
-                    base_x = pointer_x - unit_x * arrow_length
-                    base_y = pointer_y - unit_y * arrow_length
-                    perp_x = -unit_y
-                    perp_y = unit_x
-                    left_x = base_x + perp_x * (arrow_width / 2)
-                    left_y = base_y + perp_y * (arrow_width / 2)
-                    right_x = base_x - perp_x * (arrow_width / 2)
-                    right_y = base_y - perp_y * (arrow_width / 2)
-                    path = pdf.beginPath()
-                    path.moveTo(pointer_x, pointer_y)
-                    path.lineTo(left_x, left_y)
-                    path.lineTo(right_x, right_y)
-                    path.close()
-                    pdf.setFillColor(accent_color)
-                    pdf.drawPath(path, stroke=0, fill=1)
 
                 content_x = bubble_x + bubble_padding + icon_block_width
-                text_y = bubble_y + bubble_height - bubble_padding - line_height + 4
+                text_y = bubble_y + bubble_height - bubble_padding - line_height + 3
                 for index, line in enumerate(item_lines):
                     font_name = "Helvetica-Bold" if index == 0 else "Helvetica"
                     font_color = text_primary if index == 0 else muted_text
-                    pdf.setFont(font_name, 9)
+                    font_size = 10 if index == 0 else 9
+                    pdf.setFont(font_name, font_size)
                     pdf.setFillColor(font_color)
                     pdf.drawString(content_x, text_y, line)
                     text_y -= line_height
@@ -3807,15 +3841,16 @@ def generate_vehicle_inventory_pdf(
 
                 if image_reader is not None:
                     image_width, image_height = image_reader.getSize()
-                    available_width = page_width - 2 * margin
+                    available_width = page_width * 0.75
+                    available_height = image_max_height
                     scale = min(
                         available_width / image_width,
-                        image_max_height / image_height,
+                        available_height / image_height,
                         1.0,
                     )
                     drawn_width = image_width * scale
                     drawn_height = image_height * scale
-                    image_x = margin + (available_width - drawn_width) / 2
+                    image_x = margin + ((page_width - 2 * margin) - drawn_width) / 2
                     image_y = y_position - drawn_height
                     pdf.drawImage(
                         image_reader,
@@ -3823,7 +3858,7 @@ def generate_vehicle_inventory_pdf(
                         image_y,
                         width=drawn_width,
                         height=drawn_height,
-                        preserveAspectRatio=False,
+                        preserveAspectRatio=True,
                         mask="auto",
                     )
                     pdf.saveState()
@@ -3850,16 +3885,31 @@ def generate_vehicle_inventory_pdf(
 
                     bounds = (image_x, image_y, drawn_width, drawn_height)
                     for entry in located_entries:
-                        pos_x = _clamp(entry.pointer_x or 0.0, 0.0, 1.0)
-                        pos_y = _clamp(entry.pointer_y or 0.0, 0.0, 1.0)
-                        pointer_x = image_x + pos_x * drawn_width
-                        pointer_y = image_y + drawn_height * (1.0 - pos_y)
+                        bubble_ratio_x = _clamp(entry.pointer_x or 0.0, 0.0, 1.0)
+                        bubble_ratio_y = _clamp(entry.pointer_y or 0.0, 0.0, 1.0)
+                        anchor_ratio_x = _clamp(
+                            entry.position_x if entry.position_x is not None else bubble_ratio_x,
+                            0.0,
+                            1.0,
+                        )
+                        anchor_ratio_y = _clamp(
+                            entry.position_y if entry.position_y is not None else bubble_ratio_y,
+                            0.0,
+                            1.0,
+                        )
+                        bubble_x = image_x + bubble_ratio_x * drawn_width
+                        bubble_y = image_y + drawn_height * (1.0 - bubble_ratio_y)
+                        anchor_x = image_x + anchor_ratio_x * drawn_width
+                        anchor_y = image_y + drawn_height * (1.0 - anchor_ratio_y)
                         _draw_item_bubble(
-                            pointer_x,
-                            pointer_y,
+                            bubble_x,
+                            bubble_y,
+                            anchor_x,
+                            anchor_y,
                             entry,
                             _wrap_bubble_lines(entry),
                             bounds=bounds,
+                            pointer_mode=pointer_targets is not None,
                         )
 
                     y_position = image_y - 18
