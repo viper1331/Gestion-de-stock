@@ -482,7 +482,10 @@ export function PharmacyPage() {
 
       <div className="grid gap-6 lg:grid-cols-3">
         <div className="lg:col-span-2">
-          <div className="overflow-hidden rounded-lg border border-slate-800">
+          <div
+            className="max-h-[520px] overflow-y-auto rounded-lg border border-slate-800"
+            style={{ maxHeight: "calc(8 * 56px + 48px)" }}
+          >
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
