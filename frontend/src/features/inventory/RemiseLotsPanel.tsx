@@ -28,6 +28,7 @@ interface RemiseInventoryItem {
   id: number;
   name: string;
   sku: string;
+  size: string | null;
   quantity: number;
 }
 
@@ -363,11 +364,12 @@ export function RemiseLotsPanel() {
   };
 
   const availableForForm = useMemo(
-    () => availableItems.map((item) => ({
-      id: item.id,
-      label: `${item.name} (${item.sku})`,
-      quantity: item.quantity
-    })),
+    () =>
+      availableItems.map((item) => ({
+        id: item.id,
+        label: `${item.name}${item.size ? ` — ${item.size}` : ""} (${item.sku})`,
+        quantity: item.quantity
+      })),
     [availableItems]
   );
 
