@@ -79,7 +79,10 @@ interface RemiseItem {
   quantity: number;
   low_stock_threshold: number;
   track_low_stock: boolean;
+  expiration_date: string | null;
 }
+
+type ExpirationStatus = "expired" | "expiring-soon" | null;
 
 export function HomePage() {
   const { user } = useAuth();
@@ -277,6 +280,31 @@ export function HomePage() {
 
       return item.quantity <= item.low_stock_threshold;
     });
+  }, [canSeeRemiseAlerts, remiseItems]);
+
+  const remiseExpirationAlerts = useMemo(() => {
+    if (!canSeeRemiseAlerts) {
+      return [] as {
+        id: number;
+        name: string;
+        quantity: number;
+        expirationDate: string;
+        status: ExpirationStatus;
+        timestamp: number;
+      }[];
+    }
+
+    return remiseItems
+      .map((item) => ({
+        id: item.id,
+        name: item.name,
+        quantity: item.quantity,
+        expirationDate: item.expiration_date,
+        status: getExpirationStatus(item.expiration_date),
+        timestamp: item.expiration_date ? new Date(item.expiration_date).getTime() : Number.POSITIVE_INFINITY
+      }))
+      .filter((item) => Boolean(item.status) && Number.isFinite(item.timestamp))
+      .sort((a, b) => a.timestamp - b.timestamp);
   }, [canSeeRemiseAlerts, remiseItems]);
 
   const lowStockCards = useMemo(
@@ -486,6 +514,60 @@ export function HomePage() {
         </section>
       ) : null}
 
+      {canSeeRemiseAlerts ? (
+        <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
+          <header className="flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <h2 className="text-base font-semibold text-white">Péremptions des remises</h2>
+              <p className="text-xs text-slate-400">Suivez les matériels remis proches de leur date de validité.</p>
+            </div>
+            <Link
+              to="/remise-inventory"
+              className="inline-flex items-center justify-center rounded-md border border-indigo-500 px-3 py-1.5 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300"
+            >
+              Ouvrir l'inventaire remise
+            </Link>
+          </header>
+          {isFetchingRemiseAlerts ? (
+            <p className="mt-3 text-sm text-slate-400">Analyse des péremptions en cours...</p>
+          ) : remiseExpirationAlerts.length > 0 ? (
+            <>
+              <ul className="mt-4 space-y-3">
+                {remiseExpirationAlerts.slice(0, 4).map((item) => (
+                  <li
+                    key={`remise-expiration-${item.id}`}
+                    className="rounded-lg border border-slate-800 bg-slate-950/60 p-3"
+                  >
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="font-semibold text-white">{item.name}</span>
+                      <span
+                        className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${
+                          item.status === "expired"
+                            ? "border-red-500/40 bg-red-500/20 text-red-200"
+                            : "border-orange-400/40 bg-orange-500/20 text-orange-200"
+                        }`}
+                      >
+                        {item.status === "expired" ? "Expiré" : "Bientôt périmé"}
+                      </span>
+                    </div>
+                    <p className="mt-1 text-xs text-slate-400">
+                      Péremption : {formatDate(item.expirationDate)} · Stock : {item.quantity}
+                    </p>
+                  </li>
+                ))}
+              </ul>
+              {remiseExpirationAlerts.length > 4 ? (
+                <p className="mt-2 text-xs text-slate-400">
+                  +{remiseExpirationAlerts.length - 4} matériel(s) supplémentaire(s) proches de la date de péremption.
+                </p>
+              ) : null}
+            </>
+          ) : (
+            <p className="mt-3 text-sm text-emerald-300">Aucun matériel remis n'est proche de la péremption.</p>
+          )}
+        </section>
+      ) : null}
+
       <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
         <header className="flex flex-wrap items-center justify-between gap-2">
           <div>
@@ -582,4 +664,44 @@ export function HomePage() {
       ) : null}
     </section>
   );
+}
+
+function getExpirationStatus(value: string | null): ExpirationStatus {
+  if (!value) {
+    return null;
+  }
+
+  const expirationDate = new Date(value);
+  if (Number.isNaN(expirationDate.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expiration = new Date(expirationDate);
+  expiration.setHours(0, 0, 0, 0);
+
+  const diffInDays = Math.floor((expiration.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffInDays < 0) {
+    return "expired";
+  }
+
+  if (diffInDays <= 30) {
+    return "expiring-soon";
+  }
+
+  return null;
+}
+
+function formatDate(value: string | null) {
+  if (!value) {
+    return "-";
+  }
+
+  try {
+    return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(new Date(value));
+  } catch (error) {
+    return value;
+  }
 }

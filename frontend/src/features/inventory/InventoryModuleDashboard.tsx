@@ -105,7 +105,10 @@ type InventoryColumnKey =
   | "size"
   | "category"
   | "supplier"
-  | "threshold";
+  | "threshold"
+  | "expiration";
+
+type ExpirationStatus = "expired" | "expiring-soon" | null;
 
 export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: InventoryModuleDashboardProps) {
   const queryClient = useQueryClient();
@@ -291,7 +294,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     size: 140,
     category: 150,
     supplier: 180,
-    threshold: 120
+    threshold: 120,
+    expiration: 170
   };
 
   const defaultColumnVisibility: Record<InventoryColumnKey, boolean> = {
@@ -302,7 +306,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     size: true,
     category: true,
     supplier: true,
-    threshold: true
+    threshold: true,
+    expiration: supportsExpirationDate
   };
 
   const [columnVisibility, setColumnVisibility] = useState<Record<InventoryColumnKey, boolean>>(() => ({
@@ -344,11 +349,14 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       { key: "supplier", label: "Fournisseur" },
       { key: "threshold", label: "Seuil" }
     ];
+    if (supportsExpirationDate) {
+      options.push({ key: "expiration", label: "Péremption" });
+    }
     if (supportsItemImages) {
       return [{ key: "image", label: "Image" }, ...options];
     }
     return options;
-  }, [itemNoun.singularCapitalized, supportsItemImages]);
+  }, [itemNoun.singularCapitalized, supportsExpirationDate, supportsItemImages]);
 
   const columnWidths = {
     ...baseColumnWidths,
@@ -603,6 +611,13 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         onResize={(value) => saveWidth("supplier", value)}
                       />
                     ) : null}
+                    {supportsExpirationDate && columnVisibility.expiration !== false ? (
+                      <ResizableHeader
+                        label="Péremption"
+                        width={columnWidths.expiration}
+                        onResize={(value) => saveWidth("expiration", value)}
+                      />
+                    ) : null}
                     {columnVisibility.threshold !== false ? (
                       <ResizableHeader
                         label="Seuil"
@@ -621,6 +636,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                       item,
                       supportsLowStockOptOut
                     );
+                    const expirationStatus = supportsExpirationDate
+                      ? getExpirationStatus(item.expiration_date)
+                      : null;
                     const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
                     const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
                     const selectionTone =
@@ -686,6 +704,29 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         {columnVisibility.supplier !== false ? (
                           <td className="px-4 py-3 text-sm text-slate-300">
                             {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                          </td>
+                        ) : null}
+                        {supportsExpirationDate && columnVisibility.expiration !== false ? (
+                          <td
+                            className={`px-4 py-3 text-sm ${
+                              expirationStatus === "expired"
+                                ? "text-red-300"
+                                : expirationStatus === "expiring-soon"
+                                  ? "text-amber-200"
+                                  : "text-slate-300"
+                            }`}
+                          >
+                            {formatExpirationDate(item.expiration_date)}
+                            {expirationStatus === "expired" ? (
+                              <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                                Expiré
+                              </span>
+                            ) : null}
+                            {expirationStatus === "expiring-soon" ? (
+                              <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
+                                Bientôt périmé
+                              </span>
+                            ) : null}
                           </td>
                         ) : null}
                         {columnVisibility.threshold !== false ? (
@@ -1675,6 +1716,34 @@ function getInventoryAlerts(item: Item, allowOptOut = false) {
   return { isOutOfStock, isLowStock, trackingEnabled };
 }
 
+function getExpirationStatus(value: string | null): ExpirationStatus {
+  if (!value) {
+    return null;
+  }
+
+  const expirationDate = new Date(value);
+  if (Number.isNaN(expirationDate.getTime())) {
+    return null;
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const expiration = new Date(expirationDate);
+  expiration.setHours(0, 0, 0, 0);
+
+  const diffInDays = Math.floor((expiration.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
+
+  if (diffInDays < 0) {
+    return "expired";
+  }
+
+  if (diffInDays <= 30) {
+    return "expiring-soon";
+  }
+
+  return null;
+}
+
 function parseSizesInput(value: string): string[] {
   const seen = new Set<string>();
   const result: string[] = [];
@@ -1691,6 +1760,18 @@ function parseSizesInput(value: string): string[] {
     result.push(trimmed);
   }
   return result;
+}
+
+function formatExpirationDate(value: string | null) {
+  if (!value) {
+    return "-";
+  }
+
+  try {
+    return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(new Date(value));
+  } catch (error) {
+    return value;
+  }
 }
 
 function formatDate(value: string) {
