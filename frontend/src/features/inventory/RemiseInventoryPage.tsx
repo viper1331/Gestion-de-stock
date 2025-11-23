@@ -12,6 +12,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   storageKeyPrefix: "remise-inventory",
   showPurchaseOrders: false,
   supportsLowStockOptOut: true,
+  supportsExpirationDate: true,
   searchPlaceholder: "Rechercher une remise par nom ou SKU",
   barcodePrefix: "IS",
   itemNoun: {
