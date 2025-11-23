@@ -2084,11 +2084,44 @@ def delete_item(item_id: int) -> None:
 
 
 def list_vehicle_items(search: str | None = None) -> list[models.Item]:
+    _ensure_vehicle_pharmacy_templates()
     items = _list_inventory_items_internal("vehicle_inventory", search)
     for item in items:
         if item.category_id is None:
             item.qr_token = None
     return items
+
+
+def _ensure_vehicle_pharmacy_templates() -> None:
+    """Ensure pharmacy items are visible in the vehicle library."""
+
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_item_columns(conn)
+        missing_templates = conn.execute(
+            """
+            SELECT pi.id AS pharmacy_item_id
+            FROM pharmacy_items AS pi
+            WHERE NOT EXISTS (
+                SELECT 1
+                FROM vehicle_items AS vi
+                WHERE vi.pharmacy_item_id = pi.id AND vi.category_id IS NULL
+            )
+            ORDER BY pi.id
+            """
+        ).fetchall()
+
+        for row in missing_templates:
+            _create_inventory_item_internal(
+                "vehicle_inventory",
+                models.ItemCreate(
+                    name=f"Pharmacie-{row['pharmacy_item_id']}",
+                    sku=f"PHARM-{row['pharmacy_item_id']}",
+                    quantity=0,
+                    pharmacy_item_id=row["pharmacy_item_id"],
+                    vehicle_type="secours_a_personne",
+                ),
+            )
 
 
 def create_vehicle_item(payload: models.ItemCreate) -> models.Item:
