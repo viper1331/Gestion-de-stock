@@ -767,6 +767,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 onCancel={closeSidebar}
                 supportsItemImages={supportsItemImages}
                 initialImageUrl={initialImageUrl}
+                supportsExpirationDate={supportsExpirationDate}
                 itemNoun={itemNoun}
                 existingSkus={existingSkus}
                 barcodePrefix={barcodePrefix}
@@ -875,6 +876,7 @@ function ItemForm({
   isSubmitting,
   supportsItemImages = false,
   initialImageUrl = null,
+  supportsExpirationDate = false,
   itemNoun,
   existingSkus,
   barcodePrefix,
@@ -890,6 +892,7 @@ function ItemForm({
   isSubmitting: boolean;
   supportsItemImages?: boolean;
   initialImageUrl?: string | null;
+  supportsExpirationDate?: boolean;
   itemNoun: InventoryItemNounForms;
   existingSkus: ExistingSkuEntry[];
   barcodePrefix: string;
@@ -1025,7 +1028,7 @@ function ItemForm({
       excludeId: currentItemId
     });
     const expirationDatePayload =
-      config.supportsExpirationDate && values.requires_expiration_date && values.expiration_date
+      supportsExpirationDate && values.requires_expiration_date && values.expiration_date
         ? values.expiration_date
         : null;
     const { requires_expiration_date: _requiresExpirationDate, ...restValues } = values;
