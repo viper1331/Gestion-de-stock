@@ -541,152 +541,155 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="flex-1 space-y-4">
-          <div className="overflow-hidden rounded-lg border border-slate-800">
-            <table className="min-w-full divide-y divide-slate-800">
-              <thead className="bg-slate-900/60">
-                <tr>
-                  {supportsItemImages && columnVisibility.image !== false ? (
-                    <ResizableHeader
-                      label="Image"
-                      width={columnWidths.image}
-                      onResize={(value) => saveWidth("image", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.name !== false ? (
-                    <ResizableHeader
-                      label={itemNoun.singularCapitalized}
-                      width={columnWidths.name}
-                      onResize={(value) => saveWidth("name", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.sku !== false ? (
-                    <ResizableHeader
-                      label="SKU"
-                      width={columnWidths.sku}
-                      onResize={(value) => saveWidth("sku", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.quantity !== false ? (
-                    <ResizableHeader
-                      label="Quantité"
-                      width={columnWidths.quantity}
-                      onResize={(value) => saveWidth("quantity", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.size !== false ? (
-                    <ResizableHeader
-                      label="Taille / Variante"
-                      width={columnWidths.size}
-                      onResize={(value) => saveWidth("size", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.category !== false ? (
-                    <ResizableHeader
-                      label="Catégorie"
-                      width={columnWidths.category}
-                      onResize={(value) => saveWidth("category", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.supplier !== false ? (
-                    <ResizableHeader
-                      label="Fournisseur"
-                      width={columnWidths.supplier}
-                      onResize={(value) => saveWidth("supplier", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.threshold !== false ? (
-                    <ResizableHeader
-                      label="Seuil"
-                      width={columnWidths.threshold}
-                      onResize={(value) => saveWidth("threshold", value)}
-                    />
-                  ) : null}
-                  <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900 bg-slate-950/60">
-                {items.map((item, index) => {
-                  const { isOutOfStock, isLowStock } = getInventoryAlerts(
-                    item,
-                    supportsLowStockOptOut
-                  );
-                  const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
-                  const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
-                  const selectionTone =
-                    selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
-                  const imageUrl = resolveMediaUrl(item.image_url);
-                  const hasImage = Boolean(imageUrl);
+          <div className="rounded-lg border border-slate-800">
+            <div className="max-h-[520px] overflow-y-auto">
+              <table className="min-w-full divide-y divide-slate-800">
+                <thead className="bg-slate-900/60">
+                  <tr>
+                    {supportsItemImages && columnVisibility.image !== false ? (
+                      <ResizableHeader
+                        label="Image"
+                        width={columnWidths.image}
+                        onResize={(value) => saveWidth("image", value)}
+                      />
+                    ) : null}
+                    {columnVisibility.name !== false ? (
+                      <ResizableHeader
+                        label={itemNoun.singularCapitalized}
+                        width={columnWidths.name}
+                        onResize={(value) => saveWidth("name", value)}
+                      />
+                    ) : null}
+                    {columnVisibility.sku !== false ? (
+                      <ResizableHeader
+                        label="SKU"
+                        width={columnWidths.sku}
+                        onResize={(value) => saveWidth("sku", value)}
+                      />
+                    ) : null}
+                    {columnVisibility.quantity !== false ? (
+                      <ResizableHeader
+                        label="Quantité"
+                        width={columnWidths.quantity}
+                        onResize={(value) => saveWidth("quantity", value)}
+                      />
+                    ) : null}
+                    {columnVisibility.size !== false ? (
+                      <ResizableHeader
+                        label="Taille / Variante"
+                        width={columnWidths.size}
+                        onResize={(value) => saveWidth("size", value)}
+                      />
+                    ) : null}
+                    {columnVisibility.category !== false ? (
+                      <ResizableHeader
+                        label="Catégorie"
+                        width={columnWidths.category}
+                        onResize={(value) => saveWidth("category", value)}
+                      />
+                    ) : null}
+                    {columnVisibility.supplier !== false ? (
+                      <ResizableHeader
+                        label="Fournisseur"
+                        width={columnWidths.supplier}
+                        onResize={(value) => saveWidth("supplier", value)}
+                      />
+                    ) : null}
+                    {columnVisibility.threshold !== false ? (
+                      <ResizableHeader
+                        label="Seuil"
+                        width={columnWidths.threshold}
+                        onResize={(value) => saveWidth("threshold", value)}
+                      />
+                    ) : null}
+                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Actions
+                    </th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-900 bg-slate-950/60">
+                  {items.map((item, index) => {
+                    const { isOutOfStock, isLowStock } = getInventoryAlerts(
+                      item,
+                      supportsLowStockOptOut
+                    );
+                    const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
+                    const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
+                    const selectionTone =
+                      selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
+                    const imageUrl = resolveMediaUrl(item.image_url);
+                    const hasImage = Boolean(imageUrl);
 
-                  return (
-                    <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
-                      {supportsItemImages && columnVisibility.image !== false ? (
-                        <td className="px-4 py-3 text-sm text-slate-300">
-                          {hasImage ? (
-                            <img
-                              src={imageUrl ?? undefined}
-                              alt={`Illustration de ${item.name}`}
-                              className="h-12 w-12 rounded border border-slate-700 object-cover"
-                            />
-                          ) : (
-                            <span className="text-xs text-slate-500">Aucune</span>
-                          )}
-                        </td>
-                      ) : null}
-                      {columnVisibility.name !== false ? (
-                        <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
-                      ) : null}
-                      {columnVisibility.sku !== false ? (
-                        <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
-                      ) : null}
-                      {columnVisibility.quantity !== false ? (
-                        <td
-                      className={`px-4 py-3 text-sm font-semibold ${
-                        isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
-                      }`}
-                      title={
-                        isOutOfStock
-                          ? `${itemNoun.demonstrativeCapitalized} est en rupture de stock`
-                          : isLowStock
-                            ? "Stock faible"
-                            : undefined
-                      }
-                        >
-                          {item.quantity}
-                          {isOutOfStock ? (
-                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                              Rupture
-                            </span>
-                          ) : null}
-                          {!isOutOfStock && isLowStock ? (
-                            <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                              Stock faible
-                            </span>
-                          ) : null}
-                        </td>
-                      ) : null}
-                      {columnVisibility.size !== false ? (
-                        <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
-                      ) : null}
-                      {columnVisibility.category !== false ? (
-                        <td className="px-4 py-3 text-sm text-slate-300">
-                          {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
-                        </td>
-                      ) : null}
-                      {columnVisibility.supplier !== false ? (
-                        <td className="px-4 py-3 text-sm text-slate-300">
-                          {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
-                        </td>
-                      ) : null}
-                      {columnVisibility.threshold !== false ? (
-                        <td className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}>
-                          {item.low_stock_threshold}
-                        </td>
-                      ) : null}
-                      <td className="px-4 py-3 text-xs text-slate-200">
-                        <div className="flex flex-wrap gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
+                    return (
+                      <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
+                        {supportsItemImages && columnVisibility.image !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-300">
+                            {hasImage ? (
+                              <img
+                                src={imageUrl ?? undefined}
+                                alt={`Illustration de ${item.name}`}
+                                className="h-12 w-12 rounded border border-slate-700 object-cover"
+                              />
+                            ) : (
+                              <span className="text-xs text-slate-500">Aucune</span>
+                            )}
+                          </td>
+                        ) : null}
+                        {columnVisibility.name !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
+                        ) : null}
+                        {columnVisibility.sku !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
+                        ) : null}
+                        {columnVisibility.quantity !== false ? (
+                          <td
+                            className={`px-4 py-3 text-sm font-semibold ${
+                              isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                            }`}
+                            title={
+                              isOutOfStock
+                                ? `${itemNoun.demonstrativeCapitalized} est en rupture de stock`
+                                : isLowStock
+                                  ? "Stock faible"
+                                  : undefined
+                            }
+                          >
+                            {item.quantity}
+                            {isOutOfStock ? (
+                              <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                                Rupture
+                              </span>
+                            ) : null}
+                            {!isOutOfStock && isLowStock ? (
+                              <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                                Stock faible
+                              </span>
+                            ) : null}
+                          </td>
+                        ) : null}
+                        {columnVisibility.size !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
+                        ) : null}
+                        {columnVisibility.category !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-300">
+                            {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                          </td>
+                        ) : null}
+                        {columnVisibility.supplier !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-300">
+                            {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                          </td>
+                        ) : null}
+                        {columnVisibility.threshold !== false ? (
+                          <td className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}>
+                            {item.low_stock_threshold}
+                          </td>
+                        ) : null}
+                        <td className="px-4 py-3 text-xs text-slate-200">
+                          <div className="flex flex-wrap gap-2">
+                            <button
+                        type="button"
+                        onClick={() => {
                               setSelectedItem(item);
                               setFormMode("edit");
                               openSidebar();
@@ -722,6 +725,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 })}
               </tbody>
             </table>
+            </div>
           </div>
           {isFetchingItems ? (
             <p className="text-sm text-slate-400">Actualisation de l'inventaire...</p>
