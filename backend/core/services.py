@@ -431,6 +431,8 @@ def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "ALTER TABLE remise_items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 1"
         )
+    if "expiration_date" not in remise_item_columns:
+        conn.execute("ALTER TABLE remise_items ADD COLUMN expiration_date TEXT")
 
 
 def _ensure_remise_lot_columns(conn: sqlite3.Connection) -> None:
@@ -676,6 +678,7 @@ def _apply_schema_migrations() -> None:
                 quantity INTEGER NOT NULL DEFAULT 0,
                 low_stock_threshold INTEGER NOT NULL DEFAULT 0,
                 track_low_stock INTEGER NOT NULL DEFAULT 1,
+                expiration_date TEXT,
                 supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
             );
             CREATE TABLE IF NOT EXISTS remise_movements (
@@ -966,6 +969,9 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     track_low_stock = True
     if "track_low_stock" in row.keys():
         track_low_stock = bool(row["track_low_stock"])
+    expiration_date = None
+    if "expiration_date" in row.keys():
+        expiration_date = row["expiration_date"]
     return models.Item(
         id=row["id"],
         name=name,
@@ -976,6 +982,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         low_stock_threshold=row["low_stock_threshold"],
         track_low_stock=track_low_stock,
         supplier_id=supplier_id,
+        expiration_date=expiration_date,
         remise_item_id=remise_item_id,
         remise_quantity=remise_quantity,
         image_url=image_url,
@@ -1115,6 +1122,9 @@ def _create_inventory_item_internal(
         sku = payload.sku
         insert_sku = sku
         supplier_id = payload.supplier_id
+        expiration_date = (
+            payload.expiration_date.isoformat() if payload.expiration_date else None
+        )
         remise_item_id: int | None = None
         lot_id: int | None = None
         if module == "vehicle_inventory":
@@ -1208,6 +1218,8 @@ def _create_inventory_item_internal(
         if module == "inventory_remise":
             columns.append("track_low_stock")
             values.append(int(payload.track_low_stock))
+            columns.append("expiration_date")
+            values.append(expiration_date)
         if module == "vehicle_inventory":
             columns.append("remise_item_id")
             values.append(remise_item_id)
@@ -1249,6 +1261,14 @@ def _update_inventory_item_internal(
     fields.pop("lot_id", None)
     if module != "vehicle_inventory":
         fields.pop("show_in_qr", None)
+    if module != "inventory_remise":
+        fields.pop("expiration_date", None)
+    elif "expiration_date" in fields:
+        fields["expiration_date"] = (
+            fields["expiration_date"].isoformat()
+            if fields["expiration_date"] is not None
+            else None
+        )
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     if module == "vehicle_inventory":

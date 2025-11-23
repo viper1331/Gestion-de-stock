@@ -18,6 +18,7 @@ export interface InventoryModuleConfig {
   searchPlaceholder?: string;
   supportsItemImages?: boolean;
   supportsLowStockOptOut?: boolean;
+  supportsExpirationDate?: boolean;
   itemNoun?: InventoryItemNounConfig;
   barcodePrefix?: string;
 }
@@ -34,5 +35,6 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   showPurchaseOrders: true,
   searchPlaceholder: "Rechercher par nom ou SKU",
   supportsItemImages: false,
+  supportsExpirationDate: false,
   barcodePrefix: "HAB"
 };

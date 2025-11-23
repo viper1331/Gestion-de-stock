@@ -34,6 +34,7 @@ interface Item {
   low_stock_threshold: number;
    track_low_stock: boolean;
   supplier_id: number | null;
+  expiration_date: string | null;
   remise_item_id: number | null;
   remise_quantity?: number | null;
   image_url: string | null;
@@ -56,6 +57,8 @@ interface ItemFormValues {
   low_stock_threshold: number;
   track_low_stock: boolean;
   supplier_id: number | null;
+  requires_expiration_date: boolean;
+  expiration_date: string;
 }
 
 interface ItemFormSubmitPayload {
@@ -116,6 +119,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
   const supportsItemImages = config.supportsItemImages === true;
   const supportsLowStockOptOut = config.supportsLowStockOptOut === true;
+  const supportsExpirationDate = config.supportsExpirationDate === true;
   const itemNoun = useMemo(
     () => createInventoryItemNounForms(config.itemNoun),
     [config.itemNoun]
@@ -409,7 +413,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
         quantity: selectedItem.quantity,
         low_stock_threshold: selectedItem.low_stock_threshold,
         track_low_stock: selectedItem.track_low_stock,
-        supplier_id: selectedItem.supplier_id
+        supplier_id: selectedItem.supplier_id,
+        requires_expiration_date: Boolean(selectedItem.expiration_date),
+        expiration_date: selectedItem.expiration_date ?? ""
       };
     }
     return {
@@ -420,7 +426,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       quantity: 0,
       low_stock_threshold: 0,
       track_low_stock: true,
-      supplier_id: null
+      supplier_id: null,
+      requires_expiration_date: false,
+      expiration_date: ""
     };
   }, [formMode, selectedItem]);
 
@@ -1016,14 +1024,20 @@ function ItemForm({
       existingSkus,
       excludeId: currentItemId
     });
+    const expirationDatePayload =
+      config.supportsExpirationDate && values.requires_expiration_date && values.expiration_date
+        ? values.expiration_date
+        : null;
+    const { requires_expiration_date: _requiresExpirationDate, ...restValues } = values;
     const payload = {
-      ...values,
+      ...restValues,
       sku: finalSku,
       quantity: Number(values.quantity) || 0,
       low_stock_threshold: Number(values.low_stock_threshold) || 0,
       category_id: values.category_id ?? null,
       supplier_id: values.supplier_id ?? null,
-      size: values.size.trim()
+      size: values.size.trim(),
+      expiration_date: expirationDatePayload
     };
     await onSubmit({ values: payload, imageFile, removeImage });
     if (mode === "create") {
@@ -1035,7 +1049,9 @@ function ItemForm({
         quantity: 0,
         low_stock_threshold: 0,
         track_low_stock: true,
-        supplier_id: null
+        supplier_id: null,
+        requires_expiration_date: false,
+        expiration_date: ""
       });
       setIsSkuAuto(true);
       if (supportsItemImages) {
@@ -1157,6 +1173,50 @@ function ItemForm({
           />
         </div>
       </div>
+      {supportsExpirationDate ? (
+        <div className="space-y-2 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+          <label
+            className="flex items-start gap-3 text-xs font-semibold text-slate-200"
+            htmlFor="item-requires-expiration"
+          >
+            <input
+              id="item-requires-expiration"
+              type="checkbox"
+              checked={values.requires_expiration_date}
+              onChange={(event) =>
+                setValues((prev) => ({
+                  ...prev,
+                  requires_expiration_date: event.target.checked,
+                  expiration_date: event.target.checked ? prev.expiration_date : ""
+                }))
+              }
+              className="mt-0.5 h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+            />
+            <span className="space-y-1">
+              <span>Ce matériel comporte une date de péremption</span>
+              <span className="block text-[11px] font-normal text-slate-400">
+                Activez cette option si vous devez suivre une date limite d'utilisation.
+              </span>
+            </span>
+          </label>
+          {values.requires_expiration_date ? (
+            <div className="space-y-1 pl-7">
+              <label className="text-xs font-semibold text-slate-300" htmlFor="item-expiration-date">
+                Date de péremption
+              </label>
+              <input
+                id="item-expiration-date"
+                type="date"
+                value={values.expiration_date}
+                onChange={(event) =>
+                  setValues((prev) => ({ ...prev, expiration_date: event.target.value }))
+                }
+                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+            </div>
+          ) : null}
+        </div>
+      ) : null}
       {enableLowStockOptOut ? (
         <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
           <label className="flex items-start gap-3 text-xs font-semibold text-slate-200" htmlFor="item-track-low-stock">
