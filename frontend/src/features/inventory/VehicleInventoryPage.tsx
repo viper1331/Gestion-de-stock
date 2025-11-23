@@ -2569,21 +2569,26 @@ function DroppableLibrary({
             )}
           </div>
 
-          {items.map((item) => (
-            <ItemCard
-              key={item.id}
-              item={item}
-              onRemove={() => onRemoveFromVehicle(item.id)}
-              onFeedback={onItemFeedback}
-            />
-          ))}
-          {items.length === 0 && (
-            <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-              {lots.length > 0
-                ? "Aucun article individuel disponible. Ajoutez un lot pour préparer du matériel."
-                : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
-            </p>
-          )}
+          <div
+            className="space-y-3 overflow-y-auto pr-1"
+            style={{ maxHeight: "calc(8 * 5rem)" }}
+          >
+            {items.map((item) => (
+              <ItemCard
+                key={item.id}
+                item={item}
+                onRemove={() => onRemoveFromVehicle(item.id)}
+                onFeedback={onItemFeedback}
+              />
+            ))}
+            {items.length === 0 && (
+              <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                {lots.length > 0
+                  ? "Aucun article individuel disponible. Ajoutez un lot pour préparer du matériel."
+                  : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
+              </p>
+            )}
+          </div>
         </div>
       )}
     </div>
