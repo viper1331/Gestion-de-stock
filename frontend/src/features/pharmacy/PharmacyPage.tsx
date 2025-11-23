@@ -136,6 +136,7 @@ export function PharmacyPage() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<PharmacyItem | null>(null);
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
+  const [isFormVisible, setIsFormVisible] = useState(true);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
@@ -468,6 +469,7 @@ export function PharmacyPage() {
               onClick={() => {
                 setSelected(null);
                 setFormMode("create");
+                setIsFormVisible(true);
               }}
               className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
               title="Créer une nouvelle référence pharmaceutique"
@@ -480,8 +482,8 @@ export function PharmacyPage() {
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className={`grid gap-6 ${isFormVisible && canEdit ? "lg:grid-cols-3" : ""}`}>
+        <div className={isFormVisible && canEdit ? "lg:col-span-2" : ""}>
           <div
             className="max-h-[520px] overflow-y-auto rounded-lg border border-slate-800"
             style={{ maxHeight: "calc(8 * 56px + 48px)" }}
@@ -605,6 +607,7 @@ export function PharmacyPage() {
                               onClick={() => {
                                 setSelected(item);
                                 setFormMode("edit");
+                                setIsFormVisible(true);
                               }}
                               className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
                               title={`Modifier la fiche de ${item.name}`}
@@ -648,192 +651,208 @@ export function PharmacyPage() {
           {isFetching ? <p className="mt-2 text-xs text-slate-400">Actualisation...</p> : null}
         </div>
 
-        {canEdit ? (
+        {canEdit && isFormVisible ? (
           <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <h3 className="text-sm font-semibold text-white">
-              {formMode === "edit" ? "Modifier l'article" : "Ajouter un article"}
-            </h3>
-            <form
-              key={`${formMode}-${selected?.id ?? "new"}`}
-              className="mt-3 space-y-3"
-              onSubmit={handleSubmit}
-            >
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-name">
-                  Nom
-                </label>
-                <input
-                  id="pharmacy-name"
-                  value={draft.name}
-                  onChange={(event) => updateDraft({ name: event.target.value }, true)}
-                  required
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  title="Nom du médicament ou du consommable"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-dosage">
-                  Dosage
-                </label>
-                <input
-                  id="pharmacy-dosage"
-                  value={draft.dosage}
-                  onChange={(event) => updateDraft({ dosage: event.target.value }, true)}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  title="Dosage ou concentration si applicable"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-packaging">
-                  Conditionnement
-                </label>
-                <input
-                  id="pharmacy-packaging"
-                  value={draft.packaging}
-                  onChange={(event) => updateDraft({ packaging: event.target.value }, true)}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  title="Conditionnement de l'article (boîte, unité...)"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-barcode">
-                  Code-barres
-                </label>
-                <input
-                  id="pharmacy-barcode"
-                  value={draft.barcode}
-                  onChange={handleBarcodeChange}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  title="Code-barres associé (facultatif)"
-                  inputMode="text"
-                  pattern="[\x20-\x7E]*"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-category">
-                  Catégorie
-                </label>
-                <select
-                  id="pharmacy-category"
-                  value={draft.category_id}
-                  onChange={(event) => updateDraft({ category_id: event.target.value })}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  title="Associez ce produit à une catégorie métier"
-                >
-                  <option value="">Aucune</option>
-                  {categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-quantity">
-                  Quantité
-                </label>
-                <input
-                  id="pharmacy-quantity"
-                  type="number"
-                  min={0}
-                  value={Number.isNaN(draft.quantity) ? "" : draft.quantity}
-                  onChange={(event) => {
-                    const { value } = event.target;
-                    updateDraft(
-                      { quantity: value === "" ? Number.NaN : Number(value) },
-                      false
-                    );
-                  }}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  required
-                  title="Quantité disponible en stock"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-low-stock-threshold">
-                  Seuil de stock faible
-                </label>
-                <input
-                  id="pharmacy-low-stock-threshold"
-                  type="number"
-                  min={0}
-                  value={
-                    Number.isNaN(draft.low_stock_threshold) ? "" : draft.low_stock_threshold
-                  }
-                  onChange={(event) => {
-                    const { value } = event.target;
-                    updateDraft(
-                      {
-                        low_stock_threshold:
-                          value === "" ? Number.NaN : Number(value)
-                      },
-                      false
-                    );
-                  }}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  required
-                  title="Quantité minimale avant alerte de stock faible"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-expiration">
-                  Date d'expiration
-                </label>
-                <input
-                  id="pharmacy-expiration"
-                  type="date"
-                  value={draft.expiration_date}
-                  onChange={(event) => updateDraft({ expiration_date: event.target.value })}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  title="Date d'expiration (facultative)"
-                />
-              </div>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-location">
-                  Localisation
-                </label>
-                <input
-                  id="pharmacy-location"
-                  value={draft.location}
-                  onChange={(event) => updateDraft({ location: event.target.value })}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  title="Emplacement de stockage (armoire, pièce...)"
-                />
-              </div>
-              <div className="flex gap-2">
-                <button
-                  type="submit"
-                  disabled={createItem.isPending || updateItem.isPending}
-                  className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                  title={
-                    formMode === "edit"
-                      ? "Enregistrer les modifications du médicament"
-                      : "Ajouter ce médicament au stock"
-                  }
-                >
-                  {formMode === "edit"
-                    ? updateItem.isPending
-                      ? "Mise à jour..."
-                      : "Enregistrer"
-                    : createItem.isPending
-                      ? "Ajout..."
-                      : "Ajouter"}
-                </button>
-                {formMode === "edit" ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setSelected(null);
-                      setFormMode("create");
-                    }}
-                    className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-                    title="Annuler la modification en cours"
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="text-sm font-semibold text-white">
+                {formMode === "edit" ? "Modifier l'article" : "Ajouter un article"}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setIsFormVisible((previous) => !previous)}
+                className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-800"
+                title={isFormVisible ? "Masquer le formulaire" : "Afficher le formulaire"}
+              >
+                {isFormVisible ? "Fermer" : "Ouvrir"}
+              </button>
+            </div>
+            {isFormVisible ? (
+              <form
+                key={`${formMode}-${selected?.id ?? "new"}`}
+                className="mt-3 space-y-3"
+                onSubmit={handleSubmit}
+              >
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-name">
+                    Nom
+                  </label>
+                  <input
+                    id="pharmacy-name"
+                    value={draft.name}
+                    onChange={(event) => updateDraft({ name: event.target.value }, true)}
+                    required
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Nom du médicament ou du consommable"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-dosage">
+                    Dosage
+                  </label>
+                  <input
+                    id="pharmacy-dosage"
+                    value={draft.dosage}
+                    onChange={(event) => updateDraft({ dosage: event.target.value }, true)}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Dosage ou concentration si applicable"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-packaging">
+                    Conditionnement
+                  </label>
+                  <input
+                    id="pharmacy-packaging"
+                    value={draft.packaging}
+                    onChange={(event) => updateDraft({ packaging: event.target.value }, true)}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Conditionnement de l'article (boîte, unité...)"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-barcode">
+                    Code-barres
+                  </label>
+                  <input
+                    id="pharmacy-barcode"
+                    value={draft.barcode}
+                    onChange={handleBarcodeChange}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Code-barres associé (facultatif)"
+                    inputMode="text"
+                    pattern="[\x20-\x7E]*"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-category">
+                    Catégorie
+                  </label>
+                  <select
+                    id="pharmacy-category"
+                    value={draft.category_id}
+                    onChange={(event) => updateDraft({ category_id: event.target.value })}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Associez ce produit à une catégorie métier"
                   >
-                    Annuler
+                    <option value="">Aucune</option>
+                    {categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-quantity">
+                    Quantité
+                  </label>
+                  <input
+                    id="pharmacy-quantity"
+                    type="number"
+                    min={0}
+                    value={Number.isNaN(draft.quantity) ? "" : draft.quantity}
+                    onChange={(event) => {
+                      const { value } = event.target;
+                      updateDraft(
+                        { quantity: value === "" ? Number.NaN : Number(value) },
+                        false
+                      );
+                    }}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    required
+                    title="Quantité disponible en stock"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-low-stock-threshold">
+                    Seuil de stock faible
+                  </label>
+                  <input
+                    id="pharmacy-low-stock-threshold"
+                    type="number"
+                    min={0}
+                    value={
+                      Number.isNaN(draft.low_stock_threshold) ? "" : draft.low_stock_threshold
+                    }
+                    onChange={(event) => {
+                      const { value } = event.target;
+                      updateDraft(
+                        {
+                          low_stock_threshold:
+                            value === "" ? Number.NaN : Number(value)
+                        },
+                        false
+                      );
+                    }}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    required
+                    title="Quantité minimale avant alerte de stock faible"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-expiration">
+                    Date d'expiration
+                  </label>
+                  <input
+                    id="pharmacy-expiration"
+                    type="date"
+                    value={draft.expiration_date}
+                    onChange={(event) => updateDraft({ expiration_date: event.target.value })}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Date d'expiration (facultative)"
+                  />
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-location">
+                    Localisation
+                  </label>
+                  <input
+                    id="pharmacy-location"
+                    value={draft.location}
+                    onChange={(event) => updateDraft({ location: event.target.value })}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Emplacement de stockage (armoire, pièce...)"
+                  />
+                </div>
+                <div className="flex gap-2">
+                  <button
+                    type="submit"
+                    disabled={createItem.isPending || updateItem.isPending}
+                    className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    title={
+                      formMode === "edit"
+                        ? "Enregistrer les modifications du médicament"
+                        : "Ajouter ce médicament au stock"
+                    }
+                  >
+                    {formMode === "edit"
+                      ? updateItem.isPending
+                        ? "Mise à jour..."
+                        : "Enregistrer"
+                      : createItem.isPending
+                        ? "Ajout..."
+                        : "Ajouter"}
                   </button>
-                ) : null}
-              </div>
-            </form>
+                  {formMode === "edit" ? (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelected(null);
+                        setFormMode("create");
+                      }}
+                      className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                      title="Annuler la modification en cours"
+                    >
+                      Annuler
+                    </button>
+                  ) : null}
+                </div>
+              </form>
+            ) : (
+              <p className="mt-3 text-xs text-slate-400">
+                Formulaire masqué. Cliquez sur « Ouvrir » pour ajouter ou modifier un article.
+              </p>
+            )}
             <div className="mt-6 space-y-4">
               <section className="rounded-lg border border-slate-800 bg-slate-950 p-4">
                 <h4 className="text-sm font-semibold text-white">Mouvement de stock</h4>
