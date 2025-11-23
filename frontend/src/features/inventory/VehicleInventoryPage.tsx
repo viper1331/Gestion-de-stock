@@ -2498,7 +2498,10 @@ function DroppableLibrary({
                 Aucun lot complet en stock n'est disponible actuellement.
               </p>
             ) : (
-              <div className="space-y-2">
+              <div
+                className="grid grid-cols-1 gap-2 overflow-y-auto pr-1 md:grid-cols-2"
+                style={{ maxHeight: "calc(2 * 18rem)" }}
+              >
                 {lots.map((lot) => {
                   const lotTooltip =
                     lot.items.length > 0
