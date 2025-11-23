@@ -425,6 +425,9 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
     if "vehicle_type" not in vehicle_item_columns:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN vehicle_type TEXT")
 
+    if "pharmacy_item_id" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN pharmacy_item_id INTEGER REFERENCES pharmacy_items(id)")
+
 
 def _ensure_vehicle_category_columns(conn: sqlite3.Connection) -> None:
     category_info = conn.execute("PRAGMA table_info(vehicle_categories)").fetchall()
@@ -971,15 +974,25 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     lot_name = None
     if "lot_name" in row.keys():
         lot_name = row["lot_name"]
-    name = row["remise_name"] if "remise_name" in row.keys() and row["remise_name"] else row["name"]
-    sku = row["remise_sku"] if "remise_sku" in row.keys() and row["remise_sku"] else row["sku"]
+    name = row["pharmacy_name"] if "pharmacy_name" in row.keys() and row["pharmacy_name"] else None
+    if not name:
+        name = row["remise_name"] if "remise_name" in row.keys() and row["remise_name"] else row["name"]
+    sku = row["pharmacy_sku"] if "pharmacy_sku" in row.keys() and row["pharmacy_sku"] else None
+    if not sku:
+        sku = row["remise_sku"] if "remise_sku" in row.keys() and row["remise_sku"] else row["sku"]
     supplier_id = row["supplier_id"] if "supplier_id" in row.keys() else None
+    if supplier_id is None and "pharmacy_supplier_id" in row.keys():
+        supplier_id = row["pharmacy_supplier_id"]
     if supplier_id is None and "remise_supplier_id" in row.keys():
         supplier_id = row["remise_supplier_id"]
     remise_item_id = row["remise_item_id"] if "remise_item_id" in row.keys() else None
+    pharmacy_item_id = row["pharmacy_item_id"] if "pharmacy_item_id" in row.keys() else None
     remise_quantity = None
     if "remise_quantity" in row.keys():
         remise_quantity = row["remise_quantity"]
+    pharmacy_quantity = None
+    if "pharmacy_quantity" in row.keys():
+        pharmacy_quantity = row["pharmacy_quantity"]
     track_low_stock = True
     if "track_low_stock" in row.keys():
         track_low_stock = bool(row["track_low_stock"])
@@ -998,7 +1011,9 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         supplier_id=supplier_id,
         expiration_date=expiration_date,
         remise_item_id=remise_item_id,
+        pharmacy_item_id=pharmacy_item_id,
         remise_quantity=remise_quantity,
+        pharmacy_quantity=pharmacy_quantity,
         image_url=image_url,
         shared_file_url=shared_file_url,
         position_x=position_x,
@@ -1029,9 +1044,13 @@ def _list_inventory_items_internal(
             "ri.sku AS remise_sku, "
             "ri.supplier_id AS remise_supplier_id, "
             "ri.quantity AS remise_quantity, "
+            "pi.name AS pharmacy_name, "
+            "pi.barcode AS pharmacy_sku, "
+            "pi.quantity AS pharmacy_quantity, "
             "rl.name AS lot_name "
             "FROM vehicle_items AS vi "
             "LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id "
+            "LEFT JOIN pharmacy_items AS pi ON pi.id = vi.pharmacy_item_id "
             "LEFT JOIN remise_lots AS rl ON rl.id = vi.lot_id"
         )
         if search:
@@ -1064,9 +1083,11 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
             cur = conn.execute(
                 """
                 SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id,
-                       ri.quantity AS remise_quantity, rl.name AS lot_name
+                       ri.quantity AS remise_quantity, pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku,
+                       pi.quantity AS pharmacy_quantity, rl.name AS lot_name
                 FROM vehicle_items AS vi
                 LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
+                LEFT JOIN pharmacy_items AS pi ON pi.id = vi.pharmacy_item_id
                 LEFT JOIN remise_lots AS rl ON rl.id = vi.lot_id
                 WHERE vi.id = ?
                 """,
@@ -1100,6 +1121,26 @@ def _update_remise_quantity(
     conn.execute(
         "UPDATE remise_items SET quantity = ? WHERE id = ?",
         (updated, remise_item_id),
+    )
+
+
+def _update_pharmacy_quantity(
+    conn: sqlite3.Connection, pharmacy_item_id: int, delta: int
+) -> None:
+    if delta == 0:
+        return
+    row = conn.execute(
+        "SELECT quantity FROM pharmacy_items WHERE id = ?",
+        (pharmacy_item_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Article de pharmacie introuvable")
+    updated = row["quantity"] + delta
+    if updated < 0:
+        raise ValueError("Stock insuffisant en pharmacie pour cette affectation.")
+    conn.execute(
+        "UPDATE pharmacy_items SET quantity = ? WHERE id = ?",
+        (updated, pharmacy_item_id),
     )
 
 
@@ -1150,28 +1191,46 @@ def _create_inventory_item_internal(
             payload.expiration_date.isoformat() if payload.expiration_date else None
         )
         remise_item_id: int | None = None
+        pharmacy_item_id: int | None = None
         lot_id: int | None = None
         if module == "vehicle_inventory":
             remise_item_id = payload.remise_item_id
+            pharmacy_item_id = payload.pharmacy_item_id
             lot_id = payload.lot_id
-            if remise_item_id is None:
-                raise ValueError("Un article de remise doit être sélectionné.")
+            if remise_item_id is None and pharmacy_item_id is None:
+                raise ValueError(
+                    "Un article de remise ou de pharmacie doit être sélectionné."
+                )
+            if remise_item_id is not None and pharmacy_item_id is not None:
+                raise ValueError(
+                    "Sélectionnez une seule source de matériel (remise ou pharmacie)."
+                )
             if lot_id is not None:
                 if payload.category_id is None:
                     raise ValueError(
                         "Un lot ne peut être affecté qu'à un véhicule depuis l'inventaire véhicules."
                     )
                 _require_remise_lot(conn, lot_id)
-            source = conn.execute(
-                "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
-                (remise_item_id,),
-            ).fetchone()
+            source_column = "pharmacy_item_id" if pharmacy_item_id else "remise_item_id"
+            source_id = pharmacy_item_id if pharmacy_item_id is not None else remise_item_id
+            source_query = (
+                "SELECT id, name, barcode AS sku FROM pharmacy_items WHERE id = ?"
+                if pharmacy_item_id is not None
+                else "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?"
+            )
+            source = conn.execute(source_query, (source_id,)).fetchone()
             if source is None:
-                raise ValueError("Article de remise introuvable")
+                raise ValueError(
+                    "Article de pharmacie introuvable"
+                    if pharmacy_item_id is not None
+                    else "Article de remise introuvable"
+                )
             name = source["name"]
             sku = source["sku"]
+            if pharmacy_item_id is not None and not sku:
+                sku = f"PHARM-{source['id']}"
             insert_sku = sku
-            if supplier_id is None:
+            if supplier_id is None and "supplier_id" in source.keys():
                 supplier_id = source["supplier_id"]
             if payload.category_id is not None:
                 category_row = conn.execute(
@@ -1185,17 +1244,20 @@ def _create_inventory_item_internal(
                 f"""
                 SELECT id, quantity
                 FROM {config.tables.items}
-                WHERE remise_item_id = ? AND category_id IS NULL
+                WHERE {source_column} = ? AND category_id IS NULL
                 ORDER BY id
                 LIMIT 1
                 """,
-                (remise_item_id,),
+                (source_id,),
             ).fetchone()
             if payload.category_id is None and template_row is not None:
                 existing = template_row
                 delta_vehicle = payload.quantity - existing["quantity"]
                 if delta_vehicle:
-                    _update_remise_quantity(conn, remise_item_id, -delta_vehicle)
+                    if pharmacy_item_id is not None:
+                        _update_pharmacy_quantity(conn, pharmacy_item_id, -delta_vehicle)
+                    else:
+                        _update_remise_quantity(conn, remise_item_id, -delta_vehicle)
                 conn.execute(
                     f"""
                     UPDATE {config.tables.items}
@@ -1227,7 +1289,10 @@ def _create_inventory_item_internal(
                 return _get_inventory_item_internal(module, existing["id"])
             if payload.category_id is not None:
                 insert_sku = f"{sku}-{uuid4().hex[:6]}"
-            _update_remise_quantity(conn, remise_item_id, -payload.quantity)
+            if pharmacy_item_id is not None:
+                _update_pharmacy_quantity(conn, pharmacy_item_id, -payload.quantity)
+            else:
+                _update_remise_quantity(conn, remise_item_id, -payload.quantity)
         columns = [
             "name",
             "sku",
@@ -1239,8 +1304,8 @@ def _create_inventory_item_internal(
             payload.category_id,
         ]
         if module == "vehicle_inventory":
-            columns.append("vehicle_type")
-            values.append(vehicle_type)
+            columns.extend(["vehicle_type", "remise_item_id", "pharmacy_item_id"])
+            values.extend([vehicle_type, remise_item_id, pharmacy_item_id])
         columns.extend([
             "size",
             "quantity",
@@ -1302,6 +1367,7 @@ def _update_inventory_item_internal(
     if module != "vehicle_inventory":
         fields.pop("show_in_qr", None)
         fields.pop("vehicle_type", None)
+        fields.pop("pharmacy_item_id", None)
     if module != "inventory_remise":
         fields.pop("expiration_date", None)
     elif "expiration_date" in fields:
@@ -1327,13 +1393,14 @@ def _update_inventory_item_internal(
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
             current_row = conn.execute(
-                f"SELECT quantity, remise_item_id, category_id, image_path, lot_id, vehicle_type FROM {config.tables.items} WHERE id = ?",
+                f"SELECT quantity, remise_item_id, pharmacy_item_id, category_id, image_path, lot_id, vehicle_type FROM {config.tables.items} WHERE id = ?",
                 (item_id,),
             ).fetchone()
             if current_row is None:
                 raise ValueError("Article introuvable")
             current_quantity = current_row["quantity"]
             current_remise_item_id = current_row["remise_item_id"]
+            current_pharmacy_item_id = current_row["pharmacy_item_id"]
             current_category_id = current_row["category_id"]
             current_vehicle_type = current_row["vehicle_type"]
             current_lot_id = current_row["lot_id"]
@@ -1349,26 +1416,43 @@ def _update_inventory_item_internal(
                 target_vehicle_type = category_row["vehicle_type"]
             if module == "vehicle_inventory":
                 fields["vehicle_type"] = target_vehicle_type
-            if "remise_item_id" in fields:
-                remise_item_id = fields["remise_item_id"]
-                if remise_item_id is None:
-                    raise ValueError("Un article de remise doit être sélectionné.")
-                source = conn.execute(
-                    "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
-                    (remise_item_id,),
-                ).fetchone()
+            target_remise_item_id = fields.get("remise_item_id", current_remise_item_id)
+            target_pharmacy_item_id = fields.get("pharmacy_item_id", current_pharmacy_item_id)
+            if target_remise_item_id is None and target_pharmacy_item_id is None:
+                raise ValueError(
+                    "Un article de remise ou de pharmacie doit être sélectionné."
+                )
+            if target_remise_item_id is not None and target_pharmacy_item_id is not None:
+                raise ValueError(
+                    "Sélectionnez une seule source de matériel (remise ou pharmacie)."
+                )
+            if "remise_item_id" in fields or "pharmacy_item_id" in fields:
+                source_id = (
+                    fields.get("pharmacy_item_id")
+                    if fields.get("pharmacy_item_id") is not None
+                    else fields.get("remise_item_id")
+                )
+                source_query = (
+                    "SELECT id, name, barcode AS sku FROM pharmacy_items WHERE id = ?"
+                    if fields.get("pharmacy_item_id") is not None
+                    else "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?"
+                )
+                source = conn.execute(source_query, (source_id,)).fetchone()
                 if source is None:
-                    raise ValueError("Article de remise introuvable")
+                    raise ValueError(
+                        "Article de pharmacie introuvable"
+                        if fields.get("pharmacy_item_id") is not None
+                        else "Article de remise introuvable"
+                    )
                 fields["name"] = source["name"]
                 new_sku = source["sku"]
+                if fields.get("pharmacy_item_id") is not None and not new_sku:
+                    new_sku = f"PHARM-{source['id']}"
                 if target_category_id is not None:
                     new_sku = f"{new_sku}-{uuid4().hex[:6]}"
                 fields["sku"] = new_sku
-                if fields.get("supplier_id") is None:
+                if fields.get("supplier_id") is None and "supplier_id" in source.keys():
                     fields["supplier_id"] = source["supplier_id"]
-            target_remise_item_id = fields.get("remise_item_id", current_remise_item_id)
-            if target_remise_item_id is None:
-                raise ValueError("Un article de remise doit être sélectionné.")
             target_quantity = fields.get("quantity", current_quantity)
             if current_lot_id is not None:
                 lock_message = (
@@ -1384,24 +1468,39 @@ def _update_inventory_item_internal(
                         raise ValueError(lock_message)
                     fields.pop("quantity", None)
                     target_quantity = current_quantity
-                if "remise_item_id" in fields:
-                    if fields["remise_item_id"] != current_remise_item_id:
+                if "remise_item_id" in fields or "pharmacy_item_id" in fields:
+                    if fields.get("remise_item_id", current_remise_item_id) != current_remise_item_id or fields.get(
+                        "pharmacy_item_id", current_pharmacy_item_id
+                    ) != current_pharmacy_item_id:
                         raise ValueError(lock_message)
                     fields.pop("remise_item_id", None)
+                    fields.pop("pharmacy_item_id", None)
                     target_remise_item_id = current_remise_item_id
+                    target_pharmacy_item_id = current_pharmacy_item_id
             should_restack_to_template = (
                 "category_id" in fields
                 and fields["category_id"] is None
                 and current_category_id is not None
             )
-            if target_remise_item_id == current_remise_item_id:
+            current_source = "pharmacy" if current_pharmacy_item_id else "remise"
+            target_source = "pharmacy" if target_pharmacy_item_id else "remise"
+            current_source_id = current_pharmacy_item_id or current_remise_item_id
+            target_source_id = target_pharmacy_item_id or target_remise_item_id
+
+            def _update_source_quantity(source: str, source_id: int, delta: int) -> None:
+                if source == "pharmacy":
+                    _update_pharmacy_quantity(conn, source_id, delta)
+                else:
+                    _update_remise_quantity(conn, source_id, delta)
+
+            if current_source == target_source and current_source_id == target_source_id:
                 delta = current_quantity - target_quantity
                 if delta:
-                    _update_remise_quantity(conn, target_remise_item_id, delta)
+                    _update_source_quantity(target_source, target_source_id, delta)
             else:
-                if current_remise_item_id is not None and current_quantity:
-                    _update_remise_quantity(conn, current_remise_item_id, current_quantity)
-                _update_remise_quantity(conn, target_remise_item_id, -target_quantity)
+                if current_source_id is not None and current_quantity:
+                    _update_source_quantity(current_source, current_source_id, current_quantity)
+                _update_source_quantity(target_source, target_source_id, -target_quantity)
         if not fields:
             return _get_inventory_item_internal(module, item_id)
         assignments = ", ".join(f"{col} = ?" for col in fields)
