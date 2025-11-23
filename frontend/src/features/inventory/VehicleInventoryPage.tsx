@@ -751,21 +751,25 @@ export function VehicleInventoryPage() {
         if (item.lot_id !== null) {
           return false;
         }
-        if ((item.remise_quantity ?? 0) <= 0) {
+
+        const availableQuantity = item.remise_item_id
+          ? item.remise_quantity ?? 0
+          : item.quantity ?? 0;
+        if (availableQuantity <= 0) {
           return false;
         }
+
         if (item.remise_item_id && lotRemiseItemIds.has(item.remise_item_id)) {
           return false;
         }
-        if (
-          selectedVehicleType === "secours_a_personne" &&
-          item.remise_item_id !== null
-        ) {
-          return false;
-        }
+
         if (selectedVehicleType === "incendie" && item.remise_item_id === null) {
           return false;
         }
+        if (selectedVehicleType === "secours_a_personne" && item.remise_item_id !== null) {
+          return false;
+        }
+
         const templateType =
           item.vehicle_type ??
           (item.remise_item_id ? remiseItemTypeMap.get(item.remise_item_id) ?? null : null);
@@ -783,20 +787,26 @@ export function VehicleInventoryPage() {
     ]
   );
 
-  const availableLots = useMemo(
-    () =>
-      remiseLots.filter(
-        (lot) =>
-          lot.items.length > 0 &&
-          lot.items.every(
-            (item) =>
-              item.quantity > 0 &&
-              item.available_quantity >= item.quantity &&
-              isCompatibleWithVehicle(remiseItemTypeMap.get(item.remise_item_id) ?? null)
-          )
-      ),
-    [remiseLots, remiseItemTypeMap, isCompatibleWithVehicle]
-  );
+  const availableLots = useMemo(() => {
+    if (selectedVehicleType === "secours_a_personne") {
+      return [];
+    }
+    return remiseLots.filter(
+      (lot) =>
+        lot.items.length > 0 &&
+        lot.items.every(
+          (item) =>
+            item.quantity > 0 &&
+            item.available_quantity >= item.quantity &&
+            isCompatibleWithVehicle(remiseItemTypeMap.get(item.remise_item_id) ?? null)
+        )
+    );
+  }, [
+    remiseLots,
+    remiseItemTypeMap,
+    isCompatibleWithVehicle,
+    selectedVehicleType
+  ]);
 
   const handleDropLotOnView = (lotId: number, position: { x: number; y: number }) => {
     if (!selectedVehicle) {
