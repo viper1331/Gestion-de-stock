@@ -482,8 +482,8 @@ export function PharmacyPage() {
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+      <div className={`grid gap-6 ${isFormVisible && canEdit ? "lg:grid-cols-3" : ""}`}>
+        <div className={isFormVisible && canEdit ? "lg:col-span-2" : ""}>
           <div
             className="max-h-[520px] overflow-y-auto rounded-lg border border-slate-800"
             style={{ maxHeight: "calc(8 * 56px + 48px)" }}
@@ -651,7 +651,7 @@ export function PharmacyPage() {
           {isFetching ? <p className="mt-2 text-xs text-slate-400">Actualisation...</p> : null}
         </div>
 
-        {canEdit ? (
+        {canEdit && isFormVisible ? (
           <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
             <div className="flex items-center justify-between gap-3">
               <h3 className="text-sm font-semibold text-white">
