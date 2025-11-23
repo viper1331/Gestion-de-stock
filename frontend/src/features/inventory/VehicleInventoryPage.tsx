@@ -2489,6 +2489,14 @@ function DroppableLibrary({
     "vehicleInventory:library",
     false
   );
+  const [areLotsCollapsed, setAreLotsCollapsed] = usePersistentBoolean(
+    "vehicleInventory:library:lots",
+    false
+  );
+  const [areItemsCollapsed, setAreItemsCollapsed] = usePersistentBoolean(
+    "vehicleInventory:library:items",
+    false
+  );
 
   return (
     <div
@@ -2574,20 +2582,34 @@ function DroppableLibrary({
       ) : (
         <div className="mt-4 space-y-3">
           <div className="space-y-2">
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
                 <h4 className="text-[13px] font-semibold text-slate-900 dark:text-slate-100">Lots disponibles</h4>
                 <p className="text-[11px] text-slate-500 dark:text-slate-400">
                   Ajoutez un lot complet au véhicule pour préparer son contenu en une seule action.
                 </p>
               </div>
-              {vehicleName ? (
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">{vehicleName}</p>
-              ) : (
-                <p className="text-[11px] text-slate-500 dark:text-slate-400">Aucun véhicule sélectionné</p>
-              )}
+              <div className="flex items-center gap-2">
+                {vehicleName ? (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">{vehicleName}</p>
+                ) : (
+                  <p className="text-[11px] text-slate-500 dark:text-slate-400">Aucun véhicule sélectionné</p>
+                )}
+                <button
+                  type="button"
+                  onClick={() => setAreLotsCollapsed((value) => !value)}
+                  aria-expanded={!areLotsCollapsed}
+                  className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+                >
+                  {areLotsCollapsed ? "Afficher" : "Masquer"}
+                </button>
+              </div>
             </div>
-            {isLoadingLots ? (
+            {areLotsCollapsed ? (
+              <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+                Section lots masquée. Cliquez sur « Afficher » pour parcourir les lots disponibles.
+              </p>
+            ) : isLoadingLots ? (
               <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                 Chargement des lots disponibles...
               </p>
@@ -2666,47 +2688,63 @@ function DroppableLibrary({
                           </li>
                         ))}
                       </ul>
-                  </div>
+                    </div>
                   );
                 })}
               </div>
             )}
           </div>
 
-          <div className="pt-2">
-            <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
-              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700" aria-hidden />
-              <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                Matériel individuel
-              </span>
-              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700" aria-hidden />
+          <div className="space-y-3 pt-2">
+            <div className="flex flex-wrap items-center justify-between gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+              <div className="flex flex-1 items-center gap-3">
+                <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700" aria-hidden />
+                <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                  Matériel individuel
+                </span>
+                <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700" aria-hidden />
+              </div>
+              <button
+                type="button"
+                onClick={() => setAreItemsCollapsed((value) => !value)}
+                aria-expanded={!areItemsCollapsed}
+                className="rounded-full border border-slate-300 px-3 py-1 text-[11px] font-medium text-slate-600 transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:hover:border-slate-500 dark:hover:text-white"
+              >
+                {areItemsCollapsed ? "Afficher" : "Masquer"}
+              </button>
             </div>
-            <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
               Glissez un article à l'unité si vous ne souhaitez pas déplacer un lot complet. Les items déposés ici seront retirés
               du véhicule.
             </p>
           </div>
 
-          <div
-            className="space-y-3 overflow-y-auto pr-1"
-            style={{ maxHeight: "calc(8 * 5rem)" }}
-          >
-            {items.map((item) => (
-              <ItemCard
-                key={item.id}
-                item={item}
-                onRemove={() => onRemoveFromVehicle(item.id)}
-                onFeedback={onItemFeedback}
-              />
-            ))}
-            {items.length === 0 && (
-              <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-                {lots.length > 0
-                  ? "Aucun article individuel disponible. Ajoutez un lot pour préparer du matériel."
-                  : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
-              </p>
-            )}
-          </div>
+          {areItemsCollapsed ? (
+            <p className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-800/60 dark:text-slate-300">
+              Section matériel individuel masquée. Cliquez sur « Afficher » pour consulter les articles disponibles.
+            </p>
+          ) : (
+            <div
+              className="space-y-3 overflow-y-auto pr-1"
+              style={{ maxHeight: "calc(8 * 5rem)" }}
+            >
+              {items.map((item) => (
+                <ItemCard
+                  key={item.id}
+                  item={item}
+                  onRemove={() => onRemoveFromVehicle(item.id)}
+                  onFeedback={onItemFeedback}
+                />
+              ))}
+              {items.length === 0 && (
+                <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  {lots.length > 0
+                    ? "Aucun article individuel disponible. Ajoutez un lot pour préparer du matériel."
+                    : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
+                </p>
+              )}
+            </div>
+          )}
         </div>
       )}
     </div>
