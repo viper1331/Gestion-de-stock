@@ -2338,6 +2338,45 @@ def test_vehicle_items_detached_when_lot_deleted() -> None:
     assert updated_entry["lot_id"] is None
 
 
+def test_pharmacy_items_available_in_vehicle_library() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/pharmacy/categories/",
+        json={"name": f"Pharma-{uuid4().hex[:6]}"},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Template pharmacie véhicule",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "category_id": category_id,
+            "quantity": 4,
+            "dosage": "500mg",
+            "packaging": "Boîte",
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    pharmacy_item_id = item_resp.json()["id"]
+
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    library_entries = [
+        entry
+        for entry in vehicle_items_resp.json()
+        if entry["pharmacy_item_id"] == pharmacy_item_id and entry["category_id"] is None
+    ]
+
+    assert library_entries, "Le matériel de pharmacie devrait être visible dans la bibliothèque."
+    assert library_entries[0]["vehicle_type"] == "secours_a_personne"
+
+
 def test_vehicle_qr_visibility_toggle() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
