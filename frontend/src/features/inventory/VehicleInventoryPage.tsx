@@ -757,6 +757,15 @@ export function VehicleInventoryPage() {
         if (item.remise_item_id && lotRemiseItemIds.has(item.remise_item_id)) {
           return false;
         }
+        if (
+          selectedVehicleType === "secours_a_personne" &&
+          item.remise_item_id !== null
+        ) {
+          return false;
+        }
+        if (selectedVehicleType === "incendie" && item.remise_item_id === null) {
+          return false;
+        }
         const templateType =
           item.vehicle_type ??
           (item.remise_item_id ? remiseItemTypeMap.get(item.remise_item_id) ?? null : null);
@@ -765,7 +774,13 @@ export function VehicleInventoryPage() {
         }
         return true;
       }),
-    [items, lotRemiseItemIds, remiseItemTypeMap, isCompatibleWithVehicle]
+    [
+      items,
+      lotRemiseItemIds,
+      remiseItemTypeMap,
+      isCompatibleWithVehicle,
+      selectedVehicleType
+    ]
   );
 
   const availableLots = useMemo(
