@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
-from typing import Optional
+from typing import Literal, Optional
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
@@ -63,6 +63,9 @@ class TokenPayload(BaseModel):
     type: str | None = None
 
 
+VehicleType = Literal["incendie", "secours_a_personne"]
+
+
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
     role: str = Field(..., pattern=r"^(admin|user)$")
@@ -105,16 +108,19 @@ class Category(BaseModel):
     sizes: list[str] = Field(default_factory=list)
     view_configs: list[VehicleViewConfig] | None = None
     image_url: str | None = None
+    vehicle_type: VehicleType | None = None
 
 
 class CategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     sizes: list[str] = Field(default_factory=list)
+    vehicle_type: VehicleType | None = None
 
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     sizes: Optional[list[str]] = None
+    vehicle_type: VehicleType | None = None
 
 
 class Item(BaseModel):
@@ -140,6 +146,7 @@ class Item(BaseModel):
     lot_id: int | None = None
     lot_name: str | None = None
     show_in_qr: bool = True
+    vehicle_type: VehicleType | None = None
 
 
 class PointerTarget(BaseModel):
@@ -165,6 +172,7 @@ class ItemCreate(BaseModel):
     tutorial_url: Optional[str] = None
     lot_id: Optional[int] = None
     show_in_qr: bool = True
+    vehicle_type: VehicleType | None = None
 
 
 class ItemUpdate(BaseModel):
@@ -186,6 +194,7 @@ class ItemUpdate(BaseModel):
     tutorial_url: Optional[str] = None
     lot_id: Optional[int] = None
     show_in_qr: Optional[bool] = None
+    vehicle_type: VehicleType | None = None
 
 
 class VehiclePhoto(BaseModel):

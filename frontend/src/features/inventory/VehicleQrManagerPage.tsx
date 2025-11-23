@@ -6,11 +6,14 @@ import { api } from "../../lib/api";
 import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { resolveMediaUrl } from "../../lib/media";
 
+type VehicleType = "incendie" | "secours_a_personne";
+
 interface VehicleItem {
   id: number;
   name: string;
   sku: string;
   category_id: number | null;
+  vehicle_type: VehicleType | null;
   shared_file_url: string | null;
   documentation_url: string | null;
   tutorial_url: string | null;
@@ -28,6 +31,7 @@ interface VehicleItemGroup {
 interface VehicleCategory {
   id: number;
   name: string;
+  vehicle_type: VehicleType | null;
 }
 
 interface ResourceDraft {

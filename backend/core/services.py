@@ -422,6 +422,17 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
     if "show_in_qr" not in vehicle_item_columns:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN show_in_qr INTEGER NOT NULL DEFAULT 1")
 
+    if "vehicle_type" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN vehicle_type TEXT")
+
+
+def _ensure_vehicle_category_columns(conn: sqlite3.Connection) -> None:
+    category_info = conn.execute("PRAGMA table_info(vehicle_categories)").fetchall()
+    category_columns = {row["name"] for row in category_info}
+
+    if "vehicle_type" not in category_columns:
+        conn.execute("ALTER TABLE vehicle_categories ADD COLUMN vehicle_type TEXT")
+
 
 def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
     remise_item_info = conn.execute("PRAGMA table_info(remise_items)").fetchall()
@@ -612,7 +623,8 @@ def _apply_schema_migrations() -> None:
             CREATE TABLE IF NOT EXISTS vehicle_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
-                image_path TEXT
+                image_path TEXT,
+                vehicle_type TEXT
             );
             CREATE TABLE IF NOT EXISTS vehicle_category_sizes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -625,6 +637,7 @@ def _apply_schema_migrations() -> None:
                 name TEXT NOT NULL,
                 sku TEXT UNIQUE NOT NULL,
                 category_id INTEGER REFERENCES vehicle_categories(id) ON DELETE SET NULL,
+                vehicle_type TEXT,
                 size TEXT,
                 quantity INTEGER NOT NULL DEFAULT 0,
                 low_stock_threshold INTEGER NOT NULL DEFAULT 0,
@@ -710,6 +723,7 @@ def _apply_schema_migrations() -> None:
         )
         _ensure_remise_item_columns(conn)
         _ensure_remise_lot_columns(conn)
+        _ensure_vehicle_category_columns(conn)
         _ensure_vehicle_item_columns(conn)
         _ensure_vehicle_item_qr_tokens(conn)
         conn.execute(
@@ -995,6 +1009,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         lot_id=lot_id,
         lot_name=lot_name,
         show_in_qr=show_in_qr,
+        vehicle_type=row["vehicle_type"] if "vehicle_type" in row.keys() else None,
     )
 
 
@@ -1003,6 +1018,9 @@ def _list_inventory_items_internal(
 ) -> list[models.Item]:
     ensure_database_ready()
     config = _get_inventory_config(module)
+    if module == "vehicle_inventory":
+        with db.get_stock_connection() as conn:
+            _ensure_vehicle_item_columns(conn)
     params: tuple[object, ...] = ()
     if module == "vehicle_inventory":
         query = (
@@ -1040,6 +1058,8 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
     with db.get_stock_connection() as conn:
         if module == "inventory_remise":
             _ensure_remise_item_columns(conn)
+        if module == "vehicle_inventory":
+            _ensure_vehicle_item_columns(conn)
         if module == "vehicle_inventory":
             cur = conn.execute(
                 """
@@ -1118,6 +1138,10 @@ def _create_inventory_item_internal(
     with db.get_stock_connection() as conn:
         if module == "inventory_remise":
             _ensure_remise_item_columns(conn)
+        vehicle_type = payload.vehicle_type
+        if module == "vehicle_inventory":
+            _ensure_vehicle_item_columns(conn)
+            _ensure_vehicle_category_columns(conn)
         name = payload.name
         sku = payload.sku
         insert_sku = sku
@@ -1128,7 +1152,6 @@ def _create_inventory_item_internal(
         remise_item_id: int | None = None
         lot_id: int | None = None
         if module == "vehicle_inventory":
-            _ensure_vehicle_item_columns(conn)
             remise_item_id = payload.remise_item_id
             lot_id = payload.lot_id
             if remise_item_id is None:
@@ -1150,6 +1173,14 @@ def _create_inventory_item_internal(
             insert_sku = sku
             if supplier_id is None:
                 supplier_id = source["supplier_id"]
+            if payload.category_id is not None:
+                category_row = conn.execute(
+                    "SELECT vehicle_type FROM vehicle_categories WHERE id = ?",
+                    (payload.category_id,),
+                ).fetchone()
+                if category_row is None:
+                    raise ValueError("Catégorie de véhicule introuvable")
+                vehicle_type = category_row["vehicle_type"]
             template_row = conn.execute(
                 f"""
                 SELECT id, quantity
@@ -1201,20 +1232,29 @@ def _create_inventory_item_internal(
             "name",
             "sku",
             "category_id",
-            "size",
-            "quantity",
-            "low_stock_threshold",
-            "supplier_id",
         ]
         values: list[object | None] = [
             name,
             insert_sku,
             payload.category_id,
-            payload.size,
-            payload.quantity,
-            payload.low_stock_threshold,
-            supplier_id,
         ]
+        if module == "vehicle_inventory":
+            columns.append("vehicle_type")
+            values.append(vehicle_type)
+        columns.extend([
+            "size",
+            "quantity",
+            "low_stock_threshold",
+            "supplier_id",
+        ])
+        values.extend(
+            [
+                payload.size,
+                payload.quantity,
+                payload.low_stock_threshold,
+                supplier_id,
+            ]
+        )
         if module == "inventory_remise":
             columns.append("track_low_stock")
             values.append(int(payload.track_low_stock))
@@ -1261,6 +1301,7 @@ def _update_inventory_item_internal(
     fields.pop("lot_id", None)
     if module != "vehicle_inventory":
         fields.pop("show_in_qr", None)
+        fields.pop("vehicle_type", None)
     if module != "inventory_remise":
         fields.pop("expiration_date", None)
     elif "expiration_date" in fields:
@@ -1286,7 +1327,7 @@ def _update_inventory_item_internal(
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
             current_row = conn.execute(
-                f"SELECT quantity, remise_item_id, category_id, image_path, lot_id FROM {config.tables.items} WHERE id = ?",
+                f"SELECT quantity, remise_item_id, category_id, image_path, lot_id, vehicle_type FROM {config.tables.items} WHERE id = ?",
                 (item_id,),
             ).fetchone()
             if current_row is None:
@@ -1294,8 +1335,20 @@ def _update_inventory_item_internal(
             current_quantity = current_row["quantity"]
             current_remise_item_id = current_row["remise_item_id"]
             current_category_id = current_row["category_id"]
+            current_vehicle_type = current_row["vehicle_type"]
             current_lot_id = current_row["lot_id"]
             target_category_id = fields.get("category_id", current_category_id)
+            target_vehicle_type = current_vehicle_type
+            if target_category_id is not None:
+                category_row = conn.execute(
+                    "SELECT vehicle_type FROM vehicle_categories WHERE id = ?",
+                    (target_category_id,),
+                ).fetchone()
+                if category_row is None:
+                    raise ValueError("Catégorie de véhicule introuvable")
+                target_vehicle_type = category_row["vehicle_type"]
+            if module == "vehicle_inventory":
+                fields["vehicle_type"] = target_vehicle_type
             if "remise_item_id" in fields:
                 remise_item_id = fields["remise_item_id"]
                 if remise_item_id is None:
@@ -1436,9 +1489,11 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        if module == "vehicle_inventory":
+            _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path"
+            select_columns += ", image_path, vehicle_type"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
         )
@@ -1509,6 +1564,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
                     sizes=sizes,
                     view_configs=category_view_configs,
                     image_url=image_url,
+                    vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
                 )
             )
         return categories
@@ -1520,9 +1576,11 @@ def _get_inventory_category_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        if module == "vehicle_inventory":
+            _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path"
+            select_columns += ", image_path, vehicle_type"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
@@ -1566,6 +1624,7 @@ def _get_inventory_category_internal(
             sizes=sizes,
             view_configs=view_configs,
             image_url=image_url,
+            vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
         )
 
 
@@ -1576,9 +1635,15 @@ def _create_inventory_category_internal(
     config = _get_inventory_config(module)
     normalized_sizes = _normalize_sizes(payload.sizes)
     with db.get_stock_connection() as conn:
+        columns = ["name"]
+        values: list[object] = [payload.name]
+        if module == "vehicle_inventory":
+            _ensure_vehicle_category_columns(conn)
+            columns.append("vehicle_type")
+            values.append(payload.vehicle_type)
         cur = conn.execute(
-            f"INSERT INTO {config.tables.categories} (name) VALUES (?)",
-            (payload.name,),
+            f"INSERT INTO {config.tables.categories} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+            values,
         )
         category_id = cur.lastrowid
         if normalized_sizes:
@@ -1599,6 +1664,8 @@ def _update_inventory_category_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     with db.get_stock_connection() as conn:
+        if module == "vehicle_inventory":
+            _ensure_vehicle_category_columns(conn)
         cur = conn.execute(
             f"SELECT id FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
@@ -1611,6 +1678,9 @@ def _update_inventory_category_internal(
         if payload.name is not None:
             updates.append("name = ?")
             values.append(payload.name)
+        if module == "vehicle_inventory" and payload.vehicle_type is not None:
+            updates.append("vehicle_type = ?")
+            values.append(payload.vehicle_type)
         if updates:
             values.append(category_id)
             conn.execute(
