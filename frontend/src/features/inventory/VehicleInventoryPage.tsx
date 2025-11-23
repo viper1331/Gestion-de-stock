@@ -27,11 +27,14 @@ interface VehicleViewConfig {
   background_url: string | null;
 }
 
+type VehicleType = "incendie" | "secours_a_personne";
+
 interface VehicleCategory {
   id: number;
   name: string;
   sizes: string[];
   image_url: string | null;
+  vehicle_type: VehicleType | null;
   view_configs?: VehicleViewConfig[] | null;
 }
 
@@ -50,6 +53,7 @@ interface VehicleItem {
   lot_id: number | null;
   lot_name: string | null;
   show_in_qr: boolean;
+  vehicle_type: VehicleType | null;
 }
 
 interface RemiseLot {
@@ -85,6 +89,7 @@ interface VehiclePhoto {
 interface VehicleFormValues {
   name: string;
   sizes: string[];
+  vehicleType: VehicleType;
 }
 
 interface UploadVehicleImagePayload {
@@ -96,6 +101,7 @@ interface UpdateVehiclePayload {
   categoryId: number;
   name: string;
   sizes: string[];
+  vehicleType: VehicleType;
 }
 
 interface UpdateItemPayload {
@@ -112,6 +118,11 @@ const VEHICLE_ILLUSTRATIONS = [
   pickupIllustration,
   ambulanceIllustration
 ];
+
+const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
+  incendie: "Incendie",
+  secours_a_personne: "Secours à personne"
+};
 
 const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
@@ -192,11 +203,13 @@ export function VehicleInventoryPage() {
   const [isCreatingVehicle, setIsCreatingVehicle] = useState(false);
   const [vehicleName, setVehicleName] = useState("");
   const [vehicleViewsInput, setVehicleViewsInput] = useState("");
+  const [vehicleType, setVehicleType] = useState<VehicleType>("incendie");
   const [vehicleImageFile, setVehicleImageFile] = useState<File | null>(null);
   const vehicleImageInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingVehicle, setIsEditingVehicle] = useState(false);
   const [editedVehicleName, setEditedVehicleName] = useState("");
   const [editedVehicleViewsInput, setEditedVehicleViewsInput] = useState("");
+  const [editedVehicleType, setEditedVehicleType] = useState<VehicleType | null>(null);
   const [editedVehicleImageFile, setEditedVehicleImageFile] = useState<File | null>(null);
   const editedVehicleImageInputRef = useRef<HTMLInputElement | null>(null);
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
@@ -386,10 +399,11 @@ export function VehicleInventoryPage() {
     setFeedback(entry);
   };
   const createVehicle = useMutation({
-    mutationFn: async ({ name, sizes }: VehicleFormValues) => {
+    mutationFn: async ({ name, sizes, vehicleType }: VehicleFormValues) => {
       const response = await api.post<VehicleCategory>("/vehicle-inventory/categories/", {
         name,
-        sizes
+        sizes,
+        vehicle_type: vehicleType
       });
       return response.data;
     },
@@ -518,12 +532,13 @@ export function VehicleInventoryPage() {
   });
 
   const updateVehicle = useMutation({
-    mutationFn: async ({ categoryId, name, sizes }: UpdateVehiclePayload) => {
+    mutationFn: async ({ categoryId, name, sizes, vehicleType }: UpdateVehiclePayload) => {
       const response = await api.put<VehicleCategory>(
         `/vehicle-inventory/categories/${categoryId}`,
         {
           name,
-          sizes
+          sizes,
+          vehicle_type: vehicleType
         }
       );
       return response.data;
@@ -547,6 +562,7 @@ export function VehicleInventoryPage() {
       setIsEditingVehicle(false);
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
+      setEditedVehicleType(null);
     },
     onError: () => {
       setFeedback({ type: "error", text: "Impossible de supprimer ce véhicule." });
@@ -604,6 +620,8 @@ export function VehicleInventoryPage() {
     [vehicles, selectedVehicleId]
   );
 
+  const selectedVehicleType = selectedVehicle?.vehicle_type ?? null;
+
   const selectedVehicleFallback = useMemo(() => {
     if (!selectedVehicle) {
       return undefined;
@@ -618,6 +636,7 @@ export function VehicleInventoryPage() {
       setIsEditingVehicle(false);
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
+      setEditedVehicleType(null);
     }
   }, [selectedVehicleId]);
 
@@ -707,6 +726,22 @@ export function VehicleInventoryPage() {
     return ids;
   }, [remiseLots]);
 
+  const remiseItemTypeMap = useMemo(() => {
+    const map = new Map<number, VehicleType>();
+    items.forEach((item) => {
+      if (item.remise_item_id && item.vehicle_type && !map.has(item.remise_item_id)) {
+        map.set(item.remise_item_id, item.vehicle_type);
+      }
+    });
+    return map;
+  }, [items]);
+
+  const isCompatibleWithVehicle = useCallback(
+    (itemType: VehicleType | null | undefined) =>
+      !selectedVehicleType || !itemType || itemType === selectedVehicleType,
+    [selectedVehicleType]
+  );
+
   const availableItems = useMemo(
     () =>
       items.filter((item) => {
@@ -722,9 +757,15 @@ export function VehicleInventoryPage() {
         if (item.remise_item_id && lotRemiseItemIds.has(item.remise_item_id)) {
           return false;
         }
+        const templateType =
+          item.vehicle_type ??
+          (item.remise_item_id ? remiseItemTypeMap.get(item.remise_item_id) ?? null : null);
+        if (!isCompatibleWithVehicle(templateType)) {
+          return false;
+        }
         return true;
       }),
-    [items, lotRemiseItemIds]
+    [items, lotRemiseItemIds, remiseItemTypeMap, isCompatibleWithVehicle]
   );
 
   const availableLots = useMemo(
@@ -732,9 +773,14 @@ export function VehicleInventoryPage() {
       remiseLots.filter(
         (lot) =>
           lot.items.length > 0 &&
-          lot.items.every((item) => item.quantity > 0 && item.available_quantity >= item.quantity)
+          lot.items.every(
+            (item) =>
+              item.quantity > 0 &&
+              item.available_quantity >= item.quantity &&
+              isCompatibleWithVehicle(remiseItemTypeMap.get(item.remise_item_id) ?? null)
+          )
       ),
-    [remiseLots]
+    [remiseLots, remiseItemTypeMap, isCompatibleWithVehicle]
   );
 
   const handleDropLotOnView = (lotId: number, position: { x: number; y: number }) => {
@@ -802,7 +848,8 @@ export function VehicleInventoryPage() {
     try {
       const createdVehicle = await createVehicle.mutateAsync({
         name: trimmedName,
-        sizes: parsedViews
+        sizes: parsedViews,
+        vehicleType
       });
       let finalVehicle = createdVehicle;
       if (vehicleImageFile) {
@@ -817,6 +864,7 @@ export function VehicleInventoryPage() {
       });
       setVehicleName("");
       setVehicleViewsInput("");
+      setVehicleType("incendie");
       clearVehicleImageSelection();
       setIsCreatingVehicle(false);
       setSelectedVehicleId(finalVehicle.id);
@@ -840,10 +888,12 @@ export function VehicleInventoryPage() {
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
       clearEditedVehicleImageSelection();
+      setEditedVehicleType(null);
       return;
     }
     setEditedVehicleName(selectedVehicle.name);
     setEditedVehicleViewsInput(getVehicleViews(selectedVehicle).join(", "));
+    setEditedVehicleType(selectedVehicle.vehicle_type ?? "incendie");
     clearEditedVehicleImageSelection();
     setIsEditingVehicle(true);
   };
@@ -859,6 +909,7 @@ export function VehicleInventoryPage() {
     setIsEditingVehicle(false);
     setEditedVehicleName("");
     setEditedVehicleViewsInput("");
+    setEditedVehicleType(null);
     clearEditedVehicleImageSelection();
   };
 
@@ -873,11 +924,13 @@ export function VehicleInventoryPage() {
       return;
     }
     const parsedViews = normalizeVehicleViewsInput(editedVehicleViewsInput);
+    const targetVehicleType = editedVehicleType ?? selectedVehicle.vehicle_type ?? "incendie";
     try {
       await updateVehicle.mutateAsync({
         categoryId: selectedVehicle.id,
         name: trimmedName,
-        sizes: parsedViews
+        sizes: parsedViews,
+        vehicleType: targetVehicleType
       });
       if (editedVehicleImageFile) {
         await uploadVehicleImage.mutateAsync({
@@ -889,6 +942,7 @@ export function VehicleInventoryPage() {
       setIsEditingVehicle(false);
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
+      setEditedVehicleType(null);
       clearEditedVehicleImageSelection();
     } catch {
       // feedback handled in mutation callbacks
@@ -943,21 +997,36 @@ export function VehicleInventoryPage() {
                       required
                     />
                   </label>
-                  <label className="flex-1 space-y-1" htmlFor="vehicle-views">
-                    <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                      Vues (optionnel)
-                    </span>
-                    <input
+                <label className="flex-1 space-y-1" htmlFor="vehicle-views">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Vues (optionnel)
+                  </span>
+                  <input
                       id="vehicle-views"
                       type="text"
                       value={vehicleViewsInput}
                       onChange={(event) => setVehicleViewsInput(event.target.value)}
                       placeholder="Vue principale, Coffre gauche, Coffre droit"
                       className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
-                      disabled={createVehicle.isPending}
-                    />
-                  </label>
-                </div>
+                    disabled={createVehicle.isPending}
+                  />
+                </label>
+                <label className="flex-1 space-y-1" htmlFor="vehicle-type">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Type de véhicule
+                  </span>
+                  <select
+                    id="vehicle-type"
+                    value={vehicleType}
+                    onChange={(event) => setVehicleType(event.target.value as VehicleType)}
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                    disabled={createVehicle.isPending}
+                  >
+                    <option value="incendie">{VEHICLE_TYPE_LABELS.incendie}</option>
+                    <option value="secours_a_personne">{VEHICLE_TYPE_LABELS.secours_a_personne}</option>
+                  </select>
+                </label>
+              </div>
                 <label className="block space-y-1" htmlFor="vehicle-image">
                   <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                     Photo du véhicule (optionnel)
@@ -1144,6 +1213,25 @@ export function VehicleInventoryPage() {
                       uploadVehicleImage.isPending
                     }
                   />
+                </label>
+                <label className="flex-1 space-y-1" htmlFor="edit-vehicle-type">
+                  <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Type de véhicule
+                  </span>
+                  <select
+                    id="edit-vehicle-type"
+                    value={editedVehicleType ?? selectedVehicle.vehicle_type ?? "incendie"}
+                    onChange={(event) => setEditedVehicleType(event.target.value as VehicleType)}
+                    className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                    disabled={
+                      updateVehicle.isPending ||
+                      deleteVehicle.isPending ||
+                      uploadVehicleImage.isPending
+                    }
+                  >
+                    <option value="incendie">{VEHICLE_TYPE_LABELS.incendie}</option>
+                    <option value="secours_a_personne">{VEHICLE_TYPE_LABELS.secours_a_personne}</option>
+                  </select>
                 </label>
               </div>
               <p className="text-xs text-slate-500 dark:text-slate-400">
@@ -1389,6 +1477,11 @@ function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProp
                 }`
               : "Vue principale uniquement"}
           </p>
+          {vehicle.vehicle_type ? (
+            <span className="mt-1 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+              {VEHICLE_TYPE_LABELS[vehicle.vehicle_type]}
+            </span>
+          ) : null}
         </div>
         <span className="inline-flex items-center gap-1 text-sm font-medium text-blue-600 transition group-hover:text-blue-700 dark:text-blue-400 dark:group-hover:text-blue-300">
           Ouvrir l'organisation
@@ -1449,6 +1542,11 @@ function VehicleHeader({
               <p className="text-sm text-slate-600 dark:text-slate-300">
                 {itemsCount} matériel{itemsCount > 1 ? "s" : ""} associé{itemsCount > 1 ? "s" : ""}.
               </p>
+              {vehicle.vehicle_type ? (
+                <span className="mt-1 inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                  {VEHICLE_TYPE_LABELS[vehicle.vehicle_type]}
+                </span>
+              ) : null}
             </div>
             <div className="flex flex-wrap items-center gap-2">
               <button
