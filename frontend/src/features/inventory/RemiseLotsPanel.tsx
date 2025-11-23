@@ -564,12 +564,12 @@ export function RemiseLotsPanel() {
                       ) : null}
                     </div>
                   </div>
-                  <div className="mt-3 flex h-40 items-center justify-center overflow-hidden rounded-md border border-dashed border-slate-800 bg-slate-950/40">
+                  <div className="mt-3 flex h-40 items-center justify-center overflow-hidden rounded-md border border-dashed border-slate-800 bg-slate-950/40 p-2">
                     {selectedLotImageUrl ? (
                       <img
                         src={selectedLotImageUrl}
                         alt={`Illustration du lot ${selectedLot.name}`}
-                        className="h-full w-full object-cover"
+                        className="h-full w-full object-contain"
                       />
                     ) : (
                       <p className="text-xs text-slate-500">Aucune image n'est associée à ce lot.</p>
