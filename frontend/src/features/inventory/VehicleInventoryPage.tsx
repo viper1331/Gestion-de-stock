@@ -46,7 +46,9 @@ interface VehicleItem {
   size: string | null;
   quantity: number;
   remise_item_id: number | null;
+  pharmacy_item_id: number | null;
   remise_quantity: number | null;
+  pharmacy_quantity: number | null;
   image_url: string | null;
   position_x: number | null;
   position_y: number | null;
@@ -130,6 +132,7 @@ type DraggedItemData = {
   itemId?: number;
   categoryId?: number | null;
   remiseItemId?: number | null;
+  pharmacyItemId?: number | null;
   assignedLotItemIds?: number[];
   offsetX?: number;
   offsetY?: number;
@@ -317,11 +320,16 @@ export function VehicleInventoryPage() {
       if (!template) {
         throw new Error("Matériel introuvable.");
       }
-      if (template.remise_item_id == null) {
-        throw new Error("Ce matériel n'est pas lié à l'inventaire remises.");
+      const sourceQuantity = template.remise_item_id
+        ? template.remise_quantity ?? 0
+        : template.pharmacy_quantity ?? 0;
+      if (template.remise_item_id == null && template.pharmacy_item_id == null) {
+        throw new Error("Ce matériel n'est pas lié à un inventaire disponible.");
       }
-      if ((template.remise_quantity ?? 0) <= 0) {
-        throw new Error("Stock insuffisant en remise.");
+      if (sourceQuantity <= 0) {
+        throw new Error(
+          template.remise_item_id ? "Stock insuffisant en remise." : "Stock insuffisant en pharmacie."
+        );
       }
       const response = await api.post<VehicleItem>("/vehicle-inventory/", {
         name: template.name,
@@ -331,7 +339,8 @@ export function VehicleInventoryPage() {
         quantity: 1,
         position_x: position.x,
         position_y: position.y,
-        remise_item_id: template.remise_item_id
+        remise_item_id: template.remise_item_id ?? undefined,
+        pharmacy_item_id: template.pharmacy_item_id ?? undefined
       });
       return response.data;
     },
@@ -754,7 +763,9 @@ export function VehicleInventoryPage() {
 
         const availableQuantity = item.remise_item_id
           ? item.remise_quantity ?? 0
-          : item.quantity ?? 0;
+          : item.pharmacy_item_id
+            ? item.pharmacy_quantity ?? 0
+            : item.quantity ?? 0;
         if (availableQuantity <= 0) {
           return false;
         }
@@ -766,7 +777,7 @@ export function VehicleInventoryPage() {
         if (selectedVehicleType === "incendie" && item.remise_item_id === null) {
           return false;
         }
-        if (selectedVehicleType === "secours_a_personne" && item.remise_item_id !== null) {
+        if (selectedVehicleType === "secours_a_personne" && item.pharmacy_item_id === null) {
           return false;
         }
 
@@ -2234,17 +2245,18 @@ function VehicleItemMarker({
 
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-    event.dataTransfer.setData(
-      "application/json",
-      JSON.stringify({
-        itemId: entry.primaryItemId ?? undefined,
-        categoryId: entry.category_id,
-        remiseItemId: entry.remise_item_id,
-        lotId: entry.lot_id,
-        lotName: entry.lot_name,
-        assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top,
+        event.dataTransfer.setData(
+          "application/json",
+          JSON.stringify({
+            itemId: entry.primaryItemId ?? undefined,
+            categoryId: entry.category_id,
+            remiseItemId: entry.remise_item_id,
+            pharmacyItemId: entry.pharmacy_item_id,
+            lotId: entry.lot_id,
+            lotName: entry.lot_name,
+            assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
+            offsetX: event.clientX - rect.left,
+            offsetY: event.clientY - rect.top,
         elementWidth: rect.width,
         elementHeight: rect.height
       })
@@ -2935,16 +2947,17 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
         }
         const rect = event.currentTarget.getBoundingClientRect();
         event.dataTransfer.setData(
-          "application/json",
-          JSON.stringify({
-            itemId: item.id,
-            categoryId: item.category_id,
-            remiseItemId: item.remise_item_id,
-            lotId: item.lot_id,
-            lotName: item.lot_name,
-            offsetX: event.clientX - rect.left,
-            offsetY: event.clientY - rect.top,
-            elementWidth: rect.width,
+            "application/json",
+            JSON.stringify({
+              itemId: item.id,
+              categoryId: item.category_id,
+              remiseItemId: item.remise_item_id,
+              pharmacyItemId: item.pharmacy_item_id,
+              lotId: item.lot_id,
+              lotName: item.lot_name,
+              offsetX: event.clientX - rect.left,
+              offsetY: event.clientY - rect.top,
+              elementWidth: rect.width,
             elementHeight: rect.height
           })
         );
@@ -3254,6 +3267,12 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
         typeof parsed.remiseItemId === "number"
           ? parsed.remiseItemId
           : parsed.remiseItemId === null
+            ? null
+            : undefined,
+      pharmacyItemId:
+        typeof parsed.pharmacyItemId === "number"
+          ? parsed.pharmacyItemId
+          : parsed.pharmacyItemId === null
             ? null
             : undefined,
       lotId: hasLotId ? parsed.lotId : lotIdIsNull ? null : undefined,

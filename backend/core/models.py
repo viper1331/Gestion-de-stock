@@ -135,7 +135,9 @@ class Item(BaseModel):
     supplier_id: int | None = None
     expiration_date: date | None = None
     remise_item_id: int | None = None
+    pharmacy_item_id: int | None = None
     remise_quantity: int | None = None
+    pharmacy_quantity: int | None = None
     image_url: str | None = None
     shared_file_url: str | None = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
@@ -167,6 +169,7 @@ class ItemCreate(BaseModel):
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
     remise_item_id: Optional[int] = None
+    pharmacy_item_id: Optional[int] = None
     shared_file_url: Optional[str] = None
     documentation_url: Optional[str] = None
     tutorial_url: Optional[str] = None
@@ -187,6 +190,7 @@ class ItemUpdate(BaseModel):
     image_url: Optional[str] = None
     expiration_date: Optional[date] = None
     remise_item_id: Optional[int] = None
+    pharmacy_item_id: Optional[int] = None
     position_x: float | None = Field(default=None, ge=0.0, le=1.0)
     position_y: float | None = Field(default=None, ge=0.0, le=1.0)
     shared_file_url: Optional[str] = None
