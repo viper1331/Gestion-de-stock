@@ -550,7 +550,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="flex-1 space-y-4">
           <div className="rounded-lg border border-slate-800">
-            <div className="max-h-[520px] overflow-y-auto">
+            <div className="max-h-[400px] overflow-y-auto">
               <table className="min-w-full divide-y divide-slate-800">
                 <thead className="bg-slate-900/60">
                   <tr>
