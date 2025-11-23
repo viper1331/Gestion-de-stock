@@ -2575,6 +2575,20 @@ function DroppableLibrary({
             )}
           </div>
 
+          <div className="pt-2">
+            <div className="flex items-center gap-3 text-[11px] text-slate-500 dark:text-slate-400">
+              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700" aria-hidden />
+              <span className="shrink-0 rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold text-slate-700 dark:bg-slate-800 dark:text-slate-200">
+                Matériel individuel
+              </span>
+              <div className="h-px flex-1 bg-slate-200 dark:bg-slate-700" aria-hidden />
+            </div>
+            <p className="mt-2 text-[11px] text-slate-500 dark:text-slate-400">
+              Glissez un article à l'unité si vous ne souhaitez pas déplacer un lot complet. Les items déposés ici seront retirés
+              du véhicule.
+            </p>
+          </div>
+
           <div
             className="space-y-3 overflow-y-auto pr-1"
             style={{ maxHeight: "calc(8 * 5rem)" }}
