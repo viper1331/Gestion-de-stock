@@ -2552,7 +2552,10 @@ function DroppableLibrary({
                           <p className="text-[10px] text-slate-500 dark:text-slate-400">Glissez ce lot vers la vue sélectionnée pour l'affecter.</p>
                         </div>
                       </div>
-                      <ul className="mt-2 space-y-1 text-[11px] text-slate-600 dark:text-slate-300">
+                      <ul
+                        className="mt-2 space-y-1 overflow-y-auto pr-1 text-[11px] text-slate-600 dark:text-slate-300"
+                        style={{ maxHeight: "4.5rem" }}
+                      >
                         {lot.items.map((item) => (
                           <li key={item.id} className="flex items-center justify-between gap-2">
                             <span className="truncate">{item.remise_name}</span>
