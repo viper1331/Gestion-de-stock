@@ -1424,6 +1424,7 @@ export function VehicleInventoryPage() {
                 isLoadingLots={isLoadingLots}
                 isAssigningLot={assignLotToVehicle.isPending}
                 vehicleName={selectedVehicle?.name ?? null}
+                vehicleType={selectedVehicleType}
                 onAssignLot={(lot) => {
                   if (!selectedVehicle) {
                     setFeedback({
@@ -2502,6 +2503,7 @@ interface DroppableLibraryProps {
   isLoadingLots?: boolean;
   isAssigningLot?: boolean;
   vehicleName: string | null;
+  vehicleType?: VehicleType | null;
   onAssignLot?: (lot: RemiseLotWithItems) => void;
   onDropItem: (itemId: number) => void;
   onDropLot?: (lotId: number, categoryId: number) => void;
@@ -2515,6 +2517,7 @@ function DroppableLibrary({
   isLoadingLots = false,
   isAssigningLot = false,
   vehicleName,
+  vehicleType,
   onAssignLot,
   onDropItem,
   onDropLot,
@@ -2777,7 +2780,9 @@ function DroppableLibrary({
                 <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                   {lots.length > 0
                     ? "Aucun article individuel disponible. Ajoutez un lot pour préparer du matériel."
-                    : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
+                    : vehicleType === "secours_a_personne"
+                      ? "Aucun matériel disponible. Gérez vos articles depuis l'inventaire pharmacie pour les rendre disponibles ici."
+                      : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
                 </p>
               )}
             </div>
@@ -2809,7 +2814,9 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
 
   const quantityLabel =
     item.category_id === null
-      ? `Stock remise : ${item.remise_quantity ?? 0}`
+      ? item.pharmacy_item_id !== null
+        ? `Stock pharmacie : ${item.pharmacy_quantity ?? 0}`
+        : `Stock remise : ${item.remise_quantity ?? 0}`
       : `Qté : ${item.quantity}`;
   const isLockedByLot = item.lot_id !== null;
   const lotLabel = isLockedByLot ? item.lot_name ?? `Lot #${item.lot_id}` : null;
