@@ -757,12 +757,6 @@ export function VehicleInventoryPage() {
         if (item.remise_item_id && lotRemiseItemIds.has(item.remise_item_id)) {
           return false;
         }
-        if (
-          selectedVehicleType === "secours_a_personne" &&
-          item.remise_item_id !== null
-        ) {
-          return false;
-        }
         if (selectedVehicleType === "incendie" && item.remise_item_id === null) {
           return false;
         }
