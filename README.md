@@ -128,7 +128,7 @@ comportement, mais un simple appel suffit pour lancer les serveurs avec les para
 
 ## Données & configuration
 - Bases SQLite créées automatiquement dans `backend/data/` (utilisateurs + stock).
-- Fichier `backend/config.ini` pour les préférences globales (thème, périphériques audio, etc.).
+- Fichier `backend/config.example.ini` à copier en `backend/config.ini` pour personnaliser les préférences globales (thème, périphériques audio, etc.) sans générer de conflits Git.
 - Sauvegardes disponibles via l'endpoint `/backup/` (zip horodaté des bases).
 
 ## Fonctionnalités couvertes
