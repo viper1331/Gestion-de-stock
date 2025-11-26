@@ -1,58 +1,44 @@
-"""Utilities for vehicle inventory PDF rendering."""
+"""Utility helpers for vehicle inventory PDF generation."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime
 from io import BytesIO
 from pathlib import Path
 from textwrap import wrap as _wrap
 from typing import Iterable, Sequence
 
-from pydantic import BaseModel
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4, landscape, portrait
 from reportlab.pdfgen.canvas import Canvas
 
 from backend.core import models
+from .models import VehiclePdfOptions, VehicleView, VehicleViewEntry
 
 DEFAULT_VIEW_NAME = "VUE PRINCIPALE"
 _MEDIA_PREFIX = "/media/"
 
 
-class VehiclePdfOptions(BaseModel):
-    pointer_mode: bool = False
-    hide_edit_buttons: bool = False
-    theme: str = "default"
-    table_fallback: bool = False
+def clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(value, max_value))
 
 
-@dataclass
-class VehicleViewEntry:
-    key: str
-    name: str
-    reference: str
-    quantity: int
-    components: list[str]
-    category_id: int | None
-    category_name: str | None
-    view_name: str
-    bubble_x: float | None
-    bubble_y: float | None
-    anchor_x: float | None
-    anchor_y: float | None
-    icon_path: Path | None
+def clamp_ratio(value: float | None) -> float | None:
+    if value is None:
+        return None
+    return clamp(value, 0.0, 1.0)
 
 
-@dataclass
-class VehicleView:
-    category_id: int | None
-    category_name: str
-    view_name: str
-    background_path: Path | None
-    background_photo_id: int | None
-    entries: list[VehicleViewEntry]
-    pointer_mode: bool
-    hide_edit_buttons: bool
-    has_positions: bool
+def ratio_to_coordinate(ratio: float, start: float, length: float) -> float:
+    return start + ratio * length
+
+
+def wrap_text(text: str, width: int) -> list[str]:
+    if not text:
+        return []
+    return _wrap(text, width)
+
+
+def format_date(date_value: datetime) -> str:
+    return date_value.strftime("%d/%m/%Y")
 
 
 class PdfBuffer(BytesIO):
@@ -82,20 +68,13 @@ def normalize_view_name(name: str | None) -> str:
     return normalized.upper()
 
 
-def format_date(date_value: datetime) -> str:
-    return date_value.strftime("%d/%m/%Y")
-
-
-def wrap_text(text: str, width: int) -> list[str]:
-    if not text:
-        return []
-    return _wrap(text, width)
-
-
 def _resolve_media_path(url: str | None, media_root: Path | None) -> Path | None:
     if not url or not media_root:
         return None
     path_str = url
+    candidate_path = Path(path_str)
+    if candidate_path.is_absolute():
+        return candidate_path if candidate_path.exists() else None
     if path_str.startswith(_MEDIA_PREFIX):
         path_str = path_str[len(_MEDIA_PREFIX) :]
     candidate = media_root / path_str
@@ -190,9 +169,7 @@ def build_vehicle_entries(
                 for entry in entries
                 if entry.category_id == category.id and entry.view_name == normalized_view
             ]
-            background = _resolve_media_path(
-                config.background_url or category.image_url, media_root
-            )
+            background = _resolve_media_path(config.background_url or category.image_url, media_root)
             has_positions = any(
                 entry.bubble_x is not None and entry.bubble_y is not None for entry in view_entries
             )
@@ -241,3 +218,7 @@ def content_bounds(style_engine, page_width: float, page_height: float) -> tuple
     height = page_height - header_height - footer_height - margin_top - margin_bottom
     y = footer_height + margin_bottom
     return x, y, width, height
+
+
+def page_size_for_orientation(orientation: str):
+    return landscape(A4) if orientation == "landscape" else portrait(A4)
