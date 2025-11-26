@@ -14,9 +14,13 @@ interface ItemOption {
   name: string;
 }
 
+type ItemIdKey = "item_id" | "remise_item_id" | "pharmacy_item_id";
+
 interface PurchaseOrderItem {
   id: number;
-  item_id: number;
+  item_id?: number;
+  remise_item_id?: number;
+  pharmacy_item_id?: number;
   item_name: string | null;
   quantity_ordered: number;
   quantity_received: number;
@@ -37,12 +41,12 @@ interface CreateOrderPayload {
   supplier_id: number | null;
   status: string;
   note: string | null;
-  items: Array<{ item_id: number; quantity_ordered: number }>;
+  items: Array<{ quantity_ordered: number } & Record<ItemIdKey, number>>;
 }
 
 interface ReceiveOrderPayload {
   orderId: number;
-  items: Array<{ item_id: number; quantity: number }>;
+  items: Array<{ quantity: number } & Record<ItemIdKey, number>>;
 }
 
 interface UpdateOrderPayload {
@@ -77,6 +81,7 @@ interface PurchaseOrdersPanelProps {
   title?: string;
   description?: string;
   downloadPrefix?: string;
+  itemIdField?: ItemIdKey;
 }
 
 export function PurchaseOrdersPanel({
@@ -87,7 +92,8 @@ export function PurchaseOrdersPanel({
   itemsQueryKey = ["items"],
   title = "Bons de commande",
   description = "Suivez les commandes fournisseurs et marquez les réceptions pour mettre à jour les stocks.",
-  downloadPrefix = "bon_commande"
+  downloadPrefix = "bon_commande",
+  itemIdField = "item_id"
 }: PurchaseOrdersPanelProps) {
   const queryClient = useQueryClient();
   const [draftSupplier, setDraftSupplier] = useState<number | "">("");
@@ -102,11 +108,29 @@ export function PurchaseOrdersPanel({
   const [editNote, setEditNote] = useState<string>("");
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
+  const resolveItemId = (item: PurchaseOrderItem) => {
+    const candidate = (item as Record<string, unknown>)[itemIdField];
+    if (typeof candidate === "number") {
+      return candidate;
+    }
+    return item.item_id ?? null;
+  };
+
   const { data: orders = [], isLoading: loadingOrders } = useQuery({
     queryKey: ordersQueryKey,
     queryFn: async () => {
       const response = await api.get<PurchaseOrderDetail[]>(`${purchaseOrdersPath}/`);
-      return response.data;
+      return response.data.map((order) => ({
+        ...order,
+        items: order.items.map((item) => {
+          const candidate = (item as Record<string, unknown>)[itemIdField];
+          const normalizedId = typeof candidate === "number" ? candidate : item.item_id;
+          return {
+            ...item,
+            item_id: normalizedId
+          } satisfies PurchaseOrderItem;
+        })
+      }));
     }
   });
 
@@ -185,7 +209,10 @@ export function PurchaseOrdersPanel({
     setError(null);
     const normalizedLines = draftLines
       .filter((line) => line.itemId !== "" && line.quantity > 0)
-      .map((line) => ({ item_id: Number(line.itemId), quantity_ordered: line.quantity }));
+      .map((line) => ({
+        [itemIdField]: Number(line.itemId),
+        quantity_ordered: line.quantity
+      }));
     if (normalizedLines.length === 0) {
       setError("Ajoutez au moins une ligne de commande valide.");
       return;
@@ -291,11 +318,17 @@ export function PurchaseOrdersPanel({
               <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
                 {orders.map((order) => {
                   const outstanding = order.items
-                    .map((line) => ({
-                      item_id: line.item_id,
-                      quantity: line.quantity_ordered - line.quantity_received
-                    }))
-                    .filter((line) => line.quantity > 0);
+                    .map((line) => {
+                      const itemId = resolveItemId(line);
+                      if (itemId === null) return null;
+                      return {
+                        [itemIdField]: itemId,
+                        quantity: line.quantity_ordered - line.quantity_received
+                      };
+                    })
+                    .filter((line): line is { [key in ItemIdKey]?: number } & { quantity: number } =>
+                      line !== null && line.quantity > 0
+                    );
                   const canReceive = outstanding.length > 0;
                   return (
                     <tr key={order.id}>
@@ -330,15 +363,18 @@ export function PurchaseOrdersPanel({
                       </td>
                       <td className="px-4 py-3 text-slate-200">
                         <ul className="space-y-1 text-xs">
-                          {order.items.map((line) => (
-                            <li key={line.id}>
-                              <span className="font-semibold">{line.item_name ?? `#${line.item_id}`}</span>
-                              {": "}
-                              <span>
-                                {line.quantity_received}/{line.quantity_ordered}
-                              </span>
-                            </li>
-                          ))}
+                          {order.items.map((line) => {
+                            const itemId = resolveItemId(line);
+                            return (
+                              <li key={line.id}>
+                                <span className="font-semibold">{line.item_name ?? `#${itemId}`}</span>
+                                {": "}
+                                <span>
+                                  {line.quantity_received}/{line.quantity_ordered}
+                                </span>
+                              </li>
+                            );
+                          })}
                           {order.note ? (
                             <li className="text-slate-400">Note: {order.note}</li>
                           ) : null}

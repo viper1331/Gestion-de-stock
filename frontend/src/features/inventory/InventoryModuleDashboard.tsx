@@ -909,6 +909,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
           title={config.purchaseOrdersTitle}
           description={config.purchaseOrdersDescription}
           downloadPrefix={config.purchaseOrdersDownloadPrefix}
+          itemIdField={config.purchaseOrdersItemIdField}
         />
       ) : null}
     </section>

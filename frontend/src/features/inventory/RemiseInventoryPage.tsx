@@ -19,6 +19,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   purchaseOrdersDescription:
     "Suivez les commandes fournisseurs pour les remises et mettez à jour les stocks lors des réceptions.",
   purchaseOrdersDownloadPrefix: "bon_commande_remise",
+  purchaseOrdersItemIdField: "remise_item_id",
   supportsLowStockOptOut: true,
   supportsExpirationDate: true,
   showVehicleTypeColumn: true,
