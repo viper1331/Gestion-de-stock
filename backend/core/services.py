@@ -451,6 +451,21 @@ def _ensure_vehicle_category_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE vehicle_categories ADD COLUMN vehicle_type TEXT")
 
 
+def _ensure_vehicle_view_settings_columns(conn: sqlite3.Connection) -> None:
+    view_settings_info = conn.execute("PRAGMA table_info(vehicle_view_settings)").fetchall()
+    view_settings_columns = {row["name"] for row in view_settings_info}
+
+    if "pointer_mode_enabled" not in view_settings_columns:
+        conn.execute(
+            "ALTER TABLE vehicle_view_settings ADD COLUMN pointer_mode_enabled INTEGER NOT NULL DEFAULT 0"
+        )
+
+    if "hide_edit_buttons" not in view_settings_columns:
+        conn.execute(
+            "ALTER TABLE vehicle_view_settings ADD COLUMN hide_edit_buttons INTEGER NOT NULL DEFAULT 0"
+        )
+
+
 def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
     remise_item_info = conn.execute("PRAGMA table_info(remise_items)").fetchall()
     remise_item_columns = {row["name"] for row in remise_item_info}
@@ -758,6 +773,7 @@ def _apply_schema_migrations() -> None:
         _ensure_remise_item_columns(conn)
         _ensure_remise_lot_columns(conn)
         _ensure_vehicle_category_columns(conn)
+        _ensure_vehicle_view_settings_columns(conn)
         _ensure_vehicle_item_columns(conn)
         _ensure_vehicle_item_qr_tokens(conn)
         conn.execute(
