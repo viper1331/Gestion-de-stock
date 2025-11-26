@@ -22,6 +22,7 @@ export interface InventoryModuleConfig {
   purchaseOrdersTitle?: string;
   purchaseOrdersDescription?: string;
   purchaseOrdersDownloadPrefix?: string;
+  purchaseOrdersItemIdField?: "item_id" | "remise_item_id" | "pharmacy_item_id";
   searchPlaceholder?: string;
   supportsItemImages?: boolean;
   supportsLowStockOptOut?: boolean;
