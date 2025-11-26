@@ -695,6 +695,18 @@ export function VehicleInventoryPage() {
     [items, selectedVehicle?.id]
   );
 
+  const vehicleItemCountMap = useMemo(() => {
+    const map = new Map<number, number>();
+    items.forEach((item) => {
+      if (item.category_id === null) {
+        return;
+      }
+      const current = map.get(item.category_id) ?? 0;
+      map.set(item.category_id, current + item.quantity);
+    });
+    return map;
+  }, [items]);
+
   const itemsForSelectedView = useMemo(
     () =>
       vehicleItems.filter((item) => {
@@ -1183,6 +1195,7 @@ export function VehicleInventoryPage() {
               fallbackIllustration={
                 vehicleFallbackMap.get(vehicle.id) ?? VEHICLE_ILLUSTRATIONS[0]
               }
+              itemCount={vehicleItemCountMap.get(vehicle.id) ?? 0}
               onClick={() => setSelectedVehicleId(vehicle.id)}
             />
           ))}
@@ -1476,10 +1489,11 @@ export function VehicleInventoryPage() {
 interface VehicleCardProps {
   vehicle: VehicleCategory;
   fallbackIllustration: string;
+  itemCount: number;
   onClick: () => void;
 }
 
-function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProps) {
+function VehicleCard({ vehicle, fallbackIllustration, itemCount, onClick }: VehicleCardProps) {
   const [hasImageError, setHasImageError] = useState(false);
   const resolvedImageUrl = resolveMediaUrl(vehicle.image_url);
   useEffect(() => {
@@ -1513,6 +1527,13 @@ function VehicleCard({ vehicle, fallbackIllustration, onClick }: VehicleCardProp
                   vehicle.sizes.length > 1 ? "s" : ""
                 }`
               : "Vue principale uniquement"}
+          </p>
+          <p className="text-sm font-medium text-slate-700 dark:text-slate-200">
+            {itemCount > 0
+              ? `${itemCount} matériel${itemCount > 1 ? "s" : ""} affecté${
+                  itemCount > 1 ? "s" : ""
+                }`
+              : "Aucun matériel affecté"}
           </p>
           {vehicle.vehicle_type ? (
             <span className="mt-1 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
