@@ -10,7 +10,7 @@ from .utils import build_footer_label
 
 
 def draw_header(canvas, *, title: str, subtitle: str | None, style_engine, logo_path: Path | None = None):
-    margin_left, margin_top, _, _, _, _ = (style_engine.margins)
+    margin_left, margin_top, _, margin_right = style_engine.margins
     canvas.setFont(style_engine.theme.font_family, style_engine.font_size("title"))
     canvas.setFillColor(style_engine.color("text"))
     canvas.drawString(margin_left, canvas._pagesize[1] - margin_top + 10, title)
@@ -21,7 +21,14 @@ def draw_header(canvas, *, title: str, subtitle: str | None, style_engine, logo_
 
     if logo_path and logo_path.exists():
         image = ImageReader(str(logo_path))
-        canvas.drawImage(image, canvas._pagesize[0] - margin_left - 50, canvas._pagesize[1] - margin_top, width=45, height=45, mask='auto')
+        canvas.drawImage(
+            image,
+            canvas._pagesize[0] - margin_right - 50,
+            canvas._pagesize[1] - margin_top,
+            width=45,
+            height=45,
+            mask='auto',
+        )
 
 
 def draw_footer(canvas, *, generated_at: datetime, style_engine, page_number: int, page_count: int):
