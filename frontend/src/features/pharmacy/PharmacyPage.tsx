@@ -136,7 +136,7 @@ export function PharmacyPage() {
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<PharmacyItem | null>(null);
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
-  const [isFormVisible, setIsFormVisible] = useState(true);
+  const [isFormVisible, setIsFormVisible] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
