@@ -1,3 +1,4 @@
+import axios, { AxiosError } from "axios";
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
@@ -34,6 +35,19 @@ export function UpdatesPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
 
+  const formatApiError = (err: unknown, fallback: string) => {
+    if (axios.isAxiosError(err)) {
+      const responseMessage = (err as AxiosError<{ detail?: string }>).response?.data?.detail;
+      if (typeof responseMessage === "string" && responseMessage.trim()) {
+        return responseMessage;
+      }
+    }
+    if (err instanceof Error && err.message) {
+      return err.message;
+    }
+    return fallback;
+  };
+
   const {
     data: status,
     isFetching,
@@ -62,7 +76,7 @@ export function UpdatesPage() {
     },
     onError: (err: unknown) => {
       console.error(err);
-      setActionError("Impossible d'appliquer la mise à jour.");
+      setActionError(formatApiError(err, "Impossible d'appliquer la mise à jour."));
     },
     onSettled: () => {
       setTimeout(() => setMessage(null), 4000);
@@ -82,7 +96,7 @@ export function UpdatesPage() {
     },
     onError: (err: unknown) => {
       console.error(err);
-      setActionError("Impossible de restaurer la version précédente.");
+      setActionError(formatApiError(err, "Impossible de restaurer la version précédente."));
     },
     onSettled: () => {
       setTimeout(() => setMessage(null), 4000);
