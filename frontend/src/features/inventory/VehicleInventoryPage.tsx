@@ -3216,6 +3216,7 @@ function createMarkerFromLotGroup(
   const [representative] = lotItems;
   const lotName = representative?.lot_name ?? `Lot #${lotId}`;
   const totalQuantity = lotItems.reduce((sum, entry) => sum + entry.quantity, 0);
+  const imageUrl = lotItems.find((entry) => Boolean(entry.image_url))?.image_url ?? null;
   const tooltip =
     lotItems.length > 0
       ? lotItems.map((entry) => `${entry.quantity} × ${entry.name}`).join("\n")
@@ -3226,7 +3227,7 @@ function createMarkerFromLotGroup(
     key: `lot-${lotId}`,
     name: lotName,
     quantity: totalQuantity,
-    image_url: null,
+    image_url: imageUrl,
     position_x: x,
     position_y: y,
     lot_id: lotId,
