@@ -64,6 +64,8 @@ export function RemiseLotsPanel() {
   const [editQuantities, setEditQuantities] = useState<Record<number, number>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isLotsPanelCollapsed, setIsLotsPanelCollapsed] = useState(false);
+  const [isStockLotsCollapsed, setIsStockLotsCollapsed] = useState(false);
   const lotImageInputRef = useRef<HTMLInputElement | null>(null);
 
   const lotsQuery = useQuery({
@@ -382,12 +384,25 @@ export function RemiseLotsPanel() {
             Créez des lots, ajustez leur contenu et réservez du matériel disponible.
           </p>
         </div>
+        <button
+          type="button"
+          onClick={() => setIsLotsPanelCollapsed((value) => !value)}
+          aria-expanded={!isLotsPanelCollapsed}
+          className="self-start rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 transition hover:bg-slate-800"
+        >
+          {isLotsPanelCollapsed ? "Afficher" : "Masquer"} les cartes
+        </button>
       </div>
 
       {message ? <Alert tone="success" message={message} /> : null}
       {error ? <Alert tone="error" message={error} /> : null}
 
-      <div className="grid gap-6 lg:grid-cols-3">
+      {isLotsPanelCollapsed ? (
+        <p className="rounded-md border border-dashed border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
+          Cartes masquées. Cliquez sur « Afficher les cartes » pour gérer les lots de remise.
+        </p>
+      ) : (
+        <div className="grid gap-6 lg:grid-cols-3">
         <div className="space-y-4">
           <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4">
             <div className="mb-3 flex items-center justify-between gap-2">
@@ -723,6 +738,7 @@ export function RemiseLotsPanel() {
           </div>
         </div>
       </div>
+      )}
 
       <div className="space-y-3 rounded-lg border border-slate-800 bg-slate-950/60 p-4">
         <div className="flex items-start justify-between gap-3">
@@ -735,9 +751,21 @@ export function RemiseLotsPanel() {
           <div className="rounded-md border border-slate-700 bg-slate-900 px-3 py-1 text-[11px] text-slate-300">
             {lotsWithItems.length} lot(s)
           </div>
+          <button
+            type="button"
+            onClick={() => setIsStockLotsCollapsed((value) => !value)}
+            aria-expanded={!isStockLotsCollapsed}
+            className="self-start rounded-md border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-200 transition hover:bg-slate-800"
+          >
+            {isStockLotsCollapsed ? "Afficher" : "Masquer"}
+          </button>
         </div>
 
-        {lotsWithItemsQuery.isLoading ? (
+        {isStockLotsCollapsed ? (
+          <p className="rounded-md border border-dashed border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-400">
+            Cartes masquées. Cliquez sur « Afficher » pour consulter les lots en stock.
+          </p>
+        ) : lotsWithItemsQuery.isLoading ? (
           <p className="text-sm text-slate-400">Chargement des lots...</p>
         ) : lotsWithItemsQuery.isError ? (
           <p className="text-sm text-red-300">Impossible de charger les lots détaillés.</p>
