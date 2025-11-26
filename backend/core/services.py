@@ -5,6 +5,7 @@ import html
 import io
 import json
 import math
+import shutil
 from collections import defaultdict
 import sqlite3
 from dataclasses import dataclass
@@ -155,6 +156,19 @@ def _delete_media_file(relative_path: str | None) -> None:
         target.unlink(missing_ok=True)
     except OSError:
         pass
+
+
+def _clone_media_file(source_relative_path: str | None, directory: Path) -> str | None:
+    if not source_relative_path:
+        return None
+    source_path = MEDIA_ROOT / source_relative_path
+    if not source_path.exists() or not source_path.is_file():
+        return None
+    directory.mkdir(parents=True, exist_ok=True)
+    suffix = _sanitize_image_suffix(source_path.name)
+    target = directory / f"{uuid4().hex}{suffix}"
+    shutil.copyfile(source_path, target)
+    return relative_to_media(target)
 
 
 def _coerce_datetime(value: object) -> datetime:
@@ -1239,6 +1253,7 @@ def _create_inventory_item_internal(
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
             _ensure_vehicle_category_columns(conn)
+        cloned_image_path: str | None = None
         name = payload.name
         sku = payload.sku
         insert_sku = sku
@@ -1298,7 +1313,7 @@ def _create_inventory_item_internal(
                 vehicle_type = category_row["vehicle_type"]
             template_row = conn.execute(
                 f"""
-                SELECT id, quantity
+                SELECT id, quantity, image_path
                 FROM {config.tables.items}
                 WHERE {source_column} = ? AND category_id IS NULL
                 ORDER BY id
@@ -1343,6 +1358,11 @@ def _create_inventory_item_internal(
                 )
                 _persist_after_commit(conn, *_inventory_modules_to_persist(module))
                 return _get_inventory_item_internal(module, existing["id"])
+            if template_row is not None and template_row["image_path"]:
+                cloned_image_path = _clone_media_file(
+                    template_row["image_path"],
+                    VEHICLE_ITEM_MEDIA_DIR,
+                )
             if payload.category_id is not None:
                 insert_sku = f"{sku}-{uuid4().hex[:6]}"
             if pharmacy_item_id is not None:
@@ -1399,6 +1419,9 @@ def _create_inventory_item_internal(
             )
             columns.append("show_in_qr")
             values.append(int(payload.show_in_qr))
+            if cloned_image_path:
+                columns.append("image_path")
+                values.append(cloned_image_path)
         placeholders = ",".join("?" for _ in columns)
         cur = conn.execute(
             f"INSERT INTO {config.tables.items} ({', '.join(columns)}) VALUES ({placeholders})",
