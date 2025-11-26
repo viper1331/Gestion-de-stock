@@ -2714,7 +2714,7 @@ function DroppableLibrary({
                           )}
                         </div>
                         <div className="flex-1 space-y-1">
-                          <div className="flex items-start justify-between gap-2">
+                          <div className="flex items-start gap-2">
                             <div>
                               <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{lot.name}</p>
                               {lot.description ? (
@@ -2724,14 +2724,6 @@ function DroppableLibrary({
                                 {lot.item_count} matériel(s) • {lot.total_quantity} pièce(s)
                               </p>
                             </div>
-                            <button
-                              type="button"
-                              onClick={() => onAssignLot?.(lot)}
-                              disabled={!onAssignLot || isAssigningLot}
-                              className="rounded-full border border-blue-500 px-3 py-1 text-[11px] font-semibold text-blue-600 transition hover:border-blue-600 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-400 dark:text-blue-200 dark:hover:border-blue-300"
-                            >
-                              {isAssigningLot ? "Ajout en cours..." : "Ajouter au véhicule"}
-                            </button>
                           </div>
                           <p className="text-[10px] text-slate-500 dark:text-slate-400">Glissez ce lot vers la vue sélectionnée pour l'affecter.</p>
                         </div>
