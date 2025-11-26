@@ -25,7 +25,7 @@ class BackupScheduler:
         self._task: asyncio.Task[None] | None = None
         self._stop_event = asyncio.Event()
         self._schedule_event = asyncio.Event()
-        self._schedule = models.BackupSchedule(enabled=False, days=[], time="02:00")
+        self._schedule = models.BackupSchedule(enabled=False, days=[], times=["02:00"])
         self._day_numbers: set[int] = set()
         self._next_run: datetime | None = None
         self._last_run: datetime | None = None
@@ -60,14 +60,27 @@ class BackupScheduler:
         parser.read(_CONFIG_PATH, encoding="utf-8")
         enabled = parser.getboolean("backup", "enabled", fallback=False)
         days_value = parser.get("backup", "days", fallback="")
+        times_value = parser.get("backup", "times", fallback="")
         time_value = parser.get("backup", "time", fallback="02:00")
+        last_run_value = parser.get("backup", "last_run", fallback="")
         raw_days = [part.strip() for part in days_value.split(",") if part.strip()]
+        raw_times = [part.strip() for part in times_value.split(",") if part.strip()]
+        if not raw_times and time_value:
+            raw_times = [time_value]
         try:
-            schedule = models.BackupSchedule(enabled=enabled, days=raw_days, time=time_value)
+            schedule = models.BackupSchedule(enabled=enabled, days=raw_days, times=raw_times)
         except ValidationError as exc:
             logger.warning("Configuration de sauvegarde invalide, désactivation: %s", exc)
-            schedule = models.BackupSchedule(enabled=False, days=[], time="02:00")
-        await self._apply_schedule(schedule)
+            schedule = models.BackupSchedule(enabled=False, days=[], times=["02:00"])
+
+        last_run = None
+        if last_run_value:
+            try:
+                last_run = datetime.fromisoformat(last_run_value)
+            except ValueError:
+                logger.warning("Horodatage de dernière sauvegarde invalide: %s", last_run_value)
+
+        await self._apply_schedule(schedule, last_run=last_run)
 
     async def update_schedule(self, schedule: models.BackupSchedule) -> None:
         """Enregistre et applique une nouvelle configuration."""
@@ -83,15 +96,19 @@ class BackupScheduler:
         return models.BackupScheduleStatus(
             enabled=schedule.enabled,
             days=list(schedule.days),
-            time=schedule.time,
+            times=list(schedule.times),
             next_run=next_run,
             last_run=last_run,
         )
 
-    async def _apply_schedule(self, schedule: models.BackupSchedule) -> None:
+    async def _apply_schedule(
+        self, schedule: models.BackupSchedule, *, last_run: datetime | None = None
+    ) -> None:
         async with self._lock:
             self._schedule = schedule
             self._day_numbers = {models.BACKUP_WEEKDAY_INDEX[day] for day in schedule.days}
+            if last_run is not None:
+                self._last_run = last_run
             self._next_run = None
         self._schedule_event.set()
 
@@ -102,7 +119,11 @@ class BackupScheduler:
             parser.add_section("backup")
         parser.set("backup", "enabled", "true" if schedule.enabled else "false")
         parser.set("backup", "days", ",".join(schedule.days))
-        parser.set("backup", "time", schedule.time)
+        parser.set("backup", "times", ",".join(schedule.times))
+        if schedule.times:
+            parser.set("backup", "time", schedule.times[0])
+        else:
+            parser.remove_option("backup", "time")
         with _CONFIG_PATH.open("w", encoding="utf-8") as configfile:
             parser.write(configfile)
 
@@ -122,7 +143,7 @@ class BackupScheduler:
 
             now = datetime.now()
             if next_run is None or next_run <= now:
-                next_run = self._calculate_next_run(now, day_numbers, schedule.time)
+                next_run = self._calculate_next_run(now, day_numbers, schedule.times)
                 async with self._lock:
                     self._next_run = next_run
 
@@ -152,6 +173,8 @@ class BackupScheduler:
                 await self._execute_backup()
                 async with self._lock:
                     self._last_run = datetime.now()
+                self._write_last_run(self._last_run)
+                async with self._lock:
                     self._next_run = None
 
         logger.info("Fin de la tâche de planification des sauvegardes")
@@ -175,26 +198,46 @@ class BackupScheduler:
             logger.exception("Échec de la sauvegarde automatique")
 
     def _calculate_next_run(
-        self, reference: datetime, day_numbers: set[int], time_value: str
+        self, reference: datetime, day_numbers: set[int], time_values: list[str]
     ) -> datetime | None:
         if not day_numbers:
             return None
-        try:
-            hour, minute = [int(part) for part in time_value.split(":", 1)]
-        except ValueError:
-            logger.error("Heure de sauvegarde invalide: %s", time_value)
+        parsed_times: list[tuple[int, int]] = []
+        for raw_value in time_values:
+            try:
+                hour, minute = [int(part) for part in raw_value.split(":", 1)]
+            except ValueError:
+                logger.error("Heure de sauvegarde invalide: %s", raw_value)
+                continue
+            parsed_times.append((hour, minute))
+
+        if not parsed_times:
             return None
 
-        target_time = reference.replace(hour=hour, minute=minute, second=0, microsecond=0)
-        if reference.weekday() in day_numbers and target_time > reference:
-            return target_time
-
-        for offset in range(1, 8):
-            candidate = reference + timedelta(days=offset)
-            candidate = candidate.replace(hour=hour, minute=minute, second=0, microsecond=0)
-            if candidate.weekday() in day_numbers:
-                return candidate
+        parsed_times.sort()
+        for offset in range(0, 8):
+            candidate_day = reference + timedelta(days=offset)
+            if candidate_day.weekday() not in day_numbers:
+                continue
+            for hour, minute in parsed_times:
+                candidate = candidate_day.replace(
+                    hour=hour, minute=minute, second=0, microsecond=0
+                )
+                if candidate > reference:
+                    return candidate
         return None
+
+    def _write_last_run(self, last_run: datetime | None) -> None:
+        parser = ConfigParser()
+        parser.read(_CONFIG_PATH, encoding="utf-8")
+        if not parser.has_section("backup"):
+            parser.add_section("backup")
+        if last_run is None:
+            parser.remove_option("backup", "last_run")
+        else:
+            parser.set("backup", "last_run", last_run.isoformat())
+        with _CONFIG_PATH.open("w", encoding="utf-8") as configfile:
+            parser.write(configfile)
 
 
 backup_scheduler = BackupScheduler()

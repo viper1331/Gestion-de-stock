@@ -21,7 +21,7 @@ const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
 interface BackupScheduleStatus {
   enabled: boolean;
   days: string[];
-  time: string;
+  times: string[];
   next_run: string | null;
   last_run: string | null;
 }
@@ -29,7 +29,7 @@ interface BackupScheduleStatus {
 interface BackupScheduleInput {
   enabled: boolean;
   days: string[];
-  time: string;
+  times: string[];
 }
 
 const WEEK_DAYS = [
@@ -168,7 +168,7 @@ export function SettingsPage() {
   const [scheduleForm, setScheduleForm] = useState<BackupScheduleInput>({
     enabled: false,
     days: [],
-    time: "02:00"
+    times: ["02:00"]
   });
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
@@ -202,10 +202,12 @@ export function SettingsPage() {
       setScheduleForm({
         enabled: scheduleStatus.enabled,
         days: scheduleStatus.days,
-        time: scheduleStatus.time
+        times: scheduleStatus.times.length ? scheduleStatus.times : ["02:00"]
       });
     }
   }, [scheduleStatus]);
+
+  const backupTimeInputs = scheduleForm.times.length ? scheduleForm.times : ["02:00"];
 
   const orderDays = (days: string[]) => WEEK_DAY_ORDER.filter((value) => days.includes(value));
 
@@ -386,13 +388,54 @@ export function SettingsPage() {
       setError("Sélectionnez au moins un jour pour la sauvegarde automatique.");
       return;
     }
+    const uniqueTimes = getUniqueTimes(scheduleForm.times);
+    if (scheduleForm.enabled && uniqueTimes.length === 0) {
+      setError("Ajoutez au moins une heure pour la sauvegarde automatique.");
+      return;
+    }
     setMessage(null);
     setError(null);
     try {
-      await updateSchedule.mutateAsync(scheduleForm);
+      await updateSchedule.mutateAsync({ ...scheduleForm, times: uniqueTimes });
     } catch (err) {
       // L'erreur est gérée via onError.
     }
+  };
+
+  const getUniqueTimes = (values: string[]) => {
+    const seen = new Set<string>();
+    return values
+      .map((value) => value.trim())
+      .filter((value) => value)
+      .filter((value) => {
+        if (seen.has(value)) {
+          return false;
+        }
+        seen.add(value);
+        return true;
+      });
+  };
+
+  const handleTimeChange = (index: number, value: string) => {
+    setScheduleForm((prev) => {
+      const updatedTimes = [...prev.times];
+      updatedTimes[index] = value;
+      return { ...prev, times: updatedTimes };
+    });
+  };
+
+  const handleAddTime = () => {
+    setScheduleForm((prev) => {
+      const fallback = prev.times[prev.times.length - 1] ?? "12:00";
+      return { ...prev, times: [...prev.times, fallback] };
+    });
+  };
+
+  const handleRemoveTime = (index: number) => {
+    setScheduleForm((prev) => ({
+      ...prev,
+      times: prev.times.filter((_, idx) => idx !== index)
+    }));
   };
 
   const formatDateTime = (value: string | null) => {
@@ -712,18 +755,37 @@ export function SettingsPage() {
                       ))}
                     </div>
                   </div>
-                  <div className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                    <label className="text-xs font-semibold uppercase tracking-wide text-slate-400" htmlFor="backup-time">
-                      Heure de sauvegarde
-                    </label>
-                    <input
-                      id="backup-time"
-                      type="time"
-                      value={scheduleForm.time}
-                      onChange={(event) => setScheduleForm((prev) => ({ ...prev, time: event.target.value }))}
-                      disabled={!scheduleForm.enabled}
-                      className="w-full max-w-xs rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                    />
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Heures de sauvegarde</p>
+                    <div className="space-y-2">
+                      {backupTimeInputs.map((timeValue, index) => (
+                        <div key={`backup-time-${index}`} className="flex flex-col gap-2 sm:flex-row sm:items-center">
+                          <input
+                            type="time"
+                            value={timeValue}
+                            onChange={(event) => handleTimeChange(index, event.target.value)}
+                            disabled={!scheduleForm.enabled}
+                            className="w-full max-w-xs rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                          />
+                          <button
+                            type="button"
+                            onClick={() => handleRemoveTime(index)}
+                            disabled={!scheduleForm.enabled || backupTimeInputs.length === 1}
+                            className="inline-flex items-center justify-center rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+                          >
+                            Supprimer
+                          </button>
+                        </div>
+                      ))}
+                      <button
+                        type="button"
+                        onClick={handleAddTime}
+                        disabled={!scheduleForm.enabled}
+                        className="inline-flex items-center justify-center rounded-md border border-indigo-500 px-3 py-2 text-xs font-semibold text-indigo-100 hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        Ajouter un horaire
+                      </button>
+                    </div>
                   </div>
                   <button
                     type="submit"
