@@ -100,6 +100,8 @@ class VehicleViewConfig(BaseModel):
     name: str
     background_photo_id: int | None = None
     background_url: str | None = None
+    pointer_mode_enabled: bool = False
+    hide_edit_buttons: bool = False
 
 
 class Category(BaseModel):
