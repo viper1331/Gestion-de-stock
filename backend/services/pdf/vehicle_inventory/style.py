@@ -1,108 +1,90 @@
-"""Styling utilities for vehicle inventory PDFs."""
+"""Styling primitives for the vehicle inventory PDF."""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Mapping
+from pathlib import Path
+from typing import Mapping
 
 from reportlab.lib import colors
 from reportlab.lib.units import mm
 
 
 @dataclass(frozen=True)
-class PdfStyleTheme:
-    """Bundle of design tokens for a PDF theme."""
-
+class ThemeTokens:
     name: str
-    palette: Mapping[str, Any]
     margins: tuple[float, float, float, float]
-    font_family: str
-    font_sizes: Mapping[str, int]
-    border_radius: float
-    shadow: tuple[int, int, int, float]
+    fonts: Mapping[str, int]
+    colors: Mapping[str, colors.Color]
+    header_height: float
+    footer_height: float
+    font_family: str = "Helvetica"
 
 
 class PdfStyleEngine:
-    """Centralizes visual tokens for vehicle inventory PDFs."""
+    """Centralizes color, spacing and typography tokens."""
 
-    _THEMES: dict[str, PdfStyleTheme] = {
-        "default": PdfStyleTheme(
+    _THEMES: dict[str, ThemeTokens] = {
+        "default": ThemeTokens(
             name="default",
-            palette={
-                "background": colors.whitesmoke,
+            margins=(18 * mm, 14 * mm, 16 * mm, 18 * mm),
+            fonts={"title": 18, "subtitle": 11, "body": 10, "small": 8},
+            colors={
+                "background": colors.HexColor("#F8FAFC"),
                 "surface": colors.white,
-                "primary": colors.HexColor("#0F172A"),
-                "secondary": colors.HexColor("#1E293B"),
-                "accent": colors.HexColor("#3B82F6"),
-                "muted": colors.HexColor("#CBD5E1"),
+                "bubble": colors.HexColor("#EEF2FF"),
+                "bubble_border": colors.HexColor("#CBD5E1"),
                 "text": colors.HexColor("#0F172A"),
-                "text_muted": colors.HexColor("#475569"),
-                "bubble": colors.HexColor("#E2E8F0"),
+                "muted": colors.HexColor("#94A3B8"),
+                "accent": colors.HexColor("#2563EB"),
+                "overlay": colors.Color(0, 0, 0, alpha=0.15),
+                "header_band": colors.HexColor("#0F172A"),
+                "on_header": colors.white,
+                "table_header": colors.HexColor("#E2E8F0"),
             },
-            margins=(15 * mm, 15 * mm, 20 * mm, 15 * mm),
-            font_family="Helvetica",
-            font_sizes={"title": 16, "subtitle": 12, "body": 10, "small": 8},
-            border_radius=4,
-            shadow=(1, -1, 3, 0.06),
+            header_height=34,
+            footer_height=22,
         ),
-        "premium_dark": PdfStyleTheme(
-            name="premium_dark",
-            palette={
+        "premium": ThemeTokens(
+            name="premium",
+            margins=(22 * mm, 18 * mm, 18 * mm, 22 * mm),
+            fonts={"title": 20, "subtitle": 12, "body": 10, "small": 8},
+            colors={
                 "background": colors.HexColor("#0F172A"),
-                "surface": colors.HexColor("#1E293B"),
-                "primary": colors.HexColor("#3B82F6"),
-                "secondary": colors.HexColor("#CBD5E1"),
-                "accent": colors.HexColor("#3B82F6"),
+                "surface": colors.HexColor("#111827"),
+                "bubble": colors.HexColor("#1F2937"),
+                "bubble_border": colors.HexColor("#334155"),
+                "text": colors.HexColor("#F8FAFC"),
                 "muted": colors.HexColor("#CBD5E1"),
-                "text": colors.white,
-                "text_muted": colors.HexColor("#CBD5E1"),
-                "bubble": colors.HexColor("#1E293B"),
+                "accent": colors.HexColor("#8B5CF6"),
+                "overlay": colors.Color(0, 0, 0, alpha=0.3),
+                "header_band": colors.HexColor("#111827"),
+                "on_header": colors.HexColor("#F8FAFC"),
+                "table_header": colors.HexColor("#1F2937"),
             },
-            margins=(18 * mm, 18 * mm, 22 * mm, 18 * mm),
-            font_family="Helvetica",
-            font_sizes={"title": 18, "subtitle": 13, "body": 11, "small": 9},
-            border_radius=6,
-            shadow=(2, -2, 6, 0.12),
-        ),
-        "premium_light": PdfStyleTheme(
-            name="premium_light",
-            palette={
-                "background": colors.HexColor("#FFFFFF"),
-                "surface": colors.HexColor("#F8FAFC"),
-                "primary": colors.HexColor("#3B82F6"),
-                "secondary": colors.HexColor("#0F172A"),
-                "accent": colors.HexColor("#1E293B"),
-                "muted": colors.HexColor("#CBD5E1"),
-                "text": colors.HexColor("#0F172A"),
-                "text_muted": colors.HexColor("#475569"),
-                "bubble": colors.HexColor("#E2E8F0"),
-            },
-            margins=(18 * mm, 18 * mm, 22 * mm, 18 * mm),
-            font_family="Helvetica",
-            font_sizes={"title": 18, "subtitle": 13, "body": 11, "small": 9},
-            border_radius=6,
-            shadow=(1, -1, 5, 0.1),
+            header_height=46,
+            footer_height=28,
+            font_family="Helvetica-Bold",
         ),
     }
 
-    def __init__(self, *, theme: str = "default") -> None:
-        if theme not in self._THEMES:
-            theme = "default"
-        self.theme = self._THEMES[theme]
+    def __init__(self, *, theme: str = "default", logo_path: Path | None = None) -> None:
+        tokens = self._THEMES.get(theme, self._THEMES["default"])
+        self.tokens = tokens
+        self.logo_path = logo_path
 
     @property
     def margins(self) -> tuple[float, float, float, float]:
-        return self.theme.margins
+        return self.tokens.margins
 
-    def font_size(self, role: str) -> int:
-        return self.theme.font_sizes.get(role, self.theme.font_sizes["body"])
+    def color(self, name: str) -> colors.Color:
+        return self.tokens.colors.get(name, self.tokens.colors["text"])
 
-    def color(self, role: str):
-        return self.theme.palette.get(role, self.theme.palette["text"])
+    def font(self, name: str, size_override: int | None = None) -> tuple[str, int]:
+        size = size_override or self.tokens.fonts.get(name, self.tokens.fonts["body"])
+        return self.tokens.font_family, size
 
-    @property
-    def border_radius(self) -> float:
-        return self.theme.border_radius
+    def header_height(self) -> float:
+        return self.tokens.header_height
 
-    @property
-    def shadow(self) -> tuple[int, int, int, float]:
-        return self.theme.shadow
+    def footer_height(self) -> float:
+        return self.tokens.footer_height
