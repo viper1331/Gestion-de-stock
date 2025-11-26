@@ -10,6 +10,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
+from backend.services.pdf import VehiclePdfOptions
 from backend.services import qrcode_service
 
 router = APIRouter()
@@ -35,17 +36,17 @@ async def list_vehicle_items(
     return services.list_vehicle_items(search)
 
 
-class VehicleInventoryExportOptions(models.BaseModel):
+class VehicleInventoryExportOptions(VehiclePdfOptions):
     pointer_targets: dict[str, models.PointerTarget] | None = None
 
 
 def _vehicle_inventory_pdf_response(
-    *, pointer_targets: dict[str, models.PointerTarget] | None,
-    user: models.User,
+    *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
 ):
     _require_permission(user, action="view")
     pdf_bytes = services.generate_vehicle_inventory_pdf(
-        pointer_targets=pointer_targets
+        pointer_targets=pointer_targets,
+        options=options,
     )
     filename = f"inventaire_vehicules_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
     return StreamingResponse(
@@ -63,14 +64,15 @@ async def export_vehicle_inventory_pdf(
     user: models.User = Depends(get_current_user),
 ):
     pointer_targets = payload.pointer_targets if payload else None
-    return _vehicle_inventory_pdf_response(pointer_targets=pointer_targets, user=user)
+    options = payload or VehiclePdfOptions()
+    return _vehicle_inventory_pdf_response(pointer_targets=pointer_targets, options=options, user=user)
 
 
 @router.get("/export/pdf")
 async def export_vehicle_inventory_pdf_legacy(
     user: models.User = Depends(get_current_user),
 ):
-    return _vehicle_inventory_pdf_response(pointer_targets=None, user=user)
+    return _vehicle_inventory_pdf_response(pointer_targets=None, options=VehiclePdfOptions(), user=user)
 
 
 @router.get("/{item_id}/qr-code")
