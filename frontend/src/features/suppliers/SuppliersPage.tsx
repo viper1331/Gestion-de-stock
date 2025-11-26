@@ -9,7 +9,8 @@ const DEFAULT_SUPPLIER_MODULE = "suppliers";
 
 const SUPPLIER_MODULE_LABELS: Record<string, string> = {
   suppliers: "Habillement",
-  pharmacy: "Pharmacie"
+  pharmacy: "Pharmacie",
+  inventory_remise: "Remise"
 };
 
 const SUPPLIER_MODULE_OPTIONS: Array<{ key: string; label: string }> = Object.entries(
