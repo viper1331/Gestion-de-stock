@@ -149,6 +149,7 @@ class Item(BaseModel):
     lot_name: str | None = None
     show_in_qr: bool = True
     vehicle_type: VehicleType | None = None
+    assigned_vehicle_names: list[str] = Field(default_factory=list)
 
 
 class PointerTarget(BaseModel):

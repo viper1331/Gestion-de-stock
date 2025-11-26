@@ -1014,6 +1014,13 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     expiration_date = None
     if "expiration_date" in row.keys():
         expiration_date = row["expiration_date"]
+    assigned_vehicle_names: list[str] = []
+    if "assigned_vehicle_names" in row.keys() and row["assigned_vehicle_names"]:
+        assigned_vehicle_names = [
+            name.strip()
+            for name in str(row["assigned_vehicle_names"]).split(",")
+            if name and name.strip()
+        ]
     return models.Item(
         id=row["id"],
         name=name,
@@ -1040,6 +1047,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         lot_name=lot_name,
         show_in_qr=show_in_qr,
         vehicle_type=row["vehicle_type"] if "vehicle_type" in row.keys() else None,
+        assigned_vehicle_names=assigned_vehicle_names,
     )
 
 
@@ -1073,6 +1081,23 @@ def _list_inventory_items_internal(
             like = f"%{search}%"
             params = (like, like)
         query += " ORDER BY COALESCE(ri.name, vi.name) COLLATE NOCASE"
+    elif module == "inventory_remise":
+        query = (
+            "SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names "
+            "FROM remise_items AS ri "
+            "LEFT JOIN ("
+            "  SELECT vi.remise_item_id, GROUP_CONCAT(DISTINCT vc.name) AS vehicle_names "
+            "  FROM vehicle_items AS vi "
+            "  JOIN vehicle_categories AS vc ON vc.id = vi.category_id "
+            "  WHERE vi.remise_item_id IS NOT NULL "
+            "  GROUP BY vi.remise_item_id"
+            ") AS assignments ON assignments.remise_item_id = ri.id"
+        )
+        if search:
+            query += " WHERE ri.name LIKE ? OR ri.sku LIKE ?"
+            like = f"%{search}%"
+            params = (like, like)
+        query += " ORDER BY ri.name COLLATE NOCASE"
     else:
         query = f"SELECT * FROM {config.tables.items}"
         if search:
@@ -1105,6 +1130,22 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
                 LEFT JOIN pharmacy_items AS pi ON pi.id = vi.pharmacy_item_id
                 LEFT JOIN remise_lots AS rl ON rl.id = vi.lot_id
                 WHERE vi.id = ?
+                """,
+                (item_id,),
+            )
+        elif module == "inventory_remise":
+            cur = conn.execute(
+                """
+                SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names
+                FROM remise_items AS ri
+                LEFT JOIN (
+                    SELECT vi.remise_item_id, GROUP_CONCAT(DISTINCT vc.name) AS vehicle_names
+                    FROM vehicle_items AS vi
+                    JOIN vehicle_categories AS vc ON vc.id = vi.category_id
+                    WHERE vi.remise_item_id IS NOT NULL
+                    GROUP BY vi.remise_item_id
+                ) AS assignments ON assignments.remise_item_id = ri.id
+                WHERE ri.id = ?
                 """,
                 (item_id,),
             )

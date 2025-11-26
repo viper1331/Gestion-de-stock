@@ -41,6 +41,7 @@ interface Item {
   remise_quantity?: number | null;
   image_url: string | null;
   vehicle_type: VehicleType | null;
+  assigned_vehicle_names?: string[];
 }
 
 interface Movement {
@@ -719,7 +720,16 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         ) : null}
                         {columnVisibility.category !== false ? (
                           <td className="px-4 py-3 text-sm text-slate-300">
-                            {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                            <div className="space-y-1">
+                              <div>
+                                {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                              </div>
+                              {item.assigned_vehicle_names?.length ? (
+                                <p className="text-xs text-slate-400">
+                                  Affecté à : {item.assigned_vehicle_names.join(", ")}
+                                </p>
+                              ) : null}
+                            </div>
                           </td>
                         ) : null}
                         {config.showVehicleTypeColumn && columnVisibility.vehicleType !== false ? (
