@@ -24,6 +24,8 @@ interface Category {
   sizes: string[];
 }
 
+type VehicleType = "incendie" | "secours_a_personne";
+
 interface Item {
   id: number;
   name: string;
@@ -38,6 +40,7 @@ interface Item {
   remise_item_id: number | null;
   remise_quantity?: number | null;
   image_url: string | null;
+  vehicle_type: VehicleType | null;
 }
 
 interface Movement {
@@ -104,9 +107,15 @@ type InventoryColumnKey =
   | "quantity"
   | "size"
   | "category"
+  | "vehicleType"
   | "supplier"
   | "threshold"
   | "expiration";
+
+const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
+  incendie: "Incendie",
+  secours_a_personne: "Secours à personne"
+};
 
 type ExpirationStatus = "expired" | "expiring-soon" | null;
 
@@ -293,6 +302,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     quantity: 100,
     size: 140,
     category: 150,
+    vehicleType: 180,
     supplier: 180,
     threshold: 120,
     expiration: 170
@@ -305,6 +315,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     quantity: true,
     size: true,
     category: true,
+    vehicleType: Boolean(config.showVehicleTypeColumn),
     supplier: true,
     threshold: true,
     expiration: supportsExpirationDate
@@ -346,6 +357,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       { key: "quantity", label: "Quantité" },
       { key: "size", label: "Taille / Variante" },
       { key: "category", label: "Catégorie" },
+      ...(config.showVehicleTypeColumn
+        ? ([{ key: "vehicleType", label: "Catégorie véhicule" }] as const)
+        : []),
       { key: "supplier", label: "Fournisseur" },
       { key: "threshold", label: "Seuil" }
     ];
@@ -604,6 +618,13 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         onResize={(value) => saveWidth("category", value)}
                       />
                     ) : null}
+                    {config.showVehicleTypeColumn && columnVisibility.vehicleType !== false ? (
+                      <ResizableHeader
+                        label="Catégorie véhicule"
+                        width={columnWidths.vehicleType}
+                        onResize={(value) => saveWidth("vehicleType", value)}
+                      />
+                    ) : null}
                     {columnVisibility.supplier !== false ? (
                       <ResizableHeader
                         label="Fournisseur"
@@ -699,6 +720,11 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         {columnVisibility.category !== false ? (
                           <td className="px-4 py-3 text-sm text-slate-300">
                             {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                          </td>
+                        ) : null}
+                        {config.showVehicleTypeColumn && columnVisibility.vehicleType !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-300">
+                            {item.vehicle_type ? VEHICLE_TYPE_LABELS[item.vehicle_type] : "Non attribué"}
                           </td>
                         ) : null}
                         {columnVisibility.supplier !== false ? (

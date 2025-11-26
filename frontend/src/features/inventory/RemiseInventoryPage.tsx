@@ -21,6 +21,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   purchaseOrdersDownloadPrefix: "bon_commande_remise",
   supportsLowStockOptOut: true,
   supportsExpirationDate: true,
+  showVehicleTypeColumn: true,
   searchPlaceholder: "Rechercher une remise par nom ou SKU",
   barcodePrefix: "IS",
   itemNoun: {
