@@ -15,6 +15,13 @@ export interface InventoryModuleConfig {
   queryKeyPrefix: string;
   storageKeyPrefix: string;
   showPurchaseOrders?: boolean;
+  purchaseOrdersPath?: string;
+  purchaseOrdersItemsPath?: string;
+  purchaseOrdersQueryKey?: readonly unknown[];
+  purchaseOrdersItemsQueryKey?: readonly unknown[];
+  purchaseOrdersTitle?: string;
+  purchaseOrdersDescription?: string;
+  purchaseOrdersDownloadPrefix?: string;
   searchPlaceholder?: string;
   supportsItemImages?: boolean;
   supportsLowStockOptOut?: boolean;

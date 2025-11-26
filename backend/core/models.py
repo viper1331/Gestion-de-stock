@@ -460,6 +460,56 @@ class PurchaseOrderDetail(PurchaseOrder):
     items: list[PurchaseOrderItem] = Field(default_factory=list)
 
 
+class RemisePurchaseOrder(BaseModel):
+    id: int
+    supplier_id: int | None = None
+    supplier_name: str | None = None
+    status: str
+    created_at: datetime
+    note: str | None = None
+    auto_created: bool = False
+
+
+class RemisePurchaseOrderItem(BaseModel):
+    id: int
+    purchase_order_id: int
+    remise_item_id: int
+    quantity_ordered: int
+    quantity_received: int
+    item_name: str | None = None
+
+
+class RemisePurchaseOrderItemInput(BaseModel):
+    remise_item_id: int = Field(..., gt=0)
+    quantity_ordered: int = Field(..., gt=0)
+
+
+class RemisePurchaseOrderReceiveItem(BaseModel):
+    remise_item_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class RemisePurchaseOrderReceivePayload(BaseModel):
+    items: list[RemisePurchaseOrderReceiveItem] = Field(default_factory=list)
+
+
+class RemisePurchaseOrderCreate(BaseModel):
+    supplier_id: int | None = None
+    status: str = Field(default="PENDING")
+    note: str | None = None
+    items: list[RemisePurchaseOrderItemInput] = Field(default_factory=list)
+
+
+class RemisePurchaseOrderUpdate(BaseModel):
+    supplier_id: int | None = None
+    status: str | None = None
+    note: str | None = None
+
+
+class RemisePurchaseOrderDetail(RemisePurchaseOrder):
+    items: list[RemisePurchaseOrderItem] = Field(default_factory=list)
+
+
 class CollaboratorBase(BaseModel):
     full_name: str = Field(..., min_length=1, max_length=128)
     department: Optional[str] = Field(default=None, max_length=128)
