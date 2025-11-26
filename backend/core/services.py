@@ -722,6 +722,21 @@ def _apply_schema_migrations() -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_remise_lot_items_lot ON remise_lot_items(lot_id);
             CREATE INDEX IF NOT EXISTS idx_remise_lot_items_item ON remise_lot_items(remise_item_id);
+            CREATE TABLE IF NOT EXISTS remise_purchase_orders (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'PENDING',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                note TEXT,
+                auto_created INTEGER NOT NULL DEFAULT 0
+            );
+            CREATE TABLE IF NOT EXISTS remise_purchase_order_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                purchase_order_id INTEGER NOT NULL REFERENCES remise_purchase_orders(id) ON DELETE CASCADE,
+                remise_item_id INTEGER NOT NULL REFERENCES remise_items(id) ON DELETE CASCADE,
+                quantity_ordered INTEGER NOT NULL,
+                quantity_received INTEGER NOT NULL DEFAULT 0
+            );
             """
         )
         _ensure_remise_item_columns(conn)
@@ -3427,6 +3442,35 @@ def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
     )
 
 
+def generate_remise_purchase_order_pdf(order: models.RemisePurchaseOrderDetail) -> bytes:
+    status_label = _PURCHASE_ORDER_STATUS_LABELS.get(order.status, order.status)
+    created_at = order.created_at.strftime("%d/%m/%Y %H:%M")
+    supplier = order.supplier_name or "Aucun"
+    meta_lines = [
+        f"Bon de commande remises n° {order.id}",
+        f"Créé le : {created_at}",
+        f"Fournisseur : {supplier}",
+        f"Statut : {status_label}",
+    ]
+    if order.auto_created:
+        meta_lines.append("Création automatique : Oui")
+    note_lines = wrap(order.note or "", 90) if order.note else []
+    item_rows = [
+        (
+            line.item_name or f"Article #{line.remise_item_id}",
+            line.quantity_ordered,
+            line.quantity_received,
+        )
+        for line in order.items
+    ]
+    return _render_purchase_order_pdf(
+        title="Bon de commande inventaire remises",
+        meta_lines=meta_lines,
+        note_lines=note_lines,
+        items=item_rows,
+    )
+
+
 def generate_pharmacy_purchase_order_pdf(
     order: models.PharmacyPurchaseOrderDetail,
 ) -> bytes:
@@ -4352,6 +4396,240 @@ def receive_purchase_order(
             conn.rollback()
             raise
     return get_purchase_order(order_id)
+
+
+def _build_remise_purchase_order_detail(
+    conn: sqlite3.Connection, order_row: sqlite3.Row
+) -> models.RemisePurchaseOrderDetail:
+    items_cur = conn.execute(
+        """
+        SELECT rpoi.id,
+               rpoi.purchase_order_id,
+               rpoi.remise_item_id,
+               rpoi.quantity_ordered,
+               rpoi.quantity_received,
+               ri.name AS item_name
+        FROM remise_purchase_order_items AS rpoi
+        JOIN remise_items AS ri ON ri.id = rpoi.remise_item_id
+        WHERE rpoi.purchase_order_id = ?
+        ORDER BY ri.name COLLATE NOCASE
+        """,
+        (order_row["id"],),
+    )
+    items = [
+        models.RemisePurchaseOrderItem(
+            id=item_row["id"],
+            purchase_order_id=item_row["purchase_order_id"],
+            remise_item_id=item_row["remise_item_id"],
+            quantity_ordered=item_row["quantity_ordered"],
+            quantity_received=item_row["quantity_received"],
+            item_name=item_row["item_name"],
+        )
+        for item_row in items_cur.fetchall()
+    ]
+    return models.RemisePurchaseOrderDetail(
+        id=order_row["id"],
+        supplier_id=order_row["supplier_id"],
+        supplier_name=order_row["supplier_name"],
+        status=order_row["status"],
+        created_at=order_row["created_at"],
+        note=order_row["note"],
+        auto_created=bool(order_row["auto_created"]),
+        items=items,
+    )
+
+
+def list_remise_purchase_orders() -> list[models.RemisePurchaseOrderDetail]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name
+            FROM remise_purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            ORDER BY po.created_at DESC, po.id DESC
+            """
+        )
+        rows = cur.fetchall()
+        return [_build_remise_purchase_order_detail(conn, row) for row in rows]
+
+
+def get_remise_purchase_order(order_id: int) -> models.RemisePurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name
+            FROM remise_purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            WHERE po.id = ?
+            """,
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        return _build_remise_purchase_order_detail(conn, row)
+
+
+def create_remise_purchase_order(
+    payload: models.RemisePurchaseOrderCreate,
+) -> models.RemisePurchaseOrderDetail:
+    ensure_database_ready()
+    status = _normalize_purchase_order_status(payload.status)
+    aggregated = _aggregate_positive_quantities(
+        (line.remise_item_id, line.quantity_ordered) for line in payload.items
+    )
+    if not aggregated:
+        raise ValueError("Au moins un article est requis pour créer un bon de commande")
+    with db.get_stock_connection() as conn:
+        if payload.supplier_id is not None:
+            supplier_cur = conn.execute(
+                "SELECT 1 FROM suppliers WHERE id = ?", (payload.supplier_id,)
+            )
+            if supplier_cur.fetchone() is None:
+                raise ValueError("Fournisseur introuvable")
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO remise_purchase_orders (supplier_id, status, note, auto_created)
+                VALUES (?, ?, ?, 0)
+                """,
+                (payload.supplier_id, status, payload.note),
+            )
+            order_id = cur.lastrowid
+            for remise_item_id, quantity in aggregated.items():
+                item_cur = conn.execute(
+                    "SELECT 1 FROM remise_items WHERE id = ?", (remise_item_id,)
+                )
+                if item_cur.fetchone() is None:
+                    raise ValueError("Article introuvable")
+                conn.execute(
+                    """
+                    INSERT INTO remise_purchase_order_items (purchase_order_id, remise_item_id, quantity_ordered, quantity_received)
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (order_id, remise_item_id, quantity),
+                )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return get_remise_purchase_order(order_id)
+
+
+def update_remise_purchase_order(
+    order_id: int, payload: models.RemisePurchaseOrderUpdate
+) -> models.RemisePurchaseOrderDetail:
+    ensure_database_ready()
+    updates_raw = payload.model_dump(exclude_unset=True)
+    if not updates_raw:
+        return get_remise_purchase_order(order_id)
+    updates: dict[str, object] = {}
+    if "supplier_id" in updates_raw:
+        supplier_id = updates_raw["supplier_id"]
+        if supplier_id is not None:
+            with db.get_stock_connection() as conn:
+                supplier_cur = conn.execute(
+                    "SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,)
+                )
+                if supplier_cur.fetchone() is None:
+                    raise ValueError("Fournisseur introuvable")
+        updates["supplier_id"] = supplier_id
+    if "status" in updates_raw:
+        updates["status"] = _normalize_purchase_order_status(updates_raw["status"])
+    if "note" in updates_raw:
+        updates["note"] = updates_raw["note"]
+    if not updates:
+        return get_remise_purchase_order(order_id)
+    assignments = ", ".join(f"{column} = ?" for column in updates)
+    values = list(updates.values())
+    values.append(order_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "SELECT 1 FROM remise_purchase_orders WHERE id = ?", (order_id,)
+        )
+        if cur.fetchone() is None:
+            raise ValueError("Bon de commande introuvable")
+        conn.execute(
+            f"UPDATE remise_purchase_orders SET {assignments} WHERE id = ?", values
+        )
+        conn.commit()
+    return get_remise_purchase_order(order_id)
+
+
+def receive_remise_purchase_order(
+    order_id: int, payload: models.RemisePurchaseOrderReceivePayload
+) -> models.RemisePurchaseOrderDetail:
+    ensure_database_ready()
+    increments = _aggregate_positive_quantities(
+        (line.remise_item_id, line.quantity) for line in payload.items
+    )
+    if not increments:
+        raise ValueError("Aucune ligne de réception valide")
+    with db.get_stock_connection() as conn:
+        order_row = conn.execute(
+            "SELECT status FROM remise_purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if order_row is None:
+            raise ValueError("Bon de commande introuvable")
+        try:
+            for remise_item_id, increment in increments.items():
+                line = conn.execute(
+                    """
+                    SELECT id, quantity_ordered, quantity_received
+                    FROM remise_purchase_order_items
+                    WHERE purchase_order_id = ? AND remise_item_id = ?
+                    """,
+                    (order_id, remise_item_id),
+                ).fetchone()
+                if line is None:
+                    raise ValueError("Article absent du bon de commande")
+                remaining = line["quantity_ordered"] - line["quantity_received"]
+                if remaining <= 0:
+                    continue
+                new_received = line["quantity_received"] + increment
+                if new_received > line["quantity_ordered"]:
+                    new_received = line["quantity_ordered"]
+                delta = new_received - line["quantity_received"]
+                if delta <= 0:
+                    continue
+                conn.execute(
+                    "UPDATE remise_purchase_order_items SET quantity_received = ? WHERE id = ?",
+                    (new_received, line["id"]),
+                )
+                conn.execute(
+                    "UPDATE remise_items SET quantity = quantity + ? WHERE id = ?",
+                    (delta, remise_item_id),
+                )
+                conn.execute(
+                    "INSERT INTO remise_movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                    (remise_item_id, delta, f"Réception bon de commande remise #{order_id}"),
+                )
+            totals = conn.execute(
+                """
+                SELECT quantity_ordered, quantity_received
+                FROM remise_purchase_order_items
+                WHERE purchase_order_id = ?
+                """,
+                (order_id,),
+            ).fetchall()
+            if all(row["quantity_received"] >= row["quantity_ordered"] for row in totals):
+                new_status = "RECEIVED"
+            elif any(row["quantity_received"] > 0 for row in totals):
+                new_status = "PARTIALLY_RECEIVED"
+            else:
+                new_status = order_row["status"]
+            if new_status != order_row["status"]:
+                conn.execute(
+                    "UPDATE remise_purchase_orders SET status = ? WHERE id = ?",
+                    (new_status, order_id),
+                )
+            _persist_after_commit(conn, "inventory_remise")
+        except Exception:
+            conn.rollback()
+            raise
+    return get_remise_purchase_order(order_id)
 
 
 def list_collaborators() -> list[models.Collaborator]:

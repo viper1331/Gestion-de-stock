@@ -1,5 +1,5 @@
 import { FormEvent, useState } from "react";
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
@@ -68,7 +68,27 @@ interface DraftLine {
   quantity: number;
 }
 
-export function PurchaseOrdersPanel({ suppliers }: { suppliers: Supplier[] }) {
+interface PurchaseOrdersPanelProps {
+  suppliers: Supplier[];
+  purchaseOrdersPath?: string;
+  itemsPath?: string;
+  ordersQueryKey?: QueryKey;
+  itemsQueryKey?: QueryKey;
+  title?: string;
+  description?: string;
+  downloadPrefix?: string;
+}
+
+export function PurchaseOrdersPanel({
+  suppliers,
+  purchaseOrdersPath = "/purchase-orders",
+  itemsPath = "/items",
+  ordersQueryKey = ["purchase-orders"],
+  itemsQueryKey = ["items"],
+  title = "Bons de commande",
+  description = "Suivez les commandes fournisseurs et marquez les réceptions pour mettre à jour les stocks.",
+  downloadPrefix = "bon_commande"
+}: PurchaseOrdersPanelProps) {
   const queryClient = useQueryClient();
   const [draftSupplier, setDraftSupplier] = useState<number | "">("");
   const [draftStatus, setDraftStatus] = useState<string>("ORDERED");
@@ -83,24 +103,24 @@ export function PurchaseOrdersPanel({ suppliers }: { suppliers: Supplier[] }) {
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
   const { data: orders = [], isLoading: loadingOrders } = useQuery({
-    queryKey: ["purchase-orders"],
+    queryKey: ordersQueryKey,
     queryFn: async () => {
-      const response = await api.get<PurchaseOrderDetail[]>("/purchase-orders/");
+      const response = await api.get<PurchaseOrderDetail[]>(`${purchaseOrdersPath}/`);
       return response.data;
     }
   });
 
   const { data: items = [] } = useQuery({
-    queryKey: ["purchase-order-items-options"],
+    queryKey: ["purchase-order-items-options", purchaseOrdersPath],
     queryFn: async () => {
-      const response = await api.get<ItemOption[]>("/items/");
+      const response = await api.get<ItemOption[]>(`${itemsPath}/`);
       return response.data;
     }
   });
 
   const createOrder = useMutation({
     mutationFn: async (payload: CreateOrderPayload) => {
-      await api.post("/purchase-orders/", payload);
+      await api.post(`${purchaseOrdersPath}/`, payload);
     },
     onSuccess: async () => {
       setMessage("Bon de commande créé.");
@@ -108,8 +128,8 @@ export function PurchaseOrdersPanel({ suppliers }: { suppliers: Supplier[] }) {
       setDraftSupplier("");
       setDraftStatus("ORDERED");
       setDraftNote("");
-      await queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
-      await queryClient.invalidateQueries({ queryKey: ["items"] });
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
     onError: () => setError("Impossible de créer le bon de commande."),
     onSettled: () => {
@@ -119,13 +139,13 @@ export function PurchaseOrdersPanel({ suppliers }: { suppliers: Supplier[] }) {
 
   const updateOrder = useMutation<void, AxiosError<ApiErrorResponse>, UpdateOrderPayload>({
     mutationFn: async ({ orderId, successMessage: _successMessage, ...payload }) => {
-      await api.put(`/purchase-orders/${orderId}`, payload);
+      await api.put(`${purchaseOrdersPath}/${orderId}`, payload);
     },
     onSuccess: async (_, variables) => {
       setMessage(variables.successMessage ?? "Bon de commande mis à jour.");
-      await queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
       if (variables.status === "RECEIVED") {
-        await queryClient.invalidateQueries({ queryKey: ["items"] });
+        await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
       }
     },
     onError: (mutationError) => {
@@ -139,12 +159,12 @@ export function PurchaseOrdersPanel({ suppliers }: { suppliers: Supplier[] }) {
 
   const receiveOrder = useMutation({
     mutationFn: async ({ orderId, items }: ReceiveOrderPayload) => {
-      await api.post(`/purchase-orders/${orderId}/receive`, { items });
+      await api.post(`${purchaseOrdersPath}/${orderId}/receive`, { items });
     },
     onSuccess: async () => {
       setMessage("Réception enregistrée.");
-      await queryClient.invalidateQueries({ queryKey: ["purchase-orders"] });
-      await queryClient.invalidateQueries({ queryKey: ["items"] });
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
     onError: () => setError("Impossible d'enregistrer la réception."),
     onSettled: () => {
@@ -218,14 +238,14 @@ export function PurchaseOrdersPanel({ suppliers }: { suppliers: Supplier[] }) {
     setError(null);
     setDownloadingId(orderId);
     try {
-      const response = await api.get(`/purchase-orders/${orderId}/pdf`, {
+      const response = await api.get(`${purchaseOrdersPath}/${orderId}/pdf`, {
         responseType: "blob"
       });
       const blob = new Blob([response.data], { type: "application/pdf" });
       const url = window.URL.createObjectURL(blob);
       const link = document.createElement("a");
       link.href = url;
-      link.download = `bon_commande_${orderId}.pdf`;
+      link.download = `${downloadPrefix}_${orderId}.pdf`;
       document.body.appendChild(link);
       link.click();
       document.body.removeChild(link);
@@ -247,10 +267,8 @@ export function PurchaseOrdersPanel({ suppliers }: { suppliers: Supplier[] }) {
     <section className="space-y-4">
       <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h3 className="text-lg font-semibold text-white">Bons de commande</h3>
-          <p className="text-sm text-slate-400">
-            Suivez les commandes fournisseurs et marquez les réceptions pour mettre à jour les stocks.
-          </p>
+          <h3 className="text-lg font-semibold text-white">{title}</h3>
+          <p className="text-sm text-slate-400">{description}</p>
         </div>
       </header>
 

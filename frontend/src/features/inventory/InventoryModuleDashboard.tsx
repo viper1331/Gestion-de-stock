@@ -863,7 +863,18 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
         ) : null}
       </div>
 
-      {config.showPurchaseOrders ? <PurchaseOrdersPanel suppliers={suppliers} /> : null}
+      {config.showPurchaseOrders ? (
+        <PurchaseOrdersPanel
+          suppliers={suppliers}
+          purchaseOrdersPath={config.purchaseOrdersPath}
+          itemsPath={config.purchaseOrdersItemsPath}
+          ordersQueryKey={config.purchaseOrdersQueryKey}
+          itemsQueryKey={config.purchaseOrdersItemsQueryKey}
+          title={config.purchaseOrdersTitle}
+          description={config.purchaseOrdersDescription}
+          downloadPrefix={config.purchaseOrdersDownloadPrefix}
+        />
+      ) : null}
     </section>
   );
 }
