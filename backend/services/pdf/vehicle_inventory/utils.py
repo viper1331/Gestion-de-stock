@@ -48,6 +48,7 @@ class VehicleView:
     category_name: str
     view_name: str
     background_path: Path | None
+    background_photo_id: int | None
     entries: list[VehicleViewEntry]
     pointer_mode: bool
     hide_edit_buttons: bool
@@ -201,6 +202,7 @@ def build_vehicle_entries(
                     category_name=category.name,
                     view_name=normalized_view,
                     background_path=background,
+                    background_photo_id=getattr(config, "background_photo_id", None),
                     entries=view_entries,
                     pointer_mode=bool(getattr(config, "pointer_mode_enabled", False)),
                     hide_edit_buttons=bool(getattr(config, "hide_edit_buttons", False)),
@@ -218,6 +220,7 @@ def build_vehicle_entries(
                     category_name=entry.category_name or "Inventaire",
                     view_name=entry.view_name,
                     background_path=None,
+                    background_photo_id=None,
                     entries=[entry],
                     pointer_mode=False,
                     hide_edit_buttons=False,
