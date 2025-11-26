@@ -4,6 +4,9 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
 
+const LOT_CARDS_COLLAPSED_STORAGE_KEY = "remiseLots:lotCardsCollapsed";
+const STOCK_CARDS_COLLAPSED_STORAGE_KEY = "remiseLots:stockCardsCollapsed";
+
 interface RemiseLot {
   id: number;
   name: string;
@@ -64,8 +67,28 @@ export function RemiseLotsPanel() {
   const [editQuantities, setEditQuantities] = useState<Record<number, number>>({});
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [isLotsPanelCollapsed, setIsLotsPanelCollapsed] = useState(false);
-  const [isStockLotsCollapsed, setIsStockLotsCollapsed] = useState(false);
+  const [isLotsPanelCollapsed, setIsLotsPanelCollapsed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    try {
+      return window.localStorage.getItem(LOT_CARDS_COLLAPSED_STORAGE_KEY) === "true";
+    } catch (err) {
+      console.warn("Impossible de lire l'état de masquage des cartes lots", err);
+      return false;
+    }
+  });
+  const [isStockLotsCollapsed, setIsStockLotsCollapsed] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    try {
+      return window.localStorage.getItem(STOCK_CARDS_COLLAPSED_STORAGE_KEY) === "true";
+    } catch (err) {
+      console.warn("Impossible de lire l'état de masquage des cartes lots en stock", err);
+      return false;
+    }
+  });
   const lotImageInputRef = useRef<HTMLInputElement | null>(null);
 
   const lotsQuery = useQuery({
@@ -125,6 +148,28 @@ export function RemiseLotsPanel() {
     () => (availableInventoryQuery.data ?? []).filter((item) => item.quantity > 0),
     [availableInventoryQuery.data]
   );
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(LOT_CARDS_COLLAPSED_STORAGE_KEY, String(isLotsPanelCollapsed));
+    } catch (err) {
+      console.warn("Impossible d'enregistrer l'état de masquage des cartes lots", err);
+    }
+  }, [isLotsPanelCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    try {
+      window.localStorage.setItem(STOCK_CARDS_COLLAPSED_STORAGE_KEY, String(isStockLotsCollapsed));
+    } catch (err) {
+      console.warn("Impossible d'enregistrer l'état de masquage des cartes lots en stock", err);
+    }
+  }, [isStockLotsCollapsed]);
 
   const resetLotForm = () => {
     setEditingLotId(null);
