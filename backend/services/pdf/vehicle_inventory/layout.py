@@ -105,8 +105,7 @@ def _render_visual_page(
 
     image_bounds = draw_background(canvas, view.background_path, bounds, style_engine)
     pointer_mode = options.pointer_mode or view.pointer_mode
-    hide_edit = options.hide_edit_buttons or view.hide_edit_buttons
-    draw_bubbles(canvas, view.entries, image_bounds, pointer_mode, hide_edit, style_engine)
+    draw_bubbles(canvas, view.entries, image_bounds, pointer_mode, style_engine)
 
 
 def _render_table_page(
@@ -150,30 +149,32 @@ def render_vehicle_inventory_pdf(
 
     page_plan: list[tuple[str, object]] = []
     for view in views:
+        if view.background_photo_id and not view.background_path:
+            raise FileNotFoundError("Photo de fond obligatoire manquante pour la vue")
+        if not view.entries and not view.background_path:
+            continue
+
         effective_pointer = VehiclePdfOptions(
             pointer_mode=options.pointer_mode or view.pointer_mode,
-            hide_edit_buttons=options.hide_edit_buttons or view.hide_edit_buttons,
+            hide_edit_buttons=True,
             theme=options.theme,
         )
-        if view.background_path and view.has_positions:
+
+        use_visual_page = (
+            bool(view.background_path)
+            and view.has_positions
+            and not options.table_fallback
+        )
+
+        if use_visual_page:
             page_plan.append(("visual", view, effective_pointer))
-        else:
+        elif view.entries:
             chunks = paginate_entries(view.entries, bounds[3], style_engine)
             for chunk in chunks:
                 page_plan.append(("table", view, effective_pointer, chunk))
 
     if not page_plan:
-        fallback_view = VehicleView(
-            category_id=None,
-            category_name="Inventaire véhicules",
-            view_name="VUE PRINCIPALE",
-            background_path=None,
-            entries=[],
-            pointer_mode=options.pointer_mode,
-            hide_edit_buttons=options.hide_edit_buttons,
-            has_positions=False,
-        )
-        page_plan.append(("table", fallback_view, options, []))
+        raise ValueError("Aucune page générée pour l'inventaire véhicule")
 
     counter = PageCounter(len(page_plan))
     for entry in page_plan:
