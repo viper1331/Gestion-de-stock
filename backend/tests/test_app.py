@@ -2518,7 +2518,11 @@ def test_backup_schedule_roundtrip() -> None:
     try:
         response = client.post(
             "/backup/schedule",
-            json={"enabled": True, "days": ["monday", "wednesday"], "time": "22:30"},
+            json={
+                "enabled": True,
+                "days": ["monday", "wednesday"],
+                "times": ["22:30", "09:15"],
+            },
             headers=headers,
         )
         assert response.status_code == 204, response.text
@@ -2528,11 +2532,11 @@ def test_backup_schedule_roundtrip() -> None:
         data = fetched.json()
         assert data["enabled"] is True
         assert set(data["days"]) == {"monday", "wednesday"}
-        assert data["time"] == "22:30"
+        assert set(data["times"]) == {"22:30", "09:15"}
     finally:
         reset = client.post(
             "/backup/schedule",
-            json={"enabled": False, "days": [], "time": "02:00"},
+            json={"enabled": False, "days": [], "times": ["02:00"]},
             headers=headers,
         )
         assert reset.status_code == 204, reset.text

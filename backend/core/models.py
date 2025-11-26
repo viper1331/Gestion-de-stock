@@ -301,8 +301,7 @@ class BackupSchedule(BaseModel):
     enabled: bool = False
     days: list[str] = Field(default_factory=list)
 
-
-    time: str = "02:00"
+    times: list[str] = Field(default_factory=lambda: ["02:00"])
 
     @field_validator("days", mode="before")
     @classmethod
@@ -322,16 +321,37 @@ class BackupSchedule(BaseModel):
                 seen.add(day)
         return normalized
 
-    @field_validator("time")
+    @field_validator("times", mode="before")
     @classmethod
-    def _validate_time(cls, value: str) -> str:
-        datetime.strptime(value, "%H:%M")
-        return value
+    def _validate_times(cls, value: object) -> list[str]:
+        if value is None:
+            return []
+        if isinstance(value, str):
+            value = [value]
+        if not isinstance(value, list):
+            raise ValueError("Heure de sauvegarde invalide")
+
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw in value:
+            if not isinstance(raw, str):
+                raise ValueError("Heure de sauvegarde invalide")
+            time_value = raw.strip()
+            if not time_value:
+                raise ValueError("Heure de sauvegarde vide")
+            datetime.strptime(time_value, "%H:%M")
+            if time_value not in seen:
+                normalized.append(time_value)
+                seen.add(time_value)
+        return normalized
 
     @model_validator(mode="after")
     def _ensure_days_when_enabled(self) -> "BackupSchedule":
-        if self.enabled and not self.days:
-            raise ValueError("Au moins un jour doit être sélectionné")
+        if self.enabled:
+            if not self.days:
+                raise ValueError("Au moins un jour doit être sélectionné")
+            if not self.times:
+                raise ValueError("Au moins une heure doit être sélectionnée")
         return self
 
 
