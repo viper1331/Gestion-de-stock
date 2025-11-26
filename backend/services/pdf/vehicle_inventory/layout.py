@@ -6,105 +6,119 @@ from pathlib import Path
 from typing import Iterable
 
 from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.utils import ImageReader
 
 from backend.core import models
-from .background import draw_footer, draw_header
-from .bubbles import BubblePlacement, compute_bubble_layout
+from .background import draw_background
+from .bubbles import draw_bubbles
 from .style import PdfStyleEngine
-from .table import render_table
-from .utils import PdfBuffer, VehiclePdfOptions, build_vehicle_entries, layout_dimensions
+from .table import draw_table, paginate_entries
+from .utils import (
+    PageCounter,
+    PdfBuffer,
+    VehiclePdfOptions,
+    VehicleView,
+    build_vehicle_entries,
+    content_bounds,
+    format_date,
+)
 
 
-def _draw_bubble(
-    canvas,
-    placement: BubblePlacement,
-    style_engine: PdfStyleEngine,
-    *,
-    pointer_mode: bool,
-    margin_left: float,
-    margin_bottom: float,
-    usable_width: float,
-    usable_height: float,
-) -> None:
-    """Render a single bubble with labels and optional pointer anchor."""
+def _discover_logo(media_root: Path | None) -> Path | None:
+    if not media_root:
+        return None
+    candidate = media_root / "logo-premium.png"
+    return candidate if candidate.exists() else None
 
+
+def _draw_page_background(canvas, style_engine: PdfStyleEngine) -> None:
+    page_width, page_height = canvas._pagesize
     canvas.saveState()
-    canvas.setFillColor(style_engine.color("bubble"))
-    canvas.setStrokeColor(style_engine.color("muted"))
-    canvas.circle(placement.x, placement.y, placement.radius, fill=1, stroke=1)
-
-    canvas.setFont(style_engine.theme.font_family, style_engine.font_size("body"))
-    canvas.setFillColor(style_engine.color("text"))
-    label = placement.entry.display_name()
-    canvas.drawCentredString(placement.x, placement.y + 2, label[:24])
-    canvas.setFont(style_engine.theme.font_family, style_engine.font_size("small"))
-    canvas.setFillColor(style_engine.color("text_muted"))
-    canvas.drawCentredString(placement.x, placement.y - 8, f"Qté {placement.entry.total_quantity}")
-
-    if pointer_mode and placement.entry.anchor_x is not None and placement.entry.anchor_y is not None:
-        anchor_x = margin_left + placement.entry.anchor_x * usable_width
-        anchor_y = margin_bottom + placement.entry.anchor_y * usable_height
-        canvas.setStrokeColor(style_engine.color("accent"))
-        canvas.setDash(2, 2)
-        canvas.line(placement.x, placement.y, anchor_x, anchor_y)
+    canvas.setFillColor(style_engine.color("background"))
+    canvas.rect(0, 0, page_width, page_height, stroke=0, fill=1)
     canvas.restoreState()
 
 
-def _render_bubble_map(
+def _draw_header(canvas, *, style_engine: PdfStyleEngine, title: str, subtitle: str | None = None) -> None:
+    page_width, page_height = canvas._pagesize
+    header_height = style_engine.header_height()
+    margin_left, _, _, _ = style_engine.margins
+
+    canvas.saveState()
+    canvas.setFillColor(style_engine.color("header_band"))
+    canvas.rect(0, page_height - header_height, page_width, header_height, stroke=0, fill=1)
+
+    if style_engine.logo_path and style_engine.logo_path.exists():
+        logo_height = header_height - 10
+        canvas.drawImage(
+            ImageReader(str(style_engine.logo_path)),
+            margin_left,
+            page_height - header_height + 4,
+            height=logo_height,
+            preserveAspectRatio=True,
+            mask="auto",
+        )
+        text_offset = logo_height + 10
+    else:
+        text_offset = 4
+
+    canvas.setFillColor(style_engine.color("on_header"))
+    canvas.setFont(*style_engine.font("title"))
+    canvas.drawString(margin_left + text_offset, page_height - header_height / 2 + 6, title)
+    if subtitle:
+        canvas.setFont(*style_engine.font("subtitle"))
+        canvas.drawString(margin_left + text_offset, page_height - header_height + 10, subtitle)
+    canvas.restoreState()
+
+
+def _draw_footer(
     canvas,
     *,
-    entries: list[models.Item],
+    style_engine: PdfStyleEngine,
     generated_at: datetime,
+    page_number: int,
+    page_count: int,
+) -> None:
+    _, _, margin_bottom, margin_right = style_engine.margins
+    footer_label = f"Généré le {format_date(generated_at)} — Page {page_number}/{page_count}"
+    canvas.saveState()
+    canvas.setFont(*style_engine.font("small"))
+    canvas.setFillColor(style_engine.color("muted"))
+    canvas.drawRightString(canvas._pagesize[0] - margin_right, margin_bottom + style_engine.footer_height() / 2, footer_label)
+    canvas.restoreState()
+
+
+def _render_visual_page(
+    canvas,
+    *,
+    view: VehicleView,
     style_engine: PdfStyleEngine,
     options: VehiclePdfOptions,
-    pointer_targets: dict[str, models.PointerTarget] | None,
-) -> bool:
-    """Render the bubble map or return False if a fallback is required."""
+    bounds: tuple[float, float, float, float],
+) -> None:
+    x, y, width, height = bounds
 
-    margin_left, margin_top, margin_bottom, margin_right, usable_width, usable_height = layout_dimensions(style_engine)
     canvas.saveState()
     canvas.setFillColor(style_engine.color("surface"))
-    canvas.roundRect(
-        margin_left,
-        margin_bottom,
-        usable_width,
-        usable_height,
-        radius=style_engine.border_radius,
-        fill=1,
-        stroke=0,
-    )
-
-    entries_view = build_vehicle_entries(entries)
-    if pointer_targets:
-        for entry in entries_view:
-            target = pointer_targets.get(entry.key)
-            if target:
-                entry.anchor_x = target.x
-                entry.anchor_y = target.y
-    placements = compute_bubble_layout(entries_view, width=usable_width, height=usable_height, options=options)
-    if options.table_fallback and len(placements) < len(entries_view):
-        canvas.restoreState()
-        return False
-
-    for placement in placements:
-        shifted = BubblePlacement(
-            entry=placement.entry,
-            x=placement.x + margin_left,
-            y=placement.y + margin_bottom,
-            radius=placement.radius,
-        )
-        _draw_bubble(
-            canvas,
-            shifted,
-            style_engine,
-            pointer_mode=options.pointer_mode,
-            margin_left=margin_left,
-            margin_bottom=margin_bottom,
-            usable_width=usable_width,
-            usable_height=usable_height,
-        )
+    canvas.roundRect(x, y, width, height, radius=8, stroke=0, fill=1)
     canvas.restoreState()
-    return True
+
+    image_bounds = draw_background(canvas, view.background_path, bounds, style_engine)
+    pointer_mode = options.pointer_mode or view.pointer_mode
+    hide_edit = options.hide_edit_buttons or view.hide_edit_buttons
+    draw_bubbles(canvas, view.entries, image_bounds, pointer_mode, hide_edit, style_engine)
+
+
+def _render_table_page(
+    canvas,
+    *,
+    view: VehicleView,
+    entries,
+    style_engine: PdfStyleEngine,
+    bounds: tuple[float, float, float, float],
+) -> None:
+    section_title = f"{view.category_name} — {view.view_name}"
+    draw_table(canvas, entries=entries, bounds=bounds, style_engine=style_engine, section_title=section_title)
 
 
 def render_vehicle_inventory_pdf(
@@ -120,29 +134,72 @@ def render_vehicle_inventory_pdf(
 
     buffer = PdfBuffer()
     canvas = buffer.build_canvas()
-    style_engine = PdfStyleEngine(theme=options.theme)
+    logo_path = _discover_logo(media_root)
+    style_engine = PdfStyleEngine(theme=options.theme, logo_path=logo_path)
+    bounds = content_bounds(style_engine, *landscape(A4))
 
-    title = "Inventaire véhicules"
-    subtitle = generated_at.strftime("Mise à jour le %d/%m/%Y")
-    logo_path = None
-    if media_root:
-        candidate = media_root / "logo-premium.png"
-        logo_path = candidate if candidate.exists() else None
-    draw_header(canvas, title=title, subtitle=subtitle, style_engine=style_engine, logo_path=logo_path)
-
-    entries_list = list(items)
-    success = _render_bubble_map(
-        canvas,
-        entries=entries_list,
-        generated_at=generated_at,
-        style_engine=style_engine,
-        options=options,
-        pointer_targets=pointer_targets,
+    views = sorted(
+        build_vehicle_entries(
+            categories=categories,
+            items=items,
+            pointer_targets=pointer_targets,
+            media_root=media_root,
+        ),
+        key=lambda view: (view.category_name, view.view_name),
     )
-    if not success:
-        render_table(canvas, entries=build_vehicle_entries(entries_list), style_engine=style_engine)
 
-    draw_footer(canvas, generated_at=generated_at, style_engine=style_engine, page_number=1, page_count=1)
-    canvas.showPage()
+    page_plan: list[tuple[str, object]] = []
+    for view in views:
+        effective_pointer = VehiclePdfOptions(
+            pointer_mode=options.pointer_mode or view.pointer_mode,
+            hide_edit_buttons=options.hide_edit_buttons or view.hide_edit_buttons,
+            theme=options.theme,
+        )
+        if view.background_path and view.has_positions:
+            page_plan.append(("visual", view, effective_pointer))
+        else:
+            chunks = paginate_entries(view.entries, bounds[3], style_engine)
+            for chunk in chunks:
+                page_plan.append(("table", view, effective_pointer, chunk))
+
+    if not page_plan:
+        fallback_view = VehicleView(
+            category_id=None,
+            category_name="Inventaire véhicules",
+            view_name="VUE PRINCIPALE",
+            background_path=None,
+            entries=[],
+            pointer_mode=options.pointer_mode,
+            hide_edit_buttons=options.hide_edit_buttons,
+            has_positions=False,
+        )
+        page_plan.append(("table", fallback_view, options, []))
+
+    counter = PageCounter(len(page_plan))
+    for entry in page_plan:
+        kind = entry[0]
+        _draw_page_background(canvas, style_engine)
+        _draw_header(
+            canvas,
+            style_engine=style_engine,
+            title="Inventaire véhicules",
+            subtitle=f"Mise à jour le {format_date(generated_at)}",
+        )
+        if kind == "visual":
+            _, view, view_options = entry
+            _render_visual_page(canvas, view=view, style_engine=style_engine, options=view_options, bounds=bounds)
+        else:
+            _, view, view_options, chunk = entry
+            _render_table_page(canvas, view=view, entries=chunk, style_engine=style_engine, bounds=bounds)
+        page_number, page_count = counter.advance()
+        _draw_footer(
+            canvas,
+            style_engine=style_engine,
+            generated_at=generated_at,
+            page_number=page_number,
+            page_count=page_count,
+        )
+        canvas.showPage()
+
     canvas.save()
     return buffer.getvalue()
