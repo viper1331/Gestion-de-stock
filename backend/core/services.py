@@ -16,7 +16,7 @@ from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional
 from uuid import uuid4
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.pagesizes import A4, landscape, portrait
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
@@ -687,6 +687,8 @@ def _apply_schema_migrations() -> None:
                 category_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
                 name TEXT NOT NULL COLLATE NOCASE,
                 background_photo_id INTEGER REFERENCES vehicle_photos(id) ON DELETE SET NULL,
+                pointer_mode_enabled INTEGER NOT NULL DEFAULT 0,
+                hide_edit_buttons INTEGER NOT NULL DEFAULT 0,
                 UNIQUE(category_id, name)
             );
             CREATE TABLE IF NOT EXISTS remise_categories (
@@ -2483,13 +2485,20 @@ def _view_settings_key(name: str) -> str:
 
 
 def _build_vehicle_view_config(
-    name: str, background_photo_id: int | None, file_path: str | None
+    name: str,
+    background_photo_id: int | None,
+    file_path: str | None,
+    *,
+    pointer_mode_enabled: bool = False,
+    hide_edit_buttons: bool = False,
 ) -> models.VehicleViewConfig:
     normalized = _normalize_view_name(name)
     return models.VehicleViewConfig(
         name=normalized,
         background_photo_id=background_photo_id,
         background_url=_build_media_url(file_path) if background_photo_id else None,
+        pointer_mode_enabled=pointer_mode_enabled,
+        hide_edit_buttons=hide_edit_buttons,
     )
 
 
@@ -2501,7 +2510,13 @@ def _collect_vehicle_view_settings(
     placeholders = ",".join("?" for _ in category_ids)
     rows = conn.execute(
         f"""
-        SELECT vvs.category_id, vvs.name, vvs.background_photo_id, vp.file_path
+        SELECT
+            vvs.category_id,
+            vvs.name,
+            vvs.background_photo_id,
+            vvs.pointer_mode_enabled,
+            vvs.hide_edit_buttons,
+            vp.file_path
         FROM vehicle_view_settings AS vvs
         LEFT JOIN vehicle_photos AS vp ON vp.id = vvs.background_photo_id
         WHERE vvs.category_id IN ({placeholders})
@@ -2511,7 +2526,11 @@ def _collect_vehicle_view_settings(
     settings: dict[int, dict[str, models.VehicleViewConfig]] = {}
     for row in rows:
         config = _build_vehicle_view_config(
-            row["name"], row["background_photo_id"], row["file_path"]
+            row["name"],
+            row["background_photo_id"],
+            row["file_path"],
+            pointer_mode_enabled=bool(row["pointer_mode_enabled"]),
+            hide_edit_buttons=bool(row["hide_edit_buttons"]),
         )
         settings.setdefault(row["category_id"], {})[_view_settings_key(config.name)] = config
     return settings
@@ -2524,7 +2543,12 @@ def _get_vehicle_view_config(
     with db.get_stock_connection() as conn:
         row = conn.execute(
             """
-            SELECT vvs.name, vvs.background_photo_id, vp.file_path
+            SELECT
+                vvs.name,
+                vvs.background_photo_id,
+                vvs.pointer_mode_enabled,
+                vvs.hide_edit_buttons,
+                vp.file_path
             FROM vehicle_view_settings AS vvs
             LEFT JOIN vehicle_photos AS vp ON vp.id = vvs.background_photo_id
             WHERE vvs.category_id = ? AND vvs.name = ?
@@ -2533,7 +2557,13 @@ def _get_vehicle_view_config(
         ).fetchone()
     if row is None:
         return models.VehicleViewConfig(name=normalized)
-    return _build_vehicle_view_config(row["name"], row["background_photo_id"], row["file_path"])
+    return _build_vehicle_view_config(
+        row["name"],
+        row["background_photo_id"],
+        row["file_path"],
+        pointer_mode_enabled=bool(row["pointer_mode_enabled"]),
+        hide_edit_buttons=bool(row["hide_edit_buttons"]),
+    )
 
 
 def list_low_stock(threshold: int) -> list[models.LowStockReport]:
@@ -3711,10 +3741,18 @@ def generate_vehicle_inventory_pdf(
         item_image_paths[row["id"]] = MEDIA_ROOT / Path(file_path)
 
     buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=landscape(A4))
-    page_width, page_height = landscape(A4)
+    default_page_size = landscape(A4)
+    page_width, page_height = default_page_size
+    pdf = canvas.Canvas(buffer, pagesize=default_page_size)
     margin = 36
     bottom_margin = 40
+
+    def _apply_page_size(size: tuple[float, float]) -> None:
+        nonlocal page_width, page_height, image_max_height
+        page_width, page_height = size
+        pdf.setPageSize(size)
+        image_max_height = page_height - margin - bottom_margin - 40
+
     image_max_height = page_height - margin - bottom_margin - 40
     item_thumbnail_max_width = 140
     item_thumbnail_max_height = 90
@@ -3815,6 +3853,7 @@ def generate_vehicle_inventory_pdf(
                     pdf.showPage()
                 else:
                     is_first_page = False
+                pdf.setPageSize((page_width, page_height))
                 pdf.setFont("Helvetica-Bold", 18)
                 pdf.drawString(margin, page_height - margin, category.name)
                 pdf.setFont("Helvetica", 12)
@@ -3833,7 +3872,7 @@ def generate_vehicle_inventory_pdf(
                 )
                 return page_height - margin - 52
 
-            y_position = start_view_page(continued=False)
+            y_position = 0.0
 
             def _clamp(value: float, lower: float, upper: float) -> float:
                 return max(lower, min(upper, value))
@@ -3852,6 +3891,62 @@ def generate_vehicle_inventory_pdf(
                 if entry.representative.sku:
                     details.append(f"Réf. : {entry.representative.sku}")
                 return base_lines + details
+
+            @dataclass
+            class _BubbleLayout:
+                width: float
+                height: float
+                padding: float
+                line_height: float
+                icon_reader: ImageReader | None
+                icon_size: float
+                icon_block_width: float
+                quantity_width: float
+                reference_width: float
+
+            def _build_bubble_layout(
+                entry: _VehicleViewEntry, item_lines: list[str]
+            ) -> _BubbleLayout:
+                bubble_padding = 10
+                line_height = 12
+                icon_reader = _bubble_icon_reader(entry)
+                icon_size = 34 if icon_reader else 0
+                icon_spacing = 8 if icon_reader else 0
+                icon_block_width = icon_size + icon_spacing if icon_reader else 0
+
+                text_widths: list[float] = []
+                for index, line in enumerate(item_lines):
+                    font_name = "Helvetica-Bold" if index == 0 else "Helvetica"
+                    text_widths.append(
+                        pdf.stringWidth(line, font_name, 10 if index == 0 else 9)
+                    )
+                quantity_label = f"Qté : {entry.total_quantity}"
+                reference_label = entry.reference_label()
+                quantity_width = pdf.stringWidth(quantity_label, "Helvetica-Bold", 8) + 16
+                reference_width = pdf.stringWidth(reference_label, "Helvetica", 8) + 16
+                content_width = max(text_widths or [0.0]) + icon_block_width
+                bubble_width = max(
+                    content_width + 2 * bubble_padding,
+                    quantity_width + 2 * bubble_padding,
+                    170,
+                )
+                bubble_height = (
+                    line_height * len(item_lines)
+                    + 3 * bubble_padding
+                    + 16
+                )
+
+                return _BubbleLayout(
+                    width=bubble_width,
+                    height=bubble_height,
+                    padding=bubble_padding,
+                    line_height=line_height,
+                    icon_reader=icon_reader,
+                    icon_size=icon_size,
+                    icon_block_width=icon_block_width,
+                    quantity_width=quantity_width,
+                    reference_width=reference_width,
+                )
 
             def _rects_overlap(
                 rect_a: tuple[float, float, float, float],
@@ -4014,40 +4109,29 @@ def generate_vehicle_inventory_pdf(
                 anchor_py: float,
                 entry: _VehicleViewEntry,
                 item_lines: list[str],
+                layout: _BubbleLayout,
                 *,
                 bounds: tuple[float, float, float, float],
                 pointer_mode: bool,
             ) -> None:
                 pdf.saveState()
-                bubble_padding = 10
-                line_height = 12
+                bubble_padding = layout.padding
+                line_height = layout.line_height
                 accent_color = colors.HexColor("#3B82F6")
                 bubble_background = colors.HexColor("#0F172A")
                 bubble_border = colors.HexColor("#1E293B")
                 text_primary = colors.white
                 text_secondary = colors.HexColor("#E2E8F0")
                 muted_text = colors.HexColor("#CBD5E1")
+                icon_reader = layout.icon_reader
+                icon_size = layout.icon_size
 
-                icon_reader = _bubble_icon_reader(entry)
-                icon_size = 34 if icon_reader else 0
-                icon_spacing = 8 if icon_reader else 0
-                icon_block_width = icon_size + icon_spacing if icon_reader else 0
-
-                text_widths: list[float] = []
-                for index, line in enumerate(item_lines):
-                    font_name = "Helvetica-Bold" if index == 0 else "Helvetica"
-                    text_widths.append(pdf.stringWidth(line, font_name, 10 if index == 0 else 9))
                 quantity_label = f"Qté : {entry.total_quantity}"
                 reference_label = entry.reference_label()
-                quantity_width = pdf.stringWidth(quantity_label, "Helvetica-Bold", 8) + 16
-                reference_width = pdf.stringWidth(reference_label, "Helvetica", 8) + 16
-                content_width = max(text_widths or [0.0]) + icon_block_width
-                bubble_width = max(content_width + 2 * bubble_padding, quantity_width + 2 * bubble_padding, 170)
-                bubble_height = (
-                    line_height * len(item_lines)
-                    + 3 * bubble_padding
-                    + 16
-                )
+                quantity_width = layout.quantity_width
+                reference_width = layout.reference_width
+                bubble_width = layout.width
+                bubble_height = layout.height
 
                 inset = 6.0
                 bounds_x, bounds_y, bounds_w, bounds_h = bounds
@@ -4086,7 +4170,7 @@ def generate_vehicle_inventory_pdf(
                         icon_size,
                     )
 
-                content_x = bubble_x + bubble_padding + icon_block_width
+                content_x = bubble_x + bubble_padding + layout.icon_block_width
                 text_y = bubble_y + bubble_height - bubble_padding - line_height + 3
                 for index, line in enumerate(item_lines):
                     font_name = "Helvetica-Bold" if index == 0 else "Helvetica"
@@ -4135,10 +4219,6 @@ def generate_vehicle_inventory_pdf(
                 pdf.restoreState()
                 bubble_rects.append((bubble_x, bubble_y, bubble_width, bubble_height))
 
-            quantity_column_x = page_width - margin - 90
-            reference_column_x = page_width - margin
-            line_height = 12
-
             located_entries: list[_VehicleViewEntry] = []
             table_entries: list[_VehicleViewEntry] = []
             bubble_rects: list[tuple[float, float, float, float]] = []
@@ -4148,8 +4228,18 @@ def generate_vehicle_inventory_pdf(
             drawn_height = 0.0
             image_x = margin
             image_y = y_position
+            view_pointer_mode = bool(getattr(view_config, "pointer_mode_enabled", False))
+            background_path: Path | None = None
+            background_message: str | None = None
+            image_reader: ImageReader | None = None
+            desired_page_size = default_page_size
+
+            if view_config.background_photo_id is not None:
+                background_path = photo_paths.get(view_config.background_photo_id)
 
             if skip_background:
+                _apply_page_size(default_page_size)
+                y_position = start_view_page(continued=False)
                 pdf.setFont("Helvetica", 10)
                 pdf.drawString(
                     margin,
@@ -4159,19 +4249,21 @@ def generate_vehicle_inventory_pdf(
                 y_position -= 18
                 table_entries = list(view_entries)
             else:
-                background_path = None
-                if view_config.background_photo_id is not None:
-                    background_path = photo_paths.get(view_config.background_photo_id)
-
-                image_reader: ImageReader | None = None
-                background_message: str | None = None
                 if background_path and background_path.exists():
                     try:
                         image_reader = ImageReader(str(background_path))
+                        image_width, image_height = image_reader.getSize()
+                        desired_page_size = (
+                            landscape(A4) if image_width >= image_height else portrait(A4)
+                        )
                     except Exception:  # pragma: no cover - corrupted image fallback
                         background_message = "La photo de fond n'a pas pu être chargée."
+                        image_reader = None
                 else:
                     background_message = "Aucune photo n'est disponible pour cette vue."
+
+                _apply_page_size(desired_page_size)
+                y_position = start_view_page(continued=False)
 
                 if image_reader is not None:
                     image_width, image_height = image_reader.getSize()
@@ -4184,8 +4276,10 @@ def generate_vehicle_inventory_pdf(
                     )
                     drawn_width = image_width * scale
                     drawn_height = image_height * scale
-                    image_x = margin + ((page_width - 2 * margin) - drawn_width) / 2
-                    image_y = y_position - drawn_height
+                    horizontal_extra = max(0.0, available_width - drawn_width)
+                    vertical_extra = max(0.0, available_height - drawn_height)
+                    image_x = margin + horizontal_extra / 2
+                    image_y = y_position - drawn_height - vertical_extra / 2
                     pdf.drawImage(
                         image_reader,
                         image_x,
@@ -4208,19 +4302,28 @@ def generate_vehicle_inventory_pdf(
                     pdf.restoreState()
                     background_drawn = True
 
-                    for entry in view_entries:
-                        if (
-                            entry.bubble_x is not None
-                            and entry.bubble_y is not None
-                        ):
-                            located_entries.append(entry)
-                        else:
-                            table_entries.append(entry)
+                    bubble_bounds = (
+                        margin,
+                        y_position - image_max_height,
+                        page_width - 2 * margin,
+                        image_max_height,
+                    )
+                    overlay_bounds = (image_x, image_y, drawn_width, drawn_height)
+                    located_entries = list(view_entries)
 
-                    bounds = (image_x, image_y, drawn_width, drawn_height)
                     for entry in located_entries:
-                        bubble_ratio_x = _clamp(entry.bubble_x or 0.0, 0.0, 1.0)
-                        bubble_ratio_y = _clamp(entry.bubble_y or 0.0, 0.0, 1.0)
+                        bubble_ratio_x_raw = (
+                            entry.bubble_x
+                            if entry.bubble_x is not None
+                            else entry.anchor_x
+                        )
+                        bubble_ratio_y_raw = (
+                            entry.bubble_y
+                            if entry.bubble_y is not None
+                            else entry.anchor_y
+                        )
+                        bubble_ratio_x = bubble_ratio_x_raw if bubble_ratio_x_raw is not None else 0.5
+                        bubble_ratio_y = bubble_ratio_y_raw if bubble_ratio_y_raw is not None else 0.5
                         anchor_ratio_x = _clamp(
                             entry.anchor_x if entry.anchor_x is not None else bubble_ratio_x,
                             0.0,
@@ -4231,6 +4334,10 @@ def generate_vehicle_inventory_pdf(
                             0.0,
                             1.0,
                         )
+                        if not view_pointer_mode:
+                            bubble_ratio_x = _clamp(bubble_ratio_x, 0.0, 1.0)
+                            bubble_ratio_y = _clamp(bubble_ratio_y, 0.0, 1.0)
+
                         bubble_center_x = image_x + bubble_ratio_x * drawn_width
                         bubble_center_y = image_y + drawn_height * bubble_ratio_y
                         anchor_x = _clamp(
@@ -4243,19 +4350,31 @@ def generate_vehicle_inventory_pdf(
                             image_y,
                             image_y + drawn_height,
                         )
-                        pointer_mode_enabled = (
-                            bool(pointer_targets)
-                            and entry.key in (pointer_targets or {})
-                        )
+                        bubble_lines = _wrap_bubble_lines(entry)
+                        layout = _build_bubble_layout(entry, bubble_lines)
+
+                        if view_pointer_mode:
+                            initial_top = bubble_center_y - layout.height / 2
+                            adjusted_top = _find_available_bubble_y(
+                                bubble_x=bubble_center_x - layout.width / 2,
+                                bubble_width=layout.width,
+                                bubble_height=layout.height,
+                                initial_y=initial_top,
+                                min_y=bubble_bounds[1],
+                                max_y=bubble_bounds[1] + bubble_bounds[3] - layout.height,
+                            )
+                            bubble_center_y = adjusted_top + layout.height / 2
+
                         _draw_item_bubble(
                             bubble_center_x,
                             bubble_center_y,
                             anchor_x,
                             anchor_y,
                             entry,
-                            _wrap_bubble_lines(entry),
-                            bounds=bounds,
-                            pointer_mode=pointer_mode_enabled,
+                            bubble_lines,
+                            layout,
+                            bounds=bubble_bounds if view_pointer_mode else overlay_bounds,
+                            pointer_mode=view_pointer_mode,
                         )
 
                     y_position = image_y - 18
@@ -4265,6 +4384,10 @@ def generate_vehicle_inventory_pdf(
                     pdf.setFont("Helvetica", 10)
                     y_position -= 18
                     table_entries = list(view_entries)
+
+            quantity_column_x = page_width - margin - 90
+            reference_column_x = page_width - margin
+            line_height = 12
 
             def draw_table_header(y_pos: float, *, suffix: str = "") -> float:
                 pdf.setFont("Helvetica-Bold", 12)
