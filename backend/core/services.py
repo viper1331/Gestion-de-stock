@@ -3794,7 +3794,7 @@ def generate_vehicle_inventory_pdf(
 
 def generate_remise_inventory_pdf() -> bytes:
     ensure_database_ready()
-    items = list_remise_items()
+    items = [item for item in list_remise_items() if not item.assigned_vehicle_names]
     categories = {category.id: category.name for category in list_remise_categories()}
     suppliers = {supplier.id: supplier.name for supplier in list_suppliers("inventory_remise")}
 
