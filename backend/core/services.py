@@ -3555,7 +3555,7 @@ def _format_date_label(value: date | None) -> str:
 
 
 def _render_remise_inventory_pdf(
-    *, items: list[models.Item], category_map: dict[int, str], supplier_map: dict[int, str]
+    *, items: list[models.Item], category_map: dict[int, str]
 ) -> bytes:
     buffer = io.BytesIO()
     page_size = landscape(A4)
@@ -3576,7 +3576,7 @@ def _render_remise_inventory_pdf(
         ("TAILLE / VARIANTE", 0.12, "center"),
         ("CATÉGORIE", 0.13, "center"),
         ("AFFECTÉ À", 0.12, "center"),
-        ("FOURNISSEUR", 0.12, "center"),
+        ("LOT(S)", 0.12, "center"),
         ("PÉREMPTION", 0.09, "center"),
         ("SEUIL", 0.08, "center"),
     ]
@@ -3643,10 +3643,12 @@ def _render_remise_inventory_pdf(
             y = start_page(page_number)
             y = draw_header(y)
 
-        supplier_label = _format_cell(supplier_map.get(item.supplier_id or -1, None) if item.supplier_id else None)
         category_label = _format_cell(category_map.get(item.category_id or -1, None) if item.category_id else None)
         assignments_label = _format_cell(
             ", ".join(item.assigned_vehicle_names) if item.assigned_vehicle_names else None
+        )
+        lots_label = _format_cell(
+            ", ".join(item.lot_names) if item.lot_names else None
         )
         expiration_label = _format_date_label(item.expiration_date)
         expiration_label = "-" if expiration_label == "—" else expiration_label
@@ -3660,7 +3662,7 @@ def _render_remise_inventory_pdf(
             (size_label, columns[2][1], "center"),
             (category_label, columns[3][1], "center"),
             (assignments_label, columns[4][1], "center"),
-            (supplier_label, columns[5][1], "center"),
+            (lots_label, columns[5][1], "center"),
             (expiration_label, columns[6][1], "center"),
             (threshold_label, columns[7][1], "center"),
         ]
@@ -3796,12 +3798,10 @@ def generate_remise_inventory_pdf() -> bytes:
     ensure_database_ready()
     items = list_remise_items()
     categories = {category.id: category.name for category in list_remise_categories()}
-    suppliers = {supplier.id: supplier.name for supplier in list_suppliers("inventory_remise")}
 
     return _render_remise_inventory_pdf(
         items=items,
         category_map=categories,
-        supplier_map=suppliers,
     )
 
 
