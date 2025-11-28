@@ -430,6 +430,20 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     ...readPersistedValue<Record<string, number>>(columnStorageKey, baseColumnWidths)
   };
 
+  const columnStyles = {
+    image: { width: columnWidths.image, minWidth: columnWidths.image },
+    name: { width: columnWidths.name, minWidth: columnWidths.name },
+    sku: { width: columnWidths.sku, minWidth: columnWidths.sku },
+    quantity: { width: columnWidths.quantity, minWidth: columnWidths.quantity },
+    size: { width: columnWidths.size, minWidth: columnWidths.size },
+    category: { width: columnWidths.category, minWidth: columnWidths.category },
+    lotMembership: { width: columnWidths.lotMembership, minWidth: columnWidths.lotMembership },
+    vehicleType: { width: columnWidths.vehicleType, minWidth: columnWidths.vehicleType },
+    supplier: { width: columnWidths.supplier, minWidth: columnWidths.supplier },
+    expiration: { width: columnWidths.expiration, minWidth: columnWidths.expiration },
+    threshold: { width: columnWidths.threshold, minWidth: columnWidths.threshold }
+  } as const;
+
   const saveWidth = (key: string, width: number) => {
     persistValue(columnStorageKey, { ...columnWidths, [key]: width });
   };
@@ -749,7 +763,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                     return (
                       <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
                         {supportsItemImages && columnVisibility.image !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-300">
+                          <td style={columnStyles.image} className="px-4 py-3 text-sm text-slate-300">
                             {hasImage ? (
                               <img
                                 src={imageUrl ?? undefined}
@@ -762,13 +776,18 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {columnVisibility.name !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-100">{item.name}</td>
+                          <td style={columnStyles.name} className="px-4 py-3 text-sm text-slate-100">
+                            {item.name}
+                          </td>
                         ) : null}
                         {columnVisibility.sku !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-300">{item.sku}</td>
+                          <td style={columnStyles.sku} className="px-4 py-3 text-sm text-slate-300">
+                            {item.sku}
+                          </td>
                         ) : null}
                         {columnVisibility.quantity !== false ? (
                           <td
+                            style={columnStyles.quantity}
                             className={`px-4 py-3 text-sm font-semibold ${
                               isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
                             }`}
@@ -794,10 +813,12 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {columnVisibility.size !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-300">{item.size?.trim() || "-"}</td>
+                          <td style={columnStyles.size} className="px-4 py-3 text-sm text-slate-300">
+                            {item.size?.trim() || "-"}
+                          </td>
                         ) : null}
                         {columnVisibility.category !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-300">
+                          <td style={columnStyles.category} className="px-4 py-3 text-sm text-slate-300">
                             <div className="space-y-1">
                               <div>
                                 {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
@@ -811,7 +832,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-300">
+                          <td style={columnStyles.lotMembership} className="px-4 py-3 text-sm text-slate-300">
                             <div className="flex flex-wrap items-center gap-2">
                               <span>{lotLabel}</span>
                               <span
@@ -823,17 +844,18 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {config.showVehicleTypeColumn && columnVisibility.vehicleType !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-300">
+                          <td style={columnStyles.vehicleType} className="px-4 py-3 text-sm text-slate-300">
                             {item.vehicle_type ? VEHICLE_TYPE_LABELS[item.vehicle_type] : "Non attribué"}
                           </td>
                         ) : null}
                         {columnVisibility.supplier !== false ? (
-                          <td className="px-4 py-3 text-sm text-slate-300">
+                          <td style={columnStyles.supplier} className="px-4 py-3 text-sm text-slate-300">
                             {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
                           </td>
                         ) : null}
                         {supportsExpirationDate && columnVisibility.expiration !== false ? (
                           <td
+                            style={columnStyles.expiration}
                             className={`px-4 py-3 text-sm ${
                               expirationStatus === "expired"
                                 ? "text-red-300"
@@ -856,7 +878,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {columnVisibility.threshold !== false ? (
-                          <td className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}>
+                          <td
+                            style={columnStyles.threshold}
+                            className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}
+                          >
                             {item.low_stock_threshold}
                           </td>
                         ) : null}
@@ -1016,7 +1041,10 @@ function ResizableHeader({
   onResize: (value: number) => void;
 }) {
   return (
-    <th style={{ width }} className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+    <th
+      style={{ width, minWidth: width }}
+      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400"
+    >
       <div className="flex items-center justify-between">
         <span>{label}</span>
         <input
