@@ -149,6 +149,8 @@ class Item(BaseModel):
     qr_token: str | None = None
     lot_id: int | None = None
     lot_name: str | None = None
+    lot_names: list[str] = Field(default_factory=list)
+    is_in_lot: bool = False
     show_in_qr: bool = True
     vehicle_type: VehicleType | None = None
     assigned_vehicle_names: list[str] = Field(default_factory=list)

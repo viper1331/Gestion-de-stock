@@ -23,6 +23,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   supportsLowStockOptOut: true,
   supportsExpirationDate: true,
   showVehicleTypeColumn: true,
+  showLotMembershipColumn: true,
   searchPlaceholder: "Rechercher une remise par nom ou SKU",
   barcodePrefix: "IS",
   exportPdfPath: "/remise-inventory/export/pdf",
