@@ -3571,13 +3571,14 @@ def _render_remise_inventory_pdf(
     row_alt_bg_color = colors.Color(0.078, 0.098, 0.149)
 
     columns: list[tuple[str, float, str]] = [
-        ("MATÉRIEL", 0.28, "left"),
+        ("MATÉRIEL", 0.26, "left"),
         ("QUANTITÉ", 0.08, "center"),
-        ("TAILLE / VARIANTE", 0.14, "center"),
-        ("CATÉGORIE", 0.14, "center"),
-        ("FOURNISSEUR", 0.14, "center"),
-        ("PÉREMPTION", 0.1, "center"),
-        ("SEUIL", 0.12, "center"),
+        ("TAILLE / VARIANTE", 0.12, "center"),
+        ("CATÉGORIE", 0.13, "center"),
+        ("AFFECTÉ À", 0.12, "center"),
+        ("FOURNISSEUR", 0.12, "center"),
+        ("PÉREMPTION", 0.09, "center"),
+        ("SEUIL", 0.08, "center"),
     ]
 
     table_width = width - 2 * margin
@@ -3644,6 +3645,9 @@ def _render_remise_inventory_pdf(
 
         supplier_label = _format_cell(supplier_map.get(item.supplier_id or -1, None) if item.supplier_id else None)
         category_label = _format_cell(category_map.get(item.category_id or -1, None) if item.category_id else None)
+        assignments_label = _format_cell(
+            ", ".join(item.assigned_vehicle_names) if item.assigned_vehicle_names else None
+        )
         expiration_label = _format_date_label(item.expiration_date)
         expiration_label = "-" if expiration_label == "—" else expiration_label
         threshold_label = str(item.low_stock_threshold or 1) if item.track_low_stock else "1"
@@ -3655,9 +3659,10 @@ def _render_remise_inventory_pdf(
             (str(item.quantity or 0), columns[1][1], "center"),
             (size_label, columns[2][1], "center"),
             (category_label, columns[3][1], "center"),
-            (supplier_label, columns[4][1], "center"),
-            (expiration_label, columns[5][1], "center"),
-            (threshold_label, columns[6][1], "center"),
+            (assignments_label, columns[4][1], "center"),
+            (supplier_label, columns[5][1], "center"),
+            (expiration_label, columns[6][1], "center"),
+            (threshold_label, columns[7][1], "center"),
         ]
 
         pdf.setFillColor(row_alt_bg_color if index % 2 else row_bg_color)
