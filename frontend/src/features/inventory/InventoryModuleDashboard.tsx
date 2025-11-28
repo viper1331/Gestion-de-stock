@@ -739,10 +739,12 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                     const hasImage = Boolean(imageUrl);
                     const lotNames = item.lot_names?.filter((name) => name.trim().length > 0) ?? [];
                     const isInLot =
-                      item.is_in_lot ?? lotNames.length > 0 || Boolean(item.lot_id) || Boolean(item.lot_name);
+                      item.is_in_lot ??
+                      (lotNames.length > 0 || Boolean(item.lot_id) || Boolean(item.lot_name));
                     const lotLabel = lotNames.length
                       ? lotNames.join(", ")
-                      : item.lot_name ?? (isInLot && item.lot_id ? `Lot #${item.lot_id}` : isInLot ? "Oui" : "Aucun");
+                      : item.lot_name ??
+                        (isInLot && item.lot_id ? `Lot #${item.lot_id}` : isInLot ? "Oui" : "Aucun");
 
                     return (
                       <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
