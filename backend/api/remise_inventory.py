@@ -1,7 +1,11 @@
 """Routes pour la gestion de l'inventaire remises."""
 from __future__ import annotations
 
+import io
+from datetime import datetime
+
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
+from fastapi.responses import StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -23,6 +27,18 @@ async def list_remise_items(
 ) -> list[models.Item]:
     _require_permission(user, action="view")
     return services.list_remise_items(search)
+
+
+@router.get("/export/pdf")
+async def export_remise_inventory_pdf(user: models.User = Depends(get_current_user)):
+    _require_permission(user, action="view")
+    pdf_bytes = services.generate_remise_inventory_pdf()
+    filename = f"inventaire_remises_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=\"{filename}\""},
+    )
 
 
 @router.post("/", response_model=models.Item, status_code=201)

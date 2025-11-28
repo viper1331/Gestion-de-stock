@@ -25,6 +25,8 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   showVehicleTypeColumn: true,
   searchPlaceholder: "Rechercher une remise par nom ou SKU",
   barcodePrefix: "IS",
+  exportPdfPath: "/remise-inventory/export/pdf",
+  exportPdfFilenamePrefix: "inventaire_remises",
   itemNoun: {
     singular: "matériel",
     plural: "matériels",

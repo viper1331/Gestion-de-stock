@@ -93,7 +93,10 @@ def _build_document_plan(
     plan = DocumentPlan(generated_at=generated_at)
     for view in views:
         if view.background_photo_id and not view.background_path:
-            raise FileNotFoundError("Photo de fond obligatoire manquante pour la vue")
+            if options.table_fallback:
+                view.background_photo_id = None
+            else:
+                raise FileNotFoundError("Photo de fond obligatoire manquante pour la vue")
         if not view.entries and not view.background_path:
             continue
 

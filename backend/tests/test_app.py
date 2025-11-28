@@ -2107,6 +2107,40 @@ def test_vehicle_inventory_pdf_export() -> None:
     assert len(payload) > 200
 
 
+def test_remise_inventory_pdf_export() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": "Remise test", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Matériel test",
+            "sku": "REM-TEST",
+            "quantity": 3,
+            "low_stock_threshold": 1,
+            "category_id": category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+
+    export_resp = client.get("/remise-inventory/export/pdf", headers=admin_headers)
+    assert export_resp.status_code == 200, export_resp.text
+    assert export_resp.headers["content-type"] == "application/pdf"
+    payload = export_resp.content
+    assert payload.startswith(b"%PDF")
+    assert len(payload) > 200
+
+
 def test_remise_inventory_crud_cycle() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
