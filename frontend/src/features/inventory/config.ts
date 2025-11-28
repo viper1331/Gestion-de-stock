@@ -44,6 +44,7 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   supplierModule: "suppliers",
   queryKeyPrefix: "inventory",
   storageKeyPrefix: "inventory",
+  showLotMembershipColumn: true,
   showPurchaseOrders: true,
   searchPlaceholder: "Rechercher par nom ou SKU",
   supportsItemImages: false,
