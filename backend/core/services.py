@@ -19,6 +19,7 @@ from reportlab.lib import colors
 from reportlab.lib.pagesizes import A4, landscape, portrait
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
+from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 from backend.core import db, models, security
@@ -3534,88 +3535,120 @@ def _render_remise_inventory_pdf(
     *, items: list[models.Item], category_map: dict[int, str], supplier_map: dict[int, str]
 ) -> bytes:
     buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    margin = 18 * mm
-    row_height = 14
-    generated_at = datetime.now()
+    page_size = landscape(A4)
+    pdf = canvas.Canvas(buffer, pagesize=page_size)
+    width, height = page_size
+    margin = 14 * mm
+    row_height = 22
+    header_height = 24
+    text_color = colors.Color(0.91, 0.93, 0.97)
+    background_color = colors.Color(0.043, 0.059, 0.102)
+    header_bg_color = colors.Color(0.082, 0.105, 0.156)
+    row_bg_color = colors.Color(0.067, 0.082, 0.125)
+    row_alt_bg_color = colors.Color(0.078, 0.098, 0.149)
 
     columns: list[tuple[str, float, str]] = [
-        ("Matériel", 0.26, "left"),
-        ("Quantité", 0.1, "right"),
-        ("Taille / Variante", 0.14, "left"),
-        ("Catégorie", 0.16, "left"),
-        ("Fournisseur", 0.16, "left"),
-        ("Péremption", 0.09, "left"),
-        ("Seuil", 0.09, "right"),
+        ("MATÉRIEL", 0.28, "left"),
+        ("QUANTITÉ", 0.08, "center"),
+        ("TAILLE / VARIANTE", 0.14, "center"),
+        ("CATÉGORIE", 0.14, "center"),
+        ("FOURNISSEUR", 0.14, "center"),
+        ("PÉREMPTION", 0.1, "center"),
+        ("SEUIL", 0.12, "center"),
     ]
 
     table_width = width - 2 * margin
+    generated_at = datetime.now()
+
+    def _truncate(value: str, max_width: float, font_name: str, font_size: float) -> str:
+        ellipsis = "…"
+        if pdfmetrics.stringWidth(value, font_name, font_size) <= max_width:
+            return value
+        for i in range(len(value), 0, -1):
+            truncated = value[:i] + ellipsis
+            if pdfmetrics.stringWidth(truncated, font_name, font_size) <= max_width:
+                return truncated
+        return ellipsis
+
+    def _format_cell(value: str | None) -> str:
+        value = value or "-"
+        return value
+
+    def draw_page_background() -> None:
+        pdf.setFillColor(background_color)
+        pdf.rect(0, 0, width, height, stroke=0, fill=1)
+        pdf.setFillColor(text_color)
 
     def start_page(page_number: int) -> float:
-        pdf.setFont("Helvetica-Bold", 16)
-        pdf.drawString(margin, height - margin, "Inventaire remises")
-        pdf.setFont("Helvetica", 10)
+        draw_page_background()
+        pdf.setFont("Helvetica-Bold", 14)
+        pdf.drawString(margin, height - margin + 4, "Inventaire remises")
+        pdf.setFont("Helvetica", 9)
         pdf.drawString(
             margin,
-            height - margin - 16,
+            height - margin - 10,
             f"Généré le {_format_date_label(generated_at.date())} à {generated_at.strftime('%H:%M')}",
         )
-        pdf.drawString(margin, height - margin - 28, f"Articles listés : {len(items)}")
-        pdf.drawRightString(
-            width - margin,
-            margin,
-            f"Page {page_number}",
-        )
-        return height - margin - 44
+        pdf.drawRightString(width - margin, margin - 6, f"Page {page_number}")
+        return height - margin - header_height
 
     def draw_header(y_position: float) -> float:
+        pdf.setFillColor(header_bg_color)
+        pdf.rect(margin, y_position - header_height + 4, table_width, header_height, stroke=0, fill=1)
+        pdf.setFillColor(text_color)
         pdf.setFont("Helvetica-Bold", 9)
         x = margin
         for label, ratio, align in columns:
-            if align == "right":
-                pdf.drawRightString(x + ratio * table_width - 2, y_position, label)
+            cell_width = ratio * table_width
+            if align == "center":
+                pdf.drawCentredString(x + cell_width / 2, y_position - 6, label)
             else:
-                pdf.drawString(x, y_position, label)
-            x += ratio * table_width
+                pdf.drawString(x + 4, y_position - 6, label)
+            x += cell_width
         pdf.setFont("Helvetica", 9)
-        return y_position - row_height
+        return y_position - header_height
 
     y = start_page(1)
     y = draw_header(y)
     page_number = 1
 
-    for item in items:
+    for index, item in enumerate(items):
         if y <= margin + row_height:
             pdf.showPage()
             page_number += 1
             y = start_page(page_number)
             y = draw_header(y)
 
-        supplier_label = supplier_map.get(item.supplier_id or -1, "—") if item.supplier_id else "—"
-        category_label = category_map.get(item.category_id or -1, "—") if item.category_id else "—"
+        supplier_label = _format_cell(supplier_map.get(item.supplier_id or -1, None) if item.supplier_id else None)
+        category_label = _format_cell(category_map.get(item.category_id or -1, None) if item.category_id else None)
         expiration_label = _format_date_label(item.expiration_date)
-        threshold_label = "Non suivi" if not item.track_low_stock else str(item.low_stock_threshold)
-        size_label = item.size or "—"
-        name_label = f"{item.name} ({item.sku})" if item.sku else item.name
+        expiration_label = "-" if expiration_label == "—" else expiration_label
+        threshold_label = str(item.low_stock_threshold or 1) if item.track_low_stock else "1"
+        size_label = _format_cell(item.size)
+        name_label = _format_cell(item.name)
 
         values: list[tuple[str, float, str]] = [
             (name_label, columns[0][1], "left"),
-            (str(item.quantity), columns[1][1], "right"),
-            (size_label, columns[2][1], "left"),
-            (category_label, columns[3][1], "left"),
-            (supplier_label, columns[4][1], "left"),
-            (expiration_label, columns[5][1], "left"),
-            (threshold_label, columns[6][1], "right"),
+            (str(item.quantity or 0), columns[1][1], "center"),
+            (size_label, columns[2][1], "center"),
+            (category_label, columns[3][1], "center"),
+            (supplier_label, columns[4][1], "center"),
+            (expiration_label, columns[5][1], "center"),
+            (threshold_label, columns[6][1], "center"),
         ]
+
+        pdf.setFillColor(row_alt_bg_color if index % 2 else row_bg_color)
+        pdf.rect(margin, y - row_height + 6, table_width, row_height, stroke=0, fill=1)
+        pdf.setFillColor(text_color)
 
         x = margin
         for value, ratio, align in values:
             cell_width = ratio * table_width
-            if align == "right":
-                pdf.drawRightString(x + cell_width - 2, y, value)
+            text_value = _truncate(str(value), cell_width - 8, "Helvetica", 9)
+            if align == "center":
+                pdf.drawCentredString(x + cell_width / 2, y - 8, text_value)
             else:
-                pdf.drawString(x, y, value)
+                pdf.drawString(x + 4, y - 8, text_value)
             x += cell_width
         y -= row_height
 
