@@ -3570,6 +3570,21 @@ def available_config_sections() -> Iterable[str]:
     return parser.sections()
 
 
+def _get_module_title(module_key: str) -> str:
+    from configparser import ConfigParser
+
+    titles = {key: label for key, label in _AVAILABLE_MODULE_DEFINITIONS}
+    config_path = Path(__file__).resolve().parent.parent / "config.ini"
+    parser = ConfigParser()
+    parser.read(config_path, encoding="utf-8")
+    if parser.has_section("modules"):
+        for key, value in parser.items("modules"):
+            trimmed = value.strip()
+            if trimmed:
+                titles[key] = trimmed
+    return titles.get(module_key, module_key)
+
+
 def list_suppliers(module: str | None = None) -> list[models.Supplier]:
     ensure_database_ready()
     module_filter = (module or "").strip().lower()
@@ -3946,7 +3961,7 @@ def _format_date_label(value: date | None) -> str:
 
 
 def _render_remise_inventory_pdf(
-    *, items: list[models.Item], category_map: dict[int, str]
+    *, items: list[models.Item], category_map: dict[int, str], module_title: str
 ) -> bytes:
     buffer = io.BytesIO()
     page_size = landscape(A4)
@@ -3996,7 +4011,7 @@ def _render_remise_inventory_pdf(
     def start_page(page_number: int) -> float:
         draw_page_background()
         pdf.setFont("Helvetica-Bold", 14)
-        pdf.drawString(margin, height - margin + 4, "Inventaire remises")
+        pdf.drawString(margin, height - margin + 4, module_title)
         pdf.setFont("Helvetica", 9)
         pdf.drawString(
             margin,
@@ -4188,6 +4203,7 @@ def generate_remise_inventory_pdf() -> bytes:
     return _render_remise_inventory_pdf(
         items=items,
         category_map=categories,
+        module_title=_get_module_title("inventory_remise"),
     )
 
 
