@@ -3571,14 +3571,13 @@ def _render_remise_inventory_pdf(
     row_alt_bg_color = colors.Color(0.078, 0.098, 0.149)
 
     columns: list[tuple[str, float, str]] = [
-        ("MATÉRIEL", 0.26, "left"),
-        ("QUANTITÉ", 0.08, "center"),
-        ("TAILLE / VARIANTE", 0.12, "center"),
-        ("CATÉGORIE", 0.13, "center"),
-        ("AFFECTÉ À", 0.12, "center"),
+        ("MATÉRIEL", 0.28, "left"),
+        ("QUANTITÉ", 0.10, "center"),
+        ("TAILLE / VARIANTE", 0.14, "center"),
+        ("CATÉGORIE", 0.16, "center"),
         ("LOT(S)", 0.12, "center"),
-        ("PÉREMPTION", 0.09, "center"),
-        ("SEUIL", 0.08, "center"),
+        ("PÉREMPTION", 0.10, "center"),
+        ("SEUIL", 0.10, "center"),
     ]
 
     table_width = width - 2 * margin
@@ -3644,9 +3643,6 @@ def _render_remise_inventory_pdf(
             y = draw_header(y)
 
         category_label = _format_cell(category_map.get(item.category_id or -1, None) if item.category_id else None)
-        assignments_label = _format_cell(
-            ", ".join(item.assigned_vehicle_names) if item.assigned_vehicle_names else None
-        )
         lots_label = _format_cell(
             ", ".join(item.lot_names) if item.lot_names else None
         )
@@ -3661,10 +3657,9 @@ def _render_remise_inventory_pdf(
             (str(item.quantity or 0), columns[1][1], "center"),
             (size_label, columns[2][1], "center"),
             (category_label, columns[3][1], "center"),
-            (assignments_label, columns[4][1], "center"),
-            (lots_label, columns[5][1], "center"),
-            (expiration_label, columns[6][1], "center"),
-            (threshold_label, columns[7][1], "center"),
+            (lots_label, columns[4][1], "center"),
+            (expiration_label, columns[5][1], "center"),
+            (threshold_label, columns[6][1], "center"),
         ]
 
         pdf.setFillColor(row_alt_bg_color if index % 2 else row_bg_color)
