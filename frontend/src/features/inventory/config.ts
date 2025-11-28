@@ -30,6 +30,8 @@ export interface InventoryModuleConfig {
   showVehicleTypeColumn?: boolean;
   itemNoun?: InventoryItemNounConfig;
   barcodePrefix?: string;
+  exportPdfPath?: string;
+  exportPdfFilenamePrefix?: string;
 }
 
 export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {

@@ -44,10 +44,18 @@ def _vehicle_inventory_pdf_response(
     *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
 ):
     _require_permission(user, action="view")
-    pdf_bytes = services.generate_vehicle_inventory_pdf(
-        pointer_targets=pointer_targets,
-        options=options,
-    )
+    try:
+        pdf_bytes = services.generate_vehicle_inventory_pdf(
+            pointer_targets=pointer_targets,
+            options=options,
+        )
+    except FileNotFoundError:
+        fallback_options = options.model_copy()
+        fallback_options.table_fallback = True
+        pdf_bytes = services.generate_vehicle_inventory_pdf(
+            pointer_targets=pointer_targets,
+            options=fallback_options,
+        )
     filename = f"inventaire_vehicules_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
     return StreamingResponse(
         io.BytesIO(pdf_bytes),

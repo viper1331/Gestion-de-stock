@@ -1,4 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { isAxiosError } from "axios";
 import {
   useMutation,
   useQuery,
@@ -296,6 +297,47 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["reports"] })
   });
 
+  const exportInventoryPdf = useMutation({
+    mutationFn: async () => {
+      if (!config.exportPdfPath) {
+        throw new Error("Aucun export PDF configuré pour ce module.");
+      }
+      const response = await api.get<ArrayBuffer>(config.exportPdfPath, {
+        responseType: "arraybuffer"
+      });
+      return response.data;
+    },
+    onSuccess: (data) => {
+      const blob = new Blob([data], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(
+        now.getDate()
+      ).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      link.href = url;
+      const prefix = config.exportPdfFilenamePrefix || "inventaire";
+      link.download = `${prefix}_${timestamp}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setMessage("Inventaire exporté en PDF.");
+    },
+    onError: (error) => {
+      let message = "Une erreur est survenue lors de l'export du PDF.";
+      if (isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim().length > 0) {
+          message = detail;
+        }
+      } else if (error instanceof Error && error.message) {
+        message = error.message;
+      }
+      setError(message);
+    }
+  });
+
   const baseColumnWidths: Record<InventoryColumnKey, number> = {
     image: 140,
     name: 220,
@@ -533,6 +575,17 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
               onReset={resetColumnVisibility}
               description="Choisissez les colonnes à afficher dans la liste."
             />
+            {config.exportPdfPath ? (
+              <button
+                type="button"
+                onClick={() => exportInventoryPdf.mutateAsync()}
+                disabled={exportInventoryPdf.isPending}
+                className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+                title="Exporter l'inventaire au format PDF"
+              >
+                {exportInventoryPdf.isPending ? "Export en cours…" : "Exporter en PDF"}
+              </button>
+            ) : null}
             <button
               type="button"
               onClick={() => {

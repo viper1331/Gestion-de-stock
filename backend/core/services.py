@@ -3524,6 +3524,105 @@ def _render_purchase_order_pdf(
     return buffer.getvalue()
 
 
+def _format_date_label(value: date | None) -> str:
+    if value is None:
+        return "—"
+    return value.strftime("%d/%m/%Y")
+
+
+def _render_remise_inventory_pdf(
+    *, items: list[models.Item], category_map: dict[int, str], supplier_map: dict[int, str]
+) -> bytes:
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    width, height = A4
+    margin = 18 * mm
+    row_height = 14
+    generated_at = datetime.now()
+
+    columns: list[tuple[str, float, str]] = [
+        ("Matériel", 0.26, "left"),
+        ("Quantité", 0.1, "right"),
+        ("Taille / Variante", 0.14, "left"),
+        ("Catégorie", 0.16, "left"),
+        ("Fournisseur", 0.16, "left"),
+        ("Péremption", 0.09, "left"),
+        ("Seuil", 0.09, "right"),
+    ]
+
+    table_width = width - 2 * margin
+
+    def start_page(page_number: int) -> float:
+        pdf.setFont("Helvetica-Bold", 16)
+        pdf.drawString(margin, height - margin, "Inventaire remises")
+        pdf.setFont("Helvetica", 10)
+        pdf.drawString(
+            margin,
+            height - margin - 16,
+            f"Généré le {_format_date_label(generated_at.date())} à {generated_at.strftime('%H:%M')}",
+        )
+        pdf.drawString(margin, height - margin - 28, f"Articles listés : {len(items)}")
+        pdf.drawRightString(
+            width - margin,
+            margin,
+            f"Page {page_number}",
+        )
+        return height - margin - 44
+
+    def draw_header(y_position: float) -> float:
+        pdf.setFont("Helvetica-Bold", 9)
+        x = margin
+        for label, ratio, align in columns:
+            if align == "right":
+                pdf.drawRightString(x + ratio * table_width - 2, y_position, label)
+            else:
+                pdf.drawString(x, y_position, label)
+            x += ratio * table_width
+        pdf.setFont("Helvetica", 9)
+        return y_position - row_height
+
+    y = start_page(1)
+    y = draw_header(y)
+    page_number = 1
+
+    for item in items:
+        if y <= margin + row_height:
+            pdf.showPage()
+            page_number += 1
+            y = start_page(page_number)
+            y = draw_header(y)
+
+        supplier_label = supplier_map.get(item.supplier_id or -1, "—") if item.supplier_id else "—"
+        category_label = category_map.get(item.category_id or -1, "—") if item.category_id else "—"
+        expiration_label = _format_date_label(item.expiration_date)
+        threshold_label = "Non suivi" if not item.track_low_stock else str(item.low_stock_threshold)
+        size_label = item.size or "—"
+        name_label = f"{item.name} ({item.sku})" if item.sku else item.name
+
+        values: list[tuple[str, float, str]] = [
+            (name_label, columns[0][1], "left"),
+            (str(item.quantity), columns[1][1], "right"),
+            (size_label, columns[2][1], "left"),
+            (category_label, columns[3][1], "left"),
+            (supplier_label, columns[4][1], "left"),
+            (expiration_label, columns[5][1], "left"),
+            (threshold_label, columns[6][1], "right"),
+        ]
+
+        x = margin
+        for value, ratio, align in values:
+            cell_width = ratio * table_width
+            if align == "right":
+                pdf.drawRightString(x + cell_width - 2, y, value)
+            else:
+                pdf.drawString(x, y, value)
+            x += cell_width
+        y -= row_height
+
+    pdf.save()
+    return buffer.getvalue()
+
+
 def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
     status_label = _PURCHASE_ORDER_STATUS_LABELS.get(order.status, order.status)
     created_at = order.created_at.strftime("%d/%m/%Y %H:%M")
@@ -3629,6 +3728,19 @@ def generate_vehicle_inventory_pdf(
         pointer_targets=pointer_targets,
         options=pdf_options,
         media_root=MEDIA_ROOT,
+    )
+
+
+def generate_remise_inventory_pdf() -> bytes:
+    ensure_database_ready()
+    items = list_remise_items()
+    categories = {category.id: category.name for category in list_remise_categories()}
+    suppliers = {supplier.id: supplier.name for supplier in list_suppliers("inventory_remise")}
+
+    return _render_remise_inventory_pdf(
+        items=items,
+        category_map=categories,
+        supplier_map=suppliers,
     )
 
 
