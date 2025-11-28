@@ -39,6 +39,8 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM dotations")
         conn.execute("DELETE FROM collaborators")
         conn.execute("DELETE FROM suppliers")
+        conn.execute("DELETE FROM pharmacy_lot_items")
+        conn.execute("DELETE FROM pharmacy_lots")
         conn.execute("DELETE FROM pharmacy_items")
         conn.execute("DELETE FROM vehicle_movements")
         conn.execute("DELETE FROM vehicle_items")
@@ -1286,6 +1288,83 @@ def test_pharmacy_movement_management() -> None:
         headers=admin_headers,
     )
     assert missing.status_code == 404
+
+
+def test_pharmacy_lot_allocation_cycle() -> None:
+    admin_headers = _login_headers("admin", "admin123")
+
+    create_item = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Soluté de glucose",
+            "dosage": "5%",
+            "packaging": "500 mL",
+            "barcode": "PHA-LOT-001",
+            "quantity": 10,
+            "low_stock_threshold": 2,
+            "expiration_date": None,
+            "location": "Pharma A",
+            "category_id": None,
+        },
+        headers=admin_headers,
+    )
+    assert create_item.status_code == 201, create_item.text
+    pharmacy_item_id = create_item.json()["id"]
+
+    lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": f"Lot-PHA-{uuid4().hex[:6]}", "description": "Trousse d'urgence"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    assign_resp = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": pharmacy_item_id, "quantity": 4},
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+    lot_item_id = assign_resp.json()["id"]
+
+    lots_listing = client.get("/pharmacy/lots/", headers=admin_headers)
+    assert lots_listing.status_code == 200, lots_listing.text
+    lot_entry = next(entry for entry in lots_listing.json() if entry["id"] == lot_id)
+    assert lot_entry["item_count"] == 1
+    assert lot_entry["total_quantity"] == 4
+
+    with_items = client.get("/pharmacy/lots/with-items", headers=admin_headers)
+    assert with_items.status_code == 200, with_items.text
+    payload = with_items.json()
+    target_lot = next(entry for entry in payload if entry["id"] == lot_id)
+    assert target_lot["items"]
+    assert target_lot["items"][0]["pharmacy_item_id"] == pharmacy_item_id
+    assert target_lot["items"][0]["quantity"] == 4
+
+    update_resp = client.put(
+        f"/pharmacy/lots/{lot_id}/items/{lot_item_id}",
+        json={"quantity": 6},
+        headers=admin_headers,
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    assert update_resp.json()["quantity"] == 6
+
+    overflow = client.put(
+        f"/pharmacy/lots/{lot_id}/items/{lot_item_id}",
+        json={"quantity": 20},
+        headers=admin_headers,
+    )
+    assert overflow.status_code == 400
+
+    cleanup_item = client.delete(
+        f"/pharmacy/lots/{lot_id}/items/{lot_item_id}", headers=admin_headers
+    )
+    assert cleanup_item.status_code == 204
+
+    cleanup_lot = client.delete(f"/pharmacy/lots/{lot_id}", headers=admin_headers)
+    assert cleanup_lot.status_code == 204
+
+    client.delete(f"/pharmacy/{pharmacy_item_id}", headers=admin_headers)
 
 
 def test_pharmacy_category_crud() -> None:

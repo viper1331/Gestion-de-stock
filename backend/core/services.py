@@ -25,6 +25,7 @@ from reportlab.pdfgen import canvas
 from backend.core import db, models, security
 from backend.core.storage import (
     MEDIA_ROOT,
+    PHARMACY_LOT_MEDIA_DIR,
     REMISE_LOT_MEDIA_DIR,
     VEHICLE_CATEGORY_MEDIA_DIR,
     VEHICLE_ITEM_MEDIA_DIR,
@@ -488,6 +489,14 @@ def _ensure_remise_lot_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE remise_lots ADD COLUMN image_path TEXT")
 
 
+def _ensure_pharmacy_lot_columns(conn: sqlite3.Connection) -> None:
+    lot_info = conn.execute("PRAGMA table_info(pharmacy_lots)").fetchall()
+    lot_columns = {row["name"] for row in lot_info}
+
+    if "image_path" not in lot_columns:
+        conn.execute("ALTER TABLE pharmacy_lots ADD COLUMN image_path TEXT")
+
+
 def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
     vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
     vehicle_item_columns = {row["name"] for row in vehicle_item_info}
@@ -654,6 +663,23 @@ def _apply_schema_migrations() -> None:
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             );
             CREATE INDEX IF NOT EXISTS idx_pharmacy_movements_item ON pharmacy_movements(pharmacy_item_id);
+            CREATE TABLE IF NOT EXISTS pharmacy_lots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL,
+                description TEXT,
+                image_path TEXT,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(name)
+            );
+            CREATE TABLE IF NOT EXISTS pharmacy_lot_items (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                lot_id INTEGER NOT NULL REFERENCES pharmacy_lots(id) ON DELETE CASCADE,
+                pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
+                quantity INTEGER NOT NULL CHECK(quantity > 0),
+                UNIQUE(lot_id, pharmacy_item_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_pharmacy_lot_items_lot ON pharmacy_lot_items(lot_id);
+            CREATE INDEX IF NOT EXISTS idx_pharmacy_lot_items_item ON pharmacy_lot_items(pharmacy_item_id);
             CREATE TABLE IF NOT EXISTS vehicle_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
@@ -774,6 +800,7 @@ def _apply_schema_migrations() -> None:
         )
         _ensure_remise_item_columns(conn)
         _ensure_remise_lot_columns(conn)
+        _ensure_pharmacy_lot_columns(conn)
         _ensure_vehicle_category_columns(conn)
         _ensure_vehicle_view_settings_columns(conn)
         _ensure_vehicle_item_columns(conn)
@@ -3144,6 +3171,370 @@ def remove_remise_lot_item(lot_id: int, lot_item_id: int) -> None:
             (lot_item_id, lot_id),
         )
         _persist_after_commit(conn)
+
+
+def _build_pharmacy_lot(row: sqlite3.Row) -> models.PharmacyLot:
+    return models.PharmacyLot(
+        id=row["id"],
+        name=row["name"],
+        description=row["description"],
+        created_at=row["created_at"],
+        image_url=_build_media_url(row["image_path"]),
+        item_count=row["item_count"],
+        total_quantity=row["total_quantity"],
+    )
+
+
+def _require_pharmacy_lot(conn: sqlite3.Connection, lot_id: int) -> None:
+    exists = conn.execute("SELECT 1 FROM pharmacy_lots WHERE id = ?", (lot_id,)).fetchone()
+    if not exists:
+        raise ValueError("Lot introuvable")
+
+
+def list_pharmacy_lots() -> list[models.PharmacyLot]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at,
+                   COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
+            FROM pharmacy_lots AS pl
+            LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
+            GROUP BY pl.id
+            ORDER BY pl.created_at DESC
+            """,
+        ).fetchall()
+    return [_build_pharmacy_lot(row) for row in rows]
+
+
+def get_pharmacy_lot(lot_id: int) -> models.PharmacyLot:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at,
+                   COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
+            FROM pharmacy_lots AS pl
+            LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
+            WHERE pl.id = ?
+            GROUP BY pl.id
+            """,
+            (lot_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Lot introuvable")
+    return _build_pharmacy_lot(row)
+
+
+def list_pharmacy_lots_with_items() -> list[models.PharmacyLotWithItems]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        lot_rows = conn.execute(
+            """
+            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at,
+                   COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
+            FROM pharmacy_lots AS pl
+            LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
+            GROUP BY pl.id
+            ORDER BY pl.created_at DESC
+            """,
+        ).fetchall()
+
+        if not lot_rows:
+            return []
+
+        lot_ids = [row["id"] for row in lot_rows]
+        placeholders = ",".join("?" for _ in lot_ids)
+        item_rows = conn.execute(
+            f"""
+            SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity,
+                   pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku, pi.quantity AS available_quantity
+            FROM pharmacy_lot_items AS pli
+            JOIN pharmacy_items AS pi ON pi.id = pli.pharmacy_item_id
+            WHERE pli.lot_id IN ({placeholders})
+            ORDER BY pli.lot_id, pi.name
+            """,
+            lot_ids,
+        ).fetchall()
+
+    items_by_lot: dict[int, list[models.PharmacyLotItem]] = defaultdict(list)
+    for row in item_rows:
+        items_by_lot[row["lot_id"]].append(_build_pharmacy_lot_item(row))
+
+    lots: list[models.PharmacyLotWithItems] = []
+    for row in lot_rows:
+        lot_model = _build_pharmacy_lot(row)
+        lots.append(
+            models.PharmacyLotWithItems(
+                **lot_model.model_dump(),
+                items=items_by_lot.get(lot_model.id, []),
+            )
+        )
+
+    return lots
+
+
+def create_pharmacy_lot(payload: models.PharmacyLotCreate) -> models.PharmacyLot:
+    ensure_database_ready()
+    description = payload.description.strip() if payload.description else None
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            "INSERT INTO pharmacy_lots (name, description) VALUES (?, ?)",
+            (payload.name.strip(), description),
+        )
+        lot_id = cur.lastrowid
+        _persist_after_commit(conn, "pharmacy")
+    return get_pharmacy_lot(lot_id)
+
+
+def update_pharmacy_lot(lot_id: int, payload: models.PharmacyLotUpdate) -> models.PharmacyLot:
+    ensure_database_ready()
+    assignments: list[str] = []
+    values: list[object] = []
+    if payload.name is not None:
+        assignments.append("name = ?")
+        values.append(payload.name.strip())
+    if payload.description is not None:
+        assignments.append("description = ?")
+        values.append(payload.description.strip() or None)
+    if not assignments:
+        return get_pharmacy_lot(lot_id)
+
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            f"UPDATE pharmacy_lots SET {', '.join(assignments)} WHERE id = ?",
+            (*values, lot_id),
+        )
+        if cur.rowcount == 0:
+            raise ValueError("Lot introuvable")
+        _persist_after_commit(conn, "pharmacy")
+    return get_pharmacy_lot(lot_id)
+
+
+def attach_pharmacy_lot_image(
+    lot_id: int, stream: BinaryIO, filename: str | None
+) -> models.PharmacyLot:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_pharmacy_lot_columns(conn)
+        row = conn.execute(
+            "SELECT image_path FROM pharmacy_lots WHERE id = ?",
+            (lot_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Lot introuvable")
+        previous_path = row["image_path"]
+        stored_path = _store_media_file(PHARMACY_LOT_MEDIA_DIR, stream, filename)
+        conn.execute(
+            "UPDATE pharmacy_lots SET image_path = ? WHERE id = ?",
+            (stored_path, lot_id),
+        )
+        _persist_after_commit(conn, "pharmacy")
+
+    if previous_path:
+        try:
+            (MEDIA_ROOT / previous_path).unlink()
+        except FileNotFoundError:
+            pass
+    return get_pharmacy_lot(lot_id)
+
+
+def remove_pharmacy_lot_image(lot_id: int) -> models.PharmacyLot:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_pharmacy_lot_columns(conn)
+        row = conn.execute(
+            "SELECT image_path FROM pharmacy_lots WHERE id = ?",
+            (lot_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Lot introuvable")
+        if not row["image_path"]:
+            return get_pharmacy_lot(lot_id)
+
+        conn.execute(
+            "UPDATE pharmacy_lots SET image_path = NULL WHERE id = ?",
+            (lot_id,),
+        )
+        _persist_after_commit(conn, "pharmacy")
+
+    if row["image_path"]:
+        try:
+            (MEDIA_ROOT / row["image_path"]).unlink()
+        except FileNotFoundError:
+            pass
+    return get_pharmacy_lot(lot_id)
+
+
+def delete_pharmacy_lot(lot_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _require_pharmacy_lot(conn, lot_id)
+        image_row = conn.execute(
+            "SELECT image_path FROM pharmacy_lots WHERE id = ?",
+            (lot_id,),
+        ).fetchone()
+        conn.execute("DELETE FROM pharmacy_lot_items WHERE lot_id = ?", (lot_id,))
+        conn.execute("DELETE FROM pharmacy_lots WHERE id = ?", (lot_id,))
+        _persist_after_commit(conn, "pharmacy")
+
+    if image_row and image_row["image_path"]:
+        try:
+            (MEDIA_ROOT / image_row["image_path"]).unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _build_pharmacy_lot_item(row: sqlite3.Row) -> models.PharmacyLotItem:
+    return models.PharmacyLotItem(
+        id=row["id"],
+        lot_id=row["lot_id"],
+        pharmacy_item_id=row["pharmacy_item_id"],
+        quantity=row["quantity"],
+        pharmacy_name=row["pharmacy_name"],
+        pharmacy_sku=row["pharmacy_sku"],
+        available_quantity=row["available_quantity"],
+    )
+
+
+def _get_pharmacy_lot_item(
+    conn: sqlite3.Connection, lot_id: int, lot_item_id: int
+) -> sqlite3.Row:
+    row = conn.execute(
+        """
+        SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity,
+               pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku, pi.quantity AS available_quantity
+        FROM pharmacy_lot_items AS pli
+        JOIN pharmacy_items AS pi ON pi.id = pli.pharmacy_item_id
+        WHERE pli.id = ? AND pli.lot_id = ?
+        """,
+        (lot_item_id, lot_id),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Affectation introuvable")
+    return row
+
+
+def _ensure_pharmacy_lot_capacity(
+    conn: sqlite3.Connection,
+    pharmacy_item_id: int,
+    requested_quantity: int,
+    *,
+    exclude_lot_item_id: int | None = None,
+) -> None:
+    item_row = conn.execute(
+        "SELECT quantity FROM pharmacy_items WHERE id = ?",
+        (pharmacy_item_id,),
+    ).fetchone()
+    if item_row is None:
+        raise ValueError("Article de pharmacie introuvable")
+
+    query = "SELECT COALESCE(SUM(quantity), 0) AS reserved FROM pharmacy_lot_items WHERE pharmacy_item_id = ?"
+    params: list[object] = [pharmacy_item_id]
+    if exclude_lot_item_id is not None:
+        query += " AND id != ?"
+        params.append(exclude_lot_item_id)
+
+    reserved_row = conn.execute(query, params).fetchone()
+    reserved_quantity = reserved_row["reserved"] if reserved_row else 0
+    available = item_row["quantity"] - reserved_quantity
+    if requested_quantity > available:
+        raise ValueError("Stock insuffisant en pharmacie pour cette affectation.")
+
+
+def list_pharmacy_lot_items(lot_id: int) -> list[models.PharmacyLotItem]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _require_pharmacy_lot(conn, lot_id)
+        rows = conn.execute(
+            """
+            SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity,
+                   pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku, pi.quantity AS available_quantity
+            FROM pharmacy_lot_items AS pli
+            JOIN pharmacy_items AS pi ON pi.id = pli.pharmacy_item_id
+            WHERE pli.lot_id = ?
+            ORDER BY pi.name
+            """,
+            (lot_id,),
+        ).fetchall()
+    return [_build_pharmacy_lot_item(row) for row in rows]
+
+
+def add_pharmacy_lot_item(
+    lot_id: int, payload: models.PharmacyLotItemBase
+) -> models.PharmacyLotItem:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _require_pharmacy_lot(conn, lot_id)
+        existing = conn.execute(
+            """
+            SELECT id, quantity
+            FROM pharmacy_lot_items
+            WHERE lot_id = ? AND pharmacy_item_id = ?
+            """,
+            (lot_id, payload.pharmacy_item_id),
+        ).fetchone()
+        if existing:
+            new_quantity = existing["quantity"] + payload.quantity
+            _ensure_pharmacy_lot_capacity(
+                conn,
+                payload.pharmacy_item_id,
+                new_quantity,
+                exclude_lot_item_id=existing["id"],
+            )
+            conn.execute(
+                "UPDATE pharmacy_lot_items SET quantity = ? WHERE id = ?",
+                (new_quantity, existing["id"]),
+            )
+            lot_item_id = existing["id"]
+        else:
+            _ensure_pharmacy_lot_capacity(conn, payload.pharmacy_item_id, payload.quantity)
+            cur = conn.execute(
+                "INSERT INTO pharmacy_lot_items (lot_id, pharmacy_item_id, quantity) VALUES (?, ?, ?)",
+                (lot_id, payload.pharmacy_item_id, payload.quantity),
+            )
+            lot_item_id = cur.lastrowid
+        _persist_after_commit(conn, "pharmacy")
+
+    with db.get_stock_connection() as conn:
+        row = _get_pharmacy_lot_item(conn, lot_id, lot_item_id)
+    return _build_pharmacy_lot_item(row)
+
+
+def update_pharmacy_lot_item(
+    lot_id: int, lot_item_id: int, payload: models.PharmacyLotItemUpdate
+) -> models.PharmacyLotItem:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = _get_pharmacy_lot_item(conn, lot_id, lot_item_id)
+        target_quantity = payload.quantity if payload.quantity is not None else row["quantity"]
+        _ensure_pharmacy_lot_capacity(
+            conn,
+            row["pharmacy_item_id"],
+            target_quantity,
+            exclude_lot_item_id=lot_item_id,
+        )
+        if target_quantity != row["quantity"]:
+            conn.execute(
+                "UPDATE pharmacy_lot_items SET quantity = ? WHERE id = ?",
+                (target_quantity, lot_item_id),
+            )
+        _persist_after_commit(conn, "pharmacy")
+
+    with db.get_stock_connection() as conn:
+        updated_row = _get_pharmacy_lot_item(conn, lot_id, lot_item_id)
+    return _build_pharmacy_lot_item(updated_row)
+
+
+def remove_pharmacy_lot_item(lot_id: int, lot_item_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _get_pharmacy_lot_item(conn, lot_id, lot_item_id)
+        conn.execute(
+            "DELETE FROM pharmacy_lot_items WHERE id = ? AND lot_id = ?",
+            (lot_item_id, lot_id),
+        )
+        _persist_after_commit(conn, "pharmacy")
 
 
 def export_items_to_csv(path: Path) -> Path:

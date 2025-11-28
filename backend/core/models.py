@@ -277,6 +277,49 @@ class RemiseLotItem(RemiseLotItemBase):
     available_quantity: int
 
 
+class PharmacyLotBase(BaseModel):
+    name: str = Field(..., min_length=1, max_length=128)
+    description: str | None = Field(default=None, max_length=256)
+
+
+class PharmacyLotCreate(PharmacyLotBase):
+    pass
+
+
+class PharmacyLotUpdate(BaseModel):
+    name: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    description: Optional[str] = Field(default=None, max_length=256)
+
+
+class PharmacyLot(PharmacyLotBase):
+    id: int
+    created_at: datetime
+    image_url: str | None = None
+    item_count: int = 0
+    total_quantity: int = 0
+
+
+class PharmacyLotWithItems(PharmacyLot):
+    items: list["PharmacyLotItem"] = []
+
+
+class PharmacyLotItemBase(BaseModel):
+    pharmacy_item_id: int = Field(..., gt=0)
+    quantity: int = Field(..., gt=0)
+
+
+class PharmacyLotItemUpdate(BaseModel):
+    quantity: Optional[int] = Field(default=None, gt=0)
+
+
+class PharmacyLotItem(PharmacyLotItemBase):
+    id: int
+    lot_id: int
+    pharmacy_name: str
+    pharmacy_sku: str
+    available_quantity: int
+
+
 class VehicleQrInfo(BaseModel):
     item_id: int
     name: str
