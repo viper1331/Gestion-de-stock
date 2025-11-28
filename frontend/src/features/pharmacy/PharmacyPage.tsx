@@ -8,6 +8,7 @@ import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../..
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
+import { PharmacyLotsPanel } from "./PharmacyLotsPanel";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -903,6 +904,7 @@ export function PharmacyPage() {
         ) : null}
       </div>
 
+      <PharmacyLotsPanel canEdit={canEdit} />
       <PharmacyOrdersPanel canEdit={canEdit} />
     </section>
   );
