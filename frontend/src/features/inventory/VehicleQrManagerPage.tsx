@@ -5,6 +5,7 @@ import { isAxiosError } from "axios";
 import { api } from "../../lib/api";
 import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { resolveMediaUrl } from "../../lib/media";
+import { useModuleTitle } from "../../lib/moduleTitles";
 
 type VehicleType = "incendie" | "secours_a_personne";
 
@@ -43,6 +44,7 @@ interface ResourceDraft {
 
 export function VehicleQrManagerPage() {
   const queryClient = useQueryClient();
+  const moduleTitle = useModuleTitle("vehicle_qrcodes");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"vehicle" | "name">("vehicle");
   const [drafts, setDrafts] = useState<Record<string, ResourceDraft>>({});
@@ -459,7 +461,7 @@ export function VehicleQrManagerPage() {
     <div className="space-y-6 p-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
-          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">QR codes véhicules</h1>
+          <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">{moduleTitle}</h1>
           <p className="text-sm text-slate-600 dark:text-slate-300">
             Gérez les liens publics associés au matériel véhicule et exportez un QR code prêt à être affiché.
           </p>

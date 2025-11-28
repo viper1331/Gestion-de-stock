@@ -9,6 +9,7 @@ import {
 } from "../../lib/config";
 import type { ConfigEntry } from "../../lib/config";
 import { useAuth } from "../auth/useAuth";
+import { MODULE_TITLE_DEFAULTS } from "../../lib/moduleTitles";
 import {
   buildHomeConfig,
   DEFAULT_HOME_CONFIG,
@@ -48,8 +49,24 @@ type HomepageFieldType = "text" | "textarea" | "url";
 
 const ENTRY_DESCRIPTIONS: Record<string, string> = {
   "general.inactivity_timeout_minutes":
-    "Durée d'inactivité en minutes avant la déconnexion automatique. Définissez 0 ou laissez vide pour désactiver."
+    "Durée d'inactivité en minutes avant la déconnexion automatique. Définissez 0 ou laissez vide pour désactiver.",
+  "modules.barcode": "Titre principal affiché sur la page des codes-barres.",
+  "modules.clothing": "Titre principal affiché sur l'inventaire habillement.",
+  "modules.dotations": "Titre principal affiché sur la page des dotations.",
+  "modules.inventory_remise": "Titre principal affiché sur l'inventaire remises.",
+  "modules.pharmacy": "Titre principal affiché sur l'inventaire pharmacie.",
+  "modules.suppliers": "Titre principal affiché sur la page fournisseurs.",
+  "modules.vehicle_inventory": "Titre principal affiché sur l'inventaire véhicules.",
+  "modules.vehicle_qrcodes": "Titre principal affiché sur la gestion des QR codes véhicules."
 };
+
+const MODULE_TITLE_ENTRIES: ConfigEntry[] = Object.entries(MODULE_TITLE_DEFAULTS).map(
+  ([key, value]) => ({
+    section: "modules",
+    key,
+    value
+  })
+);
 
 const HOMEPAGE_FIELDS: Array<{
   key: HomePageConfigKey;
@@ -219,8 +236,20 @@ export function SettingsPage() {
     });
   };
 
+  const entriesWithModuleTitles = useMemo(() => {
+    const existingKeys = new Set(entries.map((entry) => `${entry.section}.${entry.key}`));
+    const merged = [...entries];
+    MODULE_TITLE_ENTRIES.forEach((entry) => {
+      const id = `${entry.section}.${entry.key}`;
+      if (!existingKeys.has(id)) {
+        merged.push(entry);
+      }
+    });
+    return merged;
+  }, [entries]);
+
   const groupedEntries = useMemo(() => {
-    return entries
+    return entriesWithModuleTitles
       .filter((entry) => entry.section !== "homepage")
       .reduce<Record<string, ConfigEntry[]>>((acc, entry) => {
         if (!acc[entry.section]) {
@@ -229,7 +258,7 @@ export function SettingsPage() {
         acc[entry.section].push(entry);
         return acc;
       }, {});
-  }, [entries]);
+  }, [entriesWithModuleTitles]);
 
   const personalHomepageMap = useMemo(() => {
     return personalEntries.reduce<Partial<Record<HomePageConfigKey, string>>>((acc, entry) => {

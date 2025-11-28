@@ -5,6 +5,7 @@ import type { AxiosError } from "axios";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { useModuleTitle } from "../../lib/moduleTitles";
 
 interface Collaborator {
   id: number;
@@ -72,6 +73,7 @@ export function DotationsPage() {
 
   const canView = user?.role === "admin" || modulePermissions.canAccess("dotations");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("dotations", "edit");
+  const moduleTitle = useModuleTitle("dotations");
 
   const { data: collaborators = [], isFetching: isFetchingCollaborators } = useQuery({
     queryKey: ["dotations", "collaborators"],
@@ -226,7 +228,7 @@ export function DotationsPage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Dotations</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Distribution de matériel aux collaborateurs.</p>
         </header>
         <p className="text-sm text-slate-400">Vérification des permissions...</p>
@@ -238,7 +240,7 @@ export function DotationsPage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Dotations</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Distribution de matériel aux collaborateurs.</p>
         </header>
         <p className="text-sm text-red-400">Accès refusé.</p>
@@ -322,7 +324,7 @@ export function DotationsPage() {
   return (
     <section className="space-y-6">
       <header className="space-y-1">
-        <h2 className="text-2xl font-semibold text-white">Dotations</h2>
+        <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
         <p className="text-sm text-slate-400">Suivez les dotations et restitutions de matériel.</p>
       </header>
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}

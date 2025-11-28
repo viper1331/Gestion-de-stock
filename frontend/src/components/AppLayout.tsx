@@ -8,6 +8,7 @@ import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
 import { fetchConfigEntries } from "../lib/config";
+import { buildModuleTitleMap } from "../lib/moduleTitles";
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
@@ -20,6 +21,8 @@ export function AppLayout() {
     queryFn: fetchConfigEntries,
     enabled: Boolean(user)
   });
+
+  const moduleTitles = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
 
   const inactivityCooldownMs = useMemo(() => {
     const cooldownEntry = configEntries.find(
@@ -118,7 +121,7 @@ export function AppLayout() {
       const groups: NavGroup[] = [
         {
           id: "code-barres",
-          label: "Codes-barres",
+          label: moduleTitles.barcode,
           tooltip: "Accéder aux outils de codes-barres",
           icon: "🏷️",
           sections: [
@@ -129,7 +132,7 @@ export function AppLayout() {
               links: [
                 {
                   to: "/barcode",
-                  label: "Codes-barres",
+                  label: moduleTitles.barcode,
                   tooltip: "Générer et scanner les codes-barres",
                   icon: "📌",
                   module: "barcode"
@@ -140,7 +143,7 @@ export function AppLayout() {
         },
         {
           id: "habillement",
-          label: "Habillement",
+          label: moduleTitles.clothing,
           tooltip: "Accéder aux fonctionnalités d'habillement",
           icon: "🧥",
           sections: [
@@ -151,7 +154,7 @@ export function AppLayout() {
               links: [
                 {
                   to: "/inventory",
-                  label: "Inventaire habillement",
+                  label: moduleTitles.clothing,
                   tooltip: "Consulter le tableau de bord habillement",
                   icon: "📦",
                   module: "clothing"
@@ -186,7 +189,7 @@ export function AppLayout() {
               links: [
                 {
                   to: "/suppliers",
-                  label: "Fournisseurs",
+                  label: moduleTitles.suppliers,
                   tooltip: "Gérer les fournisseurs d'habillement",
                   icon: "🏭",
                   module: "suppliers"
@@ -200,7 +203,7 @@ export function AppLayout() {
                 },
                 {
                   to: "/dotations",
-                  label: "Dotations",
+                  label: moduleTitles.dotations,
                   tooltip: "Attribuer les dotations d'habillement",
                   icon: "🎯",
                   module: "dotations"
@@ -222,21 +225,21 @@ export function AppLayout() {
               links: [
                 {
                   to: "/vehicle-inventory",
-                  label: "Inventaire véhicules",
+                  label: moduleTitles.vehicle_inventory,
                   tooltip: "Gérer le parc véhicules",
                   icon: "🚗",
                   module: "vehicle_inventory"
                 },
                 {
                   to: "/vehicle-inventory/qr-codes",
-                  label: "QR véhicules",
+                  label: moduleTitles.vehicle_qrcodes,
                   tooltip: "Partager les fiches matériel via QR codes",
                   icon: "🔖",
                   modules: ["vehicle_qrcodes", "vehicle_inventory"]
                 },
                 {
                   to: "/remise-inventory",
-                  label: "Inventaire remises",
+                  label: moduleTitles.inventory_remise,
                   tooltip: "Suivre les stocks mis en remise",
                   icon: "🏢",
                   module: "inventory_remise"
@@ -247,7 +250,7 @@ export function AppLayout() {
         },
         {
           id: "pharmacie",
-          label: "Pharmacie",
+          label: moduleTitles.pharmacy,
           tooltip: "Accéder aux fonctionnalités de pharmacie",
           icon: "💊",
           sections: [
@@ -258,7 +261,7 @@ export function AppLayout() {
               links: [
                 {
                   to: "/pharmacy",
-                  label: "Vue d'ensemble pharmacie",
+                  label: moduleTitles.pharmacy,
                   tooltip: "Consulter le tableau de bord pharmacie",
                   icon: "🏥",
                   module: "pharmacy"
@@ -367,7 +370,7 @@ export function AppLayout() {
         }))
         .filter((group) => group.sections.length > 0);
     },
-    [modulePermissions.canAccess, user]
+    [modulePermissions.canAccess, moduleTitles, user]
   );
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
