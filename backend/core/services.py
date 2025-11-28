@@ -3968,7 +3968,8 @@ def _render_remise_inventory_pdf(
     pdf = canvas.Canvas(buffer, pagesize=page_size)
     width, height = page_size
     margin = 14 * mm
-    row_height = 22
+    base_row_padding = 10
+    line_height = 12
     header_height = 24
     text_color = colors.Color(0.91, 0.93, 0.97)
     background_color = colors.Color(0.043, 0.059, 0.102)
@@ -3989,15 +3990,53 @@ def _render_remise_inventory_pdf(
     table_width = width - 2 * margin
     generated_at = datetime.now()
 
-    def _truncate(value: str, max_width: float, font_name: str, font_size: float) -> str:
-        ellipsis = "…"
-        if pdfmetrics.stringWidth(value, font_name, font_size) <= max_width:
-            return value
-        for i in range(len(value), 0, -1):
-            truncated = value[:i] + ellipsis
-            if pdfmetrics.stringWidth(truncated, font_name, font_size) <= max_width:
-                return truncated
-        return ellipsis
+    def _wrap_to_width(value: str, max_width: float, font_name: str, font_size: float) -> list[str]:
+        """Wrap a text value to fit within the provided width.
+
+        The function keeps whole words when possible and falls back to splitting long
+        tokens to avoid truncation, ensuring all lot names remain fully visible in the
+        PDF.
+        """
+
+        def _split_long_word(word: str) -> list[str]:
+            parts: list[str] = []
+            current = ""
+            for char in word:
+                if pdfmetrics.stringWidth(current + char, font_name, font_size) <= max_width:
+                    current += char
+                else:
+                    if current:
+                        parts.append(current)
+                    current = char
+            if current:
+                parts.append(current)
+            return parts or [word]
+
+        words = value.split()
+        if not words:
+            return [""]
+
+        lines: list[str] = []
+        current_line = ""
+
+        for word in words:
+            word_parts = (
+                _split_long_word(word)
+                if pdfmetrics.stringWidth(word, font_name, font_size) > max_width
+                else [word]
+            )
+            for part in word_parts:
+                candidate = f"{current_line} {part}".strip()
+                if current_line and pdfmetrics.stringWidth(candidate, font_name, font_size) > max_width:
+                    lines.append(current_line)
+                    current_line = part
+                else:
+                    current_line = candidate
+
+        if current_line:
+            lines.append(current_line)
+
+        return lines or [value]
 
     def _format_cell(value: str | None) -> str:
         value = value or "-"
@@ -4042,12 +4081,6 @@ def _render_remise_inventory_pdf(
     page_number = 1
 
     for index, item in enumerate(items):
-        if y <= margin + row_height:
-            pdf.showPage()
-            page_number += 1
-            y = start_page(page_number)
-            y = draw_header(y)
-
         category_label = _format_cell(category_map.get(item.category_id or -1, None) if item.category_id else None)
         lots_label = _format_cell(
             ", ".join(item.lot_names) if item.lot_names else None
@@ -4068,19 +4101,37 @@ def _render_remise_inventory_pdf(
             (threshold_label, columns[6][1], "center"),
         ]
 
+        wrapped_values: list[tuple[list[str], float, str]] = []
+        max_line_count = 1
+        for value, ratio, align in values:
+            cell_width = ratio * table_width
+            lines = _wrap_to_width(str(value), cell_width - 8, "Helvetica", 9)
+            max_line_count = max(max_line_count, len(lines))
+            wrapped_values.append((lines, cell_width, align))
+
+        row_height = max_line_count * line_height + base_row_padding
+
+        if y <= margin + row_height:
+            pdf.showPage()
+            page_number += 1
+            y = start_page(page_number)
+            y = draw_header(y)
+
         pdf.setFillColor(row_alt_bg_color if index % 2 else row_bg_color)
         pdf.rect(margin, y - row_height + 6, table_width, row_height, stroke=0, fill=1)
         pdf.setFillColor(text_color)
 
         x = margin
-        for value, ratio, align in values:
-            cell_width = ratio * table_width
-            text_value = _truncate(str(value), cell_width - 8, "Helvetica", 9)
-            if align == "center":
-                pdf.drawCentredString(x + cell_width / 2, y - 8, text_value)
-            else:
-                pdf.drawString(x + 4, y - 8, text_value)
+        for lines, cell_width, align in wrapped_values:
+            text_y = y - 8
+            for line in lines:
+                if align == "center":
+                    pdf.drawCentredString(x + cell_width / 2, text_y, line)
+                else:
+                    pdf.drawString(x + 4, text_y, line)
+                text_y -= line_height
             x += cell_width
+
         y -= row_height
 
     pdf.save()
