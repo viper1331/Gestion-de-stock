@@ -97,6 +97,15 @@ npm install
 npm run tauri dev
 ```
 
+## Configuration Git
+Si le dépôt a été récupéré sans informations de remote (par exemple via une archive ZIP), ajoutez l'origine GitHub avant de lancer
+un `git pull` :
+
+```bash
+git remote add origin https://github.com/viper1331/Gestion-de-stock.git
+git pull --ff-only origin main
+```
+
 ## Commandes de lancement simplifiées
 Si vous souhaitez démarrer rapidement les deux parties sans répéter toutes les étapes manuelles ci-dessus, deux scripts sont
 disponibles à la racine du projet :
