@@ -4,6 +4,7 @@ import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { useModuleTitle } from "../../lib/moduleTitles";
 
 const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
 
@@ -13,6 +14,7 @@ export function BarcodePage() {
   const canView = user?.role === "admin" || modulePermissions.canAccess("barcode");
   const canEdit =
     user?.role === "admin" || modulePermissions.canAccess("barcode", "edit");
+  const moduleTitle = useModuleTitle("barcode");
 
   const [sku, setSku] = useState(DEFAULT_SKU_PLACEHOLDER);
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -274,7 +276,7 @@ export function BarcodePage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Codes-barres</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
         </header>
         <p className="text-sm text-slate-400">Vérification des permissions...</p>
@@ -286,7 +288,7 @@ export function BarcodePage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Codes-barres</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
         </header>
         <p className="text-sm text-red-400">Accès refusé.</p>
@@ -297,7 +299,7 @@ export function BarcodePage() {
   return (
     <section className="space-y-6">
       <header className="space-y-1">
-        <h2 className="text-2xl font-semibold text-white">Codes-barres</h2>
+        <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
         <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
       </header>
       <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-4">

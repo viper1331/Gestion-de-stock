@@ -20,6 +20,7 @@ import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
+import { useModuleTitle } from "../../lib/moduleTitles";
 
 interface VehicleViewConfig {
   name: string;
@@ -198,6 +199,7 @@ function readPointerTargetsFromStorage(storageKey: string): PointerTargetMap {
 
 export function VehicleInventoryPage() {
   const queryClient = useQueryClient();
+  const moduleTitle = useModuleTitle("vehicle_inventory");
   const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
   const [selectedView, setSelectedView] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
@@ -1017,7 +1019,7 @@ export function VehicleInventoryPage() {
           <div className="space-y-2">
             <div>
               <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
-                Inventaire véhicules
+                {moduleTitle}
               </h1>
               <p className="mt-1 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
                 Visualisez chaque véhicule sous forme de vue interactive et organisez son matériel

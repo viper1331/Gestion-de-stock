@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { useModuleTitle } from "../../lib/moduleTitles";
 
 const DEFAULT_SUPPLIER_MODULE = "suppliers";
 
@@ -56,6 +57,7 @@ export function SuppliersPage() {
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const canView = user?.role === "admin" || modulePermissions.canAccess("suppliers");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("suppliers", "edit");
+  const moduleTitle = useModuleTitle("suppliers");
 
   const { data: suppliers = [], isFetching } = useQuery({
     queryKey: ["suppliers", "all"],
@@ -143,7 +145,7 @@ export function SuppliersPage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Fournisseurs</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Gestion de vos contacts fournisseurs.</p>
         </header>
         <p className="text-sm text-slate-400">Vérification des permissions...</p>
@@ -155,7 +157,7 @@ export function SuppliersPage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Fournisseurs</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Gestion de vos contacts fournisseurs.</p>
         </header>
         <p className="text-sm text-red-400">Accès refusé.</p>
@@ -196,7 +198,7 @@ export function SuppliersPage() {
     <section className="space-y-6">
       <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">Fournisseurs</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Coordonnées et suivi des partenaires.</p>
         </div>
         {canEdit ? (

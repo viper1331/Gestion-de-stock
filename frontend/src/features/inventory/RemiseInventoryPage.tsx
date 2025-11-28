@@ -1,6 +1,9 @@
+import { useMemo } from "react";
+
 import { InventoryModuleDashboard } from "./InventoryModuleDashboard";
 import { RemiseLotsPanel } from "./RemiseLotsPanel";
 import { type InventoryModuleConfig } from "./config";
+import { useModuleTitle } from "../../lib/moduleTitles";
 
 const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   title: "Inventaire remises",
@@ -36,9 +39,15 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
 };
 
 export function RemiseInventoryPage() {
+  const moduleTitle = useModuleTitle("inventory_remise");
+  const config = useMemo(
+    () => ({ ...REMISE_INVENTORY_CONFIG, title: moduleTitle }),
+    [moduleTitle]
+  );
+
   return (
     <div className="space-y-6">
-      <InventoryModuleDashboard config={REMISE_INVENTORY_CONFIG} />
+      <InventoryModuleDashboard config={config} />
       <RemiseLotsPanel />
     </div>
   );

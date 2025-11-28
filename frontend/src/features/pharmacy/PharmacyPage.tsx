@@ -9,6 +9,7 @@ import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
 import { PharmacyLotsPanel } from "./PharmacyLotsPanel";
+import { useModuleTitle } from "../../lib/moduleTitles";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -173,6 +174,7 @@ export function PharmacyPage() {
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const canView = user?.role === "admin" || modulePermissions.canAccess("pharmacy");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("pharmacy", "edit");
+  const moduleTitle = useModuleTitle("pharmacy");
 
   const { data: items = [], isFetching } = useQuery({
     queryKey: ["pharmacy"],
@@ -374,7 +376,7 @@ export function PharmacyPage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Pharmacie</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Suivi des stocks pharmaceutiques.</p>
         </header>
         <p className="text-sm text-slate-400">Vérification des permissions...</p>
@@ -386,7 +388,7 @@ export function PharmacyPage() {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Pharmacie</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Suivi des stocks pharmaceutiques.</p>
         </header>
         <p className="text-sm text-red-400">Accès refusé.</p>
@@ -453,7 +455,7 @@ export function PharmacyPage() {
     <section className="space-y-6">
       <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
-          <h2 className="text-2xl font-semibold text-white">Pharmacie</h2>
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
           <p className="text-sm text-slate-400">Gérez vos médicaments et consommables médicaux.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
