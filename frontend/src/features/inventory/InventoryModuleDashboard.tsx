@@ -35,12 +35,16 @@ interface Item {
   size: string | null;
   quantity: number;
   low_stock_threshold: number;
-   track_low_stock: boolean;
+  track_low_stock: boolean;
   supplier_id: number | null;
   expiration_date: string | null;
   remise_item_id: number | null;
   remise_quantity?: number | null;
   image_url: string | null;
+  lot_id?: number | null;
+  lot_name?: string | null;
+  lot_names?: string[];
+  is_in_lot?: boolean;
   vehicle_type: VehicleType | null;
   assigned_vehicle_names?: string[];
 }
@@ -109,6 +113,7 @@ type InventoryColumnKey =
   | "quantity"
   | "size"
   | "category"
+  | "lotMembership"
   | "vehicleType"
   | "supplier"
   | "threshold"
@@ -345,6 +350,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     quantity: 100,
     size: 140,
     category: 150,
+    lotMembership: 160,
     vehicleType: 180,
     supplier: 180,
     threshold: 120,
@@ -358,6 +364,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     quantity: true,
     size: true,
     category: true,
+    lotMembership: Boolean(config.showLotMembershipColumn),
     vehicleType: Boolean(config.showVehicleTypeColumn),
     supplier: true,
     threshold: true,
@@ -400,6 +407,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       { key: "quantity", label: "Quantité" },
       { key: "size", label: "Taille / Variante" },
       { key: "category", label: "Catégorie" },
+      ...(config.showLotMembershipColumn
+        ? ([{ key: "lotMembership", label: "Lot" }] as const)
+        : []),
       ...(config.showVehicleTypeColumn
         ? ([{ key: "vehicleType", label: "Catégorie véhicule" }] as const)
         : []),
@@ -672,6 +682,13 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         onResize={(value) => saveWidth("category", value)}
                       />
                     ) : null}
+                    {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
+                      <ResizableHeader
+                        label="Lot(s)"
+                        width={columnWidths.lotMembership}
+                        onResize={(value) => saveWidth("lotMembership", value)}
+                      />
+                    ) : null}
                     {config.showVehicleTypeColumn && columnVisibility.vehicleType !== false ? (
                       <ResizableHeader
                         label="Catégorie véhicule"
@@ -720,6 +737,12 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                       selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
                     const imageUrl = resolveMediaUrl(item.image_url);
                     const hasImage = Boolean(imageUrl);
+                    const lotNames = item.lot_names?.filter((name) => name.trim().length > 0) ?? [];
+                    const isInLot =
+                      item.is_in_lot ?? lotNames.length > 0 || Boolean(item.lot_id) || Boolean(item.lot_name);
+                    const lotLabel = lotNames.length
+                      ? lotNames.join(", ")
+                      : item.lot_name ?? (isInLot && item.lot_id ? `Lot #${item.lot_id}` : isInLot ? "Oui" : "Aucun");
 
                     return (
                       <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
@@ -782,6 +805,18 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                                   Affecté à : {item.assigned_vehicle_names.join(", ")}
                                 </p>
                               ) : null}
+                            </div>
+                          </td>
+                        ) : null}
+                        {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
+                          <td className="px-4 py-3 text-sm text-slate-300">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span>{lotLabel}</span>
+                              <span
+                                className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isInLot ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200" : "border-slate-600 bg-slate-800 text-slate-300"}`}
+                              >
+                                {isInLot ? "Associé" : "Aucun"}
+                              </span>
                             </div>
                           </td>
                         ) : null}

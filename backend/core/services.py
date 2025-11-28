@@ -1023,6 +1023,11 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     lot_name = None
     if "lot_name" in row.keys():
         lot_name = row["lot_name"]
+    lot_names: list[str] = []
+    lot_names_raw = row["lot_names"] if "lot_names" in row.keys() else None
+    if lot_names_raw:
+        lot_names = [name.strip() for name in str(lot_names_raw).split(",") if name and name.strip()]
+    lot_count = row["lot_count"] if "lot_count" in row.keys() else None
     name = row["pharmacy_name"] if "pharmacy_name" in row.keys() and row["pharmacy_name"] else None
     if not name:
         name = row["remise_name"] if "remise_name" in row.keys() and row["remise_name"] else row["name"]
@@ -1079,6 +1084,8 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         qr_token=qr_token,
         lot_id=lot_id,
         lot_name=lot_name,
+        lot_names=lot_names,
+        is_in_lot=bool(lot_id) or bool(lot_names) or bool(lot_count),
         show_in_qr=show_in_qr,
         vehicle_type=row["vehicle_type"] if "vehicle_type" in row.keys() else None,
         assigned_vehicle_names=assigned_vehicle_names,
@@ -1117,7 +1124,8 @@ def _list_inventory_items_internal(
         query += " ORDER BY COALESCE(ri.name, vi.name) COLLATE NOCASE"
     elif module == "inventory_remise":
         query = (
-            "SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names "
+            "SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names, "
+            "lot_memberships.lot_names, lot_memberships.lot_count "
             "FROM remise_items AS ri "
             "LEFT JOIN ("
             "  SELECT vi.remise_item_id, GROUP_CONCAT(DISTINCT vc.name) AS vehicle_names "
@@ -1125,7 +1133,14 @@ def _list_inventory_items_internal(
             "  JOIN vehicle_categories AS vc ON vc.id = vi.category_id "
             "  WHERE vi.remise_item_id IS NOT NULL "
             "  GROUP BY vi.remise_item_id"
-            ") AS assignments ON assignments.remise_item_id = ri.id"
+            ") AS assignments ON assignments.remise_item_id = ri.id "
+            "LEFT JOIN ("
+            "  SELECT rli.remise_item_id, GROUP_CONCAT(DISTINCT rl.name) AS lot_names, "
+            "         COUNT(DISTINCT rl.id) AS lot_count "
+            "  FROM remise_lot_items AS rli "
+            "  JOIN remise_lots AS rl ON rl.id = rli.lot_id "
+            "  GROUP BY rli.remise_item_id"
+            ") AS lot_memberships ON lot_memberships.remise_item_id = ri.id"
         )
         if search:
             query += " WHERE ri.name LIKE ? OR ri.sku LIKE ?"
@@ -1170,7 +1185,8 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
         elif module == "inventory_remise":
             cur = conn.execute(
                 """
-                SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names
+                SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names,
+                       lot_memberships.lot_names, lot_memberships.lot_count
                 FROM remise_items AS ri
                 LEFT JOIN (
                     SELECT vi.remise_item_id, GROUP_CONCAT(DISTINCT vc.name) AS vehicle_names
@@ -1179,6 +1195,13 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
                     WHERE vi.remise_item_id IS NOT NULL
                     GROUP BY vi.remise_item_id
                 ) AS assignments ON assignments.remise_item_id = ri.id
+                LEFT JOIN (
+                    SELECT rli.remise_item_id, GROUP_CONCAT(DISTINCT rl.name) AS lot_names,
+                           COUNT(DISTINCT rl.id) AS lot_count
+                    FROM remise_lot_items AS rli
+                    JOIN remise_lots AS rl ON rl.id = rli.lot_id
+                    GROUP BY rli.remise_item_id
+                ) AS lot_memberships ON lot_memberships.remise_item_id = ri.id
                 WHERE ri.id = ?
                 """,
                 (item_id,),
