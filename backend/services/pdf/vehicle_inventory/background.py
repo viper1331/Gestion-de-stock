@@ -46,15 +46,26 @@ def draw_background(
     bounds: tuple[float, float, float, float],
     style_engine: PdfStyleEngine,
 ) -> tuple[float, float, float, float]:
-    """Draw the background photo inside the provided bounds with overlay."""
+    """Draw the compartment photo centered in a 16:9 frame without overlay."""
 
     x, y, width, height = bounds
-    scale = min(width / background.width, height / background.height)
+    target_ratio = 16 / 9
+
+    target_width = width
+    target_height = target_width / target_ratio
+    if target_height > height:
+        target_height = height
+        target_width = target_height * target_ratio
+
+    frame_x = x + (width - target_width) / 2
+    frame_y = y + (height - target_height) / 2
+
+    scale = min(target_width / background.width, target_height / background.height)
     drawn_width = background.width * scale
     drawn_height = background.height * scale
 
-    image_x = x + (width - drawn_width) / 2
-    image_y = y + (height - drawn_height) / 2
+    image_x = frame_x + (target_width - drawn_width) / 2
+    image_y = frame_y + (target_height - drawn_height) / 2
 
     canvas.drawImage(
         background.reader,
@@ -65,10 +76,5 @@ def draw_background(
         preserveAspectRatio=True,
         mask="auto",
     )
-
-    canvas.saveState()
-    canvas.setFillColor(style_engine.color("overlay"))
-    canvas.rect(x, y, width, height, stroke=0, fill=1)
-    canvas.restoreState()
 
     return image_x, image_y, drawn_width, drawn_height

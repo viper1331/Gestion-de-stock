@@ -21,27 +21,23 @@ class PdfStyleEngine:
 
     # palettes inspired by Tailwind-like UI
     _palette = {
-        "background": colors.HexColor("#0B1220"),
-        "surface": colors.HexColor("#0F172A"),
-        "overlay": colors.Color(0, 0, 0, alpha=0.35),
-        "bubble": colors.HexColor("#0F172A"),
-        "bubble_border": colors.HexColor("#1E293B"),
+        "page_background": colors.HexColor("#0A0F18"),
+        "background": colors.HexColor("#0D1625"),
+        "surface": colors.HexColor("#0F1E36"),
+        "overlay": colors.Color(0, 0, 0, alpha=0.0),
+        "bubble": colors.HexColor("#0F1E36"),
+        "bubble_border": colors.HexColor("#0F1E36"),
         "text": colors.white,
-        "muted": colors.HexColor("#CBD5E1"),
-        "accent": colors.HexColor("#3B82F6"),
+        "muted": colors.HexColor("#D8E2F0"),
+        "accent": colors.HexColor("#5EA7FF"),
         "badge_text": colors.white,
-        "shadow": colors.Color(0, 0, 0, alpha=0.35),
-        "header_band": colors.HexColor("#0F172A"),
-        "footer": colors.HexColor("#1E293B"),
-        "point_fill": colors.HexColor("#5EA7FF"),
+        "shadow": colors.Color(0.03, 0.20, 0.39, alpha=0.55),
+        "header_band": colors.HexColor("#0D1625"),
+        "footer": colors.HexColor("#0D1625"),
+        "point_fill": colors.HexColor("#9BC9FF"),
     }
 
-    _premium_palette = {
-        **_palette,
-        "background": colors.HexColor("#0b1020"),
-        "header_band": colors.HexColor("#0a1329"),
-        "surface": colors.HexColor("#0d1b36"),
-    }
+    _premium_palette = _palette
 
     def color(self, name: str):
         palette = self._premium_palette if self.theme == "premium" else self._palette
@@ -50,10 +46,10 @@ class PdfStyleEngine:
     @property
     def margins(self) -> tuple[float, float, float, float]:
         # left, top, bottom, right
-        return 30, 20, 24, 30
+        return 22, 22, 22, 22
 
     def header_height(self) -> float:
-        return 48 if self.theme == "premium" else 40
+        return 40
 
     def footer_height(self) -> float:
         return 32
@@ -62,13 +58,13 @@ class PdfStyleEngine:
         base = "Inter" if self._use_custom_font else "Helvetica"
         bold = "Inter-Bold" if self._use_custom_font else "Helvetica-Bold"
         if role == "title":
-            return bold, 16
+            return bold, 18
         if role == "subtitle":
-            return base, 10
+            return base, 12
         if role == "body":
-            return base, 9
+            return base, 10
         if role == "small":
-            return base, 8
+            return base, 9
         return base, 9
 
     def _register_fonts(self) -> None:

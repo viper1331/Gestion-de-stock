@@ -9,7 +9,7 @@ from backend.core import models
 from .layout import build_plan, render_page
 from .models import VehiclePdfOptions
 from .style_engine import PdfStyleEngine
-from .utils import PageCounter, PdfBuffer, content_bounds, format_date, page_size_for_orientation
+from .utils import PageCounter, PdfBuffer, format_date, page_size_for_orientation
 
 
 def render_vehicle_inventory_pdf(
