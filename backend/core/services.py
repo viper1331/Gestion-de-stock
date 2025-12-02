@@ -1133,7 +1133,7 @@ def _list_inventory_items_internal(
     if module == "vehicle_inventory":
         query = (
             "SELECT vi.*, "
-            "COALESCE(ri.size, vi.size) AS resolved_size, "
+            "COALESCE(vi.size, ri.size) AS resolved_size, "
             "ri.name AS remise_name, "
             "ri.sku AS remise_sku, "
             "ri.supplier_id AS remise_supplier_id, "
@@ -1201,7 +1201,7 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
         if module == "vehicle_inventory":
             cur = conn.execute(
                 """
-                SELECT vi.*, COALESCE(ri.size, vi.size) AS resolved_size, ri.name AS remise_name, ri.sku AS remise_sku,
+                SELECT vi.*, COALESCE(vi.size, ri.size) AS resolved_size, ri.name AS remise_name, ri.sku AS remise_sku,
                        ri.supplier_id AS remise_supplier_id, ri.quantity AS remise_quantity, pi.name AS pharmacy_name,
                        pi.barcode AS pharmacy_sku, pi.quantity AS pharmacy_quantity, rl.name AS lot_name
                 FROM vehicle_items AS vi
