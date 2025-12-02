@@ -4236,6 +4236,11 @@ def generate_vehicle_inventory_pdf(
     generated_at = datetime.now()
     pdf_options = VehiclePdfOptions(**(options.dict() if options else {}))
 
+    if pdf_options.category_ids:
+        allowed_ids = set(pdf_options.category_ids)
+        categories = [category for category in categories if category.id in allowed_ids]
+        items = [item for item in items if item.category_id in allowed_ids]
+
     return render_vehicle_inventory_pdf(
         categories=categories,
         items=items,
