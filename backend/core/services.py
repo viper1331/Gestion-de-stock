@@ -2892,7 +2892,7 @@ def list_remise_lots_with_items() -> list[models.RemiseLotWithItems]:
         item_rows = conn.execute(
             f"""
             SELECT rli.id, rli.lot_id, rli.remise_item_id, rli.quantity,
-                   ri.name AS remise_name, ri.sku AS remise_sku, ri.quantity AS available_quantity
+                   ri.name AS remise_name, ri.sku AS remise_sku, ri.size AS size, ri.quantity AS available_quantity
             FROM remise_lot_items AS rli
             JOIN remise_items AS ri ON ri.id = rli.remise_item_id
             WHERE rli.lot_id IN ({placeholders})
@@ -3026,6 +3026,7 @@ def _build_remise_lot_item(row: sqlite3.Row) -> models.RemiseLotItem:
         quantity=row["quantity"],
         remise_name=row["remise_name"],
         remise_sku=row["remise_sku"],
+        size=row["size"],
         available_quantity=row["available_quantity"],
     )
 
@@ -3036,7 +3037,7 @@ def _get_remise_lot_item(
     row = conn.execute(
         """
         SELECT rli.id, rli.lot_id, rli.remise_item_id, rli.quantity,
-               ri.name AS remise_name, ri.sku AS remise_sku, ri.quantity AS available_quantity
+               ri.name AS remise_name, ri.sku AS remise_sku, ri.size AS size, ri.quantity AS available_quantity
         FROM remise_lot_items AS rli
         JOIN remise_items AS ri ON ri.id = rli.remise_item_id
         WHERE rli.id = ? AND rli.lot_id = ?
@@ -3087,7 +3088,7 @@ def list_remise_lot_items(lot_id: int) -> list[models.RemiseLotItem]:
         rows = conn.execute(
             """
             SELECT rli.id, rli.lot_id, rli.remise_item_id, rli.quantity,
-                   ri.name AS remise_name, ri.sku AS remise_sku, ri.quantity AS available_quantity
+                   ri.name AS remise_name, ri.sku AS remise_sku, ri.size AS size, ri.quantity AS available_quantity
             FROM remise_lot_items AS rli
             JOIN remise_items AS ri ON ri.id = rli.remise_item_id
             WHERE rli.lot_id = ?

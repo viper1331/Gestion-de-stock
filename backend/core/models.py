@@ -274,6 +274,7 @@ class RemiseLotItem(RemiseLotItemBase):
     lot_id: int
     remise_name: str
     remise_sku: str
+    size: Optional[str] = None
     available_quantity: int
 
 
