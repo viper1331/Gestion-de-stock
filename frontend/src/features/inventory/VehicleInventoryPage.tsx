@@ -144,6 +144,16 @@ type DraggedItemData = {
   lotName?: string | null;
 };
 
+function writeDraggedItemData(
+  event: DragEvent<HTMLElement>,
+  payload: DraggedItemData
+) {
+  const serialized = JSON.stringify(payload);
+  event.dataTransfer.setData("application/json", serialized);
+  // text/plain is required in some browsers to keep drag payloads readable on drop targets
+  event.dataTransfer.setData("text/plain", serialized);
+}
+
 type Feedback = { type: "success" | "error"; text: string };
 
 type PointerTarget = { x: number; y: number };
@@ -2504,22 +2514,19 @@ function VehicleItemMarker({
 
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
     const rect = event.currentTarget.getBoundingClientRect();
-        event.dataTransfer.setData(
-          "application/json",
-          JSON.stringify({
-            itemId: entry.primaryItemId ?? undefined,
-            categoryId: entry.category_id,
-            remiseItemId: entry.remise_item_id,
-            pharmacyItemId: entry.pharmacy_item_id,
-            lotId: entry.lot_id,
-            lotName: entry.lot_name,
-            assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
-            offsetX: event.clientX - rect.left,
-            offsetY: event.clientY - rect.top,
-        elementWidth: rect.width,
-        elementHeight: rect.height
-      })
-    );
+    writeDraggedItemData(event, {
+      itemId: entry.primaryItemId ?? undefined,
+      categoryId: entry.category_id,
+      remiseItemId: entry.remise_item_id,
+      pharmacyItemId: entry.pharmacy_item_id,
+      lotId: entry.lot_id,
+      lotName: entry.lot_name,
+      assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
+      offsetX: event.clientX - rect.left,
+      offsetY: event.clientY - rect.top,
+      elementWidth: rect.width,
+      elementHeight: rect.height
+    });
     event.dataTransfer.effectAllowed = "move";
   };
 
@@ -2932,10 +2939,7 @@ function DroppableLibrary({
                       title={lotTooltip}
                       draggable
                       onDragStart={(event) => {
-                        event.dataTransfer.setData(
-                          "application/json",
-                          JSON.stringify({ lotId: lot.id, lotName: lot.name })
-                        );
+                        writeDraggedItemData(event, { lotId: lot.id, lotName: lot.name });
                         event.dataTransfer.effectAllowed = "copyMove";
                       }}
                       className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
@@ -3239,21 +3243,18 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition, onUpdateQuanti
           return;
         }
         const rect = event.currentTarget.getBoundingClientRect();
-        event.dataTransfer.setData(
-            "application/json",
-            JSON.stringify({
-              itemId: item.id,
-              categoryId: item.category_id,
-              remiseItemId: item.remise_item_id,
-              pharmacyItemId: item.pharmacy_item_id,
-              lotId: item.lot_id,
-              lotName: item.lot_name,
-              offsetX: event.clientX - rect.left,
-              offsetY: event.clientY - rect.top,
-              elementWidth: rect.width,
-            elementHeight: rect.height
-          })
-        );
+        writeDraggedItemData(event, {
+          itemId: item.id,
+          categoryId: item.category_id,
+          remiseItemId: item.remise_item_id,
+          pharmacyItemId: item.pharmacy_item_id,
+          lotId: item.lot_id,
+          lotName: item.lot_name,
+          offsetX: event.clientX - rect.left,
+          offsetY: event.clientY - rect.top,
+          elementWidth: rect.width,
+          elementHeight: rect.height
+        });
         event.dataTransfer.effectAllowed = "move";
       }}
     >
@@ -3584,7 +3585,9 @@ function computeLotAveragePosition(
 }
 
 function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | null {
-  const rawData = event.dataTransfer.getData("application/json");
+  const rawData =
+    event.dataTransfer.getData("application/json") ||
+    event.dataTransfer.getData("text/plain");
   if (!rawData) {
     return null;
   }
