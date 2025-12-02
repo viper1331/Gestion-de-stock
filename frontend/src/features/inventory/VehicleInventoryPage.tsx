@@ -218,6 +218,8 @@ export function VehicleInventoryPage() {
   const [editedVehicleImageFile, setEditedVehicleImageFile] = useState<File | null>(null);
   const editedVehicleImageInputRef = useRef<HTMLInputElement | null>(null);
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
+  const [isAddingSubView, setIsAddingSubView] = useState(false);
+  const [newSubViewName, setNewSubViewName] = useState("");
 
   const {
     data: vehicles = [],
@@ -651,6 +653,11 @@ export function VehicleInventoryPage() {
     }
   }, [selectedVehicleId]);
 
+  useEffect(() => {
+    setIsAddingSubView(false);
+    setNewSubViewName("");
+  }, [selectedVehicleId]);
+
   const normalizedSelectedView = useMemo(
     () => (selectedView ? normalizeViewName(selectedView) : null),
     [selectedView]
@@ -667,6 +674,53 @@ export function VehicleInventoryPage() {
     const viewIdentifier = normalizeViewName(normalizedSelectedView).replace(/\s+/g, "-");
     return `vehicleInventory:itemsPanel:${vehicleIdentifier}:${viewIdentifier}`;
   }, [selectedVehicle?.id, normalizedSelectedView]);
+
+  const createSubviewForSelectedView = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+
+    if (!selectedVehicle) {
+      pushFeedback({ type: "error", text: "Sélectionnez d'abord un véhicule." });
+      return;
+    }
+
+    const parentView = normalizeViewName(selectedView ?? DEFAULT_VIEW_LABEL);
+    const trimmedSubView = newSubViewName.trim();
+    if (!trimmedSubView) {
+      pushFeedback({ type: "error", text: "Le nom de la sous-vue est obligatoire." });
+      return;
+    }
+
+    const normalizedSubView = normalizeViewName(trimmedSubView);
+    const composedName = `${parentView} - ${normalizedSubView}`;
+
+    const currentViews = selectedVehicle.view_configs?.length
+      ? selectedVehicle.view_configs.map((entry) => normalizeViewName(entry.name))
+      : selectedVehicle.sizes.map((entry) => normalizeViewName(entry));
+
+    if (currentViews.some((view) => view === composedName)) {
+      pushFeedback({ type: "error", text: "Cette sous-vue existe déjà pour ce véhicule." });
+      return;
+    }
+
+    const updatedViews = Array.from(new Set([...currentViews, composedName]));
+
+    updateVehicle.mutate(
+      {
+        categoryId: selectedVehicle.id,
+        name: selectedVehicle.name,
+        sizes: updatedViews,
+        vehicleType: selectedVehicle.vehicle_type ?? "incendie"
+      },
+      {
+        onSuccess: () => {
+          setNewSubViewName("");
+          setIsAddingSubView(false);
+          setSelectedView(composedName);
+          pushFeedback({ type: "success", text: "Sous-vue ajoutée." });
+        }
+      }
+    );
+  };
 
   const selectedViewConfig = useMemo(() => {
     if (!selectedVehicle?.view_configs || !normalizedSelectedView) {
@@ -1352,6 +1406,53 @@ export function VehicleInventoryPage() {
             selectedView={selectedView}
             onSelect={setSelectedView}
           />
+
+          {selectedVehicle ? (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-200">
+                    Sous-vues pour {selectedView ?? DEFAULT_VIEW_LABEL}
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Créez des vues détaillées (par exemple des rangements dans la cabine) sans quitter la vue principale.
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setIsAddingSubView((previous) => !previous)}
+                  className="inline-flex items-center gap-2 rounded-md border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-indigo-500/40 dark:text-indigo-200 dark:hover:border-indigo-400"
+                >
+                  {isAddingSubView ? "Fermer" : "Ajouter une sous-vue"}
+                </button>
+              </div>
+              {isAddingSubView ? (
+                <form className="mt-3 space-y-2 sm:flex sm:items-end sm:gap-3" onSubmit={createSubviewForSelectedView}>
+                  <label className="flex-1 space-y-1" htmlFor="sub-view-name">
+                    <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                      Nom de la sous-vue
+                    </span>
+                    <input
+                      id="sub-view-name"
+                      type="text"
+                      value={newSubViewName}
+                      onChange={(event) => setNewSubViewName(event.target.value)}
+                      placeholder="Rangement conducteur, Casier passager..."
+                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                      disabled={updateVehicle.isPending}
+                    />
+                  </label>
+                  <button
+                    type="submit"
+                    disabled={updateVehicle.isPending}
+                    className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {updateVehicle.isPending ? "Ajout..." : "Créer la sous-vue"}
+                  </button>
+                </form>
+              ) : null}
+            </div>
+          ) : null}
 
           <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
             <VehicleCompartment
