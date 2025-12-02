@@ -26,12 +26,16 @@ from backend.api import (
     remise_inventory,
     about,
     system_config as system_config_api,
+    logs,
 )
+from backend.core.logging_config import configure_logging
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
 from backend.core.system_config import get_effective_cors_origins, rebuild_cors_middleware
 from backend.ws import camera, voice
 
+
+configure_logging()
 
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
@@ -70,6 +74,7 @@ app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(updates.router, prefix="/updates", tags=["updates"])
 app.include_router(system_config_api.router, prefix="/system", tags=["system"])
 app.include_router(about.router, prefix="/about", tags=["about"])
+app.include_router(logs.router, prefix="/logs", tags=["logs"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
