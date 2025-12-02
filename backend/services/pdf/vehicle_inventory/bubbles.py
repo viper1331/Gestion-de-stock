@@ -100,6 +100,10 @@ def _build_anchor(entry: VehicleViewEntry, bounds: tuple[float, float, float, fl
     if anchor_ratio_x is None or anchor_ratio_y is None:
         anchor_ratio_x = anchor_ratio_y = 0.5
 
+    # Invert the Y ratio because the PDF coordinate system starts from the
+    # bottom while the stored ratios are expressed from the top of the image.
+    anchor_ratio_y = 1 - anchor_ratio_y
+
     anchor_x = ratio_to_coordinate(anchor_ratio_x, x, width)
     anchor_y = ratio_to_coordinate(anchor_ratio_y, y, height)
     return anchor_x, anchor_y
