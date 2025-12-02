@@ -5,7 +5,7 @@ from datetime import datetime
 from typing import Any, Literal
 
 from fastapi import APIRouter, Request
-from pydantic import BaseModel, Field, validator
+from pydantic import BaseModel, Field, field_validator
 
 logger = logging.getLogger("frontend")
 
@@ -30,7 +30,7 @@ class FrontendLogEntry(BaseModel):
         default=None, description="Horodatage généré côté frontend, si disponible."
     )
 
-    @validator("message")
+    @field_validator("message")
     def validate_message(cls, value: str) -> str:  # noqa: D417 - message validation
         if not value:
             raise ValueError("Le message de log ne peut pas être vide")
