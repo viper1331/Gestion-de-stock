@@ -946,14 +946,14 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
                     position_y,
                     remise_item_id
                 )
-                VALUES (?, ?, NULL, NULL, 0, 0, ?, NULL, NULL, ?)
+                VALUES (?, ?, NULL, ?, 0, 0, ?, NULL, NULL, ?)
                 """,
-                (source["name"], sku_value, source["supplier_id"], remise_item_id),
+                (source["name"], sku_value, source["size"], source["supplier_id"], remise_item_id),
             )
             return
 
-    assignments = ["name = ?"]
-    params: list[object] = [source["name"]]
+    assignments = ["name = ?", "size = ?"]
+    params: list[object] = [source["name"], source["size"]]
     supplier_id = source["supplier_id"]
     if supplier_id is not None:
         assignments.append("supplier_id = ?")
@@ -988,15 +988,15 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
                 position_y,
                 remise_item_id
             )
-            VALUES (?, ?, NULL, NULL, 0, 0, ?, NULL, NULL, ?)
+            VALUES (?, ?, NULL, ?, 0, 0, ?, NULL, NULL, ?)
             """,
-            (source["name"], sku_value, source["supplier_id"], remise_item_id),
+            (source["name"], sku_value, source["size"], source["supplier_id"], remise_item_id),
         )
 
 
 def _sync_vehicle_inventory_with_remise(conn: sqlite3.Connection) -> None:
     remise_rows = conn.execute(
-        "SELECT id, name, sku, supplier_id FROM remise_items"
+        "SELECT id, name, sku, supplier_id, size FROM remise_items"
     ).fetchall()
     seen_ids: list[int] = []
     for row in remise_rows:
@@ -1015,7 +1015,7 @@ def _sync_vehicle_inventory_with_remise(conn: sqlite3.Connection) -> None:
 def _sync_single_vehicle_item(remise_item_id: int) -> None:
     with db.get_stock_connection() as conn:
         source = conn.execute(
-            "SELECT id, name, sku, supplier_id FROM remise_items WHERE id = ?",
+            "SELECT id, name, sku, supplier_id, size FROM remise_items WHERE id = ?",
             (remise_item_id,),
         ).fetchone()
         if source is None:
@@ -1087,12 +1087,14 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
             for name in str(row["assigned_vehicle_names"]).split(",")
             if name and name.strip()
         ]
+    size_value = row["resolved_size"] if "resolved_size" in row.keys() else row["size"]
+
     return models.Item(
         id=row["id"],
         name=name,
         sku=sku,
         category_id=row["category_id"],
-        size=row["size"],
+        size=size_value,
         quantity=row["quantity"],
         low_stock_threshold=row["low_stock_threshold"],
         track_low_stock=track_low_stock,
@@ -1131,6 +1133,7 @@ def _list_inventory_items_internal(
     if module == "vehicle_inventory":
         query = (
             "SELECT vi.*, "
+            "COALESCE(ri.size, vi.size) AS resolved_size, "
             "ri.name AS remise_name, "
             "ri.sku AS remise_sku, "
             "ri.supplier_id AS remise_supplier_id, "
@@ -1198,9 +1201,9 @@ def _get_inventory_item_internal(module: str, item_id: int) -> models.Item:
         if module == "vehicle_inventory":
             cur = conn.execute(
                 """
-                SELECT vi.*, ri.name AS remise_name, ri.sku AS remise_sku, ri.supplier_id AS remise_supplier_id,
-                       ri.quantity AS remise_quantity, pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku,
-                       pi.quantity AS pharmacy_quantity, rl.name AS lot_name
+                SELECT vi.*, COALESCE(ri.size, vi.size) AS resolved_size, ri.name AS remise_name, ri.sku AS remise_sku,
+                       ri.supplier_id AS remise_supplier_id, ri.quantity AS remise_quantity, pi.name AS pharmacy_name,
+                       pi.barcode AS pharmacy_sku, pi.quantity AS pharmacy_quantity, rl.name AS lot_name
                 FROM vehicle_items AS vi
                 LEFT JOIN remise_items AS ri ON ri.id = vi.remise_item_id
                 LEFT JOIN pharmacy_items AS pi ON pi.id = vi.pharmacy_item_id
