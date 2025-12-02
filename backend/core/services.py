@@ -1475,8 +1475,6 @@ def _create_inventory_item_internal(
             columns.append("expiration_date")
             values.append(expiration_date)
         if module == "vehicle_inventory":
-            columns.append("remise_item_id")
-            values.append(remise_item_id)
             columns.append("lot_id")
             values.append(lot_id)
             columns.extend(["position_x", "position_y"])
