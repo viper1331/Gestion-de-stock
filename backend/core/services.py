@@ -9,7 +9,7 @@ import shutil
 from collections import defaultdict
 import sqlite3
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import wrap
 from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional
@@ -4237,8 +4237,8 @@ def generate_vehicle_inventory_pdf(
     ensure_database_ready()
     categories = list_vehicle_categories()
     items = list_vehicle_items()
-    generated_at = datetime.now()
-    pdf_options = VehiclePdfOptions(**(options.dict() if options else {}))
+    generated_at = datetime.now(timezone.utc)
+    pdf_options = VehiclePdfOptions(**(options.model_dump() if options else {}))
 
     if pdf_options.category_ids:
         allowed_ids = set(pdf_options.category_ids)

@@ -1,7 +1,6 @@
 import io
 import sys
-import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -67,7 +66,7 @@ def test_pdf_exports_without_error(sample_image, tmp_path):
     pdf_bytes = render_vehicle_inventory_pdf(
         categories=[category],
         items=[item],
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
         pointer_targets=None,
         options=options,
         media_root=tmp_path,
@@ -83,7 +82,7 @@ def test_pdf_includes_background(sample_image, tmp_path):
     pdf_bytes = render_vehicle_inventory_pdf(
         categories=[category],
         items=[item],
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
         pointer_targets=None,
         options=options,
         media_root=tmp_path,
@@ -129,7 +128,7 @@ def test_orientation_respected(portrait_image, tmp_path):
     plan = layout.build_plan(
         categories=[category],
         items=[item],
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
         pointer_targets=None,
         options=options,
         media_root=tmp_path,
@@ -144,7 +143,7 @@ def test_view_without_items_skipped(tmp_path):
         layout.build_plan(
             categories=[category],
             items=[],
-            generated_at=datetime.utcnow(),
+            generated_at=datetime.now(timezone.utc),
             pointer_targets=None,
             options=options,
             media_root=tmp_path,
@@ -200,7 +199,7 @@ def test_table_fallback(sample_image, tmp_path):
     plan = layout.build_plan(
         categories=[category],
         items=[item],
-        generated_at=datetime.utcnow(),
+        generated_at=datetime.now(timezone.utc),
         pointer_targets=None,
         options=options,
         media_root=tmp_path,
