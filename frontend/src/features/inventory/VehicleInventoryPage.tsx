@@ -3671,10 +3671,15 @@ function getVehicleViews(vehicle: VehicleCategory | null): string[] {
 }
 
 function normalizeViewName(view: string | null): string {
-  if (view && view.trim().length > 0) {
-    return view.trim().toUpperCase();
+  if (!view) {
+    return DEFAULT_VIEW_LABEL;
   }
-  return DEFAULT_VIEW_LABEL;
+
+  const collapsedWhitespace = view.replace(/\s+/g, " ").trim();
+  const standardizedHyphenSpacing = collapsedWhitespace.replace(/\s*-\s*/g, " - ");
+  const withoutDiacritics = standardizedHyphenSpacing.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  return withoutDiacritics.toUpperCase();
 }
 
 function generateLotPositions(base: { x: number; y: number }, count: number): { x: number; y: number }[] {
