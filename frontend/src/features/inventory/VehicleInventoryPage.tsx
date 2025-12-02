@@ -300,8 +300,12 @@ export function VehicleInventoryPage() {
           : "Le matériel a été retiré du véhicule."
       });
     },
-    onError: () => {
-      setFeedback({ type: "error", text: "Impossible d'enregistrer la position." });
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.data?.detail) {
+        setFeedback({ type: "error", text: error.response.data.detail });
+        return;
+      }
+      setFeedback({ type: "error", text: "Impossible d'enregistrer les modifications." });
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
@@ -1513,6 +1517,19 @@ export function VehicleInventoryPage() {
               backgroundPanelStorageKey={backgroundPanelStorageKey}
               itemsPanelStorageKey={itemsPanelStorageKey}
               onDropLot={handleDropLotOnView}
+              onUpdateItemQuantity={(itemId, quantity) => {
+                if (!selectedVehicle) {
+                  return;
+                }
+                const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                updateItemLocation.mutate({
+                  itemId,
+                  categoryId: selectedVehicle.id,
+                  size: targetView,
+                  quantity,
+                  successMessage: "Quantité mise à jour."
+                });
+              }}
             />
 
             <aside className="space-y-6">
@@ -1899,6 +1916,7 @@ interface VehicleCompartmentProps {
   backgroundPanelStorageKey: string;
   itemsPanelStorageKey: string;
   onDropLot?: (lotId: number, position: { x: number; y: number }) => void;
+  onUpdateItemQuantity?: (itemId: number, quantity: number) => void;
 }
 
 function VehicleCompartment({
@@ -1914,7 +1932,8 @@ function VehicleCompartment({
   isUpdatingBackground,
   backgroundPanelStorageKey,
   itemsPanelStorageKey,
-  onDropLot
+  onDropLot,
+  onUpdateItemQuantity
 }: VehicleCompartmentProps) {
   const [isHovering, setIsHovering] = useState(false);
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = usePersistentBoolean(
@@ -2403,6 +2422,11 @@ function VehicleCompartment({
                 item={item}
                 onRemove={() => onRemoveItem(item.id)}
                 onFeedback={onItemFeedback}
+                onUpdateQuantity={
+                  onUpdateItemQuantity
+                    ? (quantity) => onUpdateItemQuantity(item.id, quantity)
+                    : undefined
+                }
                 onUpdatePosition={(position) => onDropItem(item.id, position, { isReposition: true })}
               />
             ))}
@@ -3015,9 +3039,10 @@ interface ItemCardProps {
   onRemove?: () => void;
   onFeedback?: (feedback: Feedback) => void;
   onUpdatePosition?: (position: { x: number; y: number }) => void;
+  onUpdateQuantity?: (quantity: number) => void;
 }
 
-function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProps) {
+function ItemCard({ item, onRemove, onFeedback, onUpdatePosition, onUpdateQuantity }: ItemCardProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingPosition, setIsEditingPosition] = useState(false);
@@ -3025,6 +3050,8 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
     x: Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100)),
     y: Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100))
   }));
+  const [draftQuantity, setDraftQuantity] = useState(item.quantity);
+  const [isSavingQuantity, setIsSavingQuantity] = useState(false);
 
   const imageUrl = resolveMediaUrl(item.image_url);
   const hasImage = Boolean(imageUrl);
@@ -3047,6 +3074,11 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
       y: Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100))
     });
   }, [item.position_x, item.position_y, isEditingPosition]);
+
+  useEffect(() => {
+    setDraftQuantity(item.quantity);
+    setIsSavingQuantity(false);
+  }, [item.quantity]);
 
   const uploadImage = useMutation({
     mutationFn: async (file: File) => {
@@ -3160,6 +3192,34 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
     }));
   };
 
+  const handleQuantityInputChange = (event: ChangeEvent<HTMLInputElement>) => {
+    event.stopPropagation();
+    const rawValue = Number(event.target.value);
+    const sanitized = Number.isNaN(rawValue) ? 0 : Math.round(rawValue);
+    setDraftQuantity(clamp(sanitized, 0, 100000));
+  };
+
+  const handleQuantityStep = (delta: number) => () => {
+    setDraftQuantity((previous) => clamp(Math.round(previous + delta), 0, 100000));
+  };
+
+  const handleQuantitySubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!onUpdateQuantity) {
+      return;
+    }
+    const normalized = clamp(Math.round(draftQuantity), 0, 100000);
+    if (normalized === item.quantity) {
+      return;
+    }
+    setIsSavingQuantity(true);
+    onUpdateQuantity(normalized);
+  };
+
+  const canEditQuantity = Boolean(onUpdateQuantity) && !isLockedByLot && item.category_id !== null;
+  const isQuantityDirty = draftQuantity !== item.quantity;
+
   return (
     <div
       className="flex flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600"
@@ -3258,6 +3318,52 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition }: ItemCardProp
           <span className="text-[11px] text-slate-500 dark:text-slate-400">Enregistrement…</span>
         ) : null}
       </div>
+      {canEditQuantity ? (
+        <form
+          className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600 dark:border-slate-600/70 dark:bg-slate-800/40 dark:text-slate-200"
+          onSubmit={handleQuantitySubmit}
+        >
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <span className="font-semibold text-slate-700 dark:text-slate-100">Quantité affectée</span>
+            <span className="text-[10px] text-slate-500 dark:text-slate-300">Mise à jour du stock liée</span>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="flex items-stretch overflow-hidden rounded-md border border-slate-300 bg-white text-slate-700 shadow-sm dark:border-slate-600 dark:bg-slate-900 dark:text-slate-100">
+              <button
+                type="button"
+                onClick={handleQuantityStep(-1)}
+                className="px-3 text-sm font-semibold hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-800"
+              >
+                −
+              </button>
+              <input
+                type="number"
+                min={0}
+                value={draftQuantity}
+                onChange={handleQuantityInputChange}
+                className="w-20 border-x border-slate-200 bg-white px-2 text-center text-xs text-slate-700 focus:border-blue-500 focus:outline-none dark:border-slate-700 dark:bg-slate-900 dark:text-slate-100"
+              />
+              <button
+                type="button"
+                onClick={handleQuantityStep(1)}
+                className="px-3 text-sm font-semibold hover:bg-slate-100 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 dark:hover:bg-slate-800"
+              >
+                +
+              </button>
+            </div>
+            <button
+              type="submit"
+              disabled={!isQuantityDirty || isSavingQuantity}
+              className="rounded-full border border-blue-200 px-3 py-1 text-[11px] font-medium text-blue-600 transition hover:border-blue-300 hover:text-blue-700 disabled:cursor-not-allowed disabled:opacity-60 dark:border-blue-500/50 dark:text-blue-200 dark:hover:border-blue-400"
+            >
+              {isSavingQuantity ? "Enregistrement..." : "Mettre à jour"}
+            </button>
+          </div>
+          <p className="text-[10px] text-slate-500 dark:text-slate-400">
+            Ajustez la quantité présente dans cette vue : le stock de la remise associée sera mis à jour automatiquement.
+          </p>
+        </form>
+      ) : null}
       {isLockedByLot ? (
         <p className="rounded-lg border border-dashed border-blue-200 bg-blue-50 px-3 py-2 text-[11px] text-blue-700 dark:border-blue-900/60 dark:bg-blue-900/30 dark:text-blue-200">
           Ce matériel est verrouillé car il dépend du {lotLabel}. Ajustez son contenu depuis la page des lots.
