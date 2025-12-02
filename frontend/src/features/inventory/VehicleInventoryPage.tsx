@@ -149,7 +149,7 @@ type Feedback = { type: "success" | "error"; text: string };
 type PointerTarget = { x: number; y: number };
 type PointerTargetMap = Record<string, PointerTarget>;
 
-function collectPointerTargetsPayload(): PointerTargetMap {
+function collectPointerTargetsPayload(targetVehicleId: number | null = null): PointerTargetMap {
   if (typeof window === "undefined") {
     return {};
   }
@@ -160,6 +160,9 @@ function collectPointerTargetsPayload(): PointerTargetMap {
   for (let index = 0; index < window.localStorage.length; index += 1) {
     const key = window.localStorage.key(index);
     if (!key || !key.startsWith(prefix) || !key.endsWith(suffix)) {
+      continue;
+    }
+    if (targetVehicleId !== null && !key.includes(`vehicle-${targetVehicleId}:`)) {
       continue;
     }
     const parsed = readPointerTargetsFromStorage(key);
@@ -595,10 +598,15 @@ export function VehicleInventoryPage() {
 
   const exportInventoryPdf = useMutation({
     mutationFn: async () => {
-      const pointerTargets = collectPointerTargetsPayload();
+      const pointerTargets = collectPointerTargetsPayload(selectedVehicle?.id ?? null);
+      const payload: Record<string, unknown> = { pointer_targets: pointerTargets };
+
+      if (selectedVehicle) {
+        payload.category_ids = [selectedVehicle.id];
+      }
       const response = await api.post(
         "/vehicle-inventory/export/pdf",
-        { pointer_targets: pointerTargets },
+        payload,
         {
           responseType: "arraybuffer"
         }

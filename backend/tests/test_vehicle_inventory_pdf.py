@@ -1,5 +1,6 @@
 import io
 import sys
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -11,6 +12,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from backend.core import models
+from backend.core import services
 from backend.services.pdf.vehicle_inventory import (
     PdfStyleEngine,
     VehiclePdfOptions,
@@ -160,6 +162,30 @@ def test_lot_rendering(sample_image, tmp_path):
     entries = build_vehicle_entries(categories=[category], items=[item1, item2], pointer_targets=None, media_root=tmp_path)
     assert entries[0].entries[0].quantity == 2
     assert "Lot" in entries[0].entries[0].name
+
+
+def test_generate_pdf_filters_selected_categories(monkeypatch):
+    categories = [make_category(1), make_category(2)]
+    items = [make_item(1, 1), make_item(2, 2), make_item(3, 2)]
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(services, "ensure_database_ready", lambda: None)
+    monkeypatch.setattr(services, "list_vehicle_categories", lambda: categories)
+    monkeypatch.setattr(services, "list_vehicle_items", lambda: items)
+
+    def fake_render_vehicle_inventory_pdf(*, categories, items, **kwargs):
+        captured["categories"] = categories
+        captured["items"] = items
+        return b"pdf"
+
+    monkeypatch.setattr(services, "render_vehicle_inventory_pdf", fake_render_vehicle_inventory_pdf)
+
+    options = VehiclePdfOptions(category_ids=[2])
+    pdf_bytes = services.generate_vehicle_inventory_pdf(pointer_targets=None, options=options)
+
+    assert pdf_bytes == b"pdf"
+    assert [category.id for category in captured["categories"]] == [2]
+    assert {item.id for item in captured["items"]} == {2, 3}
 
 
 def test_theme_premium():

@@ -18,6 +18,7 @@ class VehiclePdfOptions(BaseModel):
     include_footer: bool = True
     include_header: bool = True
     table_fallback: bool = False
+    category_ids: list[int] | None = None
 
 
 @dataclass
