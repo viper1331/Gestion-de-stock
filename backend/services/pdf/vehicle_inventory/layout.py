@@ -176,6 +176,7 @@ def render_page(canvas, page: PageMetadata, *, style_engine: PdfStyleEngine) -> 
             image_bounds,
             (content_x, content_y, content_w, content_h),
             style_engine,
+            pointer_mode=page.pointer_options.pointer_mode_enabled,
         )
     else:
         section_title = f"{page.view.category_name} — {page.view.view_name}"

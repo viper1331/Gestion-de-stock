@@ -54,11 +54,7 @@ def find_best_bubble_position(
         bounds_y + MIN_BUBBLE_MARGIN,
         bounds_y + bounds_h - height - MIN_BUBBLE_MARGIN,
     )
-    max_y = clamp(
-        target_y + ARROW_OFFSET_RANGE[1],
-        bounds_y + MIN_BUBBLE_MARGIN,
-        bounds_y + bounds_h - height - MIN_BUBBLE_MARGIN,
-    )
+    max_y = bounds_y + bounds_h - height - MIN_BUBBLE_MARGIN
 
     x = clamp(target_x - width / 2, bounds_x + MIN_BUBBLE_MARGIN, bounds_x + bounds_w - width - MIN_BUBBLE_MARGIN)
     step = height + MIN_BUBBLE_MARGIN
@@ -126,6 +122,7 @@ def _place_vertical(
     base_x: float,
     container_bounds: tuple[float, float, float, float],
     metrics: BubbleMetrics,
+    pointer_mode: bool,
 ) -> list[BubblePlacement]:
     placements: list[BubblePlacement] = []
     panel_x, panel_y, panel_w, panel_h = container_bounds
@@ -148,7 +145,7 @@ def _place_vertical(
                 geometry=geometry,
                 anchor_x=anchor_x,
                 anchor_y=anchor_y,
-                pointer_mode_enabled=True,
+                pointer_mode_enabled=pointer_mode,
             )
         )
         current_y = geometry.y
@@ -162,6 +159,7 @@ def _place_horizontal(
     base_y: float,
     container_bounds: tuple[float, float, float, float],
     metrics: BubbleMetrics,
+    pointer_mode: bool,
 ) -> list[BubblePlacement]:
     placements: list[BubblePlacement] = []
     panel_x, panel_y, panel_w, panel_h = container_bounds
@@ -184,7 +182,7 @@ def _place_horizontal(
                 geometry=geometry,
                 anchor_x=anchor_x,
                 anchor_y=anchor_y,
-                pointer_mode_enabled=True,
+                pointer_mode_enabled=pointer_mode,
             )
         )
         current_x = geometry.x
@@ -195,10 +193,62 @@ def _place_horizontal(
 def layout_bubbles(
     entries: Sequence[VehicleViewEntry],
     image_bounds: tuple[float, float, float, float],
-    panel_bounds: tuple[float, float, float, float],
+    panel_bounds: tuple[float, float, float, float] | None = None,
     metrics: BubbleMetrics | None = None,
+    *,
+    pointer_mode: bool = True,
 ) -> list[BubblePlacement]:
-    metrics = metrics or BubbleMetrics()
+    metrics = metrics or BubbleMetrics(width=180, height=70) if pointer_mode else metrics or BubbleMetrics()
+    panel_bounds = panel_bounds or image_bounds
+
+    placements: list[BubblePlacement] = []
+
+    if pointer_mode:
+        anchored_entries = [
+            (entry, *_build_anchor(entry, image_bounds))
+            for entry in entries
+        ]
+        anchored_entries.sort(key=lambda item: (-item[2], item[1]))
+
+        for entry, anchor_x, anchor_y in anchored_entries:
+            geometry = find_best_bubble_position(
+                (anchor_x, anchor_y),
+                (metrics.width, metrics.height),
+                [placement.geometry for placement in placements],
+                panel_bounds,
+            )
+            placements.append(
+                BubblePlacement(
+                    entry=entry,
+                    geometry=geometry,
+                    anchor_x=anchor_x,
+                    anchor_y=anchor_y,
+                    pointer_mode_enabled=True,
+                )
+            )
+
+        for _ in range(len(placements)):
+            adjusted = False
+            for idx, placement in enumerate(placements):
+                others = [p.geometry for j, p in enumerate(placements) if j != idx]
+                if any(_rects_overlap(placement.geometry, other) for other in others):
+                    new_geometry = find_best_bubble_position(
+                        (placement.anchor_x, placement.anchor_y),
+                        (metrics.width, metrics.height),
+                        others,
+                        panel_bounds,
+                    )
+                    placements[idx] = BubblePlacement(
+                        entry=placement.entry,
+                        geometry=new_geometry,
+                        anchor_x=placement.anchor_x,
+                        anchor_y=placement.anchor_y,
+                        pointer_mode_enabled=True,
+                    )
+                    adjusted = True
+            if not adjusted:
+                break
+        return placements
 
     left: list[tuple[VehicleViewEntry, float, float]] = []
     right: list[tuple[VehicleViewEntry, float, float]] = []
@@ -220,14 +270,13 @@ def layout_bubbles(
         else:
             bottom.append((entry, anchor_x, anchor_y))
 
-    placements: list[BubblePlacement] = []
-
     placements.extend(
         _place_vertical(
             left,
             base_x=img_x - metrics.width - card_gap,
             container_bounds=panel_bounds,
             metrics=metrics,
+            pointer_mode=pointer_mode,
         )
     )
     placements.extend(
@@ -236,6 +285,7 @@ def layout_bubbles(
             base_x=img_x + img_w + card_gap,
             container_bounds=panel_bounds,
             metrics=metrics,
+            pointer_mode=pointer_mode,
         )
     )
     placements.extend(
@@ -244,6 +294,7 @@ def layout_bubbles(
             base_y=img_y + img_h + card_gap,
             container_bounds=panel_bounds,
             metrics=metrics,
+            pointer_mode=pointer_mode,
         )
     )
     placements.extend(
@@ -252,6 +303,7 @@ def layout_bubbles(
             base_y=img_y - metrics.height - card_gap,
             container_bounds=panel_bounds,
             metrics=metrics,
+            pointer_mode=pointer_mode,
         )
     )
 
@@ -356,9 +408,11 @@ def draw_bubbles(
     panel_bounds: tuple[float, float, float, float],
     style_engine: PdfStyleEngine,
     metrics: BubbleMetrics | None = None,
+    *,
+    pointer_mode: bool = True,
 ) -> list[BubblePlacement]:
     metrics = metrics or BubbleMetrics()
-    placements = layout_bubbles(entries, image_bounds, panel_bounds, metrics)
+    placements = layout_bubbles(entries, image_bounds, panel_bounds, metrics, pointer_mode=pointer_mode)
     for placement in placements:
         draw_single_bubble(canvas, placement, style_engine, metrics)
         if placement.pointer_mode_enabled:

@@ -37,7 +37,16 @@ class PdfStyleEngine:
         "point_fill": colors.HexColor("#9BC9FF"),
     }
 
-    _premium_palette = _palette
+    _premium_palette = {
+        **_palette,
+        "background": colors.HexColor("#0A0F18"),
+        "surface": colors.HexColor("#0D192B"),
+        "bubble": colors.HexColor("#0D192B"),
+        "bubble_border": colors.HexColor("#1C2C45"),
+        "accent": colors.HexColor("#F2B134"),
+        "badge_text": colors.black,
+        "shadow": colors.Color(0.06, 0.15, 0.32, alpha=0.65),
+    }
 
     def color(self, name: str):
         palette = self._premium_palette if self.theme == "premium" else self._palette
