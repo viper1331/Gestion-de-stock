@@ -5,9 +5,12 @@ import { RouterProvider } from "react-router-dom";
 
 import { ThemeProvider } from "./app/theme";
 import { router } from "./app/routes";
+import { initializeLogging } from "./lib/logger";
 import "./styles/tailwind.css";
 
 const queryClient = new QueryClient();
+
+initializeLogging();
 
 ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
   <React.StrictMode>
