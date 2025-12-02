@@ -24,6 +24,7 @@ interface RemiseLotItem {
   quantity: number;
   remise_name: string;
   remise_sku: string;
+  size: string | null;
   available_quantity: number;
 }
 
@@ -732,7 +733,9 @@ export function RemiseLotsPanel() {
                             <tr key={item.id} className="bg-slate-950/40">
                               <td className="px-3 py-3 text-sm text-slate-100">
                                 <p className="font-semibold">{item.remise_name}</p>
-                                <p className="text-xs text-slate-400">SKU : {item.remise_sku}</p>
+                                <p className="text-xs text-slate-400">
+                                  Taille / Variante : {item.size ?? "—"}
+                                </p>
                               </td>
                               <td className="px-3 py-3 text-sm text-slate-200">
                                 <input
@@ -861,7 +864,9 @@ export function RemiseLotsPanel() {
                       >
                         <div>
                           <p className="font-semibold">{item.remise_name}</p>
-                          <p className="text-xs text-slate-400">SKU : {item.remise_sku}</p>
+                          <p className="text-xs text-slate-400">
+                            Taille / Variante : {item.size ?? "—"}
+                          </p>
                         </div>
                         <div className="text-right text-xs text-slate-300">
                           <p>Réservé : {item.quantity}</p>

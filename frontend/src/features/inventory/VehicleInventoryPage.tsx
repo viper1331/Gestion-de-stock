@@ -76,6 +76,7 @@ interface RemiseLotItem {
   quantity: number;
   remise_name: string;
   remise_sku: string;
+  size: string | null;
   available_quantity: number;
 }
 
@@ -3271,7 +3272,9 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition, onUpdateQuanti
         </div>
         <div>
           <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.name}</p>
-          <p className="text-xs text-slate-500 dark:text-slate-400">SKU : {item.sku}</p>
+          <p className="text-xs text-slate-500 dark:text-slate-400">
+            Taille / Variante : {item.size ?? "—"}
+          </p>
           <p className="text-xs text-slate-500 dark:text-slate-400">{quantityLabel}</p>
           {lotLabel ? (
             <p className="mt-1 inline-flex items-center rounded-full bg-blue-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/40 dark:text-blue-200">
