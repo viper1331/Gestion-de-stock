@@ -1748,30 +1748,131 @@ function VehicleHeader({
 
 interface VehicleViewSelectorProps {
   views: string[];
-  selectedView: string;
+  selectedView: string | null;
   onSelect: (view: string) => void;
 }
 
+type ViewGroup = {
+  parent: string;
+  subViews: string[];
+};
+
 function VehicleViewSelector({ views, selectedView, onSelect }: VehicleViewSelectorProps) {
+  const groupedViews = useMemo<ViewGroup[]>(() => {
+    const groups = new Map<string, ViewGroup>();
+
+    views.forEach((view) => {
+      const { parent, subView } = splitViewHierarchy(view);
+
+      if (!groups.has(parent)) {
+        groups.set(parent, { parent, subViews: [] });
+      }
+
+      if (subView) {
+        groups.get(parent)?.subViews.push(view);
+      }
+    });
+
+    return Array.from(groups.values());
+  }, [views]);
+
+  const selectedHierarchy = useMemo(() => splitViewHierarchy(selectedView), [selectedView]);
+  const [expandedParent, setExpandedParent] = useState<string | null>(
+    selectedHierarchy.parent ?? groupedViews[0]?.parent ?? null
+  );
+
+  useEffect(() => {
+    if (selectedHierarchy.parent && selectedHierarchy.parent !== expandedParent) {
+      setExpandedParent(selectedHierarchy.parent);
+    }
+  }, [expandedParent, selectedHierarchy.parent]);
+
+  useEffect(() => {
+    if (expandedParent && groupedViews.some((group) => group.parent === expandedParent)) {
+      return;
+    }
+    setExpandedParent(groupedViews[0]?.parent ?? null);
+  }, [expandedParent, groupedViews]);
+
+  const activeGroup = expandedParent
+    ? groupedViews.find((group) => group.parent === expandedParent)
+    : null;
+
   return (
-    <div className="flex flex-wrap gap-3">
-      {views.map((view) => (
-        <button
-          key={view}
-          type="button"
-          onClick={() => onSelect(view)}
-          className={clsx(
-            "rounded-full border px-4 py-2 text-sm font-medium transition",
-            view === selectedView
-              ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-950/50 dark:text-blue-200"
-              : "border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white"
-          )}
-        >
-          {view}
-        </button>
-      ))}
+    <div className="space-y-2">
+      <div className="flex flex-wrap gap-3">
+        {groupedViews.map((group) => {
+          const isSelectedParent =
+            selectedHierarchy.parent === group.parent || selectedView === group.parent;
+
+          return (
+            <button
+              key={group.parent}
+              type="button"
+              onClick={() => {
+                setExpandedParent(group.parent);
+                onSelect(group.parent);
+              }}
+              className={clsx(
+                "rounded-full border px-4 py-2 text-sm font-medium transition",
+                isSelectedParent
+                  ? "border-blue-500 bg-blue-50 text-blue-700 dark:border-blue-400 dark:bg-blue-950/50 dark:text-blue-200"
+                  : "border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white"
+              )}
+            >
+              {group.parent}
+            </button>
+          );
+        })}
+      </div>
+
+      {activeGroup && activeGroup.subViews.length > 0 ? (
+        <div className="flex flex-wrap gap-2 pl-1">
+          {activeGroup.subViews.map((subView) => (
+            <button
+              key={subView}
+              type="button"
+              onClick={() => {
+                setExpandedParent(activeGroup.parent);
+                onSelect(subView);
+              }}
+              className={clsx(
+                "rounded-full border px-3 py-1.5 text-xs font-semibold transition",
+                selectedView === subView
+                  ? "border-indigo-400 bg-indigo-50 text-indigo-700 dark:border-indigo-400 dark:bg-indigo-950/50 dark:text-indigo-100"
+                  : "border-slate-200 text-slate-600 hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-300 dark:hover:border-slate-600 dark:hover:text-white"
+              )}
+            >
+              {formatSubViewLabel(subView, activeGroup.parent)}
+            </button>
+          ))}
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function splitViewHierarchy(view: string | null): { parent: string; subView: string | null } {
+  if (!view) {
+    return { parent: DEFAULT_VIEW_LABEL, subView: null };
+  }
+
+  const [parent, ...rest] = view.split(" - ");
+  const cleanedParent = parent.trim() || DEFAULT_VIEW_LABEL;
+  const subView = rest.join(" - ").trim();
+
+  return {
+    parent: cleanedParent,
+    subView: subView.length > 0 ? view : null,
+  };
+}
+
+function formatSubViewLabel(subView: string, parent: string) {
+  const prefix = `${parent} - `;
+  if (subView.startsWith(prefix)) {
+    return subView.slice(prefix.length);
+  }
+  return subView;
 }
 
 interface VehicleCompartmentProps {
