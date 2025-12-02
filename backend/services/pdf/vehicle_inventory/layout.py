@@ -6,51 +6,55 @@ from pathlib import Path
 from typing import Iterable
 
 from reportlab.lib.pagesizes import A4, landscape
-from reportlab.lib.utils import ImageReader
 
 from backend.core import models
-from .background import BackgroundInfo, draw_background, prepare_background
+from .background import draw_background, prepare_background
 from .bubbles import draw_bubbles
 from .models import DocumentPlan, PageMetadata, VehiclePdfOptions, VehicleView
 from .style_engine import PdfStyleEngine
 from .table import draw_table, paginate_entries
-from .utils import PageCounter, build_vehicle_entries, content_bounds, format_date, page_size_for_orientation
-
-
-def _discover_logo(media_root: Path | None) -> Path | None:
-    if not media_root:
-        return None
-    candidate = media_root / "logo-premium.png"
-    return candidate if candidate.exists() else None
+from .utils import PageCounter, build_vehicle_entries, format_date, page_size_for_orientation
 
 
 def _draw_page_background(canvas, style_engine: PdfStyleEngine) -> None:
     page_width, page_height = canvas._pagesize
     canvas.saveState()
-    canvas.setFillColor(style_engine.color("background"))
+    canvas.setFillColor(style_engine.color("page_background"))
     canvas.rect(0, 0, page_width, page_height, stroke=0, fill=1)
     canvas.restoreState()
 
 
-def _draw_header(canvas, *, style_engine: PdfStyleEngine, title: str, subtitle: str | None = None) -> None:
-    if not title:
-        return
+def _draw_panel(canvas, *, style_engine: PdfStyleEngine) -> tuple[float, float, float, float]:
     page_width, page_height = canvas._pagesize
-    header_height = style_engine.header_height()
-    margin_left, _, _, _ = style_engine.margins
+    margin_left, margin_top, margin_bottom, margin_right = style_engine.margins
+    radius = 18
+
+    panel_x = margin_left
+    panel_y = margin_bottom
+    panel_w = page_width - margin_left - margin_right
+    panel_h = page_height - margin_top - margin_bottom
 
     canvas.saveState()
-    canvas.setFillColor(style_engine.color("header_band"))
-    canvas.rect(0, page_height - header_height, page_width, header_height, stroke=0, fill=1)
+    canvas.setFillColor(style_engine.color("background"))
+    canvas.roundRect(panel_x, panel_y, panel_w, panel_h, radius=radius, stroke=0, fill=1)
+    canvas.restoreState()
+    return panel_x, panel_y, panel_w, panel_h
 
-    text_offset = 6
+
+def _draw_header(canvas, *, style_engine: PdfStyleEngine, title: str, subtitle: str | None = None, origin: tuple[float, float] = (0, 0)) -> None:
+    if not title:
+        return
+
+    origin_x, origin_y = origin
+    canvas.saveState()
     canvas.setFillColor(style_engine.color("text"))
     canvas.setFont(*style_engine.font("title"))
-    canvas.drawString(margin_left + text_offset, page_height - header_height / 2 + 6, title)
+    canvas.drawString(origin_x, origin_y, title)
+
     if subtitle:
         canvas.setFont(*style_engine.font("subtitle"))
         canvas.setFillColor(style_engine.color("muted"))
-        canvas.drawString(margin_left + text_offset, page_height - header_height + 10, subtitle)
+        canvas.drawString(origin_x, origin_y - 18, subtitle)
     canvas.restoreState()
 
 
@@ -135,23 +139,53 @@ def _build_document_plan(
 
 
 def render_page(canvas, page: PageMetadata, *, style_engine: PdfStyleEngine) -> None:
-    bounds = content_bounds(style_engine, *canvas._pagesize)
     _draw_page_background(canvas, style_engine)
+    panel_x, panel_y, panel_w, panel_h = _draw_panel(canvas, style_engine=style_engine)
+
+    padding = 24
+    content_x = panel_x + padding
+    content_y = panel_y + padding
+    content_w = panel_w - 2 * padding
+    content_h = panel_h - 2 * padding
+
+    header_y = panel_y + panel_h - padding
+    subtitle = page.view.view_name
+
     _draw_header(
         canvas,
         style_engine=style_engine,
         title="Inventaire véhicules" if page.pointer_options.include_header else "",
-        subtitle=None,
+        subtitle=subtitle,
+        origin=(content_x, header_y),
     )
+
     if page.kind == "visual":
         view = page.view
         background_info = prepare_background(view.background_path) if view.background_path else None
-        image_bounds = draw_background(canvas, background_info, bounds, style_engine) if background_info else bounds
-        pointer_mode = page.pointer_options.pointer_mode_enabled or view.pointer_mode
-        draw_bubbles(canvas, view.entries, image_bounds, pointer_mode, style_engine)
+
+        visual_bounds = (
+            content_x,
+            content_y,
+            content_w,
+            content_h - 56,
+        )
+        image_bounds = draw_background(canvas, background_info, visual_bounds, style_engine) if background_info else visual_bounds
+        draw_bubbles(
+            canvas,
+            view.entries,
+            image_bounds,
+            (content_x, content_y, content_w, content_h),
+            style_engine,
+        )
     else:
         section_title = f"{page.view.category_name} — {page.view.view_name}"
-        draw_table(canvas, entries=page.entries or [], bounds=bounds, style_engine=style_engine, section_title=section_title)
+        draw_table(
+            canvas,
+            entries=page.entries or [],
+            bounds=(content_x, content_y, content_w, content_h - 40),
+            style_engine=style_engine,
+            section_title=section_title,
+        )
 
 
 def build_plan(*, categories, items, generated_at, pointer_targets, options, media_root) -> DocumentPlan:
