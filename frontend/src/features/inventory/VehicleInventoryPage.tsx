@@ -76,6 +76,7 @@ interface RemiseLotItem {
   quantity: number;
   remise_name: string;
   remise_sku: string;
+  size: string | null;
   available_quantity: number;
 }
 
