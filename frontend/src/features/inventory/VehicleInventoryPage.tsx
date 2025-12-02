@@ -682,7 +682,7 @@ export function VehicleInventoryPage() {
   }, [selectedVehicleId]);
 
   const normalizedSelectedView = useMemo(
-    () => (selectedView ? normalizeViewName(selectedView) : null),
+    () => normalizeViewName(selectedView ?? DEFAULT_VIEW_LABEL),
     [selectedView]
   );
 
