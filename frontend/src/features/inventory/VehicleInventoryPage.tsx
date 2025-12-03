@@ -865,18 +865,23 @@ export function VehicleInventoryPage() {
           return false;
         }
 
-        if (selectedVehicleType === "incendie" && item.remise_item_id === null) {
-          return false;
-        }
-        if (selectedVehicleType === "secours_a_personne" && item.pharmacy_item_id === null) {
-          return false;
-        }
-
         const templateType =
           item.vehicle_type ??
           (item.remise_item_id ? remiseItemTypeMap.get(item.remise_item_id) ?? null : null);
         if (!isCompatibleWithVehicle(templateType)) {
           return false;
+        }
+
+        if (selectedVehicleType === "incendie") {
+          if (item.remise_item_id === null && templateType !== "incendie") {
+            return false;
+          }
+        }
+
+        if (selectedVehicleType === "secours_a_personne") {
+          if (item.pharmacy_item_id === null && templateType !== "secours_a_personne") {
+            return false;
+          }
         }
         return true;
       }),
