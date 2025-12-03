@@ -878,15 +878,22 @@ export function VehicleInventoryPage() {
           return false;
         }
 
-        const templateType =
+        let templateType =
           item.vehicle_type ??
           (item.remise_item_id ? remiseItemTypeMap.get(item.remise_item_id) ?? null : null);
         if (!isCompatibleWithVehicle(templateType)) {
           return false;
         }
 
+        if (selectedVehicleType === "incendie" && templateType === null) {
+          templateType = "incendie";
+        }
+
         if (selectedVehicleType === "incendie") {
-          if (item.remise_item_id === null && templateType !== "incendie") {
+          const isFromRemise = item.remise_item_id !== null;
+          const isIncendieByType = templateType === "incendie";
+
+          if (!isFromRemise && !isIncendieByType) {
             return false;
           }
         }
