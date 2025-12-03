@@ -836,10 +836,18 @@ export function VehicleInventoryPage() {
   }, [remiseLots]);
 
   const remiseItemTypeMap = useMemo(() => {
-    const map = new Map<number, VehicleType>();
+    const map = new Map<number, VehicleType | null>();
     items.forEach((item) => {
-      if (item.remise_item_id && item.vehicle_type && !map.has(item.remise_item_id)) {
+      if (!item.remise_item_id || !item.vehicle_type) {
+        return;
+      }
+      const previous = map.get(item.remise_item_id);
+      if (previous === undefined) {
         map.set(item.remise_item_id, item.vehicle_type);
+        return;
+      }
+      if (previous !== null && previous !== item.vehicle_type) {
+        map.set(item.remise_item_id, null);
       }
     });
     return map;
