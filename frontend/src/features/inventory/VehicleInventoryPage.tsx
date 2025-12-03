@@ -57,6 +57,7 @@ interface VehicleItem {
   lot_name: string | null;
   show_in_qr: boolean;
   vehicle_type: VehicleType | null;
+  available_quantity?: number | null;
 }
 
 interface RemiseLot {
@@ -127,6 +128,16 @@ const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
   incendie: "Incendie",
   secours_a_personne: "Secours à personne"
 };
+
+function getAvailableQuantity(item: VehicleItem): number {
+  if (item.remise_item_id !== null) {
+    return item.remise_quantity ?? item.available_quantity ?? item.quantity ?? 0;
+  }
+  if (item.pharmacy_item_id !== null) {
+    return item.pharmacy_quantity ?? item.available_quantity ?? item.quantity ?? 0;
+  }
+  return item.quantity ?? 0;
+}
 
 const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
@@ -342,9 +353,7 @@ export function VehicleInventoryPage() {
       if (!template) {
         throw new Error("Matériel introuvable.");
       }
-      const sourceQuantity = template.remise_item_id
-        ? template.remise_quantity ?? 0
-        : template.pharmacy_quantity ?? 0;
+      const sourceQuantity = getAvailableQuantity(template);
       if (template.remise_item_id == null && template.pharmacy_item_id == null) {
         throw new Error("Ce matériel n'est pas lié à un inventaire disponible.");
       }
@@ -852,11 +861,7 @@ export function VehicleInventoryPage() {
           return false;
         }
 
-        const availableQuantity = item.remise_item_id
-          ? item.remise_quantity ?? 0
-          : item.pharmacy_item_id
-            ? item.pharmacy_quantity ?? 0
-            : item.quantity ?? 0;
+        const availableQuantity = getAvailableQuantity(item);
         if (availableQuantity <= 0) {
           return false;
         }
@@ -3069,11 +3074,12 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition, onUpdateQuanti
   const imageUrl = resolveMediaUrl(item.image_url);
   const hasImage = Boolean(imageUrl);
 
+  const availableQuantity = getAvailableQuantity(item);
   const quantityLabel =
     item.category_id === null
       ? item.pharmacy_item_id !== null
-        ? `Stock pharmacie : ${item.pharmacy_quantity ?? 0}`
-        : `Stock remise : ${item.remise_quantity ?? 0}`
+        ? `Stock pharmacie : ${availableQuantity}`
+        : `Stock remise : ${availableQuantity}`
       : `Qté : ${item.quantity}`;
   const isLockedByLot = item.lot_id !== null;
   const lotLabel = isLockedByLot ? item.lot_name ?? `Lot #${item.lot_id}` : null;
