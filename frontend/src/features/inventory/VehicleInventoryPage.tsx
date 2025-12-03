@@ -1510,7 +1510,14 @@ export function VehicleInventoryPage() {
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
               onDropItem={(itemId, position, options) => {
-                const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                const backendView =
+                  selectedVehicle.sizes?.find(
+                    (v) =>
+                      normalizeViewNameStrict(v) ===
+                      normalizeViewNameStrict(selectedView ?? DEFAULT_VIEW_LABEL)
+                  ) ?? DEFAULT_VIEW_LABEL;
+
+                const targetView = backendView;
                 if (options?.sourceCategoryId === null) {
                   assignItemToVehicle.mutate({
                     itemId,
@@ -3697,6 +3704,14 @@ function getVehicleViews(vehicle: VehicleCategory | null): string[] {
     .filter((entry, index, array) => array.indexOf(entry) === index);
 
   return sanitized.length > 0 ? sanitized : [DEFAULT_VIEW_LABEL];
+}
+
+function normalizeViewNameStrict(name: string): string {
+  return name
+    .trim()
+    .toLowerCase()
+    .replace(/\s+/g, " ")
+    .replace(/[^a-z0-9 ]/g, "");
 }
 
 function normalizeViewName(view?: string | null): string {
