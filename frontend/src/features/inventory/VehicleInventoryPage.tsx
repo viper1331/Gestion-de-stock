@@ -3681,7 +3681,11 @@ function normalizeViewName(view?: string | null): string {
     return DEFAULT_VIEW_LABEL;
   }
 
-  return view.trim().replace(/\s+/g, " ").toUpperCase();
+  const collapsedWhitespace = view.replace(/\s+/g, " ").trim();
+  const standardizedHyphenSpacing = collapsedWhitespace.replace(/\s*-\s*/g, " - ");
+  const withoutDiacritics = standardizedHyphenSpacing.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
+
+  return withoutDiacritics.toUpperCase();
 }
 
 function generateLotPositions(base: { x: number; y: number }, count: number): { x: number; y: number }[] {
