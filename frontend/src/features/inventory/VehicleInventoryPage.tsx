@@ -2486,6 +2486,7 @@ interface VehicleMarkerEntry {
   primaryItemId: number | null;
   category_id: number | null;
   remise_item_id: number | null;
+  pharmacy_item_id: number | null;
 }
 
 interface MarkerLayoutPosition {
@@ -3530,7 +3531,8 @@ function createMarkerFromItem(item: VehicleItem): VehicleMarkerEntry {
     isLot: false,
     primaryItemId: item.id,
     category_id: item.category_id,
-    remise_item_id: item.remise_item_id
+    remise_item_id: item.remise_item_id,
+    pharmacy_item_id: item.pharmacy_item_id
   };
 }
 
@@ -3562,7 +3564,8 @@ function createMarkerFromLotGroup(
     isLot: true,
     primaryItemId: representative?.id ?? null,
     category_id: representative?.category_id ?? null,
-    remise_item_id: representative?.remise_item_id ?? null
+    remise_item_id: representative?.remise_item_id ?? null,
+    pharmacy_item_id: representative?.pharmacy_item_id ?? null
   };
 }
 
