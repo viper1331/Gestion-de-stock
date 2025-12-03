@@ -3676,16 +3676,12 @@ function getVehicleViews(vehicle: VehicleCategory | null): string[] {
   return sanitized.length > 0 ? sanitized : [DEFAULT_VIEW_LABEL];
 }
 
-function normalizeViewName(view: string | null): string {
+function normalizeViewName(view?: string | null): string {
   if (!view) {
     return DEFAULT_VIEW_LABEL;
   }
 
-  const collapsedWhitespace = view.replace(/\s+/g, " ").trim();
-  const standardizedHyphenSpacing = collapsedWhitespace.replace(/\s*-\s*/g, " - ");
-  const withoutDiacritics = standardizedHyphenSpacing.normalize("NFD").replace(/[\u0300-\u036f]/g, "");
-
-  return withoutDiacritics.toUpperCase();
+  return view.trim().replace(/\s+/g, " ").toUpperCase();
 }
 
 function generateLotPositions(base: { x: number; y: number }, count: number): { x: number; y: number }[] {
