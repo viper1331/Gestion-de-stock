@@ -21,6 +21,7 @@ import { resolveMediaUrl } from "../../lib/media";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
+import { useAuth } from "../auth/useAuth";
 import { useInventoryDebug } from "./useInventoryDebug";
 import { useThrottledHoverState } from "./useThrottledHoverState";
 import { useViewSelectionLock } from "./useViewSelectionLock";
@@ -144,6 +145,16 @@ function getAvailableQuantity(item: VehicleItem): number {
   }
   return item.quantity ?? 0;
 }
+
+const INVENTORY_DEBUG_ENABLED =
+  String(
+    import.meta.env.VITE_INVENTORY_DEBUG ??
+      // Fallback for environments that don't inject the VITE_ prefix.
+      import.meta.env.INVENTORY_DEBUG ??
+      "false"
+  )
+    .toLowerCase()
+    .trim() === "true";
 
 export const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
@@ -276,14 +287,34 @@ function readPointerTargetsFromStorage(storageKey: string): PointerTargetMap {
 export function VehicleInventoryPage() {
   const queryClient = useQueryClient();
   const moduleTitle = useModuleTitle("vehicle_inventory");
-  const { logDebug, logDragEvent } = useInventoryDebug();
-  const {
-    selectedView,
-    requestViewChange,
-    lockViewSelection,
-    unlockViewSelection,
-    resetView
-  } = useViewSelectionLock(null);
+  const { user } = useAuth();
+  const debugEnabled = useMemo(
+    () => user?.role === "admin" || INVENTORY_DEBUG_ENABLED,
+    [user?.role]
+  );
+  const debug = useInventoryDebug(debugEnabled);
+  const logDebug = debug.logInfo;
+  const viewLock = useViewSelectionLock();
+  const [selectedView, setSelectedView] = useState<string | null>(null);
+  const requestViewChange = useCallback(
+    (next: string | null) => {
+      if (viewLock.getLockedView("") !== "") {
+        return;
+      }
+      setSelectedView(next);
+    },
+    [viewLock]
+  );
+  const resetView = useCallback(() => {
+    setSelectedView(null);
+    viewLock.unlock();
+  }, [viewLock]);
+  const lockViewSelection = useCallback(() => {
+    viewLock.lock(resolveTargetView(selectedView));
+  }, [selectedView, viewLock]);
+  const unlockViewSelection = useCallback(() => {
+    viewLock.unlock();
+  }, [viewLock]);
   const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
     null
@@ -1617,7 +1648,7 @@ export function VehicleInventoryPage() {
                 const dropRequest = buildDropRequestPayload({
                   itemId,
                   categoryId: selectedVehicle.id,
-                  selectedView: normalizedSelectedView,
+                  selectedView: options?.targetView ?? normalizedSelectedView,
                   position,
                   quantity: options?.quantity ?? null,
                   sourceCategoryId: options?.sourceCategoryId,
@@ -2150,7 +2181,7 @@ function VehicleCompartment({
   onUpdateItemQuantity,
   onDragStartCapture
 }: VehicleCompartmentProps) {
-  const { isHovering, requestHoverState, cancelHoverState } = useThrottledHoverState();
+  const hover = useThrottledHoverState();
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = usePersistentBoolean(
     backgroundPanelStorageKey,
     true
@@ -2229,17 +2260,20 @@ function VehicleCompartment({
     : null;
   const isProcessingBackground = isUpdatingBackground || uploadBackground.isPending;
 
-  const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
-    logDragEvent("board:dragover", { clientX: event.clientX, clientY: event.clientY });
-    event.preventDefault();
-    event.dataTransfer.dropEffect = "move";
-    requestHoverState(true);
+  const handleDragOver = (e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const rect = boardRef.current?.getBoundingClientRect() ?? null;
+
+    hover.handleHover(e.nativeEvent, rect);
+
+    debug.logHover({
+      x: hover.posRef.current.x,
+      y: hover.posRef.current.y,
+      rect
+    });
   };
 
   const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
-    logDragEvent("board:dragleave", {
-      relatedTarget: (event.relatedTarget as HTMLElement | null)?.tagName ?? null
-    });
     if (!boardRef.current) {
       return;
     }
@@ -2247,18 +2281,21 @@ function VehicleCompartment({
     if (nextTarget && boardRef.current.contains(nextTarget)) {
       return;
     }
-    cancelHoverState();
+    hover.resetHover();
   };
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
-    logDragEvent("board:drop", { clientX: event.clientX, clientY: event.clientY });
     event.preventDefault();
-    cancelHoverState();
+    hover.resetHover();
     const data = readDraggedItemData(event);
     if (!data) {
       return;
     }
-    logDragEvent("board:drop:data", data);
+    const targetView = viewLock.getLockedView(resolveTargetView(selectedView));
+
+    viewLock.unlock();
+
+    debug.logDrop({ itemId: data.itemId, targetView });
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
       return;
@@ -2279,7 +2316,8 @@ function VehicleCompartment({
       data.assignedLotItemIds.forEach((lotItemId, index) => {
         onDropItem(lotItemId, position, {
           isReposition: true,
-          suppressFeedback: index > 0
+          suppressFeedback: index > 0,
+          targetView
         });
       });
       return;
@@ -2311,7 +2349,8 @@ function VehicleCompartment({
       pharmacyItemId:
         data.pharmacyItemId === undefined
           ? undefined
-          : data.pharmacyItemId ?? null
+          : data.pharmacyItemId ?? null,
+      targetView
     });
   };
 
@@ -2385,6 +2424,7 @@ function VehicleCompartment({
     onBackgroundChange(null);
   };
 
+  const isHovering = hover.hoverRef.current;
   const backgroundImageUrl = resolveMediaUrl(viewConfig?.background_url);
 
   const boardStyle = backgroundImageUrl
@@ -2725,11 +2765,6 @@ function VehicleItemMarker({
 
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
     onDragStartCapture?.();
-    logDragEvent("marker:dragstart", {
-      entryKey: entry.key,
-      itemId: entry.primaryItemId,
-      lotId: entry.lot_id
-    });
     const rect = event.currentTarget.getBoundingClientRect();
     writeDraggedItemData(event, {
       itemId: entry.primaryItemId ?? undefined,
@@ -3015,7 +3050,7 @@ function DroppableLibrary({
   onItemFeedback,
   onDragStartCapture
 }: DroppableLibraryProps) {
-  const { isHovering, requestHoverState, cancelHoverState } = useThrottledHoverState();
+  const hover = useThrottledHoverState();
   const [isCollapsed, setIsCollapsed] = usePersistentBoolean(
     "vehicleInventory:library",
     false
@@ -3029,6 +3064,8 @@ function DroppableLibrary({
     false
   );
 
+  const isHovering = hover.hoverRef.current;
+
   return (
     <div
       className={clsx(
@@ -3041,27 +3078,23 @@ function DroppableLibrary({
         if (isCollapsed) {
           return;
         }
-        logDragEvent("library:dragover", { clientX: event.clientX, clientY: event.clientY });
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
-        requestHoverState(true);
+        hover.handleHover(event.nativeEvent, null);
       }}
       onDragLeave={() => {
-        logDragEvent("library:dragleave", { isCollapsed });
-        cancelHoverState();
+        hover.resetHover();
       }}
       onDrop={(event) => {
         if (isCollapsed) {
           return;
         }
-        logDragEvent("library:drop", { clientX: event.clientX, clientY: event.clientY });
         event.preventDefault();
-        cancelHoverState();
+        hover.resetHover();
         const data = readDraggedItemData(event);
         if (!data) {
           return;
         }
-        logDragEvent("library:drop:data", data);
         if (
           typeof data.lotId === "number" &&
           data.categoryId !== null &&

@@ -1,6 +1,5 @@
-import { act, fireEvent, render, screen } from "@testing-library/react";
+import { act, renderHook } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
-import { useEffect, useRef } from "react";
 
 import {
   buildDropRequestPayload,
@@ -9,98 +8,51 @@ import {
 import { useThrottledHoverState } from "./useThrottledHoverState";
 import { useViewSelectionLock } from "./useViewSelectionLock";
 
-function HoverTester() {
-  const { isHovering, requestHoverState } = useThrottledHoverState(false, 50);
-  const renderCountRef = useRef(0);
-  renderCountRef.current += 1;
-
-  useEffect(() => {
-    // noop to react to changes in tests
-  }, [isHovering]);
-
-  return (
-    <div>
-      <span data-testid="hover-state">{isHovering ? "on" : "off"}</span>
-      <span data-testid="render-count">{renderCountRef.current}</span>
-      <button
-        type="button"
-        onClick={() => requestHoverState(true)}
-        data-testid="trigger-hover"
-      >
-        trigger
-      </button>
-    </div>
-  );
-}
-
-function ViewLockTester() {
-  const { selectedView, requestViewChange, lockViewSelection, unlockViewSelection } =
-    useViewSelectionLock("VUE A");
-
-  return (
-    <div>
-      <span data-testid="current-view">{selectedView ?? "none"}</span>
-      <button type="button" data-testid="lock" onClick={lockViewSelection}>
-        lock
-      </button>
-      <button type="button" data-testid="unlock" onClick={unlockViewSelection}>
-        unlock
-      </button>
-      <button
-        type="button"
-        data-testid="switch-view"
-        onClick={() => requestViewChange("VUE B")}
-      >
-        switch
-      </button>
-    </div>
-  );
-}
-
 describe("Vehicle inventory interactions", () => {
   it("throttles dragover updates to avoid infinite re-render loops", () => {
-    vi.useFakeTimers();
-    render(<HoverTester />);
+    const { result } = renderHook(() => useThrottledHoverState(50));
+    const rect = new DOMRect(0, 0, 100, 100);
+    const nowSpy = vi.spyOn(performance, "now");
 
-    const trigger = screen.getByTestId("trigger-hover");
-
+    nowSpy.mockReturnValue(100);
     act(() => {
-      fireEvent.click(trigger);
-      fireEvent.click(trigger);
-      fireEvent.click(trigger);
-      vi.advanceTimersByTime(25);
-      fireEvent.click(trigger);
-      vi.advanceTimersByTime(24);
+      result.current.handleHover({ clientX: 25, clientY: 75 } as DragEvent, rect);
     });
 
-    expect(screen.getByTestId("hover-state").textContent).toBe("off");
+    expect(result.current.hoverRef.current).toBe(true);
+    expect(result.current.posRef.current).toEqual({ x: 0.25, y: 0.75 });
 
+    nowSpy.mockReturnValue(120);
     act(() => {
-      vi.advanceTimersByTime(1);
+      result.current.handleHover({ clientX: 50, clientY: 50 } as DragEvent, rect);
     });
 
-    expect(screen.getByTestId("hover-state").textContent).toBe("on");
+    expect(result.current.posRef.current).toEqual({ x: 0.25, y: 0.75 });
 
-    const renderCount = Number(screen.getByTestId("render-count").textContent);
-    expect(renderCount).toBeGreaterThan(0);
-    expect(renderCount).toBeLessThan(6);
+    nowSpy.mockReturnValue(200);
+    act(() => {
+      result.current.handleHover({ clientX: 50, clientY: 50 } as DragEvent, rect);
+    });
 
-    vi.useRealTimers();
+    expect(result.current.posRef.current).toEqual({ x: 0.5, y: 0.5 });
+
+    nowSpy.mockRestore();
   });
 
   it("keeps the view locked during drag operations", () => {
-    render(<ViewLockTester />);
+    const { result } = renderHook(() => useViewSelectionLock());
 
-    expect(screen.getByTestId("current-view").textContent).toBe("VUE A");
+    act(() => {
+      result.current.lock("VUE A");
+    });
 
-    fireEvent.click(screen.getByTestId("lock"));
-    fireEvent.click(screen.getByTestId("switch-view"));
+    expect(result.current.getLockedView("VUE B")).toBe("VUE A");
 
-    expect(screen.getByTestId("current-view").textContent).toBe("VUE A");
+    act(() => {
+      result.current.unlock();
+    });
 
-    fireEvent.click(screen.getByTestId("unlock"));
-
-    expect(screen.getByTestId("current-view").textContent).toBe("VUE B");
+    expect(result.current.getLockedView("VUE B")).toBe("VUE B");
   });
 
   it("uses the active incendie view for assignments", () => {
