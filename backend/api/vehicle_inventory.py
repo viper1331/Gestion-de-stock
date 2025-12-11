@@ -11,6 +11,7 @@ from fastapi.responses import HTMLResponse, StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
+from backend.core.config import settings
 from backend.services.pdf import VehiclePdfOptions
 from backend.services import qrcode_service
 
@@ -123,31 +124,34 @@ async def create_vehicle_item(
     user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
-    logger.debug(
-        "[INVENTORY_DEBUG] Incoming vehicle assignment",
-        extra={"payload": payload.model_dump()},
-    )
+    if settings.INVENTORY_DEBUG:
+        logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment: %s", payload.model_dump())
     try:
         vehicle = (
             services.get_vehicle_category(payload.category_id)
             if payload.category_id is not None
             else None
         )
-        if vehicle and payload.size and payload.size not in (vehicle.sizes or []):
+        if (
+            settings.INVENTORY_DEBUG
+            and vehicle
+            and payload.size
+            and payload.size not in (vehicle.sizes or [])
+        ):
             logger.warning(
-                "[INVENTORY_DEBUG] Invalid view received",
-                {"received": payload.size, "expected": vehicle.sizes},
+                "[INVENTORY_DEBUG] Invalid size received (fallback applied)",
+                {"received": payload.size, "valid_views": vehicle.sizes},
             )
         new_item = services.create_vehicle_item(payload)
-        logger.debug(
-            "[INVENTORY_DEBUG] Saved vehicle item",
-            {
-                "id": new_item.id,
-                "size_saved": new_item.size,
-                "pos_x": new_item.position_x,
-                "pos_y": new_item.position_y,
-            },
-        )
+        if settings.INVENTORY_DEBUG:
+            logger.debug(
+                "[INVENTORY_DEBUG] Saved vehicle item: %s",
+                {
+                    "item_id": new_item.id,
+                    "size_saved": new_item.size,
+                    "vehicle_views": vehicle.sizes if vehicle else None,
+                },
+            )
         return new_item
     except ValueError as exc:
         logger.error("[INVENTORY_DEBUG] Vehicle assignment failed", exc_info=True)
@@ -169,10 +173,8 @@ async def update_vehicle_item(
     user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
-    logger.debug(
-        "[INVENTORY_DEBUG] Incoming vehicle assignment",
-        extra={"payload": payload.model_dump()},
-    )
+    if settings.INVENTORY_DEBUG:
+        logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment: %s", payload.model_dump())
     try:
         existing_item = services.get_vehicle_item(item_id)
         target_category_id = (
@@ -187,22 +189,27 @@ async def update_vehicle_item(
             if target_category_id is not None
             else None
         )
-        if vehicle and target_view and target_view not in (vehicle.sizes or []):
+        if (
+            settings.INVENTORY_DEBUG
+            and vehicle
+            and target_view
+            and target_view not in (vehicle.sizes or [])
+        ):
             logger.warning(
-                "[INVENTORY_DEBUG] Invalid view received",
-                {"received": target_view, "expected": vehicle.sizes},
+                "[INVENTORY_DEBUG] Invalid size received (fallback applied)",
+                {"received": target_view, "valid_views": vehicle.sizes},
             )
 
         new_item = services.update_vehicle_item(item_id, payload)
-        logger.debug(
-            "[INVENTORY_DEBUG] Saved vehicle item",
-            {
-                "id": new_item.id,
-                "size_saved": new_item.size,
-                "pos_x": new_item.position_x,
-                "pos_y": new_item.position_y,
-            },
-        )
+        if settings.INVENTORY_DEBUG:
+            logger.debug(
+                "[INVENTORY_DEBUG] Saved vehicle item: %s",
+                {
+                    "item_id": new_item.id,
+                    "size_saved": new_item.size,
+                    "vehicle_views": vehicle.sizes if vehicle else None,
+                },
+            )
         return new_item
     except ValueError as exc:
         logger.error("[INVENTORY_DEBUG] Vehicle assignment failed", exc_info=True)
