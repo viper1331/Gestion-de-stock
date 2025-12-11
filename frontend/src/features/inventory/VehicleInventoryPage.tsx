@@ -22,6 +22,10 @@ import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
 
+const logDragEvent = (eventName: string, details?: Record<string, unknown>) => {
+  console.log(`[VehicleInventory] ${eventName}`, details ?? {});
+};
+
 interface VehicleViewConfig {
   name: string;
   background_photo_id: number | null;
@@ -2067,12 +2071,16 @@ function VehicleCompartment({
   const isProcessingBackground = isUpdatingBackground || uploadBackground.isPending;
 
   const handleDragOver = (event: DragEvent<HTMLDivElement>) => {
+    logDragEvent("board:dragover", { clientX: event.clientX, clientY: event.clientY });
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
     setIsHovering(true);
   };
 
   const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
+    logDragEvent("board:dragleave", {
+      relatedTarget: (event.relatedTarget as HTMLElement | null)?.tagName ?? null
+    });
     if (!boardRef.current) {
       return;
     }
@@ -2084,12 +2092,14 @@ function VehicleCompartment({
   };
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
+    logDragEvent("board:drop", { clientX: event.clientX, clientY: event.clientY });
     event.preventDefault();
     setIsHovering(false);
     const data = readDraggedItemData(event);
     if (!data) {
       return;
     }
+    logDragEvent("board:drop:data", data);
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
       return;
@@ -2547,6 +2557,11 @@ function VehicleItemMarker({
   const markerTitle = entry.tooltip ? `${baseTitle}\n${entry.tooltip}` : baseTitle;
 
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
+    logDragEvent("marker:dragstart", {
+      entryKey: entry.key,
+      itemId: entry.primaryItemId,
+      lotId: entry.lot_id
+    });
     const rect = event.currentTarget.getBoundingClientRect();
     writeDraggedItemData(event, {
       itemId: entry.primaryItemId ?? undefined,
@@ -2849,21 +2864,27 @@ function DroppableLibrary({
         if (isCollapsed) {
           return;
         }
+        logDragEvent("library:dragover", { clientX: event.clientX, clientY: event.clientY });
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
         setIsHovering(true);
       }}
-      onDragLeave={() => setIsHovering(false)}
+      onDragLeave={() => {
+        logDragEvent("library:dragleave", { isCollapsed });
+        setIsHovering(false);
+      }}
       onDrop={(event) => {
         if (isCollapsed) {
           return;
         }
+        logDragEvent("library:drop", { clientX: event.clientX, clientY: event.clientY });
         event.preventDefault();
         setIsHovering(false);
         const data = readDraggedItemData(event);
         if (!data) {
           return;
         }
+        logDragEvent("library:drop:data", data);
         if (
           typeof data.lotId === "number" &&
           data.categoryId !== null &&
