@@ -21,33 +21,9 @@ import { resolveMediaUrl } from "../../lib/media";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
-
-const logDragEvent = (eventName: string, details?: Record<string, unknown>) => {
-  console.log(`[VehicleInventory] ${eventName}`, details ?? {});
-};
-
-const INVENTORY_DEBUG_ENABLED =
-  String(
-    import.meta.env.VITE_INVENTORY_DEBUG ??
-      // Fallback for environments that don't inject the VITE_ prefix.
-      import.meta.env.INVENTORY_DEBUG ??
-      "false"
-  )
-    .toLowerCase()
-    .trim() === "true";
-
-function logDebug(message: string, data?: any) {
-  if (!INVENTORY_DEBUG_ENABLED) {
-    return;
-  }
-  console.debug("[INVENTORY_DEBUG]", message, data ?? "");
-}
-
-function invDebug(message: string, data?: any) {
-  if (import.meta.env.VITE_INVENTORY_DEBUG === "true") {
-    console.debug("[INVENTORY_DEBUG]", message, data ?? "");
-  }
-}
+import { useInventoryDebug } from "./useInventoryDebug";
+import { useThrottledHoverState } from "./useThrottledHoverState";
+import { useViewSelectionLock } from "./useViewSelectionLock";
 
 interface VehicleViewConfig {
   name: string;
@@ -143,6 +119,9 @@ interface UpdateItemPayload {
   position?: { x: number; y: number } | null;
   quantity?: number;
   successMessage?: string;
+  sourceCategoryId?: number | null;
+  remiseItemId?: number | null;
+  pharmacyItemId?: number | null;
 }
 
 const VEHICLE_ILLUSTRATIONS = [
@@ -181,6 +160,51 @@ type DraggedItemData = {
   lotId?: number | null;
   lotName?: string | null;
 };
+
+export function resolveTargetView(selectedView: string | null): string {
+  return normalizeViewName(selectedView ?? DEFAULT_VIEW_LABEL);
+}
+
+export type DropRequestPayload = {
+  itemId: number;
+  categoryId: number;
+  position: { x: number; y: number };
+  quantity: number | null;
+  sourceCategoryId: number | null;
+  remiseItemId: number | null;
+  pharmacyItemId: number | null;
+  targetView: string;
+  isReposition?: boolean;
+  suppressFeedback?: boolean;
+};
+
+export function buildDropRequestPayload(params: {
+  itemId: number;
+  categoryId: number;
+  selectedView: string | null;
+  position: { x: number; y: number };
+  quantity?: number | null;
+  sourceCategoryId?: number | null;
+  remiseItemId?: number | null;
+  pharmacyItemId?: number | null;
+  isReposition?: boolean;
+  suppressFeedback?: boolean;
+}): DropRequestPayload {
+  const targetView = resolveTargetView(params.selectedView);
+
+  return {
+    itemId: params.itemId,
+    categoryId: params.categoryId,
+    position: params.position,
+    quantity: params.quantity ?? null,
+    sourceCategoryId: params.sourceCategoryId ?? null,
+    remiseItemId: params.remiseItemId ?? null,
+    pharmacyItemId: params.pharmacyItemId ?? null,
+    targetView,
+    isReposition: params.isReposition,
+    suppressFeedback: params.suppressFeedback
+  };
+}
 
 function writeDraggedItemData(
   event: DragEvent<HTMLElement>,
@@ -252,8 +276,15 @@ function readPointerTargetsFromStorage(storageKey: string): PointerTargetMap {
 export function VehicleInventoryPage() {
   const queryClient = useQueryClient();
   const moduleTitle = useModuleTitle("vehicle_inventory");
+  const { logDebug, logDragEvent } = useInventoryDebug();
+  const {
+    selectedView,
+    requestViewChange,
+    lockViewSelection,
+    unlockViewSelection,
+    resetView
+  } = useViewSelectionLock(null);
   const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
-  const [selectedView, setSelectedView] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
     null
   );
@@ -322,10 +353,23 @@ export function VehicleInventoryPage() {
   });
 
   const updateItemLocation = useMutation({
-    mutationFn: async ({ itemId, categoryId, size, position, quantity }: UpdateItemPayload) => {
+    mutationFn: async ({
+      itemId,
+      categoryId,
+      size,
+      position,
+      quantity,
+      sourceCategoryId,
+      remiseItemId,
+      pharmacyItemId
+    }: UpdateItemPayload) => {
       const payload: Record<string, unknown> = {
         category_id: categoryId,
-        size
+        size,
+        target_view: size ?? null,
+        source_category_id: sourceCategoryId ?? null,
+        remise_item_id: remiseItemId ?? null,
+        pharmacy_item_id: pharmacyItemId ?? null
       };
       if (position) {
         payload.position_x = position.x;
@@ -339,9 +383,8 @@ export function VehicleInventoryPage() {
       }
       await api.put(`/vehicle-inventory/${itemId}`, payload);
     },
-    onMutate: (vars) => invDebug("UPDATE START", vars),
+    onMutate: (vars) => logDebug("UPDATE START", vars),
     onSuccess: (responseData, variables) => {
-      invDebug("UPDATE SUCCESS", { data: responseData, vars: variables });
       logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
       if (variables.successMessage) {
         setFeedback({ type: "success", text: variables.successMessage });
@@ -356,7 +399,6 @@ export function VehicleInventoryPage() {
       });
     },
     onError: (error, vars) => {
-      invDebug("UPDATE ERROR", { err: error, vars });
       logDebug("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
@@ -407,9 +449,8 @@ export function VehicleInventoryPage() {
       });
       return response.data;
     },
-    onMutate: (vars) => invDebug("ASSIGN START", vars),
+    onMutate: (vars) => logDebug("ASSIGN START", vars),
     onSuccess: (responseData, variables) => {
-      invDebug("ASSIGN SUCCESS", { data: responseData, vars: variables });
       logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
       setFeedback({
@@ -420,7 +461,6 @@ export function VehicleInventoryPage() {
       });
     },
     onError: (error, vars) => {
-      invDebug("ASSIGN ERROR", { err: error, vars });
       logDebug("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
@@ -637,7 +677,7 @@ export function VehicleInventoryPage() {
     onSuccess: () => {
       setFeedback({ type: "success", text: "Véhicule supprimé." });
       setSelectedVehicleId(null);
-      setSelectedView(null);
+      requestViewChange(null);
       setIsEditingVehicle(false);
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
@@ -724,13 +764,28 @@ export function VehicleInventoryPage() {
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
       setEditedVehicleType(null);
+      resetView();
     }
-  }, [selectedVehicleId]);
+  }, [resetView, selectedVehicleId]);
 
   useEffect(() => {
     setIsAddingSubView(false);
     setNewSubViewName("");
   }, [selectedVehicleId]);
+
+  useEffect(() => {
+    const handleDragSessionEnd = () => {
+      unlockViewSelection();
+    };
+
+    window.addEventListener("dragend", handleDragSessionEnd);
+    window.addEventListener("drop", handleDragSessionEnd);
+
+    return () => {
+      window.removeEventListener("dragend", handleDragSessionEnd);
+      window.removeEventListener("drop", handleDragSessionEnd);
+    };
+  }, [unlockViewSelection]);
 
   const normalizedSelectedView = useMemo(
     () => normalizeViewName(selectedView ?? DEFAULT_VIEW_LABEL),
@@ -789,7 +844,7 @@ export function VehicleInventoryPage() {
         onSuccess: () => {
           setNewSubViewName("");
           setIsAddingSubView(false);
-          setSelectedView(composedName);
+          requestViewChange(composedName);
           pushFeedback({ type: "success", text: "Sous-vue ajoutée." });
         }
       }
@@ -809,7 +864,7 @@ export function VehicleInventoryPage() {
 
   useEffect(() => {
     if (!selectedVehicle) {
-      setSelectedView(null);
+      requestViewChange(null);
       return;
     }
 
@@ -817,8 +872,8 @@ export function VehicleInventoryPage() {
       return;
     }
 
-    setSelectedView(normalizedVehicleViews[0] ?? DEFAULT_VIEW_LABEL);
-  }, [selectedVehicle, selectedView, normalizedVehicleViews]);
+    requestViewChange(normalizedVehicleViews[0] ?? DEFAULT_VIEW_LABEL);
+  }, [normalizedVehicleViews, requestViewChange, selectedVehicle, selectedView]);
 
   const vehicleItems = useMemo(
     () => items.filter((item) => item.category_id === selectedVehicle?.id),
@@ -826,9 +881,8 @@ export function VehicleInventoryPage() {
   );
 
   useEffect(() => {
-    invDebug("ITEMS RELOADED", vehicleItems);
     logDebug("RELOADED VEHICLE ITEMS", vehicleItems);
-  }, [vehicleItems]);
+  }, [logDebug, vehicleItems]);
 
   const vehicleItemCountMap = useMemo(() => {
     const map = new Map<number, number>();
@@ -1067,7 +1121,7 @@ export function VehicleInventoryPage() {
       clearVehicleImageSelection();
       setIsCreatingVehicle(false);
       setSelectedVehicleId(finalVehicle.id);
-      setSelectedView(null);
+      requestViewChange(null);
     } catch {
       // handled in mutation callbacks
     }
@@ -1501,7 +1555,7 @@ export function VehicleInventoryPage() {
           <VehicleViewSelector
             views={normalizedVehicleViews}
             selectedView={selectedView}
-            onSelect={setSelectedView}
+            onSelect={requestViewChange}
           />
 
           {selectedVehicle ? (
@@ -1558,43 +1612,50 @@ export function VehicleInventoryPage() {
               items={itemsForSelectedView}
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
+              onDragStartCapture={lockViewSelection}
               onDropItem={(itemId, position, options) => {
-                const selectedViewSafe = selectedView ?? DEFAULT_VIEW_LABEL;
-                const vehicleViews = selectedVehicle?.sizes ?? [];
-                const backendView =
-                  vehicleViews.find(
-                    (v) =>
-                      normalizeViewNameStrict(v) ===
-                      normalizeViewNameStrict(selectedViewSafe)
-                  ) ?? (vehicleViews[0] ?? DEFAULT_VIEW_LABEL);
-                const targetView = backendView;
+                const dropRequest = buildDropRequestPayload({
+                  itemId,
+                  categoryId: selectedVehicle.id,
+                  selectedView: normalizedSelectedView,
+                  position,
+                  quantity: options?.quantity ?? null,
+                  sourceCategoryId: options?.sourceCategoryId,
+                  remiseItemId: options?.remiseItemId,
+                  pharmacyItemId: options?.pharmacyItemId,
+                  isReposition: options?.isReposition,
+                  suppressFeedback: options?.suppressFeedback
+                });
 
-                invDebug("DROP EVENT", {
-                  selectedView,
-                  normalizedSelectedView,
-                  backendView: targetView,
-                  vehicleViews,
+                logDebug("DROP EVENT", {
+                  selectedView: dropRequest.targetView,
+                  normalizedSelectedView: dropRequest.targetView,
+                  backendView: dropRequest.targetView,
+                  vehicleViews: selectedVehicle?.sizes ?? [],
                   itemId,
                   position,
                   options
                 });
                 if (options?.sourceCategoryId === null) {
                   assignItemToVehicle.mutate({
-                    itemId,
-                    categoryId: selectedVehicle.id,
-                    size: targetView,
-                    position
+                    itemId: dropRequest.itemId,
+                    categoryId: dropRequest.categoryId,
+                    size: dropRequest.targetView,
+                    position: dropRequest.position
                   });
                   return;
                 }
                 updateItemLocation.mutate({
-                  itemId,
-                  categoryId: selectedVehicle.id,
-                  size: targetView,
-                  position,
-                  quantity: options?.quantity ?? undefined,
+                  itemId: dropRequest.itemId,
+                  categoryId: dropRequest.categoryId,
+                  size: dropRequest.targetView,
+                  position: dropRequest.position,
+                  quantity: dropRequest.quantity ?? undefined,
+                  sourceCategoryId: dropRequest.sourceCategoryId,
+                  remiseItemId: dropRequest.remiseItemId,
+                  pharmacyItemId: dropRequest.pharmacyItemId,
                   successMessage:
-                    options?.isReposition && !options?.suppressFeedback
+                    dropRequest.isReposition && !options?.suppressFeedback
                       ? "Position enregistrée."
                       : undefined
                 });
@@ -1669,6 +1730,7 @@ export function VehicleInventoryPage() {
                 items={itemsInOtherViews}
                 onItemFeedback={pushFeedback}
                 storageKey="vehicleInventory:panel:otherViews"
+                onDragStartCapture={lockViewSelection}
               />
 
               <VehicleItemsPanel
@@ -1678,6 +1740,7 @@ export function VehicleInventoryPage() {
                 items={itemsWaitingAssignment}
                 onItemFeedback={pushFeedback}
                 storageKey="vehicleInventory:panel:pendingAssignment"
+                onDragStartCapture={lockViewSelection}
               />
 
               <DroppableLibrary
@@ -1687,6 +1750,7 @@ export function VehicleInventoryPage() {
                 isAssigningLot={assignLotToVehicle.isPending}
                 vehicleName={selectedVehicle?.name ?? null}
                 vehicleType={selectedVehicleType}
+                onDragStartCapture={lockViewSelection}
                 onAssignLot={(lot) => {
                   if (!selectedVehicle) {
                     setFeedback({
@@ -2053,6 +2117,8 @@ interface VehicleCompartmentProps {
       quantity?: number | null;
       sourceCategoryId?: number | null;
       remiseItemId?: number | null;
+      pharmacyItemId?: number | null;
+      targetView?: string | null;
       suppressFeedback?: boolean;
     }
   ) => void;
@@ -2064,6 +2130,7 @@ interface VehicleCompartmentProps {
   itemsPanelStorageKey: string;
   onDropLot?: (lotId: number, position: { x: number; y: number }) => void;
   onUpdateItemQuantity?: (itemId: number, quantity: number) => void;
+  onDragStartCapture: () => void;
 }
 
 function VehicleCompartment({
@@ -2080,9 +2147,10 @@ function VehicleCompartment({
   backgroundPanelStorageKey,
   itemsPanelStorageKey,
   onDropLot,
-  onUpdateItemQuantity
+  onUpdateItemQuantity,
+  onDragStartCapture
 }: VehicleCompartmentProps) {
-  const [isHovering, setIsHovering] = useState(false);
+  const { isHovering, requestHoverState, cancelHoverState } = useThrottledHoverState();
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = usePersistentBoolean(
     backgroundPanelStorageKey,
     true
@@ -2165,7 +2233,7 @@ function VehicleCompartment({
     logDragEvent("board:dragover", { clientX: event.clientX, clientY: event.clientY });
     event.preventDefault();
     event.dataTransfer.dropEffect = "move";
-    setIsHovering(true);
+    requestHoverState(true);
   };
 
   const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
@@ -2179,13 +2247,13 @@ function VehicleCompartment({
     if (nextTarget && boardRef.current.contains(nextTarget)) {
       return;
     }
-    setIsHovering(false);
+    cancelHoverState();
   };
 
   const handleDrop = (event: DragEvent<HTMLDivElement>) => {
     logDragEvent("board:drop", { clientX: event.clientX, clientY: event.clientY });
     event.preventDefault();
-    setIsHovering(false);
+    cancelHoverState();
     const data = readDraggedItemData(event);
     if (!data) {
       return;
@@ -2239,7 +2307,11 @@ function VehicleCompartment({
       quantity: !isFromLibrary && !isReposition ? 1 : undefined,
       sourceCategoryId: sourceCategoryId ?? null,
       remiseItemId:
-        data.remiseItemId === undefined ? undefined : data.remiseItemId ?? null
+        data.remiseItemId === undefined ? undefined : data.remiseItemId ?? null,
+      pharmacyItemId:
+        data.pharmacyItemId === undefined
+          ? undefined
+          : data.pharmacyItemId ?? null
     });
   };
 
@@ -2488,6 +2560,7 @@ function VehicleCompartment({
                 }
                 isPointerTargetPending={pendingPointerKey === entry.key}
                 hidePointerActions={hidePointerActions}
+                onDragStartCapture={onDragStartCapture}
               />
             );
           })}
@@ -2575,6 +2648,7 @@ function VehicleCompartment({
                 item={item}
                 onRemove={() => onRemoveItem(item.id)}
                 onFeedback={onItemFeedback}
+                onDragStartCapture={onDragStartCapture}
                 onUpdateQuantity={
                   onUpdateItemQuantity
                     ? (quantity) => onUpdateItemQuantity(item.id, quantity)
@@ -2627,6 +2701,7 @@ interface VehicleItemMarkerProps {
   onClearPointerTarget?: (markerKey: string) => void;
   isPointerTargetPending?: boolean;
   hidePointerActions?: boolean;
+  onDragStartCapture?: () => void;
 }
 
 function VehicleItemMarker({
@@ -2637,7 +2712,8 @@ function VehicleItemMarker({
   onRequestPointerTarget,
   onClearPointerTarget,
   isPointerTargetPending,
-  hidePointerActions = false
+  hidePointerActions = false,
+  onDragStartCapture
 }: VehicleItemMarkerProps) {
   const positionX = clamp(entry.position_x ?? 0.5, 0, 1);
   const positionY = clamp(entry.position_y ?? 0.5, 0, 1);
@@ -2648,6 +2724,7 @@ function VehicleItemMarker({
   const markerTitle = entry.tooltip ? `${baseTitle}\n${entry.tooltip}` : baseTitle;
 
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
+    onDragStartCapture?.();
     logDragEvent("marker:dragstart", {
       entryKey: entry.key,
       itemId: entry.primaryItemId,
@@ -2854,6 +2931,7 @@ interface VehicleItemsPanelProps {
   items: VehicleItem[];
   onItemFeedback?: (feedback: Feedback) => void;
   storageKey: string;
+  onDragStartCapture?: () => void;
 }
 
 function VehicleItemsPanel({
@@ -2862,7 +2940,8 @@ function VehicleItemsPanel({
   emptyMessage,
   items,
   onItemFeedback,
-  storageKey
+  storageKey,
+  onDragStartCapture
 }: VehicleItemsPanelProps) {
   const [isCollapsed, setIsCollapsed] = usePersistentBoolean(storageKey, false);
 
@@ -2889,7 +2968,12 @@ function VehicleItemsPanel({
       ) : (
         <div className="mt-4 space-y-3">
           {items.map((item) => (
-            <ItemCard key={item.id} item={item} onFeedback={onItemFeedback} />
+            <ItemCard
+              key={item.id}
+              item={item}
+              onFeedback={onItemFeedback}
+              onDragStartCapture={onDragStartCapture}
+            />
           ))}
           {items.length === 0 && (
             <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
@@ -2914,6 +2998,7 @@ interface DroppableLibraryProps {
   onDropLot?: (lotId: number, categoryId: number) => void;
   onRemoveFromVehicle: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
+  onDragStartCapture: () => void;
 }
 
 function DroppableLibrary({
@@ -2927,9 +3012,10 @@ function DroppableLibrary({
   onDropItem,
   onDropLot,
   onRemoveFromVehicle,
-  onItemFeedback
+  onItemFeedback,
+  onDragStartCapture
 }: DroppableLibraryProps) {
-  const [isHovering, setIsHovering] = useState(false);
+  const { isHovering, requestHoverState, cancelHoverState } = useThrottledHoverState();
   const [isCollapsed, setIsCollapsed] = usePersistentBoolean(
     "vehicleInventory:library",
     false
@@ -2958,11 +3044,11 @@ function DroppableLibrary({
         logDragEvent("library:dragover", { clientX: event.clientX, clientY: event.clientY });
         event.preventDefault();
         event.dataTransfer.dropEffect = "move";
-        setIsHovering(true);
+        requestHoverState(true);
       }}
       onDragLeave={() => {
         logDragEvent("library:dragleave", { isCollapsed });
-        setIsHovering(false);
+        cancelHoverState();
       }}
       onDrop={(event) => {
         if (isCollapsed) {
@@ -2970,7 +3056,7 @@ function DroppableLibrary({
         }
         logDragEvent("library:drop", { clientX: event.clientX, clientY: event.clientY });
         event.preventDefault();
-        setIsHovering(false);
+        cancelHoverState();
         const data = readDraggedItemData(event);
         if (!data) {
           return;
@@ -3085,6 +3171,7 @@ function DroppableLibrary({
                       title={lotTooltip}
                       draggable
                       onDragStart={(event) => {
+                        onDragStartCapture();
                         writeDraggedItemData(event, { lotId: lot.id, lotName: lot.name });
                         event.dataTransfer.effectAllowed = "copyMove";
                       }}
@@ -3174,6 +3261,7 @@ function DroppableLibrary({
                   item={item}
                   onRemove={() => onRemoveFromVehicle(item.id)}
                   onFeedback={onItemFeedback}
+                  onDragStartCapture={onDragStartCapture}
                 />
               ))}
               {items.length === 0 && (
@@ -3199,9 +3287,17 @@ interface ItemCardProps {
   onFeedback?: (feedback: Feedback) => void;
   onUpdatePosition?: (position: { x: number; y: number }) => void;
   onUpdateQuantity?: (quantity: number) => void;
+  onDragStartCapture?: () => void;
 }
 
-function ItemCard({ item, onRemove, onFeedback, onUpdatePosition, onUpdateQuantity }: ItemCardProps) {
+function ItemCard({
+  item,
+  onRemove,
+  onFeedback,
+  onUpdatePosition,
+  onUpdateQuantity,
+  onDragStartCapture
+}: ItemCardProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingPosition, setIsEditingPosition] = useState(false);
@@ -3389,6 +3485,7 @@ function ItemCard({ item, onRemove, onFeedback, onUpdatePosition, onUpdateQuanti
           event.preventDefault();
           return;
         }
+        onDragStartCapture?.();
         const rect = event.currentTarget.getBoundingClientRect();
         writeDraggedItemData(event, {
           itemId: item.id,
