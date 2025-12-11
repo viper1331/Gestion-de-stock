@@ -25,8 +25,6 @@ interface Category {
   sizes: string[];
 }
 
-type VehicleType = "incendie" | "secours_a_personne";
-
 interface Item {
   id: number;
   name: string;
@@ -45,7 +43,6 @@ interface Item {
   lot_name?: string | null;
   lot_names?: string[];
   is_in_lot?: boolean;
-  vehicle_type: VehicleType | null;
   assigned_vehicle_names?: string[];
 }
 
@@ -114,15 +111,9 @@ type InventoryColumnKey =
   | "size"
   | "category"
   | "lotMembership"
-  | "vehicleType"
   | "supplier"
   | "threshold"
   | "expiration";
-
-const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
-  incendie: "Incendie",
-  secours_a_personne: "Secours à personne"
-};
 
 type ExpirationStatus = "expired" | "expiring-soon" | null;
 
@@ -351,7 +342,6 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     size: 140,
     category: 150,
     lotMembership: 160,
-    vehicleType: 180,
     supplier: 180,
     threshold: 120,
     expiration: 170
@@ -365,7 +355,6 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     size: true,
     category: true,
     lotMembership: Boolean(config.showLotMembershipColumn),
-    vehicleType: Boolean(config.showVehicleTypeColumn),
     supplier: true,
     threshold: true,
     expiration: supportsExpirationDate
@@ -410,9 +399,6 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       ...(config.showLotMembershipColumn
         ? ([{ key: "lotMembership", label: "Lot" }] as const)
         : []),
-      ...(config.showVehicleTypeColumn
-        ? ([{ key: "vehicleType", label: "Catégorie véhicule" }] as const)
-        : []),
       { key: "supplier", label: "Fournisseur" },
       { key: "threshold", label: "Seuil" }
     ];
@@ -438,7 +424,6 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     size: { width: columnWidths.size, minWidth: columnWidths.size },
     category: { width: columnWidths.category, minWidth: columnWidths.category },
     lotMembership: { width: columnWidths.lotMembership, minWidth: columnWidths.lotMembership },
-    vehicleType: { width: columnWidths.vehicleType, minWidth: columnWidths.vehicleType },
     supplier: { width: columnWidths.supplier, minWidth: columnWidths.supplier },
     expiration: { width: columnWidths.expiration, minWidth: columnWidths.expiration },
     threshold: { width: columnWidths.threshold, minWidth: columnWidths.threshold }
@@ -703,13 +688,6 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         onResize={(value) => saveWidth("lotMembership", value)}
                       />
                     ) : null}
-                    {config.showVehicleTypeColumn && columnVisibility.vehicleType !== false ? (
-                      <ResizableHeader
-                        label="Catégorie véhicule"
-                        width={columnWidths.vehicleType}
-                        onResize={(value) => saveWidth("vehicleType", value)}
-                      />
-                    ) : null}
                     {columnVisibility.supplier !== false ? (
                       <ResizableHeader
                         label="Fournisseur"
@@ -841,11 +819,6 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                                 {isInLot ? "Associé" : "Aucun"}
                               </span>
                             </div>
-                          </td>
-                        ) : null}
-                        {config.showVehicleTypeColumn && columnVisibility.vehicleType !== false ? (
-                          <td style={columnStyles.vehicleType} className="px-4 py-3 text-sm text-slate-300">
-                            {item.vehicle_type ? VEHICLE_TYPE_LABELS[item.vehicle_type] : "Non attribué"}
                           </td>
                         ) : null}
                         {columnVisibility.supplier !== false ? (
