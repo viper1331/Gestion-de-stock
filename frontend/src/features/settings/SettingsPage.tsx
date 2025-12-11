@@ -1,4 +1,4 @@
-import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
@@ -16,7 +16,7 @@ import {
   HomePageConfigKey,
   isHomePageConfigKey
 } from "../home/homepageConfig";
-import { DEFAULT_DEBUG_FLAGS, DebugFlags, debugLog, persistDebugFlags } from "../../lib/debug";
+import { DebugFlags } from "../../lib/debug";
 
 const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
 
@@ -188,7 +188,12 @@ export function SettingsPage() {
     days: [],
     times: ["02:00"]
   });
-  const [debugConfig, setDebugConfig] = useState<DebugFlags>(DEFAULT_DEBUG_FLAGS);
+  const [debugConfig, setDebugConfig] = useState<DebugFlags>({
+    frontend_debug: false,
+    backend_debug: false,
+    inventory_debug: false,
+    network_debug: false
+  });
   const [isLoadingDebugConfig, setIsLoadingDebugConfig] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
@@ -217,11 +222,6 @@ export function SettingsPage() {
     }
   });
 
-  const applyDebugConfig = useCallback((config: DebugFlags) => {
-    setDebugConfig(config);
-    persistDebugFlags(config);
-  }, []);
-
   useEffect(() => {
     if (scheduleStatus) {
       setScheduleForm({
@@ -236,30 +236,38 @@ export function SettingsPage() {
     if (!isAdmin) {
       return undefined;
     }
-    let cancelled = false;
-    const fetchDebugConfig = async () => {
-      setIsLoadingDebugConfig(true);
-      try {
-        const response = await api.get<DebugFlags>("/admin/debug-config");
-        if (!cancelled) {
-          applyDebugConfig(response.data);
+
+    let ignore = false;
+    setIsLoadingDebugConfig(true);
+
+    api
+      .get<DebugFlags>("/admin/debug-config")
+      .then((response) => {
+        if (ignore) {
+          return;
         }
-      } catch (err) {
-        if (!cancelled) {
+        setDebugConfig(response.data);
+        Object.entries(response.data).forEach(([key, value]) => {
+          if (typeof window !== "undefined") {
+            window.localStorage.setItem(key, value ? "1" : "0");
+          }
+        });
+      })
+      .catch(() => {
+        if (!ignore) {
           setError("Impossible de charger la configuration debug.");
         }
-      } finally {
-        if (!cancelled) {
+      })
+      .finally(() => {
+        if (!ignore) {
           setIsLoadingDebugConfig(false);
         }
-      }
-    };
+      });
 
-    void fetchDebugConfig();
     return () => {
-      cancelled = true;
+      ignore = true;
     };
-  }, [applyDebugConfig, isAdmin]);
+  }, [isAdmin]);
 
   const backupTimeInputs = scheduleForm.times.length ? scheduleForm.times : ["02:00"];
 
@@ -345,26 +353,23 @@ export function SettingsPage() {
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
-  const updateDebugConfig = useCallback(
-    async (config: DebugFlags) => {
-      setMessage(null);
-      setError(null);
-      applyDebugConfig(config);
-      try {
-        await api.put("/admin/debug-config", config);
-        setMessage("Configuration debug mise à jour.");
-      } catch (err) {
-        setError("Impossible de mettre à jour la configuration debug.");
-        try {
-          const response = await api.get<DebugFlags>("/admin/debug-config");
-          applyDebugConfig(response.data);
-        } catch (innerError) {
-          debugLog("admin:debug-config:reload-failed", innerError);
-        }
+  const updateDebugConfig = async (partial: Partial<DebugFlags>) => {
+    const newCfg = { ...debugConfig, ...partial };
+    setDebugConfig(newCfg);
+
+    Object.entries(newCfg).forEach(([key, value]) => {
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(key, value ? "1" : "0");
       }
-    },
-    [applyDebugConfig]
-  );
+    });
+
+    try {
+      await api.put("/admin/debug-config", newCfg);
+    } catch (err) {
+      // eslint-disable-next-line no-console
+      console.error("Erreur update debug config", err);
+    }
+  };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>, entry: ConfigEntry) => {
     event.preventDefault();
@@ -549,7 +554,7 @@ export function SettingsPage() {
   };
 
   const handleDebugToggle = (key: keyof DebugFlags, enabled: boolean) => {
-    void updateDebugConfig({ ...debugConfig, [key]: enabled });
+    void updateDebugConfig({ [key]: enabled });
   };
 
   useEffect(() => {

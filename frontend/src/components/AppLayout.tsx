@@ -9,14 +9,13 @@ import { useModulePermissions } from "../features/permissions/useModulePermissio
 import { useUiStore } from "../app/store";
 import { fetchConfigEntries } from "../lib/config";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
-import { useDebugFlags } from "../lib/debug";
+import { isDebugEnabled } from "../lib/debug";
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
   const { sidebarOpen, toggleSidebar } = useUiStore();
-  const debugFlags = useDebugFlags();
 
   const { data: configEntries = [] } = useQuery({
     queryKey: ["config", "global"],
@@ -27,10 +26,10 @@ export function AppLayout() {
   const moduleTitles = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
 
   const isDebugActive =
-    debugFlags.frontend_debug ||
-    debugFlags.backend_debug ||
-    debugFlags.inventory_debug ||
-    debugFlags.network_debug;
+    isDebugEnabled("frontend_debug") ||
+    isDebugEnabled("backend_debug") ||
+    isDebugEnabled("inventory_debug") ||
+    isDebugEnabled("network_debug");
 
   const inactivityCooldownMs = useMemo(() => {
     const cooldownEntry = configEntries.find(
