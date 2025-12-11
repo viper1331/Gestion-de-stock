@@ -1,48 +1,34 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+// useThrottledHoverState.ts
+import { useCallback, useRef } from "react";
 
-export function useThrottledHoverState(initialState = false, delayMs = 50) {
-  const [isHovering, setIsHovering] = useState(initialState);
-  const hoverIntentRef = useRef(isHovering);
-  const throttleTimeoutRef = useRef<number | null>(null);
+export function useThrottledHoverState(throttleMs = 50) {
+  const lastCall = useRef(0);
+  const hoverRef = useRef(false);
+  const posRef = useRef({ x: 0, y: 0 });
 
-  useEffect(() => {
-    hoverIntentRef.current = isHovering;
-  }, [isHovering]);
+  const handleHover = useCallback((e: DragEvent, rect: DOMRect | null) => {
+    const now = performance.now();
+    if (now - lastCall.current < throttleMs) return;
 
-  const flushHoverIntent = useCallback(() => {
-    if (throttleTimeoutRef.current !== null) {
-      return;
+    lastCall.current = now;
+    hoverRef.current = true;
+
+    if (rect) {
+      posRef.current = {
+        x: (e.clientX - rect.left) / rect.width,
+        y: (e.clientY - rect.top) / rect.height,
+      };
     }
-    throttleTimeoutRef.current = window.setTimeout(() => {
-      throttleTimeoutRef.current = null;
-      setIsHovering(hoverIntentRef.current);
-    }, delayMs);
-  }, [delayMs]);
-
-  const requestHoverState = useCallback(
-    (nextState: boolean) => {
-      hoverIntentRef.current = nextState;
-      flushHoverIntent();
-    },
-    [flushHoverIntent]
-  );
-
-  const cancelHoverState = useCallback(() => {
-    hoverIntentRef.current = false;
-    if (throttleTimeoutRef.current !== null) {
-      window.clearTimeout(throttleTimeoutRef.current);
-      throttleTimeoutRef.current = null;
-    }
-    setIsHovering(false);
   }, []);
 
-  useEffect(() => {
-    return () => {
-      if (throttleTimeoutRef.current !== null) {
-        window.clearTimeout(throttleTimeoutRef.current);
-      }
-    };
-  }, []);
+  const resetHover = () => {
+    hoverRef.current = false;
+  };
 
-  return { isHovering, requestHoverState, cancelHoverState } as const;
+  return {
+    hoverRef,
+    posRef,
+    handleHover,
+    resetHover,
+  };
 }
