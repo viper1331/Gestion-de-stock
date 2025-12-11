@@ -36,7 +36,7 @@ const INVENTORY_DEBUG_ENABLED =
     .toLowerCase()
     .trim() === "true";
 
-function debugLog(message: string, data?: any) {
+function logDebug(message: string, data?: any) {
   if (!INVENTORY_DEBUG_ENABLED) {
     return;
   }
@@ -334,7 +334,7 @@ export function VehicleInventoryPage() {
       await api.put(`/vehicle-inventory/${itemId}`, payload);
     },
     onSuccess: (responseData, variables) => {
-      debugLog("MUTATION SUCCESS", responseData);
+      logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
       if (variables.successMessage) {
         setFeedback({ type: "success", text: variables.successMessage });
         return;
@@ -348,7 +348,7 @@ export function VehicleInventoryPage() {
       });
     },
     onError: (error) => {
-      debugLog("MUTATION ERROR", error);
+      logDebug("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
         return;
@@ -399,7 +399,7 @@ export function VehicleInventoryPage() {
       return response.data;
     },
     onSuccess: (responseData, variables) => {
-      debugLog("MUTATION SUCCESS", responseData);
+      logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
       setFeedback({
         type: "success",
@@ -409,7 +409,7 @@ export function VehicleInventoryPage() {
       });
     },
     onError: (error) => {
-      debugLog("MUTATION ERROR", error);
+      logDebug("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
         return;
@@ -513,7 +513,8 @@ export function VehicleInventoryPage() {
       }
       return created;
     },
-    onSuccess: async (_, variables) => {
+    onSuccess: async (data, variables) => {
+      logDebug("MUTATION SUCCESS", { data, vars: variables });
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
       const lotName = variables.lot?.name ?? null;
       setFeedback({
@@ -530,6 +531,7 @@ export function VehicleInventoryPage() {
       ]);
     },
     onError: (error) => {
+      logDebug("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
         return;
@@ -812,7 +814,7 @@ export function VehicleInventoryPage() {
   );
 
   useEffect(() => {
-    debugLog("ITEMS RELOADED", { vehicleItems });
+    logDebug("RELOADED VEHICLE ITEMS", vehicleItems);
   }, [vehicleItems]);
 
   const vehicleItemCountMap = useMemo(() => {
@@ -1554,25 +1556,7 @@ export function VehicleInventoryPage() {
                   ) ?? (vehicleViews[0] ?? DEFAULT_VIEW_LABEL);
 
                 const targetView = backendView;
-                if (options?.sourceCategoryId === null) {
-                  debugLog("DRAG START", {
-                    selectedView,
-                    normalizedSelectedView,
-                    vehicleViews,
-                    backendView: targetView,
-                    itemId,
-                    position,
-                    options
-                  });
-                  assignItemToVehicle.mutate({
-                    itemId,
-                    categoryId: selectedVehicle.id,
-                    size: targetView,
-                    position
-                  });
-                  return;
-                }
-                debugLog("DRAG START", {
+                logDebug("DROP EVENT", {
                   selectedView,
                   normalizedSelectedView,
                   vehicleViews,
@@ -1581,6 +1565,15 @@ export function VehicleInventoryPage() {
                   position,
                   options
                 });
+                if (options?.sourceCategoryId === null) {
+                  assignItemToVehicle.mutate({
+                    itemId,
+                    categoryId: selectedVehicle.id,
+                    size: targetView,
+                    position
+                  });
+                  return;
+                }
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
@@ -1602,7 +1595,7 @@ export function VehicleInventoryPage() {
                   });
                   return;
                 }
-                debugLog("DRAG START", {
+                logDebug("DROP EVENT", {
                   selectedView,
                   normalizedSelectedView,
                   vehicleViews,
@@ -1636,7 +1629,7 @@ export function VehicleInventoryPage() {
                   return;
                 }
                 const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
-                debugLog("DRAG START", {
+                logDebug("DROP EVENT", {
                   selectedView,
                   normalizedSelectedView,
                   vehicleViews,
@@ -1697,8 +1690,8 @@ export function VehicleInventoryPage() {
                     position: null
                   });
                 }}
-                onDropItem={(itemId) =>
-                  debugLog("DRAG START", {
+                onDropItem={(itemId) => {
+                  logDebug("DROP EVENT", {
                     selectedView,
                     normalizedSelectedView,
                     vehicleViews,
@@ -1706,20 +1699,20 @@ export function VehicleInventoryPage() {
                     itemId,
                     position: null,
                     options: undefined
-                  }) ||
+                  });
                   updateItemLocation.mutate({
                     itemId,
                     categoryId: null,
                     size: null,
                     position: null,
                     quantity: 0
-                  })
-                }
+                  });
+                }}
                 onDropLot={(lotId, categoryId) =>
                   removeLotFromVehicle.mutate({ lotId, categoryId })
                 }
-                onRemoveFromVehicle={(itemId) =>
-                  debugLog("DRAG START", {
+                onRemoveFromVehicle={(itemId) => {
+                  logDebug("DROP EVENT", {
                     selectedView,
                     normalizedSelectedView,
                     vehicleViews,
@@ -1727,15 +1720,15 @@ export function VehicleInventoryPage() {
                     itemId,
                     position: null,
                     options: undefined
-                  }) ||
+                  });
                   updateItemLocation.mutate({
                     itemId,
                     categoryId: null,
                     size: null,
                     position: null,
                     quantity: 0
-                  })
-                }
+                  });
+                }}
                 onItemFeedback={pushFeedback}
               />
             </aside>
