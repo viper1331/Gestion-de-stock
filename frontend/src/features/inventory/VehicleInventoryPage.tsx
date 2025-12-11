@@ -43,6 +43,12 @@ function logDebug(message: string, data?: any) {
   console.debug("[INVENTORY_DEBUG]", message, data ?? "");
 }
 
+function invDebug(message: string, data?: any) {
+  if (import.meta.env.VITE_INVENTORY_DEBUG === "true") {
+    console.debug("[INVENTORY_DEBUG]", message, data ?? "");
+  }
+}
+
 interface VehicleViewConfig {
   name: string;
   background_photo_id: number | null;
@@ -333,7 +339,9 @@ export function VehicleInventoryPage() {
       }
       await api.put(`/vehicle-inventory/${itemId}`, payload);
     },
+    onMutate: (vars) => invDebug("UPDATE START", vars),
     onSuccess: (responseData, variables) => {
+      invDebug("UPDATE SUCCESS", { data: responseData, vars: variables });
       logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
       if (variables.successMessage) {
         setFeedback({ type: "success", text: variables.successMessage });
@@ -347,7 +355,8 @@ export function VehicleInventoryPage() {
           : "Le matériel a été retiré du véhicule."
       });
     },
-    onError: (error) => {
+    onError: (error, vars) => {
+      invDebug("UPDATE ERROR", { err: error, vars });
       logDebug("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
@@ -398,7 +407,9 @@ export function VehicleInventoryPage() {
       });
       return response.data;
     },
+    onMutate: (vars) => invDebug("ASSIGN START", vars),
     onSuccess: (responseData, variables) => {
+      invDebug("ASSIGN SUCCESS", { data: responseData, vars: variables });
       logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
       setFeedback({
@@ -408,7 +419,8 @@ export function VehicleInventoryPage() {
           : "Le matériel a été affecté au véhicule."
       });
     },
-    onError: (error) => {
+    onError: (error, vars) => {
+      invDebug("ASSIGN ERROR", { err: error, vars });
       logDebug("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
@@ -814,6 +826,7 @@ export function VehicleInventoryPage() {
   );
 
   useEffect(() => {
+    invDebug("ITEMS RELOADED", vehicleItems);
     logDebug("RELOADED VEHICLE ITEMS", vehicleItems);
   }, [vehicleItems]);
 
@@ -1547,20 +1560,20 @@ export function VehicleInventoryPage() {
               availablePhotos={vehiclePhotos}
               onDropItem={(itemId, position, options) => {
                 const selectedViewSafe = selectedView ?? DEFAULT_VIEW_LABEL;
-
+                const vehicleViews = selectedVehicle?.sizes ?? [];
                 const backendView =
                   vehicleViews.find(
-                    (view) =>
-                      normalizeViewNameStrict(view) ===
+                    (v) =>
+                      normalizeViewNameStrict(v) ===
                       normalizeViewNameStrict(selectedViewSafe)
                   ) ?? (vehicleViews[0] ?? DEFAULT_VIEW_LABEL);
-
                 const targetView = backendView;
-                logDebug("DROP EVENT", {
+
+                invDebug("DROP EVENT", {
                   selectedView,
                   normalizedSelectedView,
-                  vehicleViews,
                   backendView: targetView,
+                  vehicleViews,
                   itemId,
                   position,
                   options
