@@ -137,6 +137,28 @@ def _sanitize_image_suffix(filename: str | None) -> str:
     return ".png"
 
 
+def _resolve_media_path(relative_path: str | None) -> Path | None:
+    """Return an absolute media path if it stays within ``MEDIA_ROOT``.
+
+    User-provided paths (stored in the database or coming from HTTP payloads)
+    must never allow traversing outside the media directory. Using ``resolve``
+    followed by ``relative_to`` ensures that sequences such as ``../`` are
+    rejected instead of silently deleting or copying arbitrary files on disk.
+    """
+
+    if not relative_path:
+        return None
+    try:
+        candidate = (MEDIA_ROOT / Path(relative_path)).resolve()
+    except (OSError, TypeError):
+        return None
+    try:
+        candidate.relative_to(MEDIA_ROOT)
+    except ValueError:
+        return None
+    return candidate
+
+
 def _store_media_file(directory: Path, stream: BinaryIO, filename: str | None) -> str:
     directory.mkdir(parents=True, exist_ok=True)
     suffix = _sanitize_image_suffix(filename)
@@ -152,9 +174,9 @@ def _store_media_file(directory: Path, stream: BinaryIO, filename: str | None) -
 
 
 def _delete_media_file(relative_path: str | None) -> None:
-    if not relative_path:
+    target = _resolve_media_path(relative_path)
+    if target is None:
         return
-    target = MEDIA_ROOT / Path(relative_path)
     try:
         target.unlink(missing_ok=True)
     except OSError:
@@ -162,10 +184,8 @@ def _delete_media_file(relative_path: str | None) -> None:
 
 
 def _clone_media_file(source_relative_path: str | None, directory: Path) -> str | None:
-    if not source_relative_path:
-        return None
-    source_path = MEDIA_ROOT / source_relative_path
-    if not source_path.exists() or not source_path.is_file():
+    source_path = _resolve_media_path(source_relative_path)
+    if source_path is None or not source_path.exists() or not source_path.is_file():
         return None
     directory.mkdir(parents=True, exist_ok=True)
     suffix = _sanitize_image_suffix(source_path.name)
