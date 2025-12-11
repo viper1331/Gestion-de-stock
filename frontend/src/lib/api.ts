@@ -2,6 +2,7 @@ import axios, { AxiosError, AxiosRequestConfig } from "axios";
 
 import { API_BASE_URL } from "./env";
 import { resetApiConfigCache, resolveApiBaseUrl } from "./apiConfig";
+import { apiDebug } from "./debug";
 
 const DEFAULT_BASE_URL = API_BASE_URL.replace(/\/$/, "");
 
@@ -24,6 +25,12 @@ async function ensureBaseUrl(): Promise<string> {
 api.interceptors.request.use(async (config) => {
   const baseUrl = await ensureBaseUrl();
   config.baseURL = baseUrl;
+  apiDebug("Request", {
+    url: config.url,
+    method: config.method,
+    params: config.params,
+    hasBody: Boolean(config.data)
+  });
   return config;
 });
 
@@ -45,10 +52,22 @@ interface RetriableRequestConfig extends AxiosRequestConfig {
 }
 
 api.interceptors.response.use(
-  (response) => response,
+  (response) => {
+    apiDebug("Response", {
+      url: response.config.url,
+      status: response.status,
+      method: response.config.method
+    });
+    return response;
+  },
   async (error) => {
     const originalRequest = error.config as RetriableRequestConfig | undefined;
     const isUnauthorized = (error as AxiosError).response?.status === 401;
+    apiDebug("Response error", {
+      url: originalRequest?.url,
+      status: (error as AxiosError).response?.status,
+      message: (error as AxiosError).message
+    });
     const storedRefresh = localStorage.getItem("gsp/token");
 
     if (isUnauthorized && storedRefresh && originalRequest && !originalRequest._retry) {

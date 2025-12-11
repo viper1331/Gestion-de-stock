@@ -96,6 +96,13 @@ class RefreshRequest(BaseModel):
     refresh_token: str
 
 
+class DebugConfig(BaseModel):
+    frontend_debug: bool = False
+    backend_debug: bool = False
+    inventory_debug: bool = False
+    network_debug: bool = False
+
+
 class VehicleViewConfig(BaseModel):
     name: str
     background_photo_id: int | None = None
