@@ -14,6 +14,7 @@ from backend.core import models, services
 from backend.core.config import settings
 from backend.services.pdf import VehiclePdfOptions
 from backend.services import qrcode_service
+from backend.services.debug_service import load_debug_config
 
 logger = logging.getLogger("inventory_debug")
 
@@ -21,6 +22,13 @@ router = APIRouter()
 
 QR_MODULE_KEY = "vehicle_qrcodes"
 FALLBACK_MODULE_KEY = "vehicle_inventory"
+
+
+def _is_inventory_debug_enabled() -> bool:
+    try:
+        return bool(load_debug_config().get("inventory_debug")) or settings.INVENTORY_DEBUG
+    except Exception:
+        return settings.INVENTORY_DEBUG
 
 
 def _require_permission(user: models.User, *, action: str) -> None:
@@ -124,7 +132,8 @@ async def create_vehicle_item(
     user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
-    if settings.INVENTORY_DEBUG:
+    inventory_debug_enabled = _is_inventory_debug_enabled()
+    if inventory_debug_enabled:
         logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment: %s", payload.model_dump())
     try:
         vehicle = (
@@ -133,7 +142,7 @@ async def create_vehicle_item(
             else None
         )
         if (
-            settings.INVENTORY_DEBUG
+            inventory_debug_enabled
             and vehicle
             and payload.size
             and payload.size not in (vehicle.sizes or [])
@@ -143,7 +152,7 @@ async def create_vehicle_item(
                 {"received": payload.size, "valid_views": vehicle.sizes},
             )
         new_item = services.create_vehicle_item(payload)
-        if settings.INVENTORY_DEBUG:
+        if inventory_debug_enabled:
             logger.debug(
                 "[INVENTORY_DEBUG] Saved vehicle item: %s",
                 {
@@ -173,7 +182,8 @@ async def update_vehicle_item(
     user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
-    if settings.INVENTORY_DEBUG:
+    inventory_debug_enabled = _is_inventory_debug_enabled()
+    if inventory_debug_enabled:
         logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment: %s", payload.model_dump())
     try:
         existing_item = services.get_vehicle_item(item_id)
@@ -190,7 +200,7 @@ async def update_vehicle_item(
             else None
         )
         if (
-            settings.INVENTORY_DEBUG
+            inventory_debug_enabled
             and vehicle
             and target_view
             and target_view not in (vehicle.sizes or [])
@@ -201,7 +211,7 @@ async def update_vehicle_item(
             )
 
         new_item = services.update_vehicle_item(item_id, payload)
-        if settings.INVENTORY_DEBUG:
+        if inventory_debug_enabled:
             logger.debug(
                 "[INVENTORY_DEBUG] Saved vehicle item: %s",
                 {

@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
@@ -16,6 +16,7 @@ import {
   HomePageConfigKey,
   isHomePageConfigKey
 } from "../home/homepageConfig";
+import { DEFAULT_DEBUG_FLAGS, DebugFlags, debugLog, persistDebugFlags } from "../../lib/debug";
 
 const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
 
@@ -187,6 +188,8 @@ export function SettingsPage() {
     days: [],
     times: ["02:00"]
   });
+  const [debugConfig, setDebugConfig] = useState<DebugFlags>(DEFAULT_DEBUG_FLAGS);
+  const [isLoadingDebugConfig, setIsLoadingDebugConfig] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [collapsedSections, setCollapsedSections] = useState<Record<string, boolean>>(() => {
     if (typeof window === "undefined") {
@@ -214,6 +217,11 @@ export function SettingsPage() {
     }
   });
 
+  const applyDebugConfig = useCallback((config: DebugFlags) => {
+    setDebugConfig(config);
+    persistDebugFlags(config);
+  }, []);
+
   useEffect(() => {
     if (scheduleStatus) {
       setScheduleForm({
@@ -223,6 +231,35 @@ export function SettingsPage() {
       });
     }
   }, [scheduleStatus]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      return undefined;
+    }
+    let cancelled = false;
+    const fetchDebugConfig = async () => {
+      setIsLoadingDebugConfig(true);
+      try {
+        const response = await api.get<DebugFlags>("/admin/debug-config");
+        if (!cancelled) {
+          applyDebugConfig(response.data);
+        }
+      } catch (err) {
+        if (!cancelled) {
+          setError("Impossible de charger la configuration debug.");
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingDebugConfig(false);
+        }
+      }
+    };
+
+    void fetchDebugConfig();
+    return () => {
+      cancelled = true;
+    };
+  }, [applyDebugConfig, isAdmin]);
 
   const backupTimeInputs = scheduleForm.times.length ? scheduleForm.times : ["02:00"];
 
@@ -307,6 +344,27 @@ export function SettingsPage() {
     onError: () => setError("Impossible d'enregistrer la planification."),
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
+
+  const updateDebugConfig = useCallback(
+    async (config: DebugFlags) => {
+      setMessage(null);
+      setError(null);
+      applyDebugConfig(config);
+      try {
+        await api.put("/admin/debug-config", config);
+        setMessage("Configuration debug mise à jour.");
+      } catch (err) {
+        setError("Impossible de mettre à jour la configuration debug.");
+        try {
+          const response = await api.get<DebugFlags>("/admin/debug-config");
+          applyDebugConfig(response.data);
+        } catch (innerError) {
+          debugLog("admin:debug-config:reload-failed", innerError);
+        }
+      }
+    },
+    [applyDebugConfig]
+  );
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>, entry: ConfigEntry) => {
     event.preventDefault();
@@ -490,6 +548,10 @@ export function SettingsPage() {
     }));
   };
 
+  const handleDebugToggle = (key: keyof DebugFlags, enabled: boolean) => {
+    void updateDebugConfig({ ...debugConfig, [key]: enabled });
+  };
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -611,12 +673,82 @@ export function SettingsPage() {
         </div>
       </div>
       {isAdmin ? (
-        <div className="rounded-lg border border-slate-800 bg-slate-900">
-          <div className="divide-y divide-slate-900">
-            {Object.entries(groupedEntries).map(([section, sectionEntries]) => {
-              const sectionKey = `admin:${section}`;
-              const sectionContentId = getSectionContentId(sectionKey);
-              return (
+        <>
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+                  Debug (Administrateur)
+                </h3>
+                <p className="text-xs text-slate-400">
+                  Activez les journaux détaillés pour le frontend, les APIs et les interactions drag & drop.
+                </p>
+              </div>
+              {isLoadingDebugConfig ? (
+                <span className="text-[11px] text-slate-400">Chargement...</span>
+              ) : null}
+            </div>
+            <div className="mt-3 grid gap-3 sm:grid-cols-2">
+              <label className="flex items-start justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-200">Frontend debug</p>
+                  <p className="text-xs text-slate-400">Journalise les interactions UI en direct.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={debugConfig.frontend_debug}
+                  onChange={(event) => handleDebugToggle("frontend_debug", event.target.checked)}
+                  disabled={isLoadingDebugConfig}
+                  className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                />
+              </label>
+              <label className="flex items-start justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-200">Backend debug</p>
+                  <p className="text-xs text-slate-400">Active les journaux enrichis côté serveur.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={debugConfig.backend_debug}
+                  onChange={(event) => handleDebugToggle("backend_debug", event.target.checked)}
+                  disabled={isLoadingDebugConfig}
+                  className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                />
+              </label>
+              <label className="flex items-start justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-200">Inventory debug (drag & drop)</p>
+                  <p className="text-xs text-slate-400">Trace les positions et affectations d'inventaire.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={debugConfig.inventory_debug}
+                  onChange={(event) => handleDebugToggle("inventory_debug", event.target.checked)}
+                  disabled={isLoadingDebugConfig}
+                  className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                />
+              </label>
+              <label className="flex items-start justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-200">Network debug (API)</p>
+                  <p className="text-xs text-slate-400">Capture les requêtes/réponses API en console.</p>
+                </div>
+                <input
+                  type="checkbox"
+                  checked={debugConfig.network_debug}
+                  onChange={(event) => handleDebugToggle("network_debug", event.target.checked)}
+                  disabled={isLoadingDebugConfig}
+                  className="h-5 w-5 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                />
+              </label>
+            </div>
+          </div>
+          <div className="rounded-lg border border-slate-800 bg-slate-900">
+            <div className="divide-y divide-slate-900">
+              {Object.entries(groupedEntries).map(([section, sectionEntries]) => {
+                const sectionKey = `admin:${section}`;
+                const sectionContentId = getSectionContentId(sectionKey);
+                return (
                 <div key={section} className="p-4">
                   <div className="flex items-center justify-between gap-2">
                     <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">{section}</h3>
@@ -681,6 +813,7 @@ export function SettingsPage() {
             })}
           </div>
         </div>
+        </>
       ) : null}
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
         <div className="space-y-4">

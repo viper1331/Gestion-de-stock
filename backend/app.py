@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 
 from backend.api import (
     auth,
+    admin,
     items,
     categories,
     reports,
@@ -55,6 +56,7 @@ app.add_middleware(
 rebuild_cors_middleware(app, get_effective_cors_origins())
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
+app.include_router(admin.router, prefix="/admin", tags=["admin"])
 app.include_router(items.router, prefix="/items", tags=["items"])
 app.include_router(categories.router, prefix="/categories", tags=["categories"])
 app.include_router(reports.router, prefix="/reports", tags=["reports"])

@@ -9,12 +9,14 @@ import { useModulePermissions } from "../features/permissions/useModulePermissio
 import { useUiStore } from "../app/store";
 import { fetchConfigEntries } from "../lib/config";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
+import { useDebugFlags } from "../lib/debug";
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
   const { sidebarOpen, toggleSidebar } = useUiStore();
+  const debugFlags = useDebugFlags();
 
   const { data: configEntries = [] } = useQuery({
     queryKey: ["config", "global"],
@@ -23,6 +25,12 @@ export function AppLayout() {
   });
 
   const moduleTitles = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
+
+  const isDebugActive =
+    debugFlags.frontend_debug ||
+    debugFlags.backend_debug ||
+    debugFlags.inventory_debug ||
+    debugFlags.network_debug;
 
   const inactivityCooldownMs = useMemo(() => {
     const cooldownEntry = configEntries.find(
@@ -442,10 +450,17 @@ export function AppLayout() {
         }`}
       >
         <div className="flex items-center justify-between gap-2">
-          <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
-            <span aria-hidden>{sidebarOpen ? "Gestion Stock Pro" : "GSP"}</span>
-            <span className="sr-only">Gestion Stock Pro</span>
-          </Link>
+          <div className="flex items-center gap-2">
+            <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
+              <span aria-hidden>{sidebarOpen ? "Gestion Stock Pro" : "GSP"}</span>
+              <span className="sr-only">Gestion Stock Pro</span>
+            </Link>
+            {isDebugActive ? (
+              <span className="rounded bg-red-600 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+                DEBUG
+              </span>
+            ) : null}
+          </div>
           <button
             type="button"
             onClick={toggleSidebar}
