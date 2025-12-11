@@ -1510,14 +1510,15 @@ export function VehicleInventoryPage() {
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
               onDropItem={(itemId, position, options) => {
-                const backendView =
+                const normalizedTargetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                const targetView =
+                  selectedVehicle.view_configs?.find(
+                    (view) => normalizeViewName(view.name) === normalizedTargetView
+                  )?.name ??
                   selectedVehicle.sizes?.find(
-                    (v) =>
-                      normalizeViewNameStrict(v) ===
-                      normalizeViewNameStrict(selectedView ?? DEFAULT_VIEW_LABEL)
-                  ) ?? DEFAULT_VIEW_LABEL;
-
-                const targetView = backendView;
+                    (v) => normalizeViewName(v) === normalizedTargetView
+                  ) ??
+                  normalizedTargetView;
                 if (options?.sourceCategoryId === null) {
                   assignItemToVehicle.mutate({
                     itemId,
