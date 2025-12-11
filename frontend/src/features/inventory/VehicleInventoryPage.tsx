@@ -139,7 +139,7 @@ function getAvailableQuantity(item: VehicleItem): number {
   return item.quantity ?? 0;
 }
 
-const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
+export const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
 type DraggedItemData = {
   itemId?: number;
@@ -3676,7 +3676,7 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
   return null;
 }
 
-function normalizeVehicleViewsInput(rawInput: string): string[] {
+export function normalizeVehicleViewsInput(rawInput: string): string[] {
   const entries = rawInput
     .split(/[,\n]/)
     .map((entry) => entry.trim())
@@ -3688,7 +3688,7 @@ function normalizeVehicleViewsInput(rawInput: string): string[] {
   return uniqueEntries.length > 0 ? uniqueEntries : [DEFAULT_VIEW_LABEL];
 }
 
-function getVehicleViews(vehicle: VehicleCategory | null): string[] {
+export function getVehicleViews(vehicle: VehicleCategory | null): string[] {
   if (!vehicle) {
     return [DEFAULT_VIEW_LABEL];
   }
@@ -3715,7 +3715,7 @@ function normalizeViewNameStrict(name: string): string {
     .replace(/[^a-z0-9 ]/g, "");
 }
 
-function normalizeViewName(view?: string | null): string {
+export function normalizeViewName(view?: string | null): string {
   if (!view) {
     return DEFAULT_VIEW_LABEL;
   }
