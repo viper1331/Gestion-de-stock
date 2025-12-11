@@ -678,7 +678,10 @@ export function VehicleInventoryPage() {
     return vehicleFallbackMap.get(selectedVehicle.id);
   }, [selectedVehicle, vehicleFallbackMap]);
 
-  const vehicleViews = useMemo(() => getVehicleViews(selectedVehicle), [selectedVehicle]);
+  const normalizedVehicleViews = useMemo(
+    () => getVehicleViews(selectedVehicle),
+    [selectedVehicle]
+  );
 
   useEffect(() => {
     if (selectedVehicleId === null) {
@@ -775,12 +778,12 @@ export function VehicleInventoryPage() {
       return;
     }
 
-    if (selectedView && vehicleViews.includes(selectedView)) {
+    if (selectedView && normalizedVehicleViews.includes(selectedView)) {
       return;
     }
 
-    setSelectedView(vehicleViews[0] ?? DEFAULT_VIEW_LABEL);
-  }, [selectedVehicle, selectedView, vehicleViews]);
+    setSelectedView(normalizedVehicleViews[0] ?? DEFAULT_VIEW_LABEL);
+  }, [selectedVehicle, selectedView, normalizedVehicleViews]);
 
   const vehicleItems = useMemo(
     () => items.filter((item) => item.category_id === selectedVehicle?.id),
@@ -1118,6 +1121,8 @@ export function VehicleInventoryPage() {
     deleteVehicle.mutate(selectedVehicle.id);
   };
 
+  const vehicleViews = selectedVehicle?.sizes ?? [];
+
   return (
     <div className="space-y-6">
       <header className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
@@ -1454,7 +1459,7 @@ export function VehicleInventoryPage() {
           ) : null}
 
           <VehicleViewSelector
-            views={vehicleViews}
+            views={normalizedVehicleViews}
             selectedView={selectedView}
             onSelect={setSelectedView}
           />
@@ -1514,15 +1519,16 @@ export function VehicleInventoryPage() {
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
               onDropItem={(itemId, position, options) => {
-                const normalizedTargetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
-                const targetView =
-                  selectedVehicle.view_configs?.find(
-                    (view) => normalizeViewName(view.name) === normalizedTargetView
-                  )?.name ??
-                  selectedVehicle.sizes?.find(
-                    (v) => normalizeViewName(v) === normalizedTargetView
-                  ) ??
-                  normalizedTargetView;
+                const selectedViewSafe = selectedView ?? DEFAULT_VIEW_LABEL;
+
+                const backendView =
+                  vehicleViews.find(
+                    (view) =>
+                      normalizeViewNameStrict(view) ===
+                      normalizeViewNameStrict(selectedViewSafe)
+                  ) ?? (vehicleViews[0] ?? DEFAULT_VIEW_LABEL);
+
+                const targetView = backendView;
                 if (options?.sourceCategoryId === null) {
                   assignItemToVehicle.mutate({
                     itemId,
@@ -3728,12 +3734,15 @@ export function getVehicleViews(vehicle: VehicleCategory | null): string[] {
   return sanitized.length > 0 ? sanitized : [DEFAULT_VIEW_LABEL];
 }
 
-function normalizeViewNameStrict(name: string): string {
+function normalizeViewNameStrict(name: string | null | undefined): string {
+  if (!name) return "";
   return name
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
     .trim()
     .toLowerCase()
-    .replace(/\s+/g, " ")
-    .replace(/[^a-z0-9 ]/g, "");
+    .replace(/[^a-z0-9 ]/g, "")
+    .replace(/\s+/g, " ");
 }
 
 export function normalizeViewName(view?: string | null): string {
