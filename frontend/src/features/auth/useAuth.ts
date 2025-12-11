@@ -1,5 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { create } from "zustand";
+import { shallow } from "zustand/shallow";
 import { useNavigate } from "react-router-dom";
 
 import { api, setAccessToken } from "../../lib/api";
@@ -50,6 +51,25 @@ export const useAuthStore = create<AuthState>((set) => ({
   clear: () => set({ user: null, token: null, refreshToken: null, error: null })
 }));
 
+const useAuthState = () =>
+  useAuthStore(
+    (state) => ({
+      user: state.user,
+      token: state.token,
+      isLoading: state.isLoading,
+      isCheckingSession: state.isCheckingSession,
+      isReady: state.isReady,
+      error: state.error,
+      setAuth: state.setAuth,
+      setLoading: state.setLoading,
+      setChecking: state.setChecking,
+      setReady: state.setReady,
+      setError: state.setError,
+      clear: state.clear
+    }),
+    shallow
+  );
+
 async function fetchProfile(): Promise<UserProfile> {
   const { data } = await api.get<UserProfile>("/auth/me");
   return data;
@@ -57,88 +77,101 @@ async function fetchProfile(): Promise<UserProfile> {
 
 export function useAuth() {
   const navigate = useNavigate();
-  const state = useAuthStore();
+  const {
+    user,
+    token,
+    isLoading,
+    isCheckingSession,
+    isReady,
+    error,
+    setAuth,
+    setLoading,
+    setChecking,
+    setReady,
+    setError,
+    clear
+  } = useAuthState();
 
   const login = useCallback(
     async ({ username, password, remember }: LoginPayload) => {
       try {
-        state.setLoading(true);
-        state.setError(null);
+        setLoading(true);
+        setError(null);
         const { data } = await api.post("/auth/login", {
           username,
           password,
           remember_me: remember
         });
-      setAccessToken(data.access_token);
-      const profile = await fetchProfile();
-      state.setAuth({
-        user: profile,
-        token: data.access_token,
-        refreshToken: remember ? data.refresh_token : null
-      });
-      if (remember) {
-        localStorage.setItem("gsp/token", data.refresh_token);
-      } else {
-        localStorage.removeItem("gsp/token");
+        setAccessToken(data.access_token);
+        const profile = await fetchProfile();
+        setAuth({
+          user: profile,
+          token: data.access_token,
+          refreshToken: remember ? data.refresh_token : null
+        });
+        if (remember) {
+          localStorage.setItem("gsp/token", data.refresh_token);
+        } else {
+          localStorage.removeItem("gsp/token");
+        }
+        navigate("/");
+      } catch (err) {
+        setError("Identifiants invalides");
+      } finally {
+        setLoading(false);
+        setReady(true);
       }
-      navigate("/");
-    } catch (err) {
-      state.setError("Identifiants invalides");
-    } finally {
-      state.setLoading(false);
-      state.setReady(true);
-    }
-  },
-  [navigate, state]
-);
+    },
+    [navigate, setAuth, setError, setLoading, setReady]
+  );
 
   const initialize = useCallback(async () => {
     const currentState = useAuthStore.getState();
     if (currentState.isReady || currentState.isCheckingSession) {
       return;
     }
-    state.setChecking(true);
+    setChecking(true);
     try {
       const storedRefresh = localStorage.getItem("gsp/token");
       if (!storedRefresh) {
-        state.setReady(true);
+        setReady(true);
         return;
       }
       const { data } = await api.post("/auth/refresh", { refresh_token: storedRefresh });
       setAccessToken(data.access_token);
       const profile = await fetchProfile();
-      state.setAuth({ user: profile, token: data.access_token, refreshToken: data.refresh_token });
+      setAuth({ user: profile, token: data.access_token, refreshToken: data.refresh_token });
       localStorage.setItem("gsp/token", data.refresh_token);
     } catch (error) {
       localStorage.removeItem("gsp/token");
       setAccessToken(null);
-      state.clear();
+      clear();
     } finally {
-      state.setChecking(false);
-      state.setReady(true);
+      setChecking(false);
+      setReady(true);
     }
-  }, [state]);
+  }, [clear, setAuth, setChecking, setReady]);
 
   const logout = useCallback(() => {
-    state.clear();
+    clear();
     setAccessToken(null);
     localStorage.removeItem("gsp/token");
-    state.setReady(true);
+    setReady(true);
     navigate("/login");
-  }, [navigate, state]);
+  }, [clear, navigate, setReady]);
 
   return useMemo(
     () => ({
-      user: state.user,
-      token: state.token,
-      isLoading: state.isLoading,
-      error: state.error,
-      isReady: state.isReady,
-      isCheckingSession: state.isCheckingSession,
+      user,
+      token,
+      isLoading,
+      error,
+      isReady,
+      isCheckingSession,
       login,
       logout,
       initialize
     }),
-    [initialize, login, logout, state.error, state.isCheckingSession, state.isLoading, state.isReady, state.token, state.user]
+    [error, initialize, isCheckingSession, isLoading, isReady, login, logout, token, user]
   );
 }
