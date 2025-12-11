@@ -17,6 +17,19 @@ interface ConnectivityResult {
 
 const DEFAULT_RESULT: ConnectivityResult = { status: "idle", message: "" };
 
+const areConfigsEqual = (a: SystemConfig, b: SystemConfig) =>
+  a.backend_url === b.backend_url &&
+  a.backend_url_lan === b.backend_url_lan &&
+  a.backend_url_public === b.backend_url_public &&
+  a.frontend_url === b.frontend_url &&
+  a.backend_host === b.backend_host &&
+  a.backend_port === b.backend_port &&
+  a.frontend_host === b.frontend_host &&
+  a.frontend_port === b.frontend_port &&
+  a.network_mode === b.network_mode &&
+  JSON.stringify(a.cors_origins ?? []) === JSON.stringify(b.cors_origins ?? []) &&
+  JSON.stringify(a.extra ?? {}) === JSON.stringify(b.extra ?? {});
+
 export function SystemConfigPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -33,9 +46,16 @@ export function SystemConfigPage() {
   const [connectivity, setConnectivity] = useState<ConnectivityResult>(DEFAULT_RESULT);
 
   useEffect(() => {
-    if (config) {
-      setForm(config);
+    if (!config) {
+      return;
     }
+
+    setForm((previous) => {
+      if (previous && areConfigsEqual(previous, config)) {
+        return previous;
+      }
+      return config;
+    });
   }, [config]);
 
   const corsValue = useMemo(() => (form?.cors_origins ?? []).join("\n") ?? "", [form]);
