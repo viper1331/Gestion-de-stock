@@ -4,7 +4,6 @@ from __future__ import annotations
 import html
 import io
 import logging
-import os
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request
@@ -15,8 +14,7 @@ from backend.core import models, services
 from backend.services.pdf import VehiclePdfOptions
 from backend.services import qrcode_service
 
-logger = logging.getLogger(__name__)
-INVENTORY_DEBUG_ENABLED = os.getenv("INVENTORY_DEBUG", "false").lower() == "true"
+logger = logging.getLogger("inventory_debug")
 
 router = APIRouter()
 
@@ -125,45 +123,42 @@ async def create_vehicle_item(
     user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
-    if INVENTORY_DEBUG_ENABLED:
-        try:
-            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", await request.json())
-        except Exception:
-            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", {"body": "unavailable"})
+    logger.debug(
+        "[INVENTORY_DEBUG] Incoming vehicle assignment",
+        extra={"payload": payload.model_dump()},
+    )
     try:
+        vehicle = (
+            services.get_vehicle_category(payload.category_id)
+            if payload.category_id is not None
+            else None
+        )
+        if vehicle and payload.size and payload.size not in (vehicle.sizes or []):
+            logger.warning(
+                "[INVENTORY_DEBUG] Invalid view received",
+                {"received": payload.size, "expected": vehicle.sizes},
+            )
         new_item = services.create_vehicle_item(payload)
-        if INVENTORY_DEBUG_ENABLED:
-            logger.debug(
-                "[INVENTORY_DEBUG] Assigned item details",
-                {
-                    "item_id": new_item.id,
-                    "size_saved": new_item.size,
-                    "x": new_item.position_x,
-                    "y": new_item.position_y,
-                },
-            )
-            requested_view = payload.size
-            saved_view = new_item.size
-            normalized_requested = (
-                requested_view.strip().upper() if isinstance(requested_view, str) else None
-            )
-            normalized_saved = saved_view.strip().upper() if isinstance(saved_view, str) else None
-            invalid_view = (
-                normalized_requested is not None
-                and (normalized_saved is None or normalized_requested != normalized_saved)
-            )
-            if invalid_view:
-                logger.warning(
-                    "[INVENTORY_DEBUG] Invalid view received, falling back",
-                    {"received": requested_view, "fallback": saved_view},
-                )
+        logger.debug(
+            "[INVENTORY_DEBUG] Saved vehicle item",
+            {
+                "id": new_item.id,
+                "size_saved": new_item.size,
+                "pos_x": new_item.position_x,
+                "pos_y": new_item.position_y,
+            },
+        )
         return new_item
     except ValueError as exc:
+        logger.error("[INVENTORY_DEBUG] Vehicle assignment failed", exc_info=True)
         detail = str(exc)
         status_code = 400
         if "introuvable" in detail.lower():
             status_code = 404
         raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception:
+        logger.error("[INVENTORY_DEBUG] Vehicle assignment failed", exc_info=True)
+        raise
 
 
 @router.put("/{item_id}", response_model=models.Item)
@@ -174,45 +169,51 @@ async def update_vehicle_item(
     user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
-    if INVENTORY_DEBUG_ENABLED:
-        try:
-            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", await request.json())
-        except Exception:
-            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", {"body": "unavailable"})
+    logger.debug(
+        "[INVENTORY_DEBUG] Incoming vehicle assignment",
+        extra={"payload": payload.model_dump()},
+    )
     try:
+        existing_item = services.get_vehicle_item(item_id)
+        target_category_id = (
+            payload.category_id
+            if payload.category_id is not None
+            else existing_item.category_id
+        )
+        target_view = payload.size if payload.size is not None else existing_item.size
+
+        vehicle = (
+            services.get_vehicle_category(target_category_id)
+            if target_category_id is not None
+            else None
+        )
+        if vehicle and target_view and target_view not in (vehicle.sizes or []):
+            logger.warning(
+                "[INVENTORY_DEBUG] Invalid view received",
+                {"received": target_view, "expected": vehicle.sizes},
+            )
+
         new_item = services.update_vehicle_item(item_id, payload)
-        if INVENTORY_DEBUG_ENABLED:
-            logger.debug(
-                "[INVENTORY_DEBUG] Assigned item details",
-                {
-                    "item_id": new_item.id,
-                    "size_saved": new_item.size,
-                    "x": new_item.position_x,
-                    "y": new_item.position_y,
-                },
-            )
-            requested_view = payload.size
-            saved_view = new_item.size
-            normalized_requested = (
-                requested_view.strip().upper() if isinstance(requested_view, str) else None
-            )
-            normalized_saved = saved_view.strip().upper() if isinstance(saved_view, str) else None
-            invalid_view = (
-                normalized_requested is not None
-                and (normalized_saved is None or normalized_requested != normalized_saved)
-            )
-            if invalid_view:
-                logger.warning(
-                    "[INVENTORY_DEBUG] Invalid view received, falling back",
-                    {"received": requested_view, "fallback": saved_view},
-                )
+        logger.debug(
+            "[INVENTORY_DEBUG] Saved vehicle item",
+            {
+                "id": new_item.id,
+                "size_saved": new_item.size,
+                "pos_x": new_item.position_x,
+                "pos_y": new_item.position_y,
+            },
+        )
         return new_item
     except ValueError as exc:
+        logger.error("[INVENTORY_DEBUG] Vehicle assignment failed", exc_info=True)
         detail = str(exc)
         status_code = 400
         if "introuvable" in detail.lower():
             status_code = 404
         raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception:
+        logger.error("[INVENTORY_DEBUG] Vehicle assignment failed", exc_info=True)
+        raise
 
 
 @router.delete("/{item_id}", status_code=204)
