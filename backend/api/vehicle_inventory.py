@@ -3,6 +3,8 @@ from __future__ import annotations
 
 import html
 import io
+import logging
+import os
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request
@@ -12,6 +14,9 @@ from backend.api.auth import get_current_user
 from backend.core import models, services
 from backend.services.pdf import VehiclePdfOptions
 from backend.services import qrcode_service
+
+logger = logging.getLogger(__name__)
+INVENTORY_DEBUG_ENABLED = os.getenv("INVENTORY_DEBUG", "false").lower() == "true"
 
 router = APIRouter()
 
@@ -115,11 +120,44 @@ async def generate_vehicle_item_qr_code(
 
 @router.post("/", response_model=models.Item, status_code=201)
 async def create_vehicle_item(
-    payload: models.ItemCreate, user: models.User = Depends(get_current_user)
+    payload: models.ItemCreate,
+    request: Request,
+    user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
+    if INVENTORY_DEBUG_ENABLED:
+        try:
+            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", await request.json())
+        except Exception:
+            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", {"body": "unavailable"})
     try:
-        return services.create_vehicle_item(payload)
+        new_item = services.create_vehicle_item(payload)
+        if INVENTORY_DEBUG_ENABLED:
+            logger.debug(
+                "[INVENTORY_DEBUG] Assigned item details",
+                {
+                    "item_id": new_item.id,
+                    "size_saved": new_item.size,
+                    "x": new_item.position_x,
+                    "y": new_item.position_y,
+                },
+            )
+            requested_view = payload.size
+            saved_view = new_item.size
+            normalized_requested = (
+                requested_view.strip().upper() if isinstance(requested_view, str) else None
+            )
+            normalized_saved = saved_view.strip().upper() if isinstance(saved_view, str) else None
+            invalid_view = (
+                normalized_requested is not None
+                and (normalized_saved is None or normalized_requested != normalized_saved)
+            )
+            if invalid_view:
+                logger.warning(
+                    "[INVENTORY_DEBUG] Invalid view received, falling back",
+                    {"received": requested_view, "fallback": saved_view},
+                )
+        return new_item
     except ValueError as exc:
         detail = str(exc)
         status_code = 400
@@ -132,11 +170,43 @@ async def create_vehicle_item(
 async def update_vehicle_item(
     item_id: int,
     payload: models.ItemUpdate,
+    request: Request,
     user: models.User = Depends(get_current_user),
 ) -> models.Item:
     _require_permission(user, action="edit")
+    if INVENTORY_DEBUG_ENABLED:
+        try:
+            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", await request.json())
+        except Exception:
+            logger.debug("[INVENTORY_DEBUG] Incoming vehicle assignment", {"body": "unavailable"})
     try:
-        return services.update_vehicle_item(item_id, payload)
+        new_item = services.update_vehicle_item(item_id, payload)
+        if INVENTORY_DEBUG_ENABLED:
+            logger.debug(
+                "[INVENTORY_DEBUG] Assigned item details",
+                {
+                    "item_id": new_item.id,
+                    "size_saved": new_item.size,
+                    "x": new_item.position_x,
+                    "y": new_item.position_y,
+                },
+            )
+            requested_view = payload.size
+            saved_view = new_item.size
+            normalized_requested = (
+                requested_view.strip().upper() if isinstance(requested_view, str) else None
+            )
+            normalized_saved = saved_view.strip().upper() if isinstance(saved_view, str) else None
+            invalid_view = (
+                normalized_requested is not None
+                and (normalized_saved is None or normalized_requested != normalized_saved)
+            )
+            if invalid_view:
+                logger.warning(
+                    "[INVENTORY_DEBUG] Invalid view received, falling back",
+                    {"received": requested_view, "fallback": saved_view},
+                )
+        return new_item
     except ValueError as exc:
         detail = str(exc)
         status_code = 400

@@ -26,6 +26,23 @@ const logDragEvent = (eventName: string, details?: Record<string, unknown>) => {
   console.log(`[VehicleInventory] ${eventName}`, details ?? {});
 };
 
+const INVENTORY_DEBUG_ENABLED =
+  String(
+    import.meta.env.VITE_INVENTORY_DEBUG ??
+      // Fallback for environments that don't inject the VITE_ prefix.
+      import.meta.env.INVENTORY_DEBUG ??
+      "false"
+  )
+    .toLowerCase()
+    .trim() === "true";
+
+function debugLog(message: string, data?: any) {
+  if (!INVENTORY_DEBUG_ENABLED) {
+    return;
+  }
+  console.debug("[INVENTORY_DEBUG]", message, data ?? "");
+}
+
 interface VehicleViewConfig {
   name: string;
   background_photo_id: number | null;
@@ -316,7 +333,8 @@ export function VehicleInventoryPage() {
       }
       await api.put(`/vehicle-inventory/${itemId}`, payload);
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (responseData, variables) => {
+      debugLog("MUTATION SUCCESS", responseData);
       if (variables.successMessage) {
         setFeedback({ type: "success", text: variables.successMessage });
         return;
@@ -330,6 +348,7 @@ export function VehicleInventoryPage() {
       });
     },
     onError: (error) => {
+      debugLog("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
         return;
@@ -379,7 +398,8 @@ export function VehicleInventoryPage() {
       });
       return response.data;
     },
-    onSuccess: (_, variables) => {
+    onSuccess: (responseData, variables) => {
+      debugLog("MUTATION SUCCESS", responseData);
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
       setFeedback({
         type: "success",
@@ -389,6 +409,7 @@ export function VehicleInventoryPage() {
       });
     },
     onError: (error) => {
+      debugLog("MUTATION ERROR", error);
       if (isAxiosError(error) && error.response?.data?.detail) {
         setFeedback({ type: "error", text: error.response.data.detail });
         return;
@@ -789,6 +810,10 @@ export function VehicleInventoryPage() {
     () => items.filter((item) => item.category_id === selectedVehicle?.id),
     [items, selectedVehicle?.id]
   );
+
+  useEffect(() => {
+    debugLog("ITEMS RELOADED", { vehicleItems });
+  }, [vehicleItems]);
 
   const vehicleItemCountMap = useMemo(() => {
     const map = new Map<number, number>();
@@ -1530,6 +1555,15 @@ export function VehicleInventoryPage() {
 
                 const targetView = backendView;
                 if (options?.sourceCategoryId === null) {
+                  debugLog("DRAG START", {
+                    selectedView,
+                    normalizedSelectedView,
+                    vehicleViews,
+                    backendView: targetView,
+                    itemId,
+                    position,
+                    options
+                  });
                   assignItemToVehicle.mutate({
                     itemId,
                     categoryId: selectedVehicle.id,
@@ -1538,6 +1572,15 @@ export function VehicleInventoryPage() {
                   });
                   return;
                 }
+                debugLog("DRAG START", {
+                  selectedView,
+                  normalizedSelectedView,
+                  vehicleViews,
+                  backendView: targetView,
+                  itemId,
+                  position,
+                  options
+                });
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
@@ -1559,6 +1602,15 @@ export function VehicleInventoryPage() {
                   });
                   return;
                 }
+                debugLog("DRAG START", {
+                  selectedView,
+                  normalizedSelectedView,
+                  vehicleViews,
+                  backendView: null,
+                  itemId,
+                  position: null,
+                  options: undefined
+                });
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
@@ -1584,6 +1636,15 @@ export function VehicleInventoryPage() {
                   return;
                 }
                 const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                debugLog("DRAG START", {
+                  selectedView,
+                  normalizedSelectedView,
+                  vehicleViews,
+                  backendView: targetView,
+                  itemId,
+                  position: undefined,
+                  options: undefined
+                });
                 updateItemLocation.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
@@ -1637,6 +1698,15 @@ export function VehicleInventoryPage() {
                   });
                 }}
                 onDropItem={(itemId) =>
+                  debugLog("DRAG START", {
+                    selectedView,
+                    normalizedSelectedView,
+                    vehicleViews,
+                    backendView: null,
+                    itemId,
+                    position: null,
+                    options: undefined
+                  }) ||
                   updateItemLocation.mutate({
                     itemId,
                     categoryId: null,
@@ -1649,6 +1719,15 @@ export function VehicleInventoryPage() {
                   removeLotFromVehicle.mutate({ lotId, categoryId })
                 }
                 onRemoveFromVehicle={(itemId) =>
+                  debugLog("DRAG START", {
+                    selectedView,
+                    normalizedSelectedView,
+                    vehicleViews,
+                    backendView: null,
+                    itemId,
+                    position: null,
+                    options: undefined
+                  }) ||
                   updateItemLocation.mutate({
                     itemId,
                     categoryId: null,
