@@ -27,7 +27,6 @@ export interface InventoryModuleConfig {
   supportsItemImages?: boolean;
   supportsLowStockOptOut?: boolean;
   supportsExpirationDate?: boolean;
-  showVehicleTypeColumn?: boolean;
   showLotMembershipColumn?: boolean;
   itemNoun?: InventoryItemNounConfig;
   barcodePrefix?: string;
