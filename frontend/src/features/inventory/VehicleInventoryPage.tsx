@@ -24,7 +24,6 @@ import { useModuleTitle } from "../../lib/moduleTitles";
 import { useAuth } from "../auth/useAuth";
 import { useInventoryDebug } from "./useInventoryDebug";
 import { useThrottledHoverState } from "./useThrottledHoverState";
-import { useViewSelectionLock } from "./useViewSelectionLock";
 
 interface VehicleViewConfig {
   name: string;
@@ -294,27 +293,18 @@ export function VehicleInventoryPage() {
   );
   const debug = useInventoryDebug(debugEnabled);
   const logDebug = debug.logInfo;
-  const viewLock = useViewSelectionLock();
   const [selectedView, setSelectedView] = useState<string | null>(null);
   const requestViewChange = useCallback(
     (next: string | null) => {
-      if (viewLock.getLockedView("") !== "") {
-        return;
-      }
       setSelectedView(next);
     },
-    [viewLock]
+    []
   );
   const resetView = useCallback(() => {
     setSelectedView(null);
-    viewLock.unlock();
-  }, [viewLock]);
-  const lockViewSelection = useCallback(() => {
-    viewLock.lock(resolveTargetView(selectedView));
-  }, [selectedView, viewLock]);
-  const unlockViewSelection = useCallback(() => {
-    viewLock.unlock();
-  }, [viewLock]);
+  }, []);
+  const lockViewSelection = useCallback(() => {}, []);
+  const unlockViewSelection = useCallback(() => {}, []);
   const [selectedVehicleId, setSelectedVehicleId] = useState<number | null>(null);
   const [feedback, setFeedback] = useState<{ type: "success" | "error"; text: string } | null>(
     null
@@ -2291,9 +2281,7 @@ function VehicleCompartment({
     if (!data) {
       return;
     }
-    const targetView = viewLock.getLockedView(resolveTargetView(selectedView));
-
-    viewLock.unlock();
+    const targetView = resolveTargetView(selectedView);
 
     debug.logDrop({ itemId: data.itemId, targetView });
     const rect = boardRef.current?.getBoundingClientRect();
