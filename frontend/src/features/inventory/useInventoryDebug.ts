@@ -24,7 +24,17 @@ const fetchInventoryDebugFlag = async (): Promise<boolean> => {
 
 const postLog = async (eventName: string, payload?: unknown) => {
   try {
-    await api.post("/logs/frontend", { event: eventName, payload, source: "inventory" });
+    const userAgent = typeof navigator !== "undefined" ? navigator.userAgent : undefined;
+    const url = typeof window !== "undefined" ? window.location.href : undefined;
+
+    await api.post("/logs/frontend", {
+      level: "debug",
+      message: `[inventory] ${eventName}`,
+      context: { event: eventName, source: "inventory", payload },
+      user_agent: userAgent,
+      url,
+      timestamp: new Date().toISOString()
+    });
   } catch {
     // Silent fallback: avoid surfacing any logging errors
   }
