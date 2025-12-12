@@ -291,8 +291,8 @@ export function VehicleInventoryPage() {
     () => user?.role === "admin" || INVENTORY_DEBUG_ENABLED,
     [user?.role]
   );
-  const debug = useInventoryDebug(debugEnabled);
-  const logDebug = debug.logInfo;
+  const inventoryDebug = useInventoryDebug(debugEnabled);
+  const logDebug = inventoryDebug.logInfo;
   const [selectedView, setSelectedView] = useState<string | null>(null);
   const requestViewChange = useCallback(
     (next: string | null) => {
@@ -2256,7 +2256,7 @@ function VehicleCompartment({
 
     hover.handleHover(e.nativeEvent, rect);
 
-    debug.logHover({
+    inventoryDebug.logHover({
       x: hover.posRef.current.x,
       y: hover.posRef.current.y,
       rect
@@ -2283,7 +2283,7 @@ function VehicleCompartment({
     }
     const targetView = resolveTargetView(selectedView);
 
-    debug.logDrop({ itemId: data.itemId, targetView });
+    inventoryDebug.logDrop({ itemId: data.itemId, targetView });
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
       return;
