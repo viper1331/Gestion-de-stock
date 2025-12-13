@@ -124,6 +124,7 @@ interface UpdateItemPayload {
   remiseItemId?: number | null;
   pharmacyItemId?: number | null;
   suppressFeedback?: boolean;
+  targetView?: string;
 }
 
 const VEHICLE_ILLUSTRATIONS = [
@@ -445,8 +446,25 @@ export function VehicleInventoryPage() {
       : position === null
         ? { position_x: null, position_y: null }
         : {}),
-    ...(typeof quantity === "number" ? { quantity } : {})
-  });
+      ...(remiseItemId !== undefined ? { remise_item_id: remiseItemId } : {}),
+      ...(pharmacyItemId !== undefined ? { pharmacy_item_id: pharmacyItemId } : {}),
+      ...(position
+        ? { position_x: position.x, position_y: position.y }
+        : position === null
+          ? { position_x: null, position_y: null }
+          : {}),
+      ...(typeof quantity === "number" ? { quantity } : {})
+    };
+  };
+
+  const ensureValidSizeForMutation = (value: string | null | undefined) => {
+    if (value === null) {
+      throw new Error("Invalid size value for mutation.");
+    }
+    if (typeof value === "string" && value.trim().length === 0) {
+      throw new Error("Invalid size value for mutation.");
+    }
+  };
 
   const handleItemMutationSuccess = (
     responseData: unknown,
@@ -492,6 +510,12 @@ export function VehicleInventoryPage() {
       if (quantity === 0) {
         throw new Error("Zero quantity updates must use removeVehicleItem.");
       }
+      if (payload.size !== undefined) {
+        ensureValidSizeForMutation(payload.size);
+      }
+      if (payload.targetView !== undefined) {
+        ensureValidSizeForMutation(payload.targetView);
+      }
       const requestBody = buildUpdatePayload({ itemId, quantity, ...payload });
       await api.put(`/vehicle-inventory/${itemId}`, requestBody);
     },
@@ -505,6 +529,12 @@ export function VehicleInventoryPage() {
 
   const removeVehicleItem = useMutation({
     mutationFn: async ({ itemId, ...payload }: UpdateItemPayload) => {
+      if (payload.size !== undefined) {
+        ensureValidSizeForMutation(payload.size);
+      }
+      if (payload.targetView !== undefined) {
+        ensureValidSizeForMutation(payload.targetView);
+      }
       const requestBody = {
         ...buildUpdatePayload({ ...payload, itemId, quantity: undefined }),
         quantity: 0,
@@ -534,6 +564,7 @@ export function VehicleInventoryPage() {
       targetView: string;
       position: { x: number; y: number };
     }) => {
+      ensureValidSizeForMutation(size);
       const template = items.find((entry) => entry.id === itemId);
       if (!template) {
         throw new Error("Matériel introuvable.");
@@ -1253,10 +1284,12 @@ export function VehicleInventoryPage() {
         updateVehicleItem.mutate({
           itemId: match.id,
           categoryId: null,
-          size: match.size,
           position: null,
           quantity: mergedQuantity,
-          suppressFeedback: true
+          suppressFeedback: true,
+          ...(match.size && match.size.trim().length > 0
+            ? { size: match.size, targetView: match.size }
+            : {})
         });
 
         removeVehicleItem.mutate({
