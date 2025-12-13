@@ -47,6 +47,7 @@ interface VehicleItem {
   sku: string;
   category_id: number | null;
   size: string | null;
+  target_view?: string | null;
   quantity: number;
   remise_item_id: number | null;
   pharmacy_item_id: number | null;
@@ -115,6 +116,7 @@ interface UpdateItemPayload {
   itemId: number;
   categoryId: number | null;
   size?: string | null;
+  targetView?: string | null;
   position?: { x: number; y: number } | null;
   quantity?: number;
   successMessage?: string;
@@ -144,6 +146,19 @@ function getAvailableQuantity(item: VehicleItem): number {
     return item.pharmacy_quantity ?? item.available_quantity ?? item.quantity ?? 0;
   }
   return item.quantity ?? 0;
+}
+
+// Vehicle placement (target_view) must stay isolated from the packaging "size" value.
+// Some legacy records still store the view in the size field; only fallback to that when
+// the backend did not expose a dedicated target_view.
+function getItemView(item: VehicleItem): string | null {
+  if (item.target_view !== undefined) {
+    return item.target_view ?? null;
+  }
+  if (item.category_id !== null) {
+    return item.size ?? null;
+  }
+  return null;
 }
 
 const INVENTORY_DEBUG_ENABLED =
@@ -417,20 +432,19 @@ export function VehicleInventoryPage() {
     sourceCategoryId,
     remiseItemId,
     pharmacyItemId
-  }: UpdateItemPayload): Record<string, unknown> => {
-    const normalizedSize =
-      typeof size === "string" && size.trim().length > 0 ? size.trim() : undefined;
-    const normalizedTargetView =
-      typeof targetView === "string" && targetView.trim().length > 0
-        ? targetView.trim()
-        : normalizedSize;
-
-    return {
-      category_id: categoryId,
-      ...(normalizedSize ? { size: normalizedSize } : {}),
-      ...(normalizedTargetView ? { target_view: normalizedTargetView } : {}),
-      ...(sourceCategoryId !== undefined
-        ? { source_category_id: sourceCategoryId ?? null }
+  }: UpdateItemPayload): Record<string, unknown> => ({
+    category_id: categoryId,
+    ...(size !== undefined ? { size } : {}),
+    ...(targetView !== undefined ? { target_view: targetView ?? null } : {}),
+    ...(sourceCategoryId !== undefined
+      ? { source_category_id: sourceCategoryId ?? null }
+      : {}),
+    ...(remiseItemId !== undefined ? { remise_item_id: remiseItemId } : {}),
+    ...(pharmacyItemId !== undefined ? { pharmacy_item_id: pharmacyItemId } : {}),
+    ...(position
+      ? { position_x: position.x, position_y: position.y }
+      : position === null
+        ? { position_x: null, position_y: null }
         : {}),
       ...(remiseItemId !== undefined ? { remise_item_id: remiseItemId } : {}),
       ...(pharmacyItemId !== undefined ? { pharmacy_item_id: pharmacyItemId } : {}),
@@ -542,12 +556,12 @@ export function VehicleInventoryPage() {
     mutationFn: async ({
       itemId,
       categoryId,
-      size,
+      targetView,
       position
     }: {
       itemId: number;
       categoryId: number;
-      size: string;
+      targetView: string;
       position: { x: number; y: number };
     }) => {
       ensureValidSizeForMutation(size);
@@ -568,12 +582,14 @@ export function VehicleInventoryPage() {
         name: template.name,
         sku: template.sku,
         category_id: categoryId,
-        size,
+        // Preserve the packaging size from the source item; vehicle placement uses target_view.
+        size: template.size,
         quantity: 1,
         position_x: position.x,
         position_y: position.y,
         remise_item_id: template.remise_item_id ?? undefined,
-        pharmacy_item_id: template.pharmacy_item_id ?? undefined
+        pharmacy_item_id: template.pharmacy_item_id ?? undefined,
+        target_view: targetView
       });
       return response.data;
     },
@@ -1030,26 +1046,27 @@ export function VehicleInventoryPage() {
         if (!normalizedSelectedView) {
           return false;
         }
-        return normalizeViewName(item.size) === normalizedSelectedView;
+        return normalizeViewName(getItemView(item)) === normalizedSelectedView;
       }),
     [vehicleItems, normalizedSelectedView]
   );
 
   const itemsWaitingAssignment = useMemo(
-    () => vehicleItems.filter((item) => !item.size),
+    () => vehicleItems.filter((item) => !getItemView(item)),
     [vehicleItems]
   );
 
   const itemsInOtherViews = useMemo(
     () =>
       vehicleItems.filter((item) => {
-        if (!item.size) {
+        const itemView = getItemView(item);
+        if (!itemView) {
           return false;
         }
         if (!normalizedSelectedView) {
           return false;
         }
-        return normalizeViewName(item.size) !== normalizedSelectedView;
+        return normalizeViewName(itemView) !== normalizedSelectedView;
       }),
     [vehicleItems, normalizedSelectedView]
   );
@@ -1923,7 +1940,7 @@ export function VehicleInventoryPage() {
                   assignItemToVehicle.mutate({
                     itemId: dropRequest.itemId,
                     categoryId: dropRequest.categoryId,
-                    size: dropRequest.targetView,
+                    targetView: dropRequest.targetView,
                     position: dropRequest.position
                   });
                   return;
@@ -2010,6 +2027,7 @@ export function VehicleInventoryPage() {
                   removeVehicleItem.mutate({
                     itemId,
                     categoryId: selectedVehicle.id,
+                    targetView,
                     position: null,
                     quantity: 0,
                     successMessage: "Le matériel a été retiré du véhicule."
@@ -2019,6 +2037,7 @@ export function VehicleInventoryPage() {
                 updateVehicleItem.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
+                  targetView,
                   quantity,
                   successMessage: "Quantité mise à jour."
                 });
