@@ -2326,7 +2326,14 @@ function VehicleCompartment({
     if (!data) {
       return;
     }
-    const targetView = resolveTargetView(selectedView);
+    const normalizedSelectedView = selectedView
+      ? normalizeViewName(selectedView)
+      : null;
+    const effectiveTargetView = normalizedSelectedView ?? selectedView;
+    if (!effectiveTargetView) {
+      console.warn("[vehicle-inventory] Drop ignored because no view is selected.");
+      return;
+    }
 
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -2351,7 +2358,7 @@ function VehicleCompartment({
           isReposition: true,
           quantity: lotItem?.quantity ?? undefined,
           suppressFeedback: index > 0,
-          targetView
+          targetView: effectiveTargetView
         });
       });
       return;
@@ -2386,7 +2393,7 @@ function VehicleCompartment({
         data.pharmacyItemId === undefined
           ? undefined
           : data.pharmacyItemId ?? null,
-      targetView
+      targetView: effectiveTargetView
     });
   };
 
