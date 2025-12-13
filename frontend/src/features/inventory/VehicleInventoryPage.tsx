@@ -407,75 +407,105 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const updateItemLocation = useMutation({
-    mutationFn: async ({
-      itemId,
-      categoryId,
-      size,
-      position,
-      quantity,
-      sourceCategoryId,
-      remiseItemId,
-      pharmacyItemId
-    }: UpdateItemPayload) => {
-      const payload: Record<string, unknown> = {
-        category_id: categoryId
-      };
+  const buildUpdatePayload = ({
+    categoryId,
+    size,
+    position,
+    quantity,
+    sourceCategoryId,
+    remiseItemId,
+    pharmacyItemId
+  }: UpdateItemPayload): Record<string, unknown> => ({
+    category_id: categoryId,
+    ...(size !== undefined
+      ? {
+          size,
+          target_view: size ?? null
+        }
+      : {}),
+    ...(sourceCategoryId !== undefined
+      ? { source_category_id: sourceCategoryId ?? null }
+      : {}),
+    ...(remiseItemId !== undefined ? { remise_item_id: remiseItemId } : {}),
+    ...(pharmacyItemId !== undefined ? { pharmacy_item_id: pharmacyItemId } : {}),
+    ...(position
+      ? { position_x: position.x, position_y: position.y }
+      : position === null
+        ? { position_x: null, position_y: null }
+        : {}),
+    ...(typeof quantity === "number" ? { quantity } : {})
+  });
 
-      if (size !== undefined) {
-        payload.size = size;
-        payload.target_view = size ?? null;
-      }
+  const handleItemMutationSuccess = (
+    responseData: unknown,
+    variables: UpdateItemPayload,
+    overrideMessage?: string
+  ) => {
+    logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
+    if (variables.suppressFeedback) {
+      return;
+    }
+    const message = overrideMessage ?? variables.successMessage;
+    if (message) {
+      setFeedback({ type: "success", text: message });
+      return;
+    }
+    const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
+    setFeedback({
+      type: "success",
+      text: vehicleName
+        ? `Le matériel a été associé à ${vehicleName}.`
+        : "Le matériel a été retiré du véhicule."
+    });
+  };
 
-      if (sourceCategoryId !== undefined) {
-        payload.source_category_id = sourceCategoryId ?? null;
-      }
+  const handleItemMutationError = (error: unknown) => {
+    logDebug("MUTATION ERROR", error);
+    if (error instanceof Error && error.message.includes("Zero quantity updates")) {
+      setFeedback({
+        type: "error",
+        text: "Impossible d'envoyer une quantité nulle sans suppression explicite."
+      });
+      return;
+    }
+    if (isAxiosError(error) && error.response?.data?.detail) {
+      setFeedback({ type: "error", text: error.response.data.detail });
+      return;
+    }
+    setFeedback({ type: "error", text: "Impossible d'enregistrer les modifications." });
+  };
 
-      if (remiseItemId !== undefined) {
-        payload.remise_item_id = remiseItemId;
+  const updateVehicleItem = useMutation({
+    mutationFn: async ({ itemId, quantity, ...payload }: UpdateItemPayload) => {
+      if (quantity === 0) {
+        throw new Error("Zero quantity updates must use removeVehicleItem.");
       }
-
-      if (pharmacyItemId !== undefined) {
-        payload.pharmacy_item_id = pharmacyItemId;
-      }
-      if (position) {
-        payload.position_x = position.x;
-        payload.position_y = position.y;
-      } else if (position === null) {
-        payload.position_x = null;
-        payload.position_y = null;
-      }
-      if (typeof quantity === "number") {
-        payload.quantity = quantity;
-      }
-      await api.put(`/vehicle-inventory/${itemId}`, payload);
+      const requestBody = buildUpdatePayload({ itemId, quantity, ...payload });
+      await api.put(`/vehicle-inventory/${itemId}`, requestBody);
     },
     onMutate: (vars) => logDebug("UPDATE START", vars),
-    onSuccess: (responseData, variables) => {
-      logDebug("MUTATION SUCCESS", { data: responseData, vars: variables });
-      if (variables.suppressFeedback) {
-        return;
-      }
-      if (variables.successMessage) {
-        setFeedback({ type: "success", text: variables.successMessage });
-        return;
-      }
-      const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
-      setFeedback({
-        type: "success",
-        text: vehicleName
-          ? `Le matériel a été associé à ${vehicleName}.`
-          : "Le matériel a été retiré du véhicule."
-      });
+    onSuccess: (responseData, variables) => handleItemMutationSuccess(responseData, variables),
+    onError: (error) => handleItemMutationError(error),
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+    }
+  });
+
+  const removeVehicleItem = useMutation({
+    mutationFn: async ({ itemId, ...payload }: UpdateItemPayload) => {
+      const requestBody = {
+        ...buildUpdatePayload({ ...payload, itemId, quantity: undefined }),
+        quantity: 0,
+        position_x: null,
+        position_y: null,
+        ...(payload.size !== undefined ? { target_view: payload.size ?? null } : {})
+      };
+      await api.put(`/vehicle-inventory/${itemId}`, requestBody);
     },
-    onError: (error, vars) => {
-      logDebug("MUTATION ERROR", error);
-      if (isAxiosError(error) && error.response?.data?.detail) {
-        setFeedback({ type: "error", text: error.response.data.detail });
-        return;
-      }
-      setFeedback({ type: "error", text: "Impossible d'enregistrer les modifications." });
-    },
+    onMutate: (vars) => logDebug("REMOVE START", vars),
+    onSuccess: (responseData, variables) =>
+      handleItemMutationSuccess(responseData, variables, variables.successMessage),
+    onError: (error) => handleItemMutationError(error),
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
     }
@@ -1182,12 +1212,13 @@ export function VehicleInventoryPage() {
       const { sourceItem, match } = findMatchingLibraryItem(itemId);
 
       if (!sourceItem) {
-        updateItemLocation.mutate({
+        removeVehicleItem.mutate({
           itemId,
           categoryId: null,
           size: null,
           position: null,
-          quantity: 0
+          quantity: 0,
+          successMessage: "Le matériel a été retiré du véhicule."
         });
         return;
       }
@@ -1195,7 +1226,19 @@ export function VehicleInventoryPage() {
       if (match) {
         const mergedQuantity = (match.quantity ?? 0) + (sourceItem.quantity ?? 0);
 
-        updateItemLocation.mutate({
+        if (mergedQuantity <= 0) {
+          removeVehicleItem.mutate({
+            itemId: sourceItem.id,
+            categoryId: null,
+            size: null,
+            position: null,
+            quantity: 0,
+            successMessage: "Le matériel a été retiré du véhicule."
+          });
+          return;
+        }
+
+        updateVehicleItem.mutate({
           itemId: match.id,
           categoryId: null,
           size: match.size,
@@ -1204,31 +1247,34 @@ export function VehicleInventoryPage() {
           suppressFeedback: true
         });
 
-        updateItemLocation.mutate({
+        removeVehicleItem.mutate({
           itemId: sourceItem.id,
           categoryId: null,
           size: null,
           position: null,
-          quantity: 0
+          quantity: 0,
+          successMessage: "Le matériel a été retiré du véhicule."
         });
         return;
       }
 
-      updateItemLocation.mutate({
+      removeVehicleItem.mutate({
         itemId,
         categoryId: null,
         size: null,
         position: null,
-        quantity: 0
+        quantity: 0,
+        successMessage: "Le matériel a été retiré du véhicule."
       });
     },
-    [findMatchingLibraryItem, updateItemLocation]
+    [findMatchingLibraryItem, removeVehicleItem, updateVehicleItem]
   );
 
   const isLoading =
     isLoadingVehicles ||
     isLoadingItems ||
-    updateItemLocation.isPending ||
+    updateVehicleItem.isPending ||
+    removeVehicleItem.isPending ||
     assignItemToVehicle.isPending ||
     createVehicle.isPending ||
     uploadVehicleImage.isPending;
@@ -1801,10 +1847,17 @@ export function VehicleInventoryPage() {
 
                   const resolvedQuantity =
                     options?.quantity ?? existingItem?.quantity;
+                  if (resolvedQuantity === 0) {
+                    pushFeedback({
+                      type: "error",
+                      text: "Impossible de déplacer un matériel avec une quantité nulle sans suppression explicite."
+                    });
+                    return;
+                  }
                   const normalizedQuantity =
-                    resolvedQuantity === 0 ? undefined : resolvedQuantity;
+                    resolvedQuantity === undefined ? undefined : resolvedQuantity;
 
-                  updateItemLocation.mutate({
+                  updateVehicleItem.mutate({
                     itemId,
                     categoryId: selectedVehicle.id,
                     size: targetView,
@@ -1849,7 +1902,14 @@ export function VehicleInventoryPage() {
                   });
                   return;
                 }
-                updateItemLocation.mutate({
+                if (dropRequest.quantity === 0) {
+                  pushFeedback({
+                    type: "error",
+                    text: "Impossible de déplacer un matériel avec une quantité nulle sans suppression explicite."
+                  });
+                  return;
+                }
+                updateVehicleItem.mutate({
                   itemId: dropRequest.itemId,
                   categoryId: dropRequest.categoryId,
                   size: dropRequest.targetView,
@@ -1886,12 +1946,13 @@ export function VehicleInventoryPage() {
                   position: null,
                   options: undefined
                 });
-                updateItemLocation.mutate({
+                removeVehicleItem.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
                   size: null,
                   position: null,
-                  quantity: 0
+                  quantity: 0,
+                  successMessage: "Le matériel a été retiré du véhicule."
                 });
               }}
               onItemFeedback={pushFeedback}
@@ -1920,7 +1981,18 @@ export function VehicleInventoryPage() {
                   position: undefined,
                   options: undefined
                 });
-                updateItemLocation.mutate({
+                if (quantity === 0) {
+                  removeVehicleItem.mutate({
+                    itemId,
+                    categoryId: selectedVehicle.id,
+                    size: targetView,
+                    position: null,
+                    quantity: 0,
+                    successMessage: "Le matériel a été retiré du véhicule."
+                  });
+                  return;
+                }
+                updateVehicleItem.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
                   size: targetView,
