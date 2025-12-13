@@ -22,7 +22,6 @@ import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { useAuth } from "../auth/useAuth";
-import { useInventoryDebug } from "./useInventoryDebug";
 import { useThrottledHoverState } from "./useThrottledHoverState";
 
 interface VehicleViewConfig {
@@ -291,8 +290,15 @@ export function VehicleInventoryPage() {
     () => user?.role === "admin" || INVENTORY_DEBUG_ENABLED,
     [user?.role]
   );
-  const inventoryDebug = useInventoryDebug(debugEnabled);
-  const logDebug = inventoryDebug.logInfo;
+  const logDebug = useCallback(
+    (...args: unknown[]) => {
+      if (!debugEnabled) {
+        return;
+      }
+      console.debug("[vehicle-inventory]", ...args);
+    },
+    [debugEnabled]
+  );
   const [selectedView, setSelectedView] = useState<string | null>(null);
   const requestViewChange = useCallback(
     (next: string | null) => {
@@ -1631,8 +1637,10 @@ export function VehicleInventoryPage() {
               title={selectedView ?? DEFAULT_VIEW_LABEL}
               description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
               items={itemsForSelectedView}
+              allItems={vehicleItems}
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
+              selectedView={selectedView}
               onDragStartCapture={lockViewSelection}
               onDropItem={(itemId, position, options) => {
                 const dropRequest = buildDropRequestPayload({
@@ -2128,8 +2136,10 @@ interface VehicleCompartmentProps {
   title: string;
   description: string;
   items: VehicleItem[];
+  allItems: VehicleItem[];
   viewConfig: VehicleViewConfig | null;
   availablePhotos: VehiclePhoto[];
+  selectedView: string | null;
   onDropItem: (
     itemId: number,
     position: { x: number; y: number },
@@ -2158,8 +2168,10 @@ function VehicleCompartment({
   title,
   description,
   items,
+  allItems,
   viewConfig,
   availablePhotos,
+  selectedView,
   onDropItem,
   onRemoveItem,
   onItemFeedback,
@@ -2255,12 +2267,6 @@ function VehicleCompartment({
     const rect = boardRef.current?.getBoundingClientRect() ?? null;
 
     hover.handleHover(e.nativeEvent, rect);
-
-    inventoryDebug.logHover({
-      x: hover.posRef.current.x,
-      y: hover.posRef.current.y,
-      rect
-    });
   };
 
   const handleDragLeave = (event: DragEvent<HTMLDivElement>) => {
@@ -2283,7 +2289,6 @@ function VehicleCompartment({
     }
     const targetView = resolveTargetView(selectedView);
 
-    inventoryDebug.logDrop({ itemId: data.itemId, targetView });
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
       return;
@@ -2302,8 +2307,10 @@ function VehicleCompartment({
     };
     if (data.assignedLotItemIds && data.assignedLotItemIds.length > 0) {
       data.assignedLotItemIds.forEach((lotItemId, index) => {
+        const lotItem = allItems.find((item) => item.id === lotItemId) ?? null;
         onDropItem(lotItemId, position, {
           isReposition: true,
+          quantity: lotItem?.quantity ?? undefined,
           suppressFeedback: index > 0,
           targetView
         });
@@ -2327,10 +2334,12 @@ function VehicleCompartment({
     const sourceCategoryId =
       data.categoryId === undefined ? undefined : data.categoryId;
     const isFromLibrary = sourceCategoryId === null;
-    const isReposition = items.some((item) => item.id === data.itemId);
+    const isReposition = allItems.some((item) => item.id === data.itemId);
+    const existingItem = allItems.find((item) => item.id === data.itemId) ?? null;
+    const quantity = isFromLibrary ? 1 : existingItem?.quantity;
     onDropItem(data.itemId, position, {
       isReposition,
-      quantity: !isFromLibrary && !isReposition ? 1 : undefined,
+      quantity: quantity ?? undefined,
       sourceCategoryId: sourceCategoryId ?? null,
       remiseItemId:
         data.remiseItemId === undefined ? undefined : data.remiseItemId ?? null,
