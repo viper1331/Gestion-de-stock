@@ -47,6 +47,7 @@ interface VehicleItem {
   sku: string;
   category_id: number | null;
   size: string | null;
+  target_view?: string | null;
   quantity: number;
   remise_item_id: number | null;
   pharmacy_item_id: number | null;
@@ -114,7 +115,8 @@ interface UpdateVehiclePayload {
 interface UpdateItemPayload {
   itemId: number;
   categoryId: number | null;
-  size: string | null;
+  size?: string | null;
+  targetView?: string | null;
   position?: { x: number; y: number } | null;
   quantity?: number;
   successMessage?: string;
@@ -143,6 +145,19 @@ function getAvailableQuantity(item: VehicleItem): number {
     return item.pharmacy_quantity ?? item.available_quantity ?? item.quantity ?? 0;
   }
   return item.quantity ?? 0;
+}
+
+// Vehicle placement (target_view) must stay isolated from the packaging "size" value.
+// Some legacy records still store the view in the size field; only fallback to that when
+// the backend did not expose a dedicated target_view.
+function getItemView(item: VehicleItem): string | null {
+  if (item.target_view !== undefined) {
+    return item.target_view ?? null;
+  }
+  if (item.category_id !== null) {
+    return item.size ?? null;
+  }
+  return null;
 }
 
 const INVENTORY_DEBUG_ENABLED =
@@ -410,6 +425,7 @@ export function VehicleInventoryPage() {
   const buildUpdatePayload = ({
     categoryId,
     size,
+    targetView,
     position,
     quantity,
     sourceCategoryId,
@@ -417,12 +433,8 @@ export function VehicleInventoryPage() {
     pharmacyItemId
   }: UpdateItemPayload): Record<string, unknown> => ({
     category_id: categoryId,
-    ...(size !== undefined
-      ? {
-          size,
-          target_view: size ?? null
-        }
-      : {}),
+    ...(size !== undefined ? { size } : {}),
+    ...(targetView !== undefined ? { target_view: targetView ?? null } : {}),
     ...(sourceCategoryId !== undefined
       ? { source_category_id: sourceCategoryId ?? null }
       : {}),
@@ -497,8 +509,7 @@ export function VehicleInventoryPage() {
         ...buildUpdatePayload({ ...payload, itemId, quantity: undefined }),
         quantity: 0,
         position_x: null,
-        position_y: null,
-        ...(payload.size !== undefined ? { target_view: payload.size ?? null } : {})
+        position_y: null
       };
       await api.put(`/vehicle-inventory/${itemId}`, requestBody);
     },
@@ -515,12 +526,12 @@ export function VehicleInventoryPage() {
     mutationFn: async ({
       itemId,
       categoryId,
-      size,
+      targetView,
       position
     }: {
       itemId: number;
       categoryId: number;
-      size: string;
+      targetView: string;
       position: { x: number; y: number };
     }) => {
       const template = items.find((entry) => entry.id === itemId);
@@ -540,12 +551,14 @@ export function VehicleInventoryPage() {
         name: template.name,
         sku: template.sku,
         category_id: categoryId,
-        size,
+        // Preserve the packaging size from the source item; vehicle placement uses target_view.
+        size: template.size,
         quantity: 1,
         position_x: position.x,
         position_y: position.y,
         remise_item_id: template.remise_item_id ?? undefined,
-        pharmacy_item_id: template.pharmacy_item_id ?? undefined
+        pharmacy_item_id: template.pharmacy_item_id ?? undefined,
+        target_view: targetView
       });
       return response.data;
     },
@@ -1002,26 +1015,27 @@ export function VehicleInventoryPage() {
         if (!normalizedSelectedView) {
           return false;
         }
-        return normalizeViewName(item.size) === normalizedSelectedView;
+        return normalizeViewName(getItemView(item)) === normalizedSelectedView;
       }),
     [vehicleItems, normalizedSelectedView]
   );
 
   const itemsWaitingAssignment = useMemo(
-    () => vehicleItems.filter((item) => !item.size),
+    () => vehicleItems.filter((item) => !getItemView(item)),
     [vehicleItems]
   );
 
   const itemsInOtherViews = useMemo(
     () =>
       vehicleItems.filter((item) => {
-        if (!item.size) {
+        const itemView = getItemView(item);
+        if (!itemView) {
           return false;
         }
         if (!normalizedSelectedView) {
           return false;
         }
-        return normalizeViewName(item.size) !== normalizedSelectedView;
+        return normalizeViewName(itemView) !== normalizedSelectedView;
       }),
     [vehicleItems, normalizedSelectedView]
   );
@@ -1215,7 +1229,6 @@ export function VehicleInventoryPage() {
         removeVehicleItem.mutate({
           itemId,
           categoryId: null,
-          size: null,
           position: null,
           quantity: 0,
           successMessage: "Le matériel a été retiré du véhicule."
@@ -1230,7 +1243,6 @@ export function VehicleInventoryPage() {
           removeVehicleItem.mutate({
             itemId: sourceItem.id,
             categoryId: null,
-            size: null,
             position: null,
             quantity: 0,
             successMessage: "Le matériel a été retiré du véhicule."
@@ -1250,7 +1262,6 @@ export function VehicleInventoryPage() {
         removeVehicleItem.mutate({
           itemId: sourceItem.id,
           categoryId: null,
-          size: null,
           position: null,
           quantity: 0,
           successMessage: "Le matériel a été retiré du véhicule."
@@ -1261,7 +1272,6 @@ export function VehicleInventoryPage() {
       removeVehicleItem.mutate({
         itemId,
         categoryId: null,
-        size: null,
         position: null,
         quantity: 0,
         successMessage: "Le matériel a été retiré du véhicule."
@@ -1860,7 +1870,7 @@ export function VehicleInventoryPage() {
                   updateVehicleItem.mutate({
                     itemId,
                     categoryId: selectedVehicle.id,
-                    size: targetView,
+                    targetView,
                     position,
                     // Never send quantity: 0 on DROP: the backend interprets it as a removal.
                     quantity: normalizedQuantity,
@@ -1897,7 +1907,7 @@ export function VehicleInventoryPage() {
                   assignItemToVehicle.mutate({
                     itemId: dropRequest.itemId,
                     categoryId: dropRequest.categoryId,
-                    size: dropRequest.targetView,
+                    targetView: dropRequest.targetView,
                     position: dropRequest.position
                   });
                   return;
@@ -1912,7 +1922,7 @@ export function VehicleInventoryPage() {
                 updateVehicleItem.mutate({
                   itemId: dropRequest.itemId,
                   categoryId: dropRequest.categoryId,
-                  size: dropRequest.targetView,
+                  targetView: dropRequest.targetView,
                   position: dropRequest.position,
                   // Never send quantity: 0 on DROP: the backend interprets it as a removal.
                   quantity:
@@ -1949,7 +1959,6 @@ export function VehicleInventoryPage() {
                 removeVehicleItem.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
-                  size: null,
                   position: null,
                   quantity: 0,
                   successMessage: "Le matériel a été retiré du véhicule."
@@ -1985,7 +1994,7 @@ export function VehicleInventoryPage() {
                   removeVehicleItem.mutate({
                     itemId,
                     categoryId: selectedVehicle.id,
-                    size: targetView,
+                    targetView,
                     position: null,
                     quantity: 0,
                     successMessage: "Le matériel a été retiré du véhicule."
@@ -1995,7 +2004,7 @@ export function VehicleInventoryPage() {
                 updateVehicleItem.mutate({
                   itemId,
                   categoryId: selectedVehicle.id,
-                  size: targetView,
+                  targetView,
                   quantity,
                   successMessage: "Quantité mise à jour."
                 });
