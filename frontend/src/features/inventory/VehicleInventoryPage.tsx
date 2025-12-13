@@ -391,13 +391,25 @@ export function VehicleInventoryPage() {
       pharmacyItemId
     }: UpdateItemPayload) => {
       const payload: Record<string, unknown> = {
-        category_id: categoryId,
-        size,
-        target_view: size ?? null,
-        source_category_id: sourceCategoryId ?? null,
-        remise_item_id: remiseItemId ?? null,
-        pharmacy_item_id: pharmacyItemId ?? null
+        category_id: categoryId
       };
+
+      if (size !== undefined) {
+        payload.size = size;
+        payload.target_view = size ?? null;
+      }
+
+      if (sourceCategoryId !== undefined) {
+        payload.source_category_id = sourceCategoryId ?? null;
+      }
+
+      if (remiseItemId !== undefined) {
+        payload.remise_item_id = remiseItemId;
+      }
+
+      if (pharmacyItemId !== undefined) {
+        payload.pharmacy_item_id = pharmacyItemId;
+      }
       if (position) {
         payload.position_x = position.x;
         payload.position_y = position.y;
@@ -1643,10 +1655,37 @@ export function VehicleInventoryPage() {
               selectedView={selectedView}
               onDragStartCapture={lockViewSelection}
               onDropItem={(itemId, position, options) => {
+                const targetView = resolveTargetView(
+                  options?.targetView ?? normalizedSelectedView
+                );
+
+                const isInternalReposition =
+                  options?.isReposition &&
+                  (options?.sourceCategoryId === undefined ||
+                    options.sourceCategoryId === selectedVehicle.id);
+
+                if (isInternalReposition) {
+                  const existingItem = vehicleItems.find(
+                    (entry) => entry.id === itemId
+                  );
+
+                  updateItemLocation.mutate({
+                    itemId,
+                    categoryId: selectedVehicle.id,
+                    size: targetView,
+                    position,
+                    quantity: options?.quantity ?? existingItem?.quantity,
+                    successMessage: options?.suppressFeedback
+                      ? undefined
+                      : "Position enregistrée."
+                  });
+                  return;
+                }
+
                 const dropRequest = buildDropRequestPayload({
                   itemId,
                   categoryId: selectedVehicle.id,
-                  selectedView: options?.targetView ?? normalizedSelectedView,
+                  selectedView: targetView,
                   position,
                   quantity: options?.quantity ?? null,
                   sourceCategoryId: options?.sourceCategoryId,
