@@ -1799,12 +1799,18 @@ export function VehicleInventoryPage() {
                     (entry) => entry.id === itemId
                   );
 
+                  const resolvedQuantity =
+                    options?.quantity ?? existingItem?.quantity;
+                  const normalizedQuantity =
+                    resolvedQuantity === 0 ? undefined : resolvedQuantity;
+
                   updateItemLocation.mutate({
                     itemId,
                     categoryId: selectedVehicle.id,
                     size: targetView,
                     position,
-                    quantity: options?.quantity ?? existingItem?.quantity,
+                    // Never send quantity: 0 on DROP: the backend interprets it as a removal.
+                    quantity: normalizedQuantity,
                     successMessage: options?.suppressFeedback
                       ? undefined
                       : "Position enregistrée."
@@ -1848,7 +1854,11 @@ export function VehicleInventoryPage() {
                   categoryId: dropRequest.categoryId,
                   size: dropRequest.targetView,
                   position: dropRequest.position,
-                  quantity: dropRequest.quantity ?? undefined,
+                  // Never send quantity: 0 on DROP: the backend interprets it as a removal.
+                  quantity:
+                    dropRequest.quantity === 0
+                      ? undefined
+                      : dropRequest.quantity ?? undefined,
                   sourceCategoryId: dropRequest.sourceCategoryId,
                   remiseItemId: dropRequest.remiseItemId,
                   pharmacyItemId: dropRequest.pharmacyItemId,
