@@ -226,6 +226,33 @@ function writeDraggedItemData(
   event.dataTransfer.setData("text/plain", serialized);
 }
 
+type DragPayloadSource = Pick<
+  VehicleItem,
+  "id" | "category_id" | "remise_item_id" | "pharmacy_item_id" | "lot_id" | "lot_name"
+>;
+
+function writeItemDragPayload(
+  event: DragEvent<HTMLElement>,
+  item: DragPayloadSource,
+  options?: { assignedLotItemIds?: number[] }
+) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  writeDraggedItemData(event, {
+    itemId: item.id ?? undefined,
+    categoryId: item.category_id ?? null,
+    remiseItemId: item.remise_item_id ?? null,
+    pharmacyItemId: item.pharmacy_item_id ?? null,
+    lotId: item.lot_id ?? null,
+    lotName: item.lot_name ?? undefined,
+    assignedLotItemIds: options?.assignedLotItemIds,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+    elementWidth: rect.width,
+    elementHeight: rect.height
+  });
+  event.dataTransfer.effectAllowed = "move";
+}
+
 type Feedback = { type: "success" | "error"; text: string };
 
 type PointerTarget = { x: number; y: number };
@@ -2417,14 +2444,7 @@ function VehicleCompartment({
     if (!data) {
       return;
     }
-    const normalizedSelectedView = selectedView
-      ? normalizeViewName(selectedView)
-      : null;
-    const effectiveTargetView = normalizedSelectedView ?? selectedView;
-    if (!effectiveTargetView) {
-      console.warn("[vehicle-inventory] Drop ignored because no view is selected.");
-      return;
-    }
+    const targetView = resolveTargetView(selectedView);
 
     const rect = boardRef.current?.getBoundingClientRect();
     if (!rect) {
@@ -2449,7 +2469,7 @@ function VehicleCompartment({
           isReposition: true,
           quantity: lotItem?.quantity ?? undefined,
           suppressFeedback: index > 0,
-          targetView: effectiveTargetView
+          targetView
         });
       });
       return;
@@ -2468,8 +2488,7 @@ function VehicleCompartment({
     if (typeof data.itemId !== "number") {
       return;
     }
-    const sourceCategoryId =
-      data.categoryId === undefined ? undefined : data.categoryId;
+    const sourceCategoryId = data.categoryId ?? null;
     const isFromLibrary = sourceCategoryId === null;
     const isReposition = allItems.some((item) => item.id === data.itemId);
     const existingItem = allItems.find((item) => item.id === data.itemId) ?? null;
@@ -2484,7 +2503,7 @@ function VehicleCompartment({
         data.pharmacyItemId === undefined
           ? undefined
           : data.pharmacyItemId ?? null,
-      targetView: effectiveTargetView
+      targetView
     });
   };
 
@@ -2899,21 +2918,20 @@ function VehicleItemMarker({
 
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
     onDragStartCapture?.();
-    const rect = event.currentTarget.getBoundingClientRect();
-    writeDraggedItemData(event, {
-      itemId: entry.primaryItemId ?? undefined,
-      categoryId: entry.category_id,
-      remiseItemId: entry.remise_item_id,
-      pharmacyItemId: entry.pharmacy_item_id,
-      lotId: entry.lot_id,
-      lotName: entry.lot_name,
-      assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined,
-      offsetX: event.clientX - rect.left,
-      offsetY: event.clientY - rect.top,
-      elementWidth: rect.width,
-      elementHeight: rect.height
-    });
-    event.dataTransfer.effectAllowed = "move";
+    writeItemDragPayload(
+      event,
+      {
+        id: entry.primaryItemId,
+        category_id: entry.category_id,
+        remise_item_id: entry.remise_item_id,
+        pharmacy_item_id: entry.pharmacy_item_id,
+        lot_id: entry.lot_id,
+        lot_name: entry.lot_name
+      },
+      {
+        assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined
+      }
+    );
   };
 
   const markerContent = (
@@ -3653,20 +3671,14 @@ function ItemCard({
           return;
         }
         onDragStartCapture?.();
-        const rect = event.currentTarget.getBoundingClientRect();
-        writeDraggedItemData(event, {
-          itemId: item.id,
-          categoryId: item.category_id,
-          remiseItemId: item.remise_item_id,
-          pharmacyItemId: item.pharmacy_item_id,
-          lotId: item.lot_id,
-          lotName: item.lot_name,
-          offsetX: event.clientX - rect.left,
-          offsetY: event.clientY - rect.top,
-          elementWidth: rect.width,
-          elementHeight: rect.height
+        writeItemDragPayload(event, {
+          id: item.id,
+          category_id: item.category_id,
+          remise_item_id: item.remise_item_id,
+          pharmacy_item_id: item.pharmacy_item_id,
+          lot_id: item.lot_id,
+          lot_name: item.lot_name
         });
-        event.dataTransfer.effectAllowed = "move";
       }}
     >
       <input
