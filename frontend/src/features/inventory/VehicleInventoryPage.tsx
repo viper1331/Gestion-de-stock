@@ -446,16 +446,8 @@ export function VehicleInventoryPage() {
       : position === null
         ? { position_x: null, position_y: null }
         : {}),
-      ...(remiseItemId !== undefined ? { remise_item_id: remiseItemId } : {}),
-      ...(pharmacyItemId !== undefined ? { pharmacy_item_id: pharmacyItemId } : {}),
-      ...(position
-        ? { position_x: position.x, position_y: position.y }
-        : position === null
-          ? { position_x: null, position_y: null }
-          : {}),
-      ...(typeof quantity === "number" ? { quantity } : {})
-    };
-  };
+    ...(typeof quantity === "number" ? { quantity } : {})
+  });
 
   const ensureValidSizeForMutation = (value: string | null | undefined) => {
     if (value === null) {
