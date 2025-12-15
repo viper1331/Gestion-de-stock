@@ -32,6 +32,26 @@ interface VehicleViewConfig {
 
 type VehicleType = "incendie" | "secours_a_personne";
 
+type InventoryItem =
+  | {
+      kind: "vehicle";
+      id: number;
+      categoryId: number;
+      view: string;
+      position: { x: number; y: number };
+    }
+  | {
+      kind: "pharmacy";
+      pharmacyItemId: number;
+      availableQuantity: number;
+    }
+  | {
+      kind: "remise";
+      remiseItemId: number;
+      availableQuantity: number;
+    };
+type InventorySourceType = InventoryItem["kind"];
+
 interface VehicleCategory {
   id: number;
   name: string;
@@ -174,10 +194,13 @@ const INVENTORY_DEBUG_ENABLED =
 export const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
 type DraggedItemData = {
-  itemId?: number;
+  sourceType?: InventorySourceType;
+  sourceId?: number;
+  vehicleItemId?: number;
   categoryId?: number | null;
   remiseItemId?: number | null;
   pharmacyItemId?: number | null;
+  quantity?: number;
   assignedLotItemIds?: number[];
   offsetX?: number;
   offsetY?: number;
@@ -192,7 +215,9 @@ export function resolveTargetView(selectedView: string | null): string {
 }
 
 export type DropRequestPayload = {
-  itemId: number;
+  sourceType: InventorySourceType;
+  sourceId: number;
+  vehicleItemId: number | null;
   categoryId: number;
   position: { x: number; y: number };
   quantity: number | null;
@@ -205,7 +230,9 @@ export type DropRequestPayload = {
 };
 
 export function buildDropRequestPayload(params: {
-  itemId: number;
+  sourceType: InventorySourceType;
+  sourceId: number;
+  vehicleItemId?: number | null;
   categoryId: number;
   selectedView: string | null;
   position: { x: number; y: number };
@@ -219,7 +246,9 @@ export function buildDropRequestPayload(params: {
   const targetView = resolveTargetView(params.selectedView);
 
   return {
-    itemId: params.itemId,
+    sourceType: params.sourceType,
+    sourceId: params.sourceId,
+    vehicleItemId: params.vehicleItemId ?? null,
     categoryId: params.categoryId,
     position: params.position,
     quantity: params.quantity ?? null,
@@ -230,6 +259,49 @@ export function buildDropRequestPayload(params: {
     isReposition: params.isReposition,
     suppressFeedback: params.suppressFeedback
   };
+}
+
+function canAssignInventoryItem(payload: DropRequestPayload, vehicleItems: VehicleItem[]): boolean {
+  if (payload.sourceType === "vehicle") {
+    return (
+      typeof payload.vehicleItemId === "number" &&
+      vehicleItems.some((item) => item.id === payload.vehicleItemId)
+    );
+  }
+
+  if (payload.sourceType === "pharmacy" || payload.sourceType === "remise") {
+    return (payload.quantity ?? 0) > 0;
+  }
+
+  return false;
+}
+
+function resolveTemplateForSource(items: VehicleItem[], payload: DropRequestPayload): VehicleItem | null {
+  if (payload.sourceType === "vehicle" && payload.vehicleItemId !== null) {
+    return items.find((item) => item.id === payload.vehicleItemId) ?? null;
+  }
+
+  if (payload.sourceType === "pharmacy") {
+    return (
+      items.find(
+        (item) =>
+          item.category_id === null &&
+          item.pharmacy_item_id === payload.sourceId &&
+          item.remise_item_id === null
+      ) ?? null
+    );
+  }
+
+  if (payload.sourceType === "remise") {
+    return (
+      items.find(
+        (item) =>
+          item.category_id === null && item.remise_item_id === payload.sourceId
+      ) ?? null
+    );
+  }
+
+  return null;
 }
 
 function writeDraggedItemData(
@@ -244,20 +316,86 @@ function writeDraggedItemData(
 
 type DragPayloadSource = Pick<
   VehicleItem,
-  "id" | "category_id" | "remise_item_id" | "pharmacy_item_id" | "lot_id" | "lot_name"
+  | "id"
+  | "category_id"
+  | "remise_item_id"
+  | "pharmacy_item_id"
+  | "lot_id"
+  | "lot_name"
+  | "quantity"
+  | "available_quantity"
 >;
+
+type DragSourceDescriptor = {
+  sourceType: InventorySourceType;
+  sourceId: number;
+  vehicleItemId: number | null;
+  categoryId: number | null;
+  remiseItemId: number | null;
+  pharmacyItemId: number | null;
+  quantity: number;
+};
+
+function resolveDragSource(item: DragPayloadSource): DragSourceDescriptor | null {
+  if (item.category_id !== null) {
+    return {
+      sourceType: "vehicle",
+      sourceId: item.id,
+      vehicleItemId: item.id,
+      categoryId: item.category_id,
+      remiseItemId: item.remise_item_id ?? null,
+      pharmacyItemId: item.pharmacy_item_id ?? null,
+      quantity: item.quantity ?? 0
+    };
+  }
+
+  if (item.remise_item_id !== null) {
+    return {
+      sourceType: "remise",
+      sourceId: item.remise_item_id,
+      vehicleItemId: null,
+      categoryId: null,
+      remiseItemId: item.remise_item_id,
+      pharmacyItemId: null,
+      quantity: item.available_quantity ?? item.quantity ?? 0
+    };
+  }
+
+  if (item.pharmacy_item_id !== null) {
+    return {
+      sourceType: "pharmacy",
+      sourceId: item.pharmacy_item_id,
+      vehicleItemId: null,
+      categoryId: null,
+      remiseItemId: null,
+      pharmacyItemId: item.pharmacy_item_id,
+      quantity: item.available_quantity ?? item.quantity ?? 0
+    };
+  }
+
+  return null;
+}
 
 function writeItemDragPayload(
   event: DragEvent<HTMLElement>,
   item: DragPayloadSource,
   options?: { assignedLotItemIds?: number[] }
 ) {
+  const source = resolveDragSource(item);
+  if (!source) {
+    console.error("[vehicle-inventory] Unable to build drag source from item", item);
+    event.preventDefault();
+    return;
+  }
   const rect = event.currentTarget.getBoundingClientRect();
   writeDraggedItemData(event, {
-    itemId: item.id ?? undefined,
-    categoryId: item.category_id ?? null,
-    remiseItemId: item.remise_item_id ?? null,
-    pharmacyItemId: item.pharmacy_item_id ?? null,
+    sourceType: source.sourceType,
+    sourceId: source.sourceId,
+    vehicleItemId: source.vehicleItemId,
+    categoryId: source.categoryId,
+    remiseItemId: source.remiseItemId,
+    pharmacyItemId: source.pharmacyItemId,
+    quantity: source.quantity,
     lotId: item.lot_id ?? null,
     lotName: item.lot_name ?? undefined,
     assignedLotItemIds: options?.assignedLotItemIds,
@@ -545,19 +683,10 @@ export function VehicleInventoryPage() {
   });
 
   const assignItemToVehicle = useMutation({
-    mutationFn: async ({
-      itemId,
-      categoryId,
-      targetView,
-      position
-    }: {
-      itemId: number;
-      categoryId: number;
-      targetView: string;
-      position: { x: number; y: number };
-    }) => {
-      ensureValidSizeForMutation(size);
-      const template = items.find((entry) => entry.id === itemId);
+    mutationFn: async (payload: DropRequestPayload) => {
+      ensureValidSizeForMutation(payload.targetView);
+
+      const template = resolveTemplateForSource(items, payload);
       if (!template) {
         throw new Error("Matériel introuvable.");
       }
@@ -565,7 +694,7 @@ export function VehicleInventoryPage() {
       if (template.remise_item_id == null && template.pharmacy_item_id == null) {
         throw new Error("Ce matériel n'est pas lié à un inventaire disponible.");
       }
-      if (sourceQuantity <= 0) {
+      if (sourceQuantity <= 0 || (payload.quantity ?? 0) <= 0) {
         throw new Error(
           template.remise_item_id ? "Stock insuffisant en remise." : "Stock insuffisant en pharmacie."
         );
@@ -573,15 +702,15 @@ export function VehicleInventoryPage() {
       const response = await api.post<VehicleItem>("/vehicle-inventory/", {
         name: template.name,
         sku: template.sku,
-        category_id: categoryId,
+        category_id: payload.categoryId,
         // Preserve the packaging size from the source item; vehicle placement uses target_view.
         size: template.size,
-        quantity: 1,
-        position_x: position.x,
-        position_y: position.y,
+        quantity: payload.quantity ?? 1,
+        position_x: payload.position.x,
+        position_y: payload.position.y,
         remise_item_id: template.remise_item_id ?? undefined,
         pharmacy_item_id: template.pharmacy_item_id ?? undefined,
-        target_view: targetView
+        target_view: payload.targetView
       });
       return response.data;
     },
@@ -1860,28 +1989,37 @@ export function VehicleInventoryPage() {
               title={selectedView ?? DEFAULT_VIEW_LABEL}
               description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
               items={itemsForSelectedView}
-              allItems={vehicleItems}
+              allItems={items}
+              categoryId={selectedVehicle.id}
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
               selectedView={selectedView}
               onDragStartCapture={lockViewSelection}
-              onDropItem={(itemId, position, options) => {
-                const targetView = resolveTargetView(
-                  options?.targetView ?? normalizedSelectedView
-                );
+              onDropItem={(dropRequest) => {
+                const targetView = dropRequest.targetView;
+
+                logDebug("DROP EVENT", {
+                  selectedView: dropRequest.targetView,
+                  normalizedSelectedView: dropRequest.targetView,
+                  backendView: dropRequest.targetView,
+                  vehicleViews: selectedVehicle?.sizes ?? [],
+                  itemId: dropRequest.vehicleItemId ?? dropRequest.sourceId,
+                  position: dropRequest.position,
+                  options: dropRequest
+                });
 
                 const isInternalReposition =
-                  options?.isReposition &&
-                  (options?.sourceCategoryId === undefined ||
-                    options.sourceCategoryId === selectedVehicle.id);
+                  dropRequest.sourceType === "vehicle" &&
+                  (dropRequest.sourceCategoryId === undefined ||
+                    dropRequest.sourceCategoryId === selectedVehicle.id);
 
                 if (isInternalReposition) {
+                  const vehicleItemId = dropRequest.vehicleItemId ?? dropRequest.sourceId;
                   const existingItem = vehicleItems.find(
-                    (entry) => entry.id === itemId
+                    (entry) => entry.id === vehicleItemId
                   );
 
-                  const resolvedQuantity =
-                    options?.quantity ?? existingItem?.quantity;
+                  const resolvedQuantity = dropRequest.quantity ?? existingItem?.quantity;
                   if (resolvedQuantity === 0) {
                     pushFeedback({
                       type: "error",
@@ -1889,54 +2027,21 @@ export function VehicleInventoryPage() {
                     });
                     return;
                   }
-                  const normalizedQuantity =
-                    resolvedQuantity === undefined ? undefined : resolvedQuantity;
 
                   updateVehicleItem.mutate({
-                    itemId,
+                    itemId: vehicleItemId,
                     categoryId: selectedVehicle.id,
                     targetView,
-                    position,
+                    position: dropRequest.position,
                     // Never send quantity: 0 on DROP: the backend interprets it as a removal.
-                    quantity: normalizedQuantity,
-                    successMessage: options?.suppressFeedback
+                    quantity: resolvedQuantity ?? undefined,
+                    successMessage: dropRequest.suppressFeedback
                       ? undefined
                       : "Position enregistrée."
                   });
                   return;
                 }
 
-                const dropRequest = buildDropRequestPayload({
-                  itemId,
-                  categoryId: selectedVehicle.id,
-                  selectedView: targetView,
-                  position,
-                  quantity: options?.quantity ?? null,
-                  sourceCategoryId: options?.sourceCategoryId,
-                  remiseItemId: options?.remiseItemId,
-                  pharmacyItemId: options?.pharmacyItemId,
-                  isReposition: options?.isReposition,
-                  suppressFeedback: options?.suppressFeedback
-                });
-
-                logDebug("DROP EVENT", {
-                  selectedView: dropRequest.targetView,
-                  normalizedSelectedView: dropRequest.targetView,
-                  backendView: dropRequest.targetView,
-                  vehicleViews: selectedVehicle?.sizes ?? [],
-                  itemId,
-                  position,
-                  options
-                });
-                if (options?.sourceCategoryId === null) {
-                  assignItemToVehicle.mutate({
-                    itemId: dropRequest.itemId,
-                    categoryId: dropRequest.categoryId,
-                    targetView: dropRequest.targetView,
-                    position: dropRequest.position
-                  });
-                  return;
-                }
                 if (dropRequest.quantity === 0) {
                   pushFeedback({
                     type: "error",
@@ -1944,24 +2049,29 @@ export function VehicleInventoryPage() {
                   });
                   return;
                 }
-                updateVehicleItem.mutate({
-                  itemId: dropRequest.itemId,
-                  categoryId: dropRequest.categoryId,
-                  targetView: dropRequest.targetView,
-                  position: dropRequest.position,
-                  // Never send quantity: 0 on DROP: the backend interprets it as a removal.
-                  quantity:
-                    dropRequest.quantity === 0
-                      ? undefined
-                      : dropRequest.quantity ?? undefined,
-                  sourceCategoryId: dropRequest.sourceCategoryId,
-                  remiseItemId: dropRequest.remiseItemId,
-                  pharmacyItemId: dropRequest.pharmacyItemId,
-                  successMessage:
-                    dropRequest.isReposition && !options?.suppressFeedback
-                      ? "Position enregistrée."
-                      : undefined
-                });
+
+                if (dropRequest.sourceType === "vehicle") {
+                  updateVehicleItem.mutate({
+                    itemId: dropRequest.vehicleItemId ?? dropRequest.sourceId,
+                    categoryId: dropRequest.categoryId,
+                    targetView: dropRequest.targetView,
+                    position: dropRequest.position,
+                    quantity:
+                      dropRequest.quantity === 0
+                        ? undefined
+                        : dropRequest.quantity ?? undefined,
+                    sourceCategoryId: dropRequest.sourceCategoryId,
+                    remiseItemId: dropRequest.remiseItemId,
+                    pharmacyItemId: dropRequest.pharmacyItemId,
+                    successMessage:
+                      dropRequest.isReposition && !dropRequest.suppressFeedback
+                        ? "Position enregistrée."
+                        : undefined
+                  });
+                  return;
+                }
+
+                assignItemToVehicle.mutate(dropRequest);
               }}
               onRemoveItem={(itemId) => {
                 const lockedItem = findLockedLotItem(itemId);
@@ -2410,22 +2520,11 @@ interface VehicleCompartmentProps {
   description: string;
   items: VehicleItem[];
   allItems: VehicleItem[];
+  categoryId: number;
   viewConfig: VehicleViewConfig | null;
   availablePhotos: VehiclePhoto[];
   selectedView: string | null;
-  onDropItem: (
-    itemId: number,
-    position: { x: number; y: number },
-    options?: {
-      isReposition?: boolean;
-      quantity?: number | null;
-      sourceCategoryId?: number | null;
-      remiseItemId?: number | null;
-      pharmacyItemId?: number | null;
-      targetView?: string | null;
-      suppressFeedback?: boolean;
-    }
-  ) => void;
+  onDropItem: (payload: DropRequestPayload) => void;
   onRemoveItem: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
   onBackgroundChange: (photoId: number | null) => void;
@@ -2442,6 +2541,7 @@ function VehicleCompartment({
   description,
   items,
   allItems,
+  categoryId,
   viewConfig,
   availablePhotos,
   selectedView,
@@ -2581,12 +2681,31 @@ function VehicleCompartment({
     if (data.assignedLotItemIds && data.assignedLotItemIds.length > 0) {
       data.assignedLotItemIds.forEach((lotItemId, index) => {
         const lotItem = allItems.find((item) => item.id === lotItemId) ?? null;
-        onDropItem(lotItemId, position, {
+        const dropRequest: DropRequestPayload = {
+          sourceType: "vehicle",
+          sourceId: lotItemId,
+          vehicleItemId: lotItemId,
+          categoryId,
+          position,
+          quantity: lotItem?.quantity ?? null,
+          sourceCategoryId: lotItem?.category_id ?? null,
+          remiseItemId: lotItem?.remise_item_id ?? null,
+          pharmacyItemId: lotItem?.pharmacy_item_id ?? null,
+          targetView,
           isReposition: true,
-          quantity: lotItem?.quantity ?? undefined,
-          suppressFeedback: index > 0,
-          targetView
-        });
+          suppressFeedback: index > 0
+        };
+
+        if (!canAssignInventoryItem(dropRequest, allItems)) {
+          console.error("[vehicle-inventory] Invalid lot drop payload", dropRequest);
+          onItemFeedback({
+            type: "error",
+            text: "Impossible de déplacer ce lot : données incohérentes."
+          });
+          return;
+        }
+
+        onDropItem(dropRequest);
       });
       return;
     }
@@ -2601,26 +2720,47 @@ function VehicleCompartment({
       }
       return;
     }
-    if (typeof data.itemId !== "number") {
+
+    if (!data.sourceType || typeof data.sourceId !== "number") {
+      console.error("[vehicle-inventory] Missing drag source information", data);
+      onItemFeedback({
+        type: "error",
+        text: "Données de glisser-déposer incomplètes."
+      });
       return;
     }
-    const sourceCategoryId = data.categoryId ?? null;
-    const isFromLibrary = sourceCategoryId === null;
-    const isReposition = allItems.some((item) => item.id === data.itemId);
-    const existingItem = allItems.find((item) => item.id === data.itemId) ?? null;
-    const quantity = isFromLibrary ? 1 : existingItem?.quantity;
-    onDropItem(data.itemId, position, {
-      isReposition,
-      quantity: quantity ?? undefined,
-      sourceCategoryId: sourceCategoryId ?? null,
-      remiseItemId:
-        data.remiseItemId === undefined ? undefined : data.remiseItemId ?? null,
-      pharmacyItemId:
-        data.pharmacyItemId === undefined
-          ? undefined
-          : data.pharmacyItemId ?? null,
-      targetView
-    });
+
+    const isReposition = data.sourceType === "vehicle";
+    const existingItem =
+      isReposition && typeof data.vehicleItemId === "number"
+        ? allItems.find((item) => item.id === data.vehicleItemId) ?? null
+        : null;
+    const normalizedQuantity = isReposition ? existingItem?.quantity ?? null : data.quantity ?? 1;
+
+    const dropRequest: DropRequestPayload = {
+      sourceType: data.sourceType,
+      sourceId: data.sourceId,
+      vehicleItemId: data.vehicleItemId ?? null,
+      categoryId,
+      position,
+      quantity: normalizedQuantity,
+      sourceCategoryId: data.categoryId ?? null,
+      remiseItemId: data.remiseItemId ?? null,
+      pharmacyItemId: data.pharmacyItemId ?? null,
+      targetView,
+      isReposition
+    };
+
+    if (!canAssignInventoryItem(dropRequest, allItems)) {
+      console.error("[vehicle-inventory] Guard prevented mutation", dropRequest);
+      onItemFeedback({
+        type: "error",
+        text: "Action impossible : matériel introuvable ou quantité invalide."
+      });
+      return;
+    }
+
+    onDropItem(dropRequest);
   };
 
   const handlePointerTargetRequest = useCallback((markerKey: string) => {
@@ -3379,11 +3519,12 @@ function DroppableLibrary({
           return;
         }
         if (
-          typeof data.itemId === "number" &&
+          data.sourceType === "vehicle" &&
+          typeof data.vehicleItemId === "number" &&
           data.categoryId !== null &&
           data.categoryId !== undefined
         ) {
-          onDropItem(data.itemId);
+          onDropItem(data.vehicleItemId);
           return;
         }
         if (typeof data.lotId === "number") {
@@ -3391,7 +3532,9 @@ function DroppableLibrary({
             type: "error",
             text: "Sélectionnez le véhicule concerné avant de retirer un lot."
           });
+          return;
         }
+        console.error("[vehicle-inventory] Unsupported drop payload on library", data);
       }}
     >
       <div className="flex items-center justify-between gap-3">
@@ -4135,14 +4278,18 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
 
   try {
     const parsed = JSON.parse(rawData) as Partial<DraggedItemData>;
-    const hasItemId = typeof parsed.itemId === "number";
+    const hasSourceType =
+      parsed.sourceType === "vehicle" || parsed.sourceType === "pharmacy" || parsed.sourceType === "remise";
+    const hasSourceId = typeof parsed.sourceId === "number";
     const hasLotId = typeof parsed.lotId === "number";
     const lotIdIsNull = parsed.lotId === null;
-    if (!hasItemId && !hasLotId && !lotIdIsNull) {
+    if ((!hasSourceType || !hasSourceId) && !hasLotId && !lotIdIsNull) {
       return null;
     }
     return {
-      itemId: hasItemId ? parsed.itemId : undefined,
+      sourceType: hasSourceType ? parsed.sourceType : undefined,
+      sourceId: hasSourceId ? parsed.sourceId : undefined,
+      vehicleItemId: typeof parsed.vehicleItemId === "number" ? parsed.vehicleItemId : undefined,
       categoryId:
         typeof parsed.categoryId === "number"
           ? parsed.categoryId
@@ -4161,6 +4308,7 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
           : parsed.pharmacyItemId === null
             ? null
             : undefined,
+      quantity: typeof parsed.quantity === "number" ? parsed.quantity : undefined,
       lotId: hasLotId ? parsed.lotId : lotIdIsNull ? null : undefined,
       lotName: typeof parsed.lotName === "string" ? parsed.lotName : undefined,
       assignedLotItemIds: Array.isArray(parsed.assignedLotItemIds)
