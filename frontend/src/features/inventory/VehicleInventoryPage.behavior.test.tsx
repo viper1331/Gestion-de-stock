@@ -57,7 +57,9 @@ describe("Vehicle inventory interactions", () => {
 
   it("uses the active incendie view for assignments", () => {
     const dropRequest = buildDropRequestPayload({
-      itemId: 10,
+      sourceType: "vehicle",
+      sourceId: 10,
+      vehicleItemId: 10,
       categoryId: 99,
       selectedView: "Vue cabine",
       position: { x: 0.1, y: 0.2 }
@@ -69,7 +71,9 @@ describe("Vehicle inventory interactions", () => {
 
   it("sends coherent API parameters on drop", () => {
     const dropRequest = buildDropRequestPayload({
-      itemId: 5,
+      sourceType: "remise",
+      sourceId: 3,
+      vehicleItemId: null,
       categoryId: 7,
       selectedView: "Vue principale",
       position: { x: 0.5, y: 0.5 },
@@ -80,7 +84,8 @@ describe("Vehicle inventory interactions", () => {
     });
 
     expect(dropRequest).toMatchObject({
-      itemId: 5,
+      sourceType: "remise",
+      sourceId: 3,
       categoryId: 7,
       sourceCategoryId: null,
       remiseItemId: 3,
