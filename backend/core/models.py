@@ -213,6 +213,15 @@ class ItemUpdate(BaseModel):
     vehicle_type: VehicleType | None = None
 
 
+class VehicleAssignmentFromRemise(BaseModel):
+    remise_item_id: int = Field(..., ge=1)
+    category_id: int = Field(..., ge=1)
+    vehicle_type: VehicleType | None = None
+    target_view: str
+    position: PointerTarget
+    quantity: int = Field(..., gt=0)
+
+
 class VehiclePhoto(BaseModel):
     id: int
     image_url: str

@@ -658,20 +658,8 @@ export function VehicleInventoryPage() {
   });
 
   const removeVehicleItem = useMutation({
-    mutationFn: async ({ itemId, ...payload }: UpdateItemPayload) => {
-      if (payload.size !== undefined) {
-        ensureValidSizeForMutation(payload.size);
-      }
-      if (payload.targetView !== undefined) {
-        ensureValidSizeForMutation(payload.targetView);
-      }
-      const requestBody = {
-        ...buildUpdatePayload({ ...payload, itemId, quantity: undefined }),
-        quantity: 0,
-        position_x: null,
-        position_y: null
-      };
-      await api.put(`/vehicle-inventory/${itemId}`, requestBody);
+    mutationFn: async ({ itemId }: UpdateItemPayload) => {
+      await api.delete(`/vehicle-inventory/${itemId}`);
     },
     onMutate: (vars) => logDebug("REMOVE START", vars),
     onSuccess: (responseData, variables) =>
@@ -699,18 +687,36 @@ export function VehicleInventoryPage() {
           template.remise_item_id ? "Stock insuffisant en remise." : "Stock insuffisant en pharmacie."
         );
       }
+      const vehicle = vehicles.find((entry) => entry.id === payload.categoryId) ?? null;
+      const requestedQuantity = payload.quantity ?? 1;
+
+      if (payload.sourceType === "remise") {
+        if (template.remise_item_id == null) {
+          throw new Error("Ce matériel n'est pas lié à la remise.");
+        }
+        const response = await api.post<VehicleItem>("/vehicle-inventory/assign-from-remise", {
+          remise_item_id: template.remise_item_id,
+          category_id: payload.categoryId,
+          vehicle_type: vehicle?.vehicle_type ?? template.vehicle_type ?? null,
+          target_view: payload.targetView,
+          position: payload.position,
+          quantity: requestedQuantity
+        });
+        return response.data;
+      }
+
       const response = await api.post<VehicleItem>("/vehicle-inventory/", {
         name: template.name,
         sku: template.sku,
         category_id: payload.categoryId,
-        // Preserve the packaging size from the source item; vehicle placement uses target_view.
-        size: template.size,
-        quantity: payload.quantity ?? 1,
+        size: payload.targetView,
+        quantity: requestedQuantity,
         position_x: payload.position.x,
         position_y: payload.position.y,
         remise_item_id: template.remise_item_id ?? undefined,
         pharmacy_item_id: template.pharmacy_item_id ?? undefined,
-        target_view: payload.targetView
+        target_view: payload.targetView,
+        vehicle_type: vehicle?.vehicle_type ?? template.vehicle_type ?? null
       });
       return response.data;
     },
@@ -1322,116 +1328,16 @@ export function VehicleInventoryPage() {
   const describeLot = (item: VehicleItem) =>
     item.lot_name ?? (item.lot_id ? `Lot #${item.lot_id}` : "lot");
 
-  const findMatchingLibraryItem = useCallback(
-    (itemId: number) => {
-      const sourceItem = items.find((entry) => entry.id === itemId);
-
-      if (!sourceItem) {
-        return { sourceItem: null, match: null } as const;
-      }
-
-      if (sourceItem.lot_id !== null) {
-        return { sourceItem, match: null } as const;
-      }
-
-      const match = items.find((candidate) => {
-        if (candidate.category_id !== null) {
-          return false;
-        }
-        if (candidate.lot_id !== null) {
-          return false;
-        }
-        if (candidate.id === sourceItem.id) {
-          return false;
-        }
-        const sameSize = (candidate.size ?? null) === (sourceItem.size ?? null);
-
-        if (!sameSize) {
-          return false;
-        }
-
-        if (
-          sourceItem.remise_item_id !== null &&
-          candidate.remise_item_id === sourceItem.remise_item_id
-        ) {
-          return true;
-        }
-
-        if (
-          sourceItem.remise_item_id === null &&
-          sourceItem.pharmacy_item_id !== null &&
-          candidate.pharmacy_item_id === sourceItem.pharmacy_item_id
-        ) {
-          return true;
-        }
-
-        return false;
-      });
-
-      return { sourceItem, match } as const;
-    },
-    [items]
-  );
-
   const returnItemToLibrary = useCallback(
     (itemId: number) => {
-      const { sourceItem, match } = findMatchingLibraryItem(itemId);
-
-      if (!sourceItem) {
-        removeVehicleItem.mutate({
-          itemId,
-          categoryId: null,
-          position: null,
-          quantity: 0,
-          successMessage: "Le matériel a été retiré du véhicule."
-        });
-        return;
-      }
-
-      if (match) {
-        const mergedQuantity = (match.quantity ?? 0) + (sourceItem.quantity ?? 0);
-
-        if (mergedQuantity <= 0) {
-          removeVehicleItem.mutate({
-            itemId: sourceItem.id,
-            categoryId: null,
-            position: null,
-            quantity: 0,
-            successMessage: "Le matériel a été retiré du véhicule."
-          });
-          return;
-        }
-
-        updateVehicleItem.mutate({
-          itemId: match.id,
-          categoryId: null,
-          position: null,
-          quantity: mergedQuantity,
-          suppressFeedback: true,
-          ...(match.size && match.size.trim().length > 0
-            ? { size: match.size, targetView: match.size }
-            : {})
-        });
-
-        removeVehicleItem.mutate({
-          itemId: sourceItem.id,
-          categoryId: null,
-          position: null,
-          quantity: 0,
-          successMessage: "Le matériel a été retiré du véhicule."
-        });
-        return;
-      }
-
       removeVehicleItem.mutate({
         itemId,
         categoryId: null,
         position: null,
-        quantity: 0,
         successMessage: "Le matériel a été retiré du véhicule."
       });
     },
-    [findMatchingLibraryItem, removeVehicleItem, updateVehicleItem]
+    [removeVehicleItem]
   );
 
   const isLoading =
@@ -2095,7 +2001,6 @@ export function VehicleInventoryPage() {
                   itemId,
                   categoryId: selectedVehicle.id,
                   position: null,
-                  quantity: 0,
                   successMessage: "Le matériel a été retiré du véhicule."
                 });
               }}
@@ -2131,7 +2036,6 @@ export function VehicleInventoryPage() {
                     categoryId: selectedVehicle.id,
                     targetView,
                     position: null,
-                    quantity: 0,
                     successMessage: "Le matériel a été retiré du véhicule."
                   });
                   return;
@@ -2750,6 +2654,14 @@ function VehicleCompartment({
       targetView,
       isReposition
     };
+
+    if (
+      dropRequest.sourceType === "remise" &&
+      dropRequest.targetView &&
+      (!dropRequest.quantity || dropRequest.quantity <= 0)
+    ) {
+      dropRequest.quantity = 1;
+    }
 
     if (!canAssignInventoryItem(dropRequest, allItems)) {
       console.error("[vehicle-inventory] Guard prevented mutation", dropRequest);
