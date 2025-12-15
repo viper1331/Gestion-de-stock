@@ -245,13 +245,18 @@ export function buildDropRequestPayload(params: {
 }): DropRequestPayload {
   const targetView = resolveTargetView(params.selectedView);
 
+  const normalizedQuantity =
+    params.sourceType === "pharmacy"
+      ? Math.max(1, params.quantity ?? 1)
+      : params.quantity ?? null;
+
   return {
     sourceType: params.sourceType,
     sourceId: params.sourceId,
     vehicleItemId: params.vehicleItemId ?? null,
     categoryId: params.categoryId,
     position: params.position,
-    quantity: params.quantity ?? null,
+    quantity: normalizedQuantity,
     sourceCategoryId: params.sourceCategoryId ?? null,
     remiseItemId: params.remiseItemId ?? null,
     pharmacyItemId: params.pharmacyItemId ?? null,
@@ -662,8 +667,31 @@ export function VehicleInventoryPage() {
       await api.delete(`/vehicle-inventory/${itemId}`);
     },
     onMutate: (vars) => logDebug("REMOVE START", vars),
-    onSuccess: (responseData, variables) =>
-      handleItemMutationSuccess(responseData, variables, variables.successMessage),
+    onSuccess: async (responseData, variables) => {
+      handleItemMutationSuccess(responseData, variables, variables.successMessage);
+      await Promise.all([
+        queryClient.invalidateQueries({
+          queryKey: ["remise-inventory"],
+          refetchType: "active"
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["remise-inventory", "lots"],
+          refetchType: "active"
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["remise-lots-with-items"],
+          refetchType: "active"
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["vehicle-items"],
+          refetchType: "active"
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["vehicle-inventory"],
+          refetchType: "active"
+        })
+      ]);
+    },
     onError: (error) => handleItemMutationError(error),
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
@@ -2639,7 +2667,10 @@ function VehicleCompartment({
       isReposition && typeof data.vehicleItemId === "number"
         ? allItems.find((item) => item.id === data.vehicleItemId) ?? null
         : null;
-    const normalizedQuantity = isReposition ? existingItem?.quantity ?? null : data.quantity ?? 1;
+
+    const baseQuantity =
+      data.sourceType === "pharmacy" ? Math.max(1, data.quantity ?? 1) : data.quantity ?? 1;
+    const normalizedQuantity = isReposition ? existingItem?.quantity ?? null : baseQuantity;
 
     const dropRequest: DropRequestPayload = {
       sourceType: data.sourceType,
@@ -2654,6 +2685,10 @@ function VehicleCompartment({
       targetView,
       isReposition
     };
+
+    if (dropRequest.sourceType === "pharmacy") {
+      dropRequest.quantity = Math.max(1, dropRequest.quantity ?? 1);
+    }
 
     if (
       dropRequest.sourceType === "remise" &&
