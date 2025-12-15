@@ -174,6 +174,20 @@ async def create_vehicle_item(
         raise
 
 
+@router.post("/assign-from-remise", response_model=models.Item, status_code=201)
+async def assign_vehicle_item_from_remise(
+    payload: models.VehicleAssignmentFromRemise,
+    user: models.User = Depends(get_current_user),
+) -> models.Item:
+    _require_permission(user, action="edit")
+    try:
+        return services.assign_vehicle_item_from_remise(payload)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @router.put("/{item_id}", response_model=models.Item)
 async def update_vehicle_item(
     item_id: int,
@@ -238,7 +252,12 @@ async def delete_vehicle_item(
     item_id: int, user: models.User = Depends(get_current_user)
 ) -> None:
     _require_permission(user, action="edit")
-    services.delete_vehicle_item(item_id)
+    try:
+        services.delete_vehicle_item(item_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/{item_id}/image", response_model=models.Item)

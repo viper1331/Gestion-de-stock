@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import io
 import json
+import logging
 import math
 import shutil
 from collections import defaultdict
@@ -37,6 +38,8 @@ from backend.services.pdf import VehiclePdfOptions, render_vehicle_inventory_pdf
 
 # Initialisation des bases de données au chargement du module
 _db_initialized = False
+
+logger = logging.getLogger(__name__)
 
 _AUTO_PO_CLOSED_STATUSES = ("CANCELLED", "RECEIVED")
 
@@ -1339,6 +1342,12 @@ def _create_inventory_item_internal(
 ) -> models.Item:
     ensure_database_ready()
     config = _get_inventory_config(module)
+    if (
+        module == "vehicle_inventory"
+        and payload.category_id is not None
+        and payload.quantity <= 0
+    ):
+        raise ValueError("La quantité affectée au véhicule doit être strictement positive.")
     with db.get_stock_connection() as conn:
         if module == "inventory_remise":
             _ensure_remise_item_columns(conn)
@@ -1624,6 +1633,14 @@ def _update_inventory_item_internal(
                 if fields.get("supplier_id") is None and "supplier_id" in source.keys():
                     fields["supplier_id"] = source["supplier_id"]
             target_quantity = fields.get("quantity", current_quantity)
+            if (
+                target_category_id is not None
+                and target_quantity is not None
+                and target_quantity <= 0
+            ):
+                raise ValueError(
+                    "La quantité d'un matériel affecté au véhicule doit être strictement positive."
+                )
             if current_lot_id is not None:
                 lock_message = (
                     "Impossible de retirer ce matériel : il est rattaché à un lot. Modifiez le lot dans l'inventaire remises."
@@ -2298,6 +2315,52 @@ def create_vehicle_item(payload: models.ItemCreate) -> models.Item:
     return _create_inventory_item_internal("vehicle_inventory", payload)
 
 
+def assign_vehicle_item_from_remise(
+    payload: models.VehicleAssignmentFromRemise,
+) -> models.Item:
+    category = get_vehicle_category(payload.category_id)
+    if category is None:
+        raise ValueError("Catégorie de véhicule introuvable")
+    vehicle_type = payload.vehicle_type or category.vehicle_type
+    if category.vehicle_type and payload.vehicle_type and payload.vehicle_type != category.vehicle_type:
+        raise ValueError("Le type de véhicule ne correspond pas à la catégorie ciblée.")
+
+    logger.info(
+        "[VEHICLE_INVENTORY] Assignation remise -> véhicule",
+        extra={
+            "remise_item_id": payload.remise_item_id,
+            "vehicle_category_id": payload.category_id,
+            "vehicle_type": vehicle_type,
+            "target_view": payload.target_view,
+            "quantity": payload.quantity,
+        },
+    )
+
+    assignment_payload = models.ItemCreate(
+        name="",  # The source name will be applied during creation
+        sku="",  # The source SKU will be applied during creation
+        category_id=payload.category_id,
+        size=payload.target_view,
+        quantity=payload.quantity,
+        low_stock_threshold=0,
+        track_low_stock=True,
+        supplier_id=None,
+        expiration_date=None,
+        position_x=payload.position.x,
+        position_y=payload.position.y,
+        remise_item_id=payload.remise_item_id,
+        pharmacy_item_id=None,
+        shared_file_url=None,
+        documentation_url=None,
+        tutorial_url=None,
+        lot_id=None,
+        show_in_qr=True,
+        vehicle_type=vehicle_type,
+    )
+
+    return _create_inventory_item_internal("vehicle_inventory", assignment_payload)
+
+
 def get_vehicle_item(item_id: int) -> models.Item:
     item = _get_inventory_item_internal("vehicle_inventory", item_id)
     if item.category_id is None:
@@ -2310,7 +2373,54 @@ def update_vehicle_item(item_id: int, payload: models.ItemUpdate) -> models.Item
 
 
 def delete_vehicle_item(item_id: int) -> None:
-    _delete_inventory_item_internal("vehicle_inventory", item_id)
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_item_columns(conn)
+        row = conn.execute(
+            f"""
+            SELECT quantity, remise_item_id, pharmacy_item_id, image_path, lot_id
+            FROM {config.tables.items}
+            WHERE id = ?
+            """,
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        if row["lot_id"]:
+            raise ValueError(
+                "Impossible de supprimer ce matériel depuis l'inventaire véhicules : il est rattaché à un lot."
+            )
+
+        quantity = row["quantity"] or 0
+        if quantity <= 0:
+            raise ValueError(
+                "Impossible de restituer ce matériel : la quantité en véhicule est nulle."
+            )
+
+        if row["remise_item_id"] is not None:
+            _update_remise_quantity(conn, row["remise_item_id"], quantity)
+        elif row["pharmacy_item_id"] is not None:
+            _update_pharmacy_quantity(conn, row["pharmacy_item_id"], quantity)
+
+        conn.execute(
+            f"DELETE FROM {config.tables.items} WHERE id = ?",
+            (item_id,),
+        )
+        image_path = row["image_path"]
+        if image_path:
+            _delete_media_file(image_path)
+        _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
+
+    logger.info(
+        "[VEHICLE_INVENTORY] Restitution véhicule -> remise",
+        extra={
+            "vehicle_item_id": item_id,
+            "remise_item_id": row["remise_item_id"],
+            "pharmacy_item_id": row["pharmacy_item_id"],
+            "quantity": quantity,
+        },
+    )
 
 
 def list_remise_items(search: str | None = None) -> list[models.Item]:
