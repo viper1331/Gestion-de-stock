@@ -217,7 +217,7 @@ class VehicleAssignmentFromRemise(BaseModel):
     remise_item_id: int = Field(..., ge=1)
     category_id: int = Field(..., ge=1)
     vehicle_type: VehicleType | None = None
-    target_view: str
+    target_view: str = Field(..., min_length=1)
     position: PointerTarget
     quantity: int = Field(..., gt=0)
 

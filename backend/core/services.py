@@ -975,16 +975,25 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
             )
             return
 
-    assignments = ["name = ?", "size = ?"]
-    params: list[object] = [source["name"], source["size"]]
+    template_assignments = ["name = ?", "size = ?"]
+    template_params: list[object] = [source["name"], source["size"]]
+    assigned_assignments = ["name = ?"]
+    assigned_params: list[object] = [source["name"]]
     supplier_id = source["supplier_id"]
     if supplier_id is not None:
-        assignments.append("supplier_id = ?")
-        params.append(supplier_id)
-    params.append(remise_item_id)
+        template_assignments.append("supplier_id = ?")
+        template_params.append(supplier_id)
+        assigned_assignments.append("supplier_id = ?")
+        assigned_params.append(supplier_id)
+    template_params.append(remise_item_id)
+    assigned_params.append(remise_item_id)
     conn.execute(
-        f"UPDATE vehicle_items SET {', '.join(assignments)} WHERE remise_item_id = ?",
-        params,
+        f"UPDATE vehicle_items SET {', '.join(template_assignments)} WHERE remise_item_id = ? AND category_id IS NULL",
+        template_params,
+    )
+    conn.execute(
+        f"UPDATE vehicle_items SET {', '.join(assigned_assignments)} WHERE remise_item_id = ? AND category_id IS NOT NULL",
+        assigned_params,
     )
 
     conn.execute(
@@ -1355,6 +1364,11 @@ def _create_inventory_item_internal(
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
             _ensure_vehicle_category_columns(conn)
+            if payload.category_id is not None:
+                target_view = (payload.size or "").strip()
+                if not target_view:
+                    raise ValueError("Vehicle item created without view (size)")
+                payload.size = target_view
         cloned_image_path: str | None = None
         name = payload.name
         sku = payload.sku
@@ -2321,6 +2335,9 @@ def assign_vehicle_item_from_remise(
     category = get_vehicle_category(payload.category_id)
     if category is None:
         raise ValueError("Catégorie de véhicule introuvable")
+    target_view = payload.target_view.strip()
+    if not target_view:
+        raise ValueError("Vehicle item created without view (size)")
     vehicle_type = payload.vehicle_type or category.vehicle_type
     if category.vehicle_type and payload.vehicle_type and payload.vehicle_type != category.vehicle_type:
         raise ValueError("Le type de véhicule ne correspond pas à la catégorie ciblée.")
@@ -2331,7 +2348,7 @@ def assign_vehicle_item_from_remise(
             "remise_item_id": payload.remise_item_id,
             "vehicle_category_id": payload.category_id,
             "vehicle_type": vehicle_type,
-            "target_view": payload.target_view,
+            "target_view": target_view,
             "quantity": payload.quantity,
         },
     )
@@ -2340,7 +2357,7 @@ def assign_vehicle_item_from_remise(
         name="",  # The source name will be applied during creation
         sku="",  # The source SKU will be applied during creation
         category_id=payload.category_id,
-        size=payload.target_view,
+        size=target_view,
         quantity=payload.quantity,
         low_stock_threshold=0,
         track_low_stock=True,
@@ -2358,7 +2375,10 @@ def assign_vehicle_item_from_remise(
         vehicle_type=vehicle_type,
     )
 
-    return _create_inventory_item_internal("vehicle_inventory", assignment_payload)
+    created_item = _create_inventory_item_internal("vehicle_inventory", assignment_payload)
+    if not created_item.size:
+        raise ValueError("Vehicle item created without view (size)")
+    return created_item
 
 
 def get_vehicle_item(item_id: int) -> models.Item:
