@@ -1367,7 +1367,21 @@ def _create_inventory_item_internal(
             if payload.category_id is not None:
                 target_view = (payload.size or "").strip()
                 if not target_view:
-                    raise ValueError("Vehicle item created without view (size)")
+                    default_view_row = conn.execute(
+                        """
+                        SELECT name
+                        FROM vehicle_category_sizes
+                        WHERE category_id = ?
+                        ORDER BY name COLLATE NOCASE
+                        LIMIT 1
+                        """,
+                        (payload.category_id,),
+                    ).fetchone()
+                    target_view = (
+                        default_view_row["name"]
+                        if default_view_row is not None
+                        else DEFAULT_VEHICLE_VIEW_NAME
+                    )
                 payload.size = target_view
         cloned_image_path: str | None = None
         name = payload.name
@@ -2399,7 +2413,7 @@ def delete_vehicle_item(item_id: int) -> None:
         _ensure_vehicle_item_columns(conn)
         row = conn.execute(
             f"""
-            SELECT quantity, remise_item_id, pharmacy_item_id, image_path, lot_id
+            SELECT quantity, remise_item_id, pharmacy_item_id, image_path, lot_id, category_id
             FROM {config.tables.items}
             WHERE id = ?
             """,
@@ -2414,6 +2428,18 @@ def delete_vehicle_item(item_id: int) -> None:
 
         quantity = row["quantity"] or 0
         if quantity <= 0:
+            if row["category_id"] is None:
+                conn.execute(
+                    f"DELETE FROM {config.tables.items} WHERE id = ?",
+                    (item_id,),
+                )
+                image_path = row["image_path"]
+                if image_path:
+                    _delete_media_file(image_path)
+                _persist_after_commit(
+                    conn, *_inventory_modules_to_persist("vehicle_inventory")
+                )
+                return
             raise ValueError(
                 "Impossible de restituer ce matériel : la quantité en véhicule est nulle."
             )
