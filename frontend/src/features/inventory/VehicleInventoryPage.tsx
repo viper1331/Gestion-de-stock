@@ -253,7 +253,10 @@ const INVENTORY_DEBUG_ENABLED =
 
 export const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
+type DragKind = "pharmacy_lot" | "remise_lot" | "library_item";
+
 type DraggedItemData = {
+  kind: DragKind;
   sourceType?: InventorySourceType;
   sourceId?: number;
   vehicleItemId?: number;
@@ -454,6 +457,7 @@ function writeItemDragPayload(
   }
   const rect = event.currentTarget.getBoundingClientRect();
   writeDraggedItemData(event, {
+    kind: "library_item",
     sourceType: source.sourceType,
     sourceId: source.sourceId,
     vehicleItemId: source.vehicleItemId,
@@ -2860,6 +2864,24 @@ function VehicleCompartment({
       x: clamp(centerX / rect.width, 0, 1),
       y: clamp(centerY / rect.height, 0, 1)
     };
+    if (data.kind === "pharmacy_lot" || data.kind === "remise_lot") {
+      if (typeof data.lotId === "number") {
+        if (onDropLot) {
+          onDropLot(data.lotId, position);
+        } else {
+          onItemFeedback({
+            type: "error",
+            text: "Sélectionnez un véhicule avant d'ajouter un lot."
+          });
+        }
+        return;
+      }
+      onItemFeedback({
+        type: "error",
+        text: "Données de lot incomplètes."
+      });
+      return;
+    }
     if (data.assignedLotItemIds && data.assignedLotItemIds.length > 0) {
       data.assignedLotItemIds.forEach((lotItemId, index) => {
         const lotItem = allItems.find((item) => item.id === lotItemId) ?? null;
@@ -2891,18 +2913,6 @@ function VehicleCompartment({
       });
       return;
     }
-    if (data.lotId !== null && data.lotId !== undefined) {
-      if (onDropLot) {
-        onDropLot(data.lotId, position);
-      } else {
-        onItemFeedback({
-          type: "error",
-          text: "Sélectionnez un véhicule avant d'ajouter un lot."
-        });
-      }
-      return;
-    }
-
     if (!data.sourceType || typeof data.sourceId !== "number") {
       console.error("[vehicle-inventory] Missing drag source information", data);
       onItemFeedback({
@@ -3700,6 +3710,13 @@ function DroppableLibrary({
         if (!data) {
           return;
         }
+        if (data.kind === "pharmacy_lot" || data.kind === "remise_lot") {
+          onItemFeedback({
+            type: "error",
+            text: "Impossible de déposer un lot sur cette bibliothèque."
+          });
+          return;
+        }
         if (
           typeof data.lotId === "number" &&
           data.categoryId !== null &&
@@ -3811,11 +3828,15 @@ function DroppableLibrary({
                       key={lot.id}
                       title={lotTooltip}
                       draggable
-                      onDragStart={(event) => {
-                        onDragStartCapture();
-                        writeDraggedItemData(event, { lotId: lot.id, lotName: lot.name });
-                        event.dataTransfer.effectAllowed = "copyMove";
-                      }}
+      onDragStart={(event) => {
+        onDragStartCapture();
+        writeDraggedItemData(event, {
+          kind: lot.source === "pharmacy" ? "pharmacy_lot" : "remise_lot",
+          lotId: lot.id,
+          lotName: lot.name
+        });
+        event.dataTransfer.effectAllowed = "copyMove";
+      }}
                       className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
                     >
                       <div className="flex items-start gap-3">
@@ -4475,15 +4496,28 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
 
   try {
     const parsed = JSON.parse(rawData) as Partial<DraggedItemData>;
+    const hasKind =
+      parsed.kind === "library_item" ||
+      parsed.kind === "pharmacy_lot" ||
+      parsed.kind === "remise_lot";
+    if (!hasKind) {
+      return null;
+    }
     const hasSourceType =
-      parsed.sourceType === "vehicle" || parsed.sourceType === "pharmacy" || parsed.sourceType === "remise";
+      parsed.sourceType === "vehicle" ||
+      parsed.sourceType === "pharmacy" ||
+      parsed.sourceType === "remise";
     const hasSourceId = typeof parsed.sourceId === "number";
     const hasLotId = typeof parsed.lotId === "number";
     const lotIdIsNull = parsed.lotId === null;
-    if ((!hasSourceType || !hasSourceId) && !hasLotId && !lotIdIsNull) {
+    if (
+      (parsed.kind === "library_item" && (!hasSourceType || !hasSourceId)) ||
+      ((parsed.kind === "pharmacy_lot" || parsed.kind === "remise_lot") && !hasLotId)
+    ) {
       return null;
     }
     return {
+      kind: parsed.kind,
       sourceType: hasSourceType ? parsed.sourceType : undefined,
       sourceId: hasSourceId ? parsed.sourceId : undefined,
       vehicleItemId: typeof parsed.vehicleItemId === "number" ? parsed.vehicleItemId : undefined,
@@ -4521,8 +4555,6 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
   } catch {
     return null;
   }
-
-  return null;
 }
 
 export function normalizeVehicleViewsInput(rawInput: string): string[] {

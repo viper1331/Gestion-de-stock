@@ -2636,7 +2636,10 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
         },
         headers=admin_headers,
     )
-    assert apply_resp.status_code == 204, apply_resp.text
+    assert apply_resp.status_code == 200, apply_resp.text
+    apply_payload = apply_resp.json()
+    assert apply_payload["created_count"] == 2
+    assert len(apply_payload["created_item_ids"]) == apply_payload["created_count"]
 
     vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
     assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
@@ -2684,6 +2687,8 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
         headers=admin_headers,
     )
     assert duplicate_apply_resp.status_code == 400, duplicate_apply_resp.text
+
+
 def test_vehicle_qr_visibility_toggle() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

@@ -244,6 +244,11 @@ class VehiclePharmacyLotApply(BaseModel):
     drop_position: PointerTarget | None = None
 
 
+class VehiclePharmacyLotApplyResult(BaseModel):
+    created_item_ids: list[int]
+    created_count: int
+
+
 class Movement(BaseModel):
     id: int
     item_id: int
