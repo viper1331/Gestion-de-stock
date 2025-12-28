@@ -323,10 +323,12 @@ class PharmacyLotWithItems(PharmacyLot):
 class PharmacyLotItemBase(BaseModel):
     pharmacy_item_id: int = Field(..., gt=0)
     quantity: int = Field(..., gt=0)
+    compartment_name: Optional[str] = Field(default=None, max_length=64)
 
 
 class PharmacyLotItemUpdate(BaseModel):
     quantity: Optional[int] = Field(default=None, gt=0)
+    compartment_name: Optional[str] = Field(default=None, max_length=64)
 
 
 class PharmacyLotItem(PharmacyLotItemBase):
