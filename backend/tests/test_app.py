@@ -2495,6 +2495,157 @@ def test_pharmacy_items_available_in_vehicle_library() -> None:
     assert library_entries[0]["category_id"] is None
 
 
+def test_pharmacy_lots_available_in_vehicle_library() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    item_a_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Lot VSAV Item A",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "quantity": 5,
+        },
+        headers=admin_headers,
+    )
+    assert item_a_resp.status_code == 201, item_a_resp.text
+    item_a_id = item_a_resp.json()["id"]
+
+    item_b_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Lot VSAV Item B",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "quantity": 6,
+        },
+        headers=admin_headers,
+    )
+    assert item_b_resp.status_code == 201, item_b_resp.text
+    item_b_id = item_b_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": f"Lot VSAV-{uuid4().hex[:6]}", "description": "Kit VSAV"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    add_item_a_resp = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": item_a_id, "quantity": 2},
+        headers=admin_headers,
+    )
+    assert add_item_a_resp.status_code == 201, add_item_a_resp.text
+
+    add_item_b_resp = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": item_b_id, "quantity": 3},
+        headers=admin_headers,
+    )
+    assert add_item_b_resp.status_code == 201, add_item_b_resp.text
+
+    library_resp = client.get(
+        "/vehicle-inventory/library/lots",
+        params={"vehicle_type": "secours_a_personne"},
+        headers=admin_headers,
+    )
+    assert library_resp.status_code == 200, library_resp.text
+    lot_entry = next(
+        (entry for entry in library_resp.json() if entry["id"] == lot_id),
+        None,
+    )
+    assert lot_entry is not None, "Le lot pharmacie devrait être visible dans la bibliothèque."
+    assert lot_entry["item_count"] == 2
+    assert {item["pharmacy_item_id"] for item in lot_entry["items"]} == {
+        item_a_id,
+        item_b_id,
+    }
+
+
+def test_apply_pharmacy_lot_to_vehicle() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    vehicle_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={
+            "name": f"VSAV-{uuid4().hex[:6]}",
+            "sizes": ["VUE PRINCIPALE"],
+            "vehicle_type": "secours_a_personne",
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_resp.status_code == 201, vehicle_resp.text
+    vehicle_id = vehicle_resp.json()["id"]
+
+    item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Lot apply item",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "quantity": 4,
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    pharmacy_item_id = item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": f"Lot apply-{uuid4().hex[:6]}", "description": "Kit apply"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    add_item_resp = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": pharmacy_item_id, "quantity": 2},
+        headers=admin_headers,
+    )
+    assert add_item_resp.status_code == 201, add_item_resp.text
+
+    apply_resp = client.post(
+        "/vehicle-inventory/apply-pharmacy-lot",
+        json={
+            "vehicle_id": vehicle_id,
+            "lot_id": lot_id,
+            "target_view": "VUE PRINCIPALE",
+        },
+        headers=admin_headers,
+    )
+    assert apply_resp.status_code == 204, apply_resp.text
+
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    vehicle_items = [
+        entry
+        for entry in vehicle_items_resp.json()
+        if entry["category_id"] == vehicle_id and entry["pharmacy_item_id"] == pharmacy_item_id
+    ]
+    assert vehicle_items
+    assert vehicle_items[0]["quantity"] == 2
+
+    pharmacy_items_resp = client.get("/pharmacy/", headers=admin_headers)
+    assert pharmacy_items_resp.status_code == 200, pharmacy_items_resp.text
+    pharmacy_item = next(
+        (entry for entry in pharmacy_items_resp.json() if entry["id"] == pharmacy_item_id),
+        None,
+    )
+    assert pharmacy_item is not None
+    assert pharmacy_item["quantity"] == 2
+
+    duplicate_apply_resp = client.post(
+        "/vehicle-inventory/apply-pharmacy-lot",
+        json={
+            "vehicle_id": vehicle_id,
+            "lot_id": lot_id,
+            "target_view": "VUE PRINCIPALE",
+        },
+        headers=admin_headers,
+    )
+    assert duplicate_apply_resp.status_code == 400, duplicate_apply_resp.text
 def test_vehicle_qr_visibility_toggle() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

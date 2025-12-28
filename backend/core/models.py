@@ -237,6 +237,12 @@ class VehicleLotUnassign(BaseModel):
     category_id: int = Field(..., ge=1)
 
 
+class VehiclePharmacyLotApply(BaseModel):
+    vehicle_id: int = Field(..., ge=1)
+    lot_id: int = Field(..., ge=1)
+    target_view: str | None = Field(default=None, max_length=128)
+
+
 class Movement(BaseModel):
     id: int
     item_id: int
