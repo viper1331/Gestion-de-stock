@@ -3414,7 +3414,7 @@ def update_vehicle_applied_lot_position(
         return _build_vehicle_applied_lot(row)
 
 
-def delete_vehicle_applied_lot(assignment_id: int) -> None:
+def delete_vehicle_applied_lot(assignment_id: int) -> models.VehicleAppliedLotDeleteResult:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
         _ensure_vehicle_applied_lot_table(conn)
@@ -3434,6 +3434,7 @@ def delete_vehicle_applied_lot(assignment_id: int) -> None:
             """,
             (assignment_id,),
         ).fetchall()
+        items_removed = len(items)
         for item in items:
             pharmacy_item_id = item["pharmacy_item_id"]
             if pharmacy_item_id is None:
@@ -3458,6 +3459,11 @@ def delete_vehicle_applied_lot(assignment_id: int) -> None:
             )
 
         _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
+        return models.VehicleAppliedLotDeleteResult(
+            restored=True,
+            lot_id=pharmacy_lot_id,
+            items_removed=items_removed,
+        )
 
 
 def assign_vehicle_item_from_remise(
@@ -4620,19 +4626,34 @@ def get_pharmacy_lot(lot_id: int) -> models.PharmacyLot:
     return _build_pharmacy_lot(row)
 
 
-def list_pharmacy_lots_with_items() -> list[models.PharmacyLotWithItems]:
+def list_pharmacy_lots_with_items(
+    *, exclude_applied_vehicle_id: int | None = None
+) -> list[models.PharmacyLotWithItems]:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
-        lot_rows = conn.execute(
-            """
+        if exclude_applied_vehicle_id is not None:
+            _ensure_vehicle_applied_lot_table(conn)
+        params: list[object] = []
+        query = """
             SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at, pl.extra_json,
                    COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
             FROM pharmacy_lots AS pl
             LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
+            """
+        if exclude_applied_vehicle_id is not None:
+            query += """
+            WHERE pl.id NOT IN (
+                SELECT pharmacy_lot_id
+                FROM vehicle_applied_lots
+                WHERE vehicle_id = ? AND source = 'pharmacy'
+            )
+            """
+            params.append(exclude_applied_vehicle_id)
+        query += """
             GROUP BY pl.id
             ORDER BY pl.created_at DESC
-            """,
-        ).fetchall()
+            """
+        lot_rows = conn.execute(query, params).fetchall()
 
         if not lot_rows:
             return []
@@ -6438,10 +6459,12 @@ def list_vehicle_library_items(
         ]
 
 
-def list_vehicle_pharmacy_lots(vehicle_type: str) -> list[models.PharmacyLotWithItems]:
+def list_vehicle_pharmacy_lots(
+    vehicle_type: str, vehicle_id: int | None = None
+) -> list[models.PharmacyLotWithItems]:
     if vehicle_type != "secours_a_personne":
         return []
-    return list_pharmacy_lots_with_items()
+    return list_pharmacy_lots_with_items(exclude_applied_vehicle_id=vehicle_id)
 
 
 def _iter_module_barcode_values(
