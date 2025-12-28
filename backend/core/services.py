@@ -2299,7 +2299,6 @@ def delete_item(item_id: int) -> None:
 
 
 def list_vehicle_items(search: str | None = None) -> list[models.Item]:
-    _ensure_vehicle_pharmacy_templates()
     items = _list_inventory_items_internal("vehicle_inventory", search)
     for item in items:
         if item.category_id is None:
