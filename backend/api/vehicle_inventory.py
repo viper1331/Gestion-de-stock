@@ -256,6 +256,48 @@ async def apply_pharmacy_lot_to_vehicle(
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
+@router.get("/applied-lots", response_model=list[models.VehicleAppliedLot])
+async def list_vehicle_applied_lots(
+    vehicle_id: int | None = None,
+    vehicle_type: str | None = None,
+    view: str | None = None,
+    user: models.User = Depends(get_current_user),
+) -> list[models.VehicleAppliedLot]:
+    _require_permission(user, action="view")
+    return services.list_vehicle_applied_lots(
+        vehicle_id=vehicle_id, vehicle_type=vehicle_type, view=view
+    )
+
+
+@router.patch("/applied-lots/{assignment_id}", response_model=models.VehicleAppliedLot)
+async def update_vehicle_applied_lot(
+    assignment_id: int,
+    payload: models.VehicleAppliedLotUpdate,
+    user: models.User = Depends(get_current_user),
+) -> models.VehicleAppliedLot:
+    _require_permission(user, action="edit")
+    try:
+        return services.update_vehicle_applied_lot_position(assignment_id, payload)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.delete("/applied-lots/{assignment_id}", status_code=204)
+async def delete_vehicle_applied_lot(
+    assignment_id: int,
+    user: models.User = Depends(get_current_user),
+) -> None:
+    _require_permission(user, action="edit")
+    try:
+        services.delete_vehicle_applied_lot(assignment_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @router.post("/assign-from-remise", response_model=models.Item, status_code=201)
 async def assign_vehicle_item_from_remise(
     payload: models.VehicleAssignmentFromRemise,

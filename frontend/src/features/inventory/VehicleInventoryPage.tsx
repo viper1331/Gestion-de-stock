@@ -88,6 +88,8 @@ interface VehicleItem {
   position_y: number | null;
   lot_id: number | null;
   lot_name: string | null;
+  applied_lot_source?: string | null;
+  applied_lot_assignment_id?: number | null;
   show_in_qr: boolean;
   vehicle_type: VehicleType | null;
   available_quantity?: number | null;
@@ -185,6 +187,19 @@ interface VehiclePhoto {
   uploaded_at: string;
 }
 
+interface VehicleAppliedLot {
+  id: number;
+  vehicle_id: number;
+  vehicle_type: VehicleType | null;
+  view: string | null;
+  source: string;
+  pharmacy_lot_id: number | null;
+  lot_name: string | null;
+  position_x: number | null;
+  position_y: number | null;
+  created_at: string | null;
+}
+
 interface VehicleFormValues {
   name: string;
   sizes: string[];
@@ -266,7 +281,7 @@ const INVENTORY_DEBUG_ENABLED =
 
 export const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
-type DragKind = "pharmacy_lot" | "remise_lot" | "library_item";
+type DragKind = "pharmacy_lot" | "remise_lot" | "library_item" | "applied_lot";
 
 type DraggedItemData = {
   kind: DragKind;
@@ -284,6 +299,7 @@ type DraggedItemData = {
   elementHeight?: number;
   lotId?: number | null;
   lotName?: string | null;
+  appliedLotId?: number | null;
 };
 
 export function resolveTargetView(selectedView: string | null): string {
@@ -481,6 +497,19 @@ function writeItemDragPayload(
     lotId: item.lot_id ?? null,
     lotName: item.lot_name ?? undefined,
     assignedLotItemIds: options?.assignedLotItemIds,
+    offsetX: event.clientX - rect.left,
+    offsetY: event.clientY - rect.top,
+    elementWidth: rect.width,
+    elementHeight: rect.height
+  });
+  event.dataTransfer.effectAllowed = "move";
+}
+
+function writeAppliedLotDragPayload(event: DragEvent<HTMLElement>, assignmentId: number) {
+  const rect = event.currentTarget.getBoundingClientRect();
+  writeDraggedItemData(event, {
+    kind: "applied_lot",
+    appliedLotId: assignmentId,
     offsetX: event.clientX - rect.left,
     offsetY: event.clientY - rect.top,
     elementWidth: rect.width,
@@ -1134,7 +1163,8 @@ export function VehicleInventoryPage() {
       if (variables.lot.source === "pharmacy") {
         invalidations.push(
           queryClient.invalidateQueries({ queryKey: ["vehicle-library", selectedVehicleType] }),
-          queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots", selectedVehicleType] })
+          queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots", selectedVehicleType] }),
+          queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] })
         );
       } else {
         invalidations.push(
@@ -1188,6 +1218,39 @@ export function VehicleInventoryPage() {
         type: "error",
         text: "Impossible de retirer ce lot du véhicule."
       });
+    }
+  });
+
+  const updateAppliedLotPosition = useMutation({
+    mutationFn: async ({
+      assignmentId,
+      position
+    }: {
+      assignmentId: number;
+      position: { x: number; y: number };
+    }) => {
+      const response = await api.patch<VehicleAppliedLot>(
+        `/vehicle-inventory/applied-lots/${assignmentId}`,
+        {
+          position_x: position.x,
+          position_y: position.y
+        }
+      );
+      return response.data;
+    },
+    onError: (error) => {
+      logDebug("APPLIED LOT UPDATE ERROR", error);
+      if (isAxiosError(error) && error.response?.data?.detail) {
+        setFeedback({ type: "error", text: error.response.data.detail });
+        return;
+      }
+      setFeedback({
+        type: "error",
+        text: "Impossible de déplacer ce lot."
+      });
+    },
+    onSettled: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] });
     }
   });
 
@@ -1356,6 +1419,20 @@ export function VehicleInventoryPage() {
     [selectedView]
   );
 
+  const { data: appliedLots = [] } = useQuery({
+    queryKey: ["vehicle-applied-lots", selectedVehicle?.id, normalizedSelectedView],
+    enabled: !!selectedVehicle?.id,
+    queryFn: async () => {
+      const response = await api.get<VehicleAppliedLot[]>("/vehicle-inventory/applied-lots", {
+        params: {
+          vehicle_id: selectedVehicle?.id,
+          view: normalizedSelectedView
+        }
+      });
+      return response.data;
+    }
+  });
+
   const backgroundPanelStorageKey = useMemo(() => {
     const vehicleIdentifier = selectedVehicle?.id ? `vehicle-${selectedVehicle.id}` : "no-vehicle";
     const viewIdentifier = normalizeViewName(normalizedSelectedView).replace(/\s+/g, "-");
@@ -1444,6 +1521,24 @@ export function VehicleInventoryPage() {
     [items, selectedVehicle?.id]
   );
 
+  const appliedLotItemsByAssignment = useMemo(() => {
+    const map = new Map<number, VehicleItem[]>();
+    items.forEach((item) => {
+      if (!item.applied_lot_assignment_id) {
+        return;
+      }
+      const current = map.get(item.applied_lot_assignment_id) ?? [];
+      current.push(item);
+      map.set(item.applied_lot_assignment_id, current);
+    });
+    return map;
+  }, [items]);
+
+  const visibleVehicleItems = useMemo(
+    () => vehicleItems.filter((item) => !item.applied_lot_assignment_id),
+    [vehicleItems]
+  );
+
   useEffect(() => {
     logDebug("RELOADED VEHICLE ITEMS", vehicleItems);
   }, [logDebug, vehicleItems]);
@@ -1462,23 +1557,23 @@ export function VehicleInventoryPage() {
 
   const itemsForSelectedView = useMemo(
     () =>
-      vehicleItems.filter((item) => {
+      visibleVehicleItems.filter((item) => {
         if (!normalizedSelectedView) {
           return false;
         }
         return normalizeViewName(getItemView(item)) === normalizedSelectedView;
       }),
-    [vehicleItems, normalizedSelectedView]
+    [visibleVehicleItems, normalizedSelectedView]
   );
 
   const itemsWaitingAssignment = useMemo(
-    () => vehicleItems.filter((item) => !getItemView(item)),
-    [vehicleItems]
+    () => visibleVehicleItems.filter((item) => !getItemView(item)),
+    [visibleVehicleItems]
   );
 
   const itemsInOtherViews = useMemo(
     () =>
-      vehicleItems.filter((item) => {
+      visibleVehicleItems.filter((item) => {
         const itemView = getItemView(item);
         if (!itemView) {
           return false;
@@ -1488,7 +1583,7 @@ export function VehicleInventoryPage() {
         }
         return normalizeViewName(itemView) !== normalizedSelectedView;
       }),
-    [vehicleItems, normalizedSelectedView]
+    [visibleVehicleItems, normalizedSelectedView]
   );
 
   const lotRemiseItemIds = useMemo(() => {
@@ -2320,6 +2415,8 @@ export function VehicleInventoryPage() {
               description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
               items={itemsForSelectedView}
               allItems={items}
+              appliedLots={appliedLots}
+              appliedLotItemsByAssignment={appliedLotItemsByAssignment}
               categoryId={selectedVehicle.id}
               viewConfig={selectedViewConfig}
               availablePhotos={vehiclePhotos}
@@ -2440,6 +2537,9 @@ export function VehicleInventoryPage() {
               backgroundPanelStorageKey={backgroundPanelStorageKey}
               itemsPanelStorageKey={itemsPanelStorageKey}
               onDropLot={handleDropLotOnView}
+              onDropAppliedLot={(assignmentId, position) =>
+                updateAppliedLotPosition.mutate({ assignmentId, position })
+              }
               onUpdateItemQuantity={(itemId, quantity) => {
                 if (!selectedVehicle) {
                   return;
@@ -2865,6 +2965,8 @@ interface VehicleCompartmentProps {
   description: string;
   items: VehicleItem[];
   allItems: VehicleItem[];
+  appliedLots?: VehicleAppliedLot[];
+  appliedLotItemsByAssignment?: Map<number, VehicleItem[]>;
   categoryId: number;
   viewConfig: VehicleViewConfig | null;
   availablePhotos: VehiclePhoto[];
@@ -2877,6 +2979,7 @@ interface VehicleCompartmentProps {
   backgroundPanelStorageKey: string;
   itemsPanelStorageKey: string;
   onDropLot?: (lotId: number, position: { x: number; y: number }) => void;
+  onDropAppliedLot?: (assignmentId: number, position: { x: number; y: number }) => void;
   onUpdateItemQuantity?: (itemId: number, quantity: number) => void;
   onDragStartCapture: () => void;
 }
@@ -2886,6 +2989,8 @@ function VehicleCompartment({
   description,
   items,
   allItems,
+  appliedLots = [],
+  appliedLotItemsByAssignment = new Map(),
   categoryId,
   viewConfig,
   availablePhotos,
@@ -2898,6 +3003,7 @@ function VehicleCompartment({
   backgroundPanelStorageKey,
   itemsPanelStorageKey,
   onDropLot,
+  onDropAppliedLot,
   onUpdateItemQuantity,
   onDragStartCapture
 }: VehicleCompartmentProps) {
@@ -2946,7 +3052,10 @@ function VehicleCompartment({
   const boardRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const queryClient = useQueryClient();
-  const markerEntries = useMemo(() => buildVehicleMarkerEntries(items), [items]);
+  const markerEntries = useMemo(
+    () => buildVehicleMarkerEntries(items, appliedLots, appliedLotItemsByAssignment),
+    [items, appliedLots, appliedLotItemsByAssignment]
+  );
   const markerLayouts = useMemo(() => buildMarkerLayoutMap(markerEntries), [markerEntries]);
 
   useEffect(() => {
@@ -3023,6 +3132,24 @@ function VehicleCompartment({
       x: clamp(centerX / rect.width, 0, 1),
       y: clamp(centerY / rect.height, 0, 1)
     };
+    if (data.kind === "applied_lot") {
+      if (typeof data.appliedLotId === "number") {
+        if (onDropAppliedLot) {
+          onDropAppliedLot(data.appliedLotId, position);
+        } else {
+          onItemFeedback({
+            type: "error",
+            text: "Sélectionnez un véhicule avant de déplacer ce lot."
+          });
+        }
+        return;
+      }
+      onItemFeedback({
+        type: "error",
+        text: "Données de lot appliqué incomplètes."
+      });
+      return;
+    }
     if (data.kind === "pharmacy_lot" || data.kind === "remise_lot") {
       if (typeof data.lotId === "number") {
         if (onDropLot) {
@@ -3486,6 +3613,7 @@ function VehicleCompartment({
 
 interface VehicleMarkerEntry {
   key: string;
+  kind: "item" | "lot" | "applied_lot";
   name: string;
   quantity: number;
   image_url: string | null;
@@ -3500,6 +3628,9 @@ interface VehicleMarkerEntry {
   category_id: number | null;
   remise_item_id: number | null;
   pharmacy_item_id: number | null;
+  applied_lot_id?: number | null;
+  applied_lot_source?: string | null;
+  applied_lot_items?: VehicleItem[];
 }
 
 interface MarkerLayoutPosition {
@@ -3534,12 +3665,33 @@ function VehicleItemMarker({
   const positionY = clamp(entry.position_y ?? 0.5, 0, 1);
   const imageUrl = resolveMediaUrl(entry.image_url);
   const hasImage = Boolean(imageUrl);
-  const lotLabel = entry.lot_id ? entry.lot_name ?? `Lot #${entry.lot_id}` : null;
-  const baseTitle = `${entry.name} (Qté : ${entry.quantity})${lotLabel ? ` - ${lotLabel}` : ""}`;
+  const isAppliedLot = entry.kind === "applied_lot";
+  const [isAppliedLotOpen, setIsAppliedLotOpen] = useState(false);
+  const lotLabel =
+    entry.kind === "lot" && entry.lot_id ? entry.lot_name ?? `Lot #${entry.lot_id}` : null;
+  const appliedLotCount = entry.lotItemIds.length;
+  const baseTitle = isAppliedLot
+    ? `${entry.name} (${appliedLotCount} élément(s))`
+    : `${entry.name} (Qté : ${entry.quantity})${lotLabel ? ` - ${lotLabel}` : ""}`;
   const markerTitle = entry.tooltip ? `${baseTitle}\n${entry.tooltip}` : baseTitle;
+  const appliedLotItems = entry.applied_lot_items ?? [];
+  const handleToggleAppliedLot = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsAppliedLotOpen((previous) => !previous);
+  };
+  const handleCloseAppliedLot = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setIsAppliedLotOpen(false);
+  };
 
   const handleDragStart = (event: DragEvent<HTMLElement>) => {
     onDragStartCapture?.();
+    if (isAppliedLot && entry.applied_lot_id) {
+      writeAppliedLotDragPayload(event, entry.applied_lot_id);
+      return;
+    }
     writeItemDragPayload(
       event,
       {
@@ -3556,7 +3708,24 @@ function VehicleItemMarker({
     );
   };
 
-  const markerContent = (
+  const markerContent = isAppliedLot ? (
+    <div className="flex items-center gap-2">
+      <div className="flex h-10 w-10 items-center justify-center rounded-md border border-emerald-200 bg-emerald-50 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 shadow-sm dark:border-emerald-600/40 dark:bg-emerald-900/30 dark:text-emerald-200">
+        Lot
+      </div>
+      <div className="text-left">
+        <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
+          {entry.name}
+        </span>
+        <span className="block text-[10px] text-slate-500 dark:text-slate-300">
+          {appliedLotCount} élément(s) • Qté : {entry.quantity}
+        </span>
+        <span className="mt-0.5 inline-flex items-center rounded-full bg-emerald-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-emerald-700 dark:bg-emerald-900/60 dark:text-emerald-200">
+          Lot appliqué
+        </span>
+      </div>
+    </div>
+  ) : (
     <div className="flex items-center gap-2">
       {hasImage ? (
         <img
@@ -3573,7 +3742,9 @@ function VehicleItemMarker({
         <span className="block text-xs font-semibold text-slate-700 dark:text-slate-100">
           {entry.name}
         </span>
-        <span className="block text-[10px] text-slate-500 dark:text-slate-300">Qté : {entry.quantity}</span>
+        <span className="block text-[10px] text-slate-500 dark:text-slate-300">
+          Qté : {entry.quantity}
+        </span>
         {lotLabel ? (
           <span className="mt-0.5 inline-flex items-center rounded-full bg-blue-100 px-2 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-blue-700 dark:bg-blue-900/60 dark:text-blue-200">
             {lotLabel}
@@ -3710,8 +3881,53 @@ function VehicleItemMarker({
                 ) : null}
               </>
             )}
+            {isAppliedLot ? (
+              <button
+                type="button"
+                onClick={handleToggleAppliedLot}
+                className="rounded-full border border-emerald-300 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/70 dark:text-emerald-200 dark:hover:bg-emerald-900/30"
+              >
+                Voir contenu
+              </button>
+            ) : null}
           </div>
         </div>
+        {isAppliedLot && isAppliedLotOpen ? (
+          <div
+            className="absolute z-20 w-56 -translate-x-1/2 translate-y-3 rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-600 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200"
+            style={{ left: `${cardX * 100}%`, top: `${cardY * 100}%` }}
+          >
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">Contenu du lot</p>
+                <p className="text-[10px] text-slate-500 dark:text-slate-400">{entry.name}</p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseAppliedLot}
+                className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+              >
+                Fermer
+              </button>
+            </div>
+            <ul className="mt-2 space-y-1">
+              {appliedLotItems.length > 0 ? (
+                appliedLotItems.map((item) => (
+                  <li key={item.id} className="flex items-center justify-between gap-2">
+                    <span className="truncate">{item.name}</span>
+                    <span className="text-[10px] text-slate-500 dark:text-slate-400">
+                      {item.quantity}
+                    </span>
+                  </li>
+                ))
+              ) : (
+                <li className="text-[10px] text-slate-500 dark:text-slate-400">
+                  Aucun matériel enregistré.
+                </li>
+              )}
+            </ul>
+          </div>
+        ) : null}
       </>
     );
   }
@@ -3720,16 +3936,59 @@ function VehicleItemMarker({
   const displayY = clamp(layoutPosition?.y ?? positionY, 0, 1);
 
   return (
-    <button
-      type="button"
-      className="group absolute -translate-x-1/2 -translate-y-1/2 cursor-move rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-105 dark:bg-slate-900/80 dark:text-slate-200"
-      style={{ left: `${displayX * 100}%`, top: `${displayY * 100}%` }}
-      draggable
-      onDragStart={handleDragStart}
-      title={markerTitle}
-    >
-      {markerContent}
-    </button>
+    <div className="absolute -translate-x-1/2 -translate-y-1/2" style={{ left: `${displayX * 100}%`, top: `${displayY * 100}%` }}>
+      <button
+        type="button"
+        className="group cursor-move rounded-lg bg-white/90 px-3 py-2 text-xs font-medium text-slate-700 shadow-md backdrop-blur-sm transition hover:scale-105 dark:bg-slate-900/80 dark:text-slate-200"
+        draggable
+        onDragStart={handleDragStart}
+        title={markerTitle}
+      >
+        {markerContent}
+      </button>
+      {isAppliedLot ? (
+        <div className="mt-1 flex items-center gap-2 text-[10px] font-semibold">
+          <button
+            type="button"
+            onClick={handleToggleAppliedLot}
+            className="rounded-full border border-emerald-300 px-2 py-0.5 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/70 dark:text-emerald-200 dark:hover:bg-emerald-900/30"
+          >
+            Voir contenu
+          </button>
+        </div>
+      ) : null}
+      {isAppliedLot && isAppliedLotOpen ? (
+        <div className="mt-2 w-56 rounded-xl border border-slate-200 bg-white p-3 text-[11px] text-slate-600 shadow-lg dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+          <div className="flex items-start justify-between gap-2">
+            <div>
+              <p className="text-xs font-semibold text-slate-900 dark:text-slate-100">Contenu du lot</p>
+              <p className="text-[10px] text-slate-500 dark:text-slate-400">{entry.name}</p>
+            </div>
+            <button
+              type="button"
+              onClick={handleCloseAppliedLot}
+              className="rounded-full border border-slate-200 px-2 py-0.5 text-[10px] font-semibold text-slate-600 hover:bg-slate-100 dark:border-slate-700 dark:text-slate-200 dark:hover:bg-slate-800"
+            >
+              Fermer
+            </button>
+          </div>
+          <ul className="mt-2 space-y-1">
+            {appliedLotItems.length > 0 ? (
+              appliedLotItems.map((item) => (
+                <li key={item.id} className="flex items-center justify-between gap-2">
+                  <span className="truncate">{item.name}</span>
+                  <span className="text-[10px] text-slate-500 dark:text-slate-400">{item.quantity}</span>
+                </li>
+              ))
+            ) : (
+              <li className="text-[10px] text-slate-500 dark:text-slate-400">
+                Aucun matériel enregistré.
+              </li>
+            )}
+          </ul>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -3883,6 +4142,13 @@ function DroppableLibrary({
           onItemFeedback({
             type: "error",
             text: "Impossible de déposer un lot sur cette bibliothèque."
+          });
+          return;
+        }
+        if (data.kind === "applied_lot") {
+          onItemFeedback({
+            type: "error",
+            text: "Impossible de déposer un lot appliqué sur cette bibliothèque."
           });
           return;
         }
@@ -4596,10 +4862,11 @@ function ItemCard({
   );
 }
 
-function buildVehicleMarkerEntries(items: VehicleItem[]): VehicleMarkerEntry[] {
-  if (items.length === 0) {
-    return [];
-  }
+function buildVehicleMarkerEntries(
+  items: VehicleItem[],
+  appliedLots: VehicleAppliedLot[] = [],
+  appliedLotItemsByAssignment: Map<number, VehicleItem[]> = new Map()
+): VehicleMarkerEntry[] {
   const groupedLots = new Map<number, VehicleItem[]>();
   for (const item of items) {
     if (item.lot_id === null) {
@@ -4611,7 +4878,9 @@ function buildVehicleMarkerEntries(items: VehicleItem[]): VehicleMarkerEntry[] {
   }
 
   const renderedLots = new Set<number>();
-  const markers: VehicleMarkerEntry[] = [];
+  const markers: VehicleMarkerEntry[] = appliedLots.map((lot) =>
+    createMarkerFromAppliedLot(lot, appliedLotItemsByAssignment.get(lot.id) ?? [])
+  );
   for (const item of items) {
     if (item.lot_id === null) {
       markers.push(createMarkerFromItem(item));
@@ -4647,6 +4916,7 @@ function buildMarkerLayoutMap(entries: VehicleMarkerEntry[]): Map<string, Marker
 function createMarkerFromItem(item: VehicleItem): VehicleMarkerEntry {
   return {
     key: `item-${item.id}`,
+    kind: "item",
     name: item.name,
     quantity: item.quantity,
     image_url: item.image_url,
@@ -4680,6 +4950,7 @@ function createMarkerFromLotGroup(
 
   return {
     key: `lot-${lotId}`,
+    kind: "lot",
     name: lotName,
     quantity: totalQuantity,
     image_url: imageUrl,
@@ -4694,6 +4965,40 @@ function createMarkerFromLotGroup(
     category_id: representative?.category_id ?? null,
     remise_item_id: representative?.remise_item_id ?? null,
     pharmacy_item_id: representative?.pharmacy_item_id ?? null
+  };
+}
+
+function createMarkerFromAppliedLot(
+  appliedLot: VehicleAppliedLot,
+  appliedLotItems: VehicleItem[]
+): VehicleMarkerEntry {
+  const lotName = appliedLot.lot_name ?? "Lot pharmacie";
+  const totalQuantity = appliedLotItems.reduce((sum, entry) => sum + entry.quantity, 0);
+  const tooltip =
+    appliedLotItems.length > 0
+      ? appliedLotItems.map((entry) => `${entry.quantity} × ${entry.name}`).join("\n")
+      : "Ce lot est encore vide.";
+
+  return {
+    key: `applied-lot-${appliedLot.id}`,
+    kind: "applied_lot",
+    name: lotName,
+    quantity: totalQuantity,
+    image_url: null,
+    position_x: appliedLot.position_x,
+    position_y: appliedLot.position_y,
+    lot_id: null,
+    lot_name: null,
+    lotItemIds: appliedLotItems.map((entry) => entry.id),
+    tooltip,
+    isLot: true,
+    primaryItemId: appliedLotItems[0]?.id ?? null,
+    category_id: appliedLot.vehicle_id ?? null,
+    remise_item_id: null,
+    pharmacy_item_id: null,
+    applied_lot_id: appliedLot.id,
+    applied_lot_source: appliedLot.source,
+    applied_lot_items: appliedLotItems
   };
 }
 
@@ -4739,7 +5044,8 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
     const hasKind =
       parsed.kind === "library_item" ||
       parsed.kind === "pharmacy_lot" ||
-      parsed.kind === "remise_lot";
+      parsed.kind === "remise_lot" ||
+      parsed.kind === "applied_lot";
     if (!hasKind) {
       return null;
     }
@@ -4750,9 +5056,11 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
     const hasSourceId = typeof parsed.sourceId === "number";
     const hasLotId = typeof parsed.lotId === "number";
     const lotIdIsNull = parsed.lotId === null;
+    const hasAppliedLotId = typeof parsed.appliedLotId === "number";
     if (
       (parsed.kind === "library_item" && (!hasSourceType || !hasSourceId)) ||
-      ((parsed.kind === "pharmacy_lot" || parsed.kind === "remise_lot") && !hasLotId)
+      ((parsed.kind === "pharmacy_lot" || parsed.kind === "remise_lot") && !hasLotId) ||
+      (parsed.kind === "applied_lot" && !hasAppliedLotId)
     ) {
       return null;
     }
@@ -4782,6 +5090,7 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
       quantity: typeof parsed.quantity === "number" ? parsed.quantity : undefined,
       lotId: hasLotId ? parsed.lotId : lotIdIsNull ? null : undefined,
       lotName: typeof parsed.lotName === "string" ? parsed.lotName : undefined,
+      appliedLotId: hasAppliedLotId ? parsed.appliedLotId : undefined,
       assignedLotItemIds: Array.isArray(parsed.assignedLotItemIds)
         ? parsed.assignedLotItemIds
             .map((entry) => (typeof entry === "number" ? entry : null))
