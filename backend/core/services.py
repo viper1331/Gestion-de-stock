@@ -1294,9 +1294,14 @@ def _update_remise_quantity(
     updated = row["quantity"] + delta
     if updated < 0:
         raise ValueError("Stock insuffisant en remise pour cette affectation.")
-    conn.execute(
+    cursor = conn.execute(
         "UPDATE remise_items SET quantity = ? WHERE id = ?",
         (updated, remise_item_id),
+    )
+    logger.info(
+        "[VEHICLE_INVENTORY] Delete rowcount step=update-remise-quantity remise_item_id=%s rowcount=%s",
+        remise_item_id,
+        cursor.rowcount,
     )
 
 
@@ -1314,9 +1319,14 @@ def _update_pharmacy_quantity(
     updated = row["quantity"] + delta
     if updated < 0:
         raise ValueError("Stock insuffisant en pharmacie pour cette affectation.")
-    conn.execute(
+    cursor = conn.execute(
         "UPDATE pharmacy_items SET quantity = ? WHERE id = ?",
         (updated, pharmacy_item_id),
+    )
+    logger.info(
+        "[VEHICLE_INVENTORY] Delete rowcount step=update-pharmacy-quantity pharmacy_item_id=%s rowcount=%s",
+        pharmacy_item_id,
+        cursor.rowcount,
     )
 
 
@@ -2409,69 +2419,125 @@ def update_vehicle_item(item_id: int, payload: models.ItemUpdate) -> models.Item
 def delete_vehicle_item(item_id: int) -> None:
     ensure_database_ready()
     config = _get_inventory_config("vehicle_inventory")
-    with db.get_stock_connection() as conn:
-        _ensure_vehicle_item_columns(conn)
-        total_count = conn.execute(
-            f"SELECT COUNT(*) as n FROM {config.tables.items}"
-        ).fetchone()
-        existence = conn.execute(
-            f"SELECT id FROM {config.tables.items} WHERE id = ?",
-            (item_id,),
-        ).fetchone()
-        logger.info(
-            "[VEHICLE_INVENTORY] Delete lookup pid=%s db=%s item_id=%s vehicle_items_count=%s exists=%s",
-            os.getpid(),
-            db.STOCK_DB_PATH.resolve(),
-            item_id,
-            total_count["n"] if total_count else None,
-            None if existence is None else existence["id"],
-        )
-        row = conn.execute(
-            f"""
-            SELECT quantity, remise_item_id, pharmacy_item_id, image_path, lot_id, category_id
-            FROM {config.tables.items}
-            WHERE id = ?
-            """,
-            (item_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError("Article introuvable")
-        if row["lot_id"]:
-            raise ValueError(
-                "Impossible de supprimer ce matériel depuis l'inventaire véhicules : il est rattaché à un lot."
+    try:
+        with db.get_stock_connection() as conn:
+            _ensure_vehicle_item_columns(conn)
+            total_count = conn.execute(
+                f"SELECT COUNT(*) as n FROM {config.tables.items}"
+            ).fetchone()
+            existence = conn.execute(
+                f"SELECT id FROM {config.tables.items} WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            logger.info(
+                "[VEHICLE_INVENTORY] Delete lookup pid=%s db=%s item_id=%s vehicle_items_count=%s exists=%s",
+                os.getpid(),
+                db.STOCK_DB_PATH.resolve(),
+                item_id,
+                total_count["n"] if total_count else None,
+                None if existence is None else existence["id"],
             )
-
-        quantity = row["quantity"] or 0
-        if quantity <= 0:
-            if row["category_id"] is None:
-                conn.execute(
-                    f"DELETE FROM {config.tables.items} WHERE id = ?",
-                    (item_id,),
-                )
-                image_path = row["image_path"]
-                if image_path:
-                    _delete_media_file(image_path)
-                _persist_after_commit(
-                    conn, *_inventory_modules_to_persist("vehicle_inventory")
-                )
-                return
-            raise ValueError(
-                "Impossible de restituer ce matériel : la quantité en véhicule est nulle."
+            row = conn.execute(
+                f"""
+                SELECT id,
+                       sku,
+                       quantity,
+                       size,
+                       vehicle_type,
+                       remise_item_id,
+                       pharmacy_item_id,
+                       image_path,
+                       lot_id,
+                       category_id
+                FROM {config.tables.items}
+                WHERE id = ?
+                """,
+                (item_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Article introuvable")
+            logger.info(
+                "[VEHICLE_INVENTORY] Delete row snapshot id=%s sku=%s qty=%s size=%s vehicle_type=%s pharmacy_item_id=%s remise_item_id=%s lot_id=%s",
+                row["id"],
+                row["sku"],
+                row["quantity"],
+                row["size"],
+                row.get("vehicle_type"),
+                row.get("pharmacy_item_id"),
+                row.get("remise_item_id"),
+                row.get("lot_id"),
             )
+            if row["lot_id"]:
+                raise ValueError(
+                    "Impossible de supprimer ce matériel depuis l'inventaire véhicules : il est rattaché à un lot."
+                )
 
-        if row["remise_item_id"] is not None:
-            _update_remise_quantity(conn, row["remise_item_id"], quantity)
-        elif row["pharmacy_item_id"] is not None:
-            _update_pharmacy_quantity(conn, row["pharmacy_item_id"], quantity)
+            quantity = row["quantity"] or 0
+            if quantity <= 0:
+                if row["category_id"] is None:
+                    logger.info(
+                        "[VEHICLE_INVENTORY] Delete step=delete-vehicle-item-zero-quantity id=%s",
+                        item_id,
+                    )
+                    delete_cursor = conn.execute(
+                        f"DELETE FROM {config.tables.items} WHERE id = ?",
+                        (item_id,),
+                    )
+                    logger.info(
+                        "[VEHICLE_INVENTORY] Delete rowcount step=delete-vehicle-item-zero-quantity id=%s rowcount=%s",
+                        item_id,
+                        delete_cursor.rowcount,
+                    )
+                    image_path = row["image_path"]
+                    if image_path:
+                        _delete_media_file(image_path)
+                    _persist_after_commit(
+                        conn, *_inventory_modules_to_persist("vehicle_inventory")
+                    )
+                    return
+                raise ValueError(
+                    "Impossible de restituer ce matériel : la quantité en véhicule est nulle."
+                )
 
-        conn.execute(
-            f"DELETE FROM {config.tables.items} WHERE id = ?",
-            (item_id,),
-        )
-        image_path = row["image_path"]
-        if image_path:
-            _delete_media_file(image_path)
-        _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
+            if row["remise_item_id"] is not None:
+                logger.info(
+                    "[VEHICLE_INVENTORY] Delete step=update-remise-quantity id=%s remise_item_id=%s delta=%s",
+                    item_id,
+                    row["remise_item_id"],
+                    quantity,
+                )
+                _update_remise_quantity(conn, row["remise_item_id"], quantity)
+            elif row["pharmacy_item_id"] is not None:
+                logger.info(
+                    "[VEHICLE_INVENTORY] Delete step=update-pharmacy-quantity id=%s pharmacy_item_id=%s delta=%s",
+                    item_id,
+                    row["pharmacy_item_id"],
+                    quantity,
+                )
+                _update_pharmacy_quantity(conn, row["pharmacy_item_id"], quantity)
+
+            logger.info(
+                "[VEHICLE_INVENTORY] Delete step=delete-vehicle-item id=%s",
+                item_id,
+            )
+            delete_cursor = conn.execute(
+                f"DELETE FROM {config.tables.items} WHERE id = ?",
+                (item_id,),
+            )
+            logger.info(
+                "[VEHICLE_INVENTORY] Delete rowcount step=delete-vehicle-item id=%s rowcount=%s",
+                item_id,
+                delete_cursor.rowcount,
+            )
+            image_path = row["image_path"]
+            if image_path:
+                _delete_media_file(image_path)
+            _persist_after_commit(
+                conn, *_inventory_modules_to_persist("vehicle_inventory")
+            )
+    except Exception:
+        logger.exception("[VEHICLE_INVENTORY] Delete failed id=%s", item_id)
+        raise
 
     logger.info(
         "[VEHICLE_INVENTORY] Restitution véhicule -> remise",
