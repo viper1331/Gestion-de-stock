@@ -2410,6 +2410,21 @@ def delete_vehicle_item(item_id: int) -> None:
     config = _get_inventory_config("vehicle_inventory")
     with db.get_stock_connection() as conn:
         _ensure_vehicle_item_columns(conn)
+        total_count = conn.execute(
+            f"SELECT COUNT(*) as n FROM {config.tables.items}"
+        ).fetchone()
+        existence = conn.execute(
+            f"SELECT id FROM {config.tables.items} WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        logger.info(
+            "[VEHICLE_INVENTORY] Delete lookup",
+            extra={
+                "vehicle_item_id": item_id,
+                "total_items": total_count["n"] if total_count else None,
+                "exists": bool(existence),
+            },
+        )
         row = conn.execute(
             f"""
             SELECT quantity, remise_item_id, pharmacy_item_id, image_path, lot_id, category_id

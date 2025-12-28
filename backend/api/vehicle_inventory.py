@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, 
 from fastapi.responses import HTMLResponse, StreamingResponse
 
 from backend.api.auth import get_current_user
-from backend.core import models, services
+from backend.core import db, models, services
 from backend.core.config import settings
 from backend.services.pdf import VehiclePdfOptions
 from backend.services import qrcode_service
@@ -252,6 +252,14 @@ async def delete_vehicle_item(
     item_id: int, user: models.User = Depends(get_current_user)
 ) -> None:
     _require_permission(user, action="edit")
+    logger.info(
+        "[VEHICLE_INVENTORY] Delete request",
+        extra={
+            "vehicle_item_id": item_id,
+            "username": user.username,
+            "stock_db_path": db.STOCK_DB_PATH.resolve(),
+        },
+    )
     try:
         services.delete_vehicle_item(item_id)
     except ValueError as exc:
