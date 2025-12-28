@@ -49,6 +49,27 @@ async def list_vehicle_items(
     return services.list_vehicle_items(search)
 
 
+@router.get("/library", response_model=list[models.VehicleLibraryItem])
+async def list_vehicle_library(
+    vehicle_type: str = Query(..., description="Type de véhicule ciblé"),
+    q: str | None = Query(default=None, description="Recherche par nom ou code barre"),
+    category_id: int | None = Query(default=None, gt=0, description="Filtre catégorie"),
+    limit: int | None = Query(default=None, ge=1, description="Pagination: taille"),
+    offset: int | None = Query(default=None, ge=0, description="Pagination: décalage"),
+    user: models.User = Depends(get_current_user),
+) -> list[models.VehicleLibraryItem]:
+    _require_permission(user, action="view")
+    if vehicle_type != "secours_a_personne":
+        return []
+    return services.list_vehicle_library_items(
+        vehicle_type=vehicle_type,
+        search=q,
+        category_id=category_id,
+        limit=limit,
+        offset=offset,
+    )
+
+
 class VehicleInventoryExportOptions(VehiclePdfOptions):
     pointer_targets: dict[str, models.PointerTarget] | None = None
 

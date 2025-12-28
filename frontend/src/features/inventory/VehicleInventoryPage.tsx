@@ -83,6 +83,18 @@ interface VehicleItem {
   available_quantity?: number | null;
 }
 
+interface VehicleLibraryItem {
+  id: number;
+  name: string;
+  sku: string | null;
+  category_id: number | null;
+  quantity: number;
+  expiration_date: string | null;
+  image_url: string | null;
+  track_low_stock: boolean;
+  low_stock_threshold: number;
+}
+
 interface RemiseLot {
   id: number;
   name: string;
@@ -558,6 +570,17 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const { data: pharmacyLibraryItems = [] } = useQuery({
+    queryKey: ["vehicle-library", selectedVehicleType],
+    enabled: selectedVehicleType === "secours_a_personne",
+    queryFn: async () => {
+      const response = await api.get<VehicleLibraryItem[]>("/vehicle-inventory/library", {
+        params: { vehicle_type: "secours_a_personne" }
+      });
+      return response.data;
+    }
+  });
+
   const { data: vehiclePhotos = [] } = useQuery({
     queryKey: ["vehicle-photos"],
     queryFn: async () => {
@@ -658,7 +681,10 @@ export function VehicleInventoryPage() {
     onSuccess: (responseData, variables) => handleItemMutationSuccess(responseData, variables),
     onError: (error) => handleItemMutationError(error),
     onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vehicle-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-library"] })
+      ]);
     }
   });
 
@@ -694,7 +720,10 @@ export function VehicleInventoryPage() {
     },
     onError: (error) => handleItemMutationError(error),
     onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vehicle-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-library"] })
+      ]);
     }
   });
 
@@ -702,7 +731,11 @@ export function VehicleInventoryPage() {
     mutationFn: async (payload: DropRequestPayload) => {
       ensureValidSizeForMutation(payload.targetView);
 
-      const template = resolveTemplateForSource(items, payload);
+      const templateSourceItems =
+        payload.sourceType === "pharmacy" && selectedVehicleType === "secours_a_personne"
+          ? pharmacyLibraryInventoryItems
+          : items;
+      const template = resolveTemplateForSource(templateSourceItems, payload);
       if (!template) {
         throw new Error("Matériel introuvable.");
       }
@@ -771,7 +804,10 @@ export function VehicleInventoryPage() {
       });
     },
     onSettled: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["vehicle-items"] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-library"] })
+      ]);
     }
   });
 
@@ -1254,6 +1290,35 @@ export function VehicleInventoryPage() {
     return map;
   }, [items]);
 
+  const pharmacyLibraryInventoryItems = useMemo(
+    () =>
+      pharmacyLibraryItems.map((item) => ({
+        id: item.id,
+        name: item.name,
+        sku: item.sku ?? `PHARM-${item.id}`,
+        category_id: null,
+        size: null,
+        target_view: null,
+        quantity: item.quantity,
+        remise_item_id: null,
+        pharmacy_item_id: item.id,
+        remise_quantity: null,
+        pharmacy_quantity: item.quantity,
+        image_url: item.image_url,
+        position_x: null,
+        position_y: null,
+        lot_id: null,
+        lot_name: null,
+        show_in_qr: false,
+        vehicle_type: "secours_a_personne" as VehicleType,
+        available_quantity: item.quantity
+      })),
+    [pharmacyLibraryItems]
+  );
+
+  const librarySourceItems =
+    selectedVehicleType === "secours_a_personne" ? pharmacyLibraryInventoryItems : items;
+
   const isCompatibleWithVehicle = useCallback(
     (itemType: VehicleType | null | undefined) =>
       !selectedVehicleType || !itemType || itemType === selectedVehicleType,
@@ -1262,7 +1327,7 @@ export function VehicleInventoryPage() {
 
   const availableItems = useMemo(
     () =>
-      items.filter((item) => {
+      librarySourceItems.filter((item) => {
         if (item.category_id !== null) {
           return false;
         }
@@ -1307,7 +1372,7 @@ export function VehicleInventoryPage() {
         return true;
       }),
     [
-      items,
+      librarySourceItems,
       lotRemiseItemIds,
       remiseItemTypeMap,
       isCompatibleWithVehicle,
