@@ -261,11 +261,24 @@ async def delete_vehicle_item(
         user.username,
     )
     try:
-        services.delete_vehicle_item(item_id)
+        deleted = services.delete_vehicle_item(item_id)
+        if deleted is False:
+            raise HTTPException(status_code=404, detail="Article introuvable.")
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
+    except Exception as exc:
+        logger.exception(
+            "[VEHICLE_INVENTORY] Delete failed pid=%s db=%s item_id=%s user=%s",
+            os.getpid(),
+            db.STOCK_DB_PATH.resolve(),
+            item_id,
+            user.username,
+        )
+        raise HTTPException(
+            status_code=500, detail="Erreur interne lors de la suppression."
+        ) from exc
 
 
 @router.post("/{item_id}/image", response_model=models.Item)
