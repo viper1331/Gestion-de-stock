@@ -2608,6 +2608,8 @@ export function VehicleInventoryPage() {
               onDropAppliedLot={(assignmentId, position) =>
                 updateAppliedLotPosition.mutate({ assignmentId, position })
               }
+              onRemoveAppliedLot={removeAppliedLot.mutate}
+              isRemovingAppliedLot={removeAppliedLot.isPending}
               onUpdateItemQuantity={(itemId, quantity) => {
                 if (!selectedVehicle) {
                   return;
@@ -3050,6 +3052,8 @@ interface VehicleCompartmentProps {
   onDropAppliedLot?: (assignmentId: number, position: { x: number; y: number }) => void;
   onUpdateItemQuantity?: (itemId: number, quantity: number) => void;
   onDragStartCapture: () => void;
+  onRemoveAppliedLot?: (assignmentId: number) => void;
+  isRemovingAppliedLot?: boolean;
 }
 
 function VehicleCompartment({
@@ -3073,7 +3077,9 @@ function VehicleCompartment({
   onDropLot,
   onDropAppliedLot,
   onUpdateItemQuantity,
-  onDragStartCapture
+  onDragStartCapture,
+  onRemoveAppliedLot,
+  isRemovingAppliedLot
 }: VehicleCompartmentProps) {
   const hover = useThrottledHoverState();
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = usePersistentBoolean(
@@ -3571,8 +3577,8 @@ function VehicleCompartment({
                 isPointerTargetPending={pendingPointerKey === entry.key}
                 hidePointerActions={hidePointerActions}
                 onDragStartCapture={onDragStartCapture}
-                onRemoveAppliedLot={removeAppliedLot.mutate}
-                isRemovingAppliedLot={removeAppliedLot.isPending}
+                onRemoveAppliedLot={onRemoveAppliedLot}
+                isRemovingAppliedLot={isRemovingAppliedLot}
               />
             );
           })}
