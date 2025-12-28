@@ -10,3 +10,4 @@ reportlab
 python-multipart
 python-barcode[images]
 qrcode
+playwright

@@ -101,8 +101,8 @@ def _aggregate_components(items: Sequence[models.Item]) -> list[str]:
 
 def _build_entry_key(item: models.Item) -> str:
     if item.lot_id:
-        return f"lot:{item.lot_id}"
-    return f"item:{item.id}"
+        return f"lot-{item.lot_id}"
+    return f"item-{item.id}"
 
 
 def _derive_reference(representative: models.Item) -> str:
@@ -151,6 +151,7 @@ def build_vehicle_entries(
                 category_id=representative.category_id,
                 category_name=category.name if category else None,
                 view_name=view_name,
+                lot_label=_lot_label(representative) if representative.lot_id else None,
                 bubble_x=representative.position_x,
                 bubble_y=representative.position_y,
                 anchor_x=anchor_x,
@@ -181,6 +182,7 @@ def build_vehicle_entries(
                     background_path=background,
                     background_photo_id=getattr(config, "background_photo_id", None),
                     entries=view_entries,
+                    vehicle_type=category.vehicle_type,
                     pointer_mode=bool(getattr(config, "pointer_mode_enabled", False)),
                     hide_edit_buttons=bool(getattr(config, "hide_edit_buttons", False)),
                     has_positions=has_positions,
@@ -199,6 +201,7 @@ def build_vehicle_entries(
                     background_path=None,
                     background_photo_id=None,
                     entries=[entry],
+                    vehicle_type=None,
                     pointer_mode=False,
                     hide_edit_buttons=False,
                     has_positions=bool(entry.bubble_x is not None and entry.bubble_y is not None),
