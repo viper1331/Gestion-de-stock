@@ -953,6 +953,35 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN pharmacy_item_id INTEGER REFERENCES pharmacy_items(id)")
     if "extra_json" not in vehicle_item_columns:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+    if "applied_lot_source" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN applied_lot_source TEXT")
+    if "applied_lot_assignment_id" not in vehicle_item_columns:
+        conn.execute(
+            "ALTER TABLE vehicle_items ADD COLUMN applied_lot_assignment_id INTEGER REFERENCES vehicle_applied_lots(id) ON DELETE SET NULL"
+        )
+
+
+def _ensure_vehicle_applied_lot_table(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS vehicle_applied_lots (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicle_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+            vehicle_type TEXT,
+            view TEXT,
+            source TEXT NOT NULL,
+            pharmacy_lot_id INTEGER REFERENCES pharmacy_lots(id) ON DELETE SET NULL,
+            lot_name TEXT,
+            position_x REAL,
+            position_y REAL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_vehicle_applied_lots_vehicle
+        ON vehicle_applied_lots(vehicle_id);
+        CREATE INDEX IF NOT EXISTS idx_vehicle_applied_lots_view
+        ON vehicle_applied_lots(view);
+        """
+    )
 
 
 def _ensure_vehicle_category_columns(conn: sqlite3.Connection) -> None:
@@ -1257,6 +1286,22 @@ def _apply_schema_migrations() -> None:
                 vehicle_type TEXT,
                 extra_json TEXT NOT NULL DEFAULT '{}'
             );
+            CREATE TABLE IF NOT EXISTS vehicle_applied_lots (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+                vehicle_type TEXT,
+                view TEXT,
+                source TEXT NOT NULL,
+                pharmacy_lot_id INTEGER REFERENCES pharmacy_lots(id) ON DELETE SET NULL,
+                lot_name TEXT,
+                position_x REAL,
+                position_y REAL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_vehicle_applied_lots_vehicle
+            ON vehicle_applied_lots(vehicle_id);
+            CREATE INDEX IF NOT EXISTS idx_vehicle_applied_lots_view
+            ON vehicle_applied_lots(view);
             CREATE TABLE IF NOT EXISTS vehicle_category_sizes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 category_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
@@ -1284,6 +1329,8 @@ def _apply_schema_migrations() -> None:
                 qr_token TEXT,
                 show_in_qr INTEGER NOT NULL DEFAULT 1,
                 lot_id INTEGER REFERENCES remise_lots(id) ON DELETE SET NULL,
+                applied_lot_source TEXT,
+                applied_lot_assignment_id INTEGER REFERENCES vehicle_applied_lots(id) ON DELETE SET NULL,
                 extra_json TEXT NOT NULL DEFAULT '{}'
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
@@ -1390,6 +1437,7 @@ def _apply_schema_migrations() -> None:
         _ensure_pharmacy_lot_item_columns(conn)
         _ensure_vehicle_category_columns(conn)
         _ensure_vehicle_view_settings_columns(conn)
+        _ensure_vehicle_applied_lot_table(conn)
         _ensure_vehicle_item_columns(conn)
         _ensure_vehicle_item_qr_tokens(conn)
         conn.execute(
@@ -1659,6 +1707,10 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
     lot_name = None
     if "lot_name" in row.keys():
         lot_name = row["lot_name"]
+    applied_lot_source = row["applied_lot_source"] if "applied_lot_source" in row.keys() else None
+    applied_lot_assignment_id = (
+        row["applied_lot_assignment_id"] if "applied_lot_assignment_id" in row.keys() else None
+    )
     lot_names: list[str] = []
     lot_names_raw = row["lot_names"] if "lot_names" in row.keys() else None
     if lot_names_raw:
@@ -1725,6 +1777,8 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         lot_name=lot_name,
         lot_names=lot_names,
         is_in_lot=bool(lot_id) or bool(lot_names) or bool(lot_count),
+        applied_lot_source=applied_lot_source,
+        applied_lot_assignment_id=applied_lot_assignment_id,
         show_in_qr=show_in_qr,
         vehicle_type=row["vehicle_type"] if "vehicle_type" in row.keys() else None,
         assigned_vehicle_names=assigned_vehicle_names,
@@ -3129,6 +3183,7 @@ def apply_pharmacy_lot(
         _ensure_vehicle_item_columns(conn)
         _ensure_vehicle_category_columns(conn)
         _ensure_pharmacy_lot_item_columns(conn)
+        _ensure_vehicle_applied_lot_table(conn)
         _require_pharmacy_lot(conn, payload.lot_id)
 
         vehicle_row = conn.execute(
@@ -3185,6 +3240,37 @@ def apply_pharmacy_lot(
                 f"Manquants : {details}."
             )
 
+        lot_name_row = conn.execute(
+            "SELECT name FROM pharmacy_lots WHERE id = ?",
+            (payload.lot_id,),
+        ).fetchone()
+        lot_name = lot_name_row["name"] if lot_name_row else None
+        applied_lot_cursor = conn.execute(
+            """
+            INSERT INTO vehicle_applied_lots (
+                vehicle_id,
+                vehicle_type,
+                view,
+                source,
+                pharmacy_lot_id,
+                lot_name,
+                position_x,
+                position_y
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                payload.vehicle_id,
+                vehicle_row["vehicle_type"],
+                target_view,
+                "pharmacy",
+                payload.lot_id,
+                lot_name,
+                base_position.x,
+                base_position.y,
+            ),
+        )
+        applied_lot_id = int(applied_lot_cursor.lastrowid)
+
         created_item_ids: list[int] = []
         for index, row in enumerate(lot_items):
             pharmacy_item_id = row["pharmacy_item_id"]
@@ -3211,8 +3297,10 @@ def apply_pharmacy_lot(
                     shared_file_url,
                     qr_token,
                     show_in_qr,
-                    lot_id
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    lot_id,
+                    applied_lot_source,
+                    applied_lot_assignment_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     row["name"],
@@ -3233,6 +3321,8 @@ def apply_pharmacy_lot(
                     uuid4().hex,
                     1,
                     None,
+                    "pharmacy",
+                    applied_lot_id,
                 ),
             )
             created_item_ids.append(int(cursor.lastrowid))
@@ -3259,6 +3349,115 @@ def apply_pharmacy_lot(
             created_item_ids=created_item_ids,
             created_count=len(created_item_ids),
         )
+
+
+def _build_vehicle_applied_lot(row: sqlite3.Row) -> models.VehicleAppliedLot:
+    return models.VehicleAppliedLot(
+        id=row["id"],
+        vehicle_id=row["vehicle_id"],
+        vehicle_type=row["vehicle_type"] if "vehicle_type" in row.keys() else None,
+        view=row["view"] if "view" in row.keys() else None,
+        source=row["source"],
+        pharmacy_lot_id=row["pharmacy_lot_id"] if "pharmacy_lot_id" in row.keys() else None,
+        lot_name=row["lot_name"] if "lot_name" in row.keys() else None,
+        position_x=row["position_x"] if "position_x" in row.keys() else None,
+        position_y=row["position_y"] if "position_y" in row.keys() else None,
+        created_at=row["created_at"] if "created_at" in row.keys() else None,
+    )
+
+
+def list_vehicle_applied_lots(
+    *, vehicle_id: int | None = None, vehicle_type: str | None = None, view: str | None = None
+) -> list[models.VehicleAppliedLot]:
+    ensure_database_ready()
+    query = "SELECT * FROM vehicle_applied_lots WHERE source = ?"
+    params: list[object] = ["pharmacy"]
+    if vehicle_id is not None:
+        query += " AND vehicle_id = ?"
+        params.append(vehicle_id)
+    if vehicle_type is not None:
+        query += " AND vehicle_type = ?"
+        params.append(vehicle_type)
+    if view is not None:
+        query += " AND view = ?"
+        params.append(view)
+    query += " ORDER BY created_at DESC"
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_applied_lot_table(conn)
+        rows = conn.execute(query, tuple(params)).fetchall()
+        return [_build_vehicle_applied_lot(row) for row in rows]
+
+
+def update_vehicle_applied_lot_position(
+    assignment_id: int, payload: models.VehicleAppliedLotUpdate
+) -> models.VehicleAppliedLot:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_applied_lot_table(conn)
+        cursor = conn.execute(
+            """
+            UPDATE vehicle_applied_lots
+            SET position_x = ?, position_y = ?
+            WHERE id = ?
+            """,
+            (payload.position_x, payload.position_y, assignment_id),
+        )
+        if cursor.rowcount == 0:
+            raise ValueError("Lot appliqué introuvable")
+        row = conn.execute(
+            "SELECT * FROM vehicle_applied_lots WHERE id = ?",
+            (assignment_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Lot appliqué introuvable")
+        _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
+        return _build_vehicle_applied_lot(row)
+
+
+def delete_vehicle_applied_lot(assignment_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_applied_lot_table(conn)
+        _ensure_vehicle_item_columns(conn)
+        row = conn.execute(
+            "SELECT * FROM vehicle_applied_lots WHERE id = ?",
+            (assignment_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Lot appliqué introuvable")
+
+        items = conn.execute(
+            """
+            SELECT id, pharmacy_item_id, quantity
+            FROM vehicle_items
+            WHERE applied_lot_assignment_id = ?
+            """,
+            (assignment_id,),
+        ).fetchall()
+        for item in items:
+            pharmacy_item_id = item["pharmacy_item_id"]
+            if pharmacy_item_id is None:
+                continue
+            _update_pharmacy_quantity(conn, pharmacy_item_id, item["quantity"])
+
+        conn.execute(
+            "DELETE FROM vehicle_items WHERE applied_lot_assignment_id = ?",
+            (assignment_id,),
+        )
+        conn.execute("DELETE FROM vehicle_applied_lots WHERE id = ?", (assignment_id,))
+
+        pharmacy_lot_id = row["pharmacy_lot_id"] if "pharmacy_lot_id" in row.keys() else None
+        vehicle_id = row["vehicle_id"] if "vehicle_id" in row.keys() else None
+        if pharmacy_lot_id is not None and vehicle_id is not None:
+            conn.execute(
+                """
+                DELETE FROM vehicle_pharmacy_lot_assignments
+                WHERE vehicle_category_id = ? AND lot_id = ?
+                """,
+                (vehicle_id, pharmacy_lot_id),
+            )
+
+        _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
 
 
 def assign_vehicle_item_from_remise(

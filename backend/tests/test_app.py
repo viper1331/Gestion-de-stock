@@ -44,7 +44,9 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM pharmacy_items")
         conn.execute("DELETE FROM custom_field_definitions")
         conn.execute("DELETE FROM vehicle_movements")
+        conn.execute("DELETE FROM vehicle_pharmacy_lot_assignments")
         conn.execute("DELETE FROM vehicle_items")
+        conn.execute("DELETE FROM vehicle_applied_lots")
         conn.execute("DELETE FROM vehicle_photos")
         conn.execute("DELETE FROM vehicle_view_settings")
         conn.execute("DELETE FROM vehicle_category_sizes")
@@ -1903,6 +1905,87 @@ def test_vehicle_lot_can_be_unassigned_via_endpoint() -> None:
     )
     assert cleanup_vehicle.status_code == 204
 
+
+def test_incendie_lot_assignment_structure_regression() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Depot-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot incendie",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 2,
+            "category_id": remise_category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert remise_item_resp.status_code == 201, remise_item_resp.text
+    remise_item_id = remise_item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": f"Lot-{uuid4().hex[:6]}", "description": "Lot incendie"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    add_lot_item = client.post(
+        f"/remise-inventory/lots/{lot_id}/items",
+        json={"remise_item_id": remise_item_id, "quantity": 1},
+        headers=admin_headers,
+    )
+    assert add_lot_item.status_code == 201, add_lot_item.text
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={
+            "name": f"Véhicule-{uuid4().hex[:6]}",
+            "sizes": ["VUE PRINCIPALE"],
+            "vehicle_type": "incendie",
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    assign_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Lot incendie",
+            "sku": f"VEH-{uuid4().hex[:6]}",
+            "quantity": 1,
+            "category_id": vehicle_category_id,
+            "size": "VUE PRINCIPALE",
+            "remise_item_id": remise_item_id,
+            "lot_id": lot_id,
+        },
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    entry = next(
+        item
+        for item in vehicle_items_resp.json()
+        if item["category_id"] == vehicle_category_id and item["lot_id"] == lot_id
+    )
+    assert entry["lot_name"]
+    assert entry["is_in_lot"] is True
+    assert entry["applied_lot_assignment_id"] is None
+    assert entry["applied_lot_source"] is None
+
     cleanup_lot = client.delete(f"/remise-inventory/lots/{lot_id}", headers=admin_headers)
     assert cleanup_lot.status_code == 204
 
@@ -2658,10 +2741,27 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
     for entry in vehicle_items:
         assert entry["position_x"] is not None
         assert entry["position_y"] is not None
+        assert entry["lot_id"] is None
+        assert entry["applied_lot_source"] == "pharmacy"
+        assert entry["applied_lot_assignment_id"] is not None
     avg_x = sum(entry["position_x"] for entry in vehicle_items) / len(vehicle_items)
     avg_y = sum(entry["position_y"] for entry in vehicle_items) / len(vehicle_items)
     assert abs(avg_x - drop_position["x"]) < 0.02
     assert abs(avg_y - drop_position["y"]) < 0.02
+
+    applied_lots_resp = client.get(
+        "/vehicle-inventory/applied-lots",
+        params={"vehicle_id": vehicle_id},
+        headers=admin_headers,
+    )
+    assert applied_lots_resp.status_code == 200, applied_lots_resp.text
+    applied_lots = applied_lots_resp.json()
+    assert len(applied_lots) == 1
+    applied_lot = applied_lots[0]
+    assert applied_lot["pharmacy_lot_id"] == lot_id
+    assert applied_lot["lot_name"] is not None
+    assert applied_lot["position_x"] == pytest.approx(drop_position["x"])
+    assert applied_lot["position_y"] == pytest.approx(drop_position["y"])
 
     pharmacy_items_resp = client.get("/pharmacy/", headers=admin_headers)
     assert pharmacy_items_resp.status_code == 200, pharmacy_items_resp.text
@@ -2688,6 +2788,106 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
         headers=admin_headers,
     )
     assert duplicate_apply_resp.status_code == 400, duplicate_apply_resp.text
+
+
+def test_vehicle_applied_lot_update_and_delete() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    vehicle_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={
+            "name": f"VSAV-{uuid4().hex[:6]}",
+            "sizes": ["VUE PRINCIPALE"],
+            "vehicle_type": "secours_a_personne",
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_resp.status_code == 201, vehicle_resp.text
+    vehicle_id = vehicle_resp.json()["id"]
+
+    item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Lot apply item delete",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "quantity": 5,
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    pharmacy_item_id = item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": f"Lot apply-del-{uuid4().hex[:6]}", "description": "Kit apply delete"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    add_item_resp = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": pharmacy_item_id, "quantity": 3},
+        headers=admin_headers,
+    )
+    assert add_item_resp.status_code == 201, add_item_resp.text
+
+    apply_resp = client.post(
+        "/vehicle-inventory/apply-pharmacy-lot",
+        json={
+            "vehicle_id": vehicle_id,
+            "lot_id": lot_id,
+            "target_view": "VUE PRINCIPALE",
+            "drop_position": {"x": 0.3, "y": 0.4},
+        },
+        headers=admin_headers,
+    )
+    assert apply_resp.status_code == 200, apply_resp.text
+
+    applied_lots_resp = client.get(
+        "/vehicle-inventory/applied-lots",
+        params={"vehicle_id": vehicle_id},
+        headers=admin_headers,
+    )
+    assert applied_lots_resp.status_code == 200, applied_lots_resp.text
+    applied_lot = applied_lots_resp.json()[0]
+    assignment_id = applied_lot["id"]
+
+    patch_resp = client.patch(
+        f"/vehicle-inventory/applied-lots/{assignment_id}",
+        json={"position_x": 0.12, "position_y": 0.34},
+        headers=admin_headers,
+    )
+    assert patch_resp.status_code == 200, patch_resp.text
+    updated = patch_resp.json()
+    assert updated["position_x"] == pytest.approx(0.12)
+    assert updated["position_y"] == pytest.approx(0.34)
+
+    delete_resp = client.delete(
+        f"/vehicle-inventory/applied-lots/{assignment_id}",
+        headers=admin_headers,
+    )
+    assert delete_resp.status_code == 204, delete_resp.text
+
+    remaining_applied = client.get(
+        "/vehicle-inventory/applied-lots",
+        params={"vehicle_id": vehicle_id},
+        headers=admin_headers,
+    )
+    assert remaining_applied.status_code == 200, remaining_applied.text
+    assert remaining_applied.json() == []
+
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    assert all(
+        entry["applied_lot_assignment_id"] != assignment_id
+        for entry in vehicle_items_resp.json()
+    )
+
+    pharmacy_item_resp = client.get(f"/pharmacy/{pharmacy_item_id}", headers=admin_headers)
+    assert pharmacy_item_resp.status_code == 200, pharmacy_item_resp.text
+    assert pharmacy_item_resp.json()["quantity"] == 5
 
 
 def test_vehicle_qr_visibility_toggle() -> None:

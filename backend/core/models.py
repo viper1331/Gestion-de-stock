@@ -161,6 +161,8 @@ class Item(BaseModel):
     lot_name: str | None = None
     lot_names: list[str] = Field(default_factory=list)
     is_in_lot: bool = False
+    applied_lot_source: str | None = None
+    applied_lot_assignment_id: int | None = None
     show_in_qr: bool = True
     vehicle_type: VehicleType | None = None
     assigned_vehicle_names: list[str] = Field(default_factory=list)
@@ -253,6 +255,24 @@ class VehiclePharmacyLotApply(BaseModel):
 class VehiclePharmacyLotApplyResult(BaseModel):
     created_item_ids: list[int]
     created_count: int
+
+
+class VehicleAppliedLot(BaseModel):
+    id: int
+    vehicle_id: int
+    vehicle_type: VehicleType | None = None
+    view: str | None = None
+    source: str
+    pharmacy_lot_id: int | None = None
+    lot_name: str | None = None
+    position_x: float | None = Field(default=None, ge=0.0, le=1.0)
+    position_y: float | None = Field(default=None, ge=0.0, le=1.0)
+    created_at: datetime | None = None
+
+
+class VehicleAppliedLotUpdate(BaseModel):
+    position_x: float = Field(..., ge=0.0, le=1.0)
+    position_y: float = Field(..., ge=0.0, le=1.0)
 
 
 class Movement(BaseModel):
