@@ -238,14 +238,18 @@ async def create_vehicle_item(
         raise
 
 
-@router.post("/apply-pharmacy-lot", status_code=204)
+@router.post(
+    "/apply-pharmacy-lot",
+    response_model=models.VehiclePharmacyLotApplyResult,
+    status_code=200,
+)
 async def apply_pharmacy_lot_to_vehicle(
     payload: models.VehiclePharmacyLotApply,
     user: models.User = Depends(get_current_user),
-) -> None:
+) -> models.VehiclePharmacyLotApplyResult:
     _require_permission(user, action="edit")
     try:
-        await asyncio.to_thread(services.apply_pharmacy_lot, payload)
+        return await asyncio.to_thread(services.apply_pharmacy_lot, payload)
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400

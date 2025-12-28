@@ -2574,7 +2574,9 @@ def _generate_lot_positions(
     return positions
 
 
-def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
+def apply_pharmacy_lot(
+    payload: models.VehiclePharmacyLotApply,
+) -> models.VehiclePharmacyLotApplyResult:
     ensure_database_ready()
     target_view = payload.target_view.strip() if payload.target_view else None
     if target_view == "":
@@ -2620,7 +2622,7 @@ def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
             (payload.lot_id,),
         ).fetchall()
         if not lot_items:
-            raise ValueError("Ce lot ne contient aucun matériel.")
+            raise ValueError("Lot vide")
 
         base_position = payload.drop_position or models.PointerTarget(x=0.5, y=0.5)
         distributed_positions = _generate_lot_positions(base_position, len(lot_items))
@@ -2639,12 +2641,13 @@ def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
                 f"Manquants : {details}."
             )
 
+        created_item_ids: list[int] = []
         for index, row in enumerate(lot_items):
             pharmacy_item_id = row["pharmacy_item_id"]
             sku = row["sku"] or f"PHARM-{pharmacy_item_id}"
             insert_sku = f"{sku}-{uuid4().hex[:6]}"
             position_x, position_y = distributed_positions[index]
-            conn.execute(
+            cursor = conn.execute(
                 """
                 INSERT INTO vehicle_items (
                     name,
@@ -2688,6 +2691,7 @@ def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
                     None,
                 ),
             )
+            created_item_ids.append(int(cursor.lastrowid))
             _update_pharmacy_quantity(conn, pharmacy_item_id, -row["quantity"])
 
         conn.execute(
@@ -2698,7 +2702,19 @@ def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
             (payload.vehicle_id, payload.lot_id),
         )
 
+        logger.info(
+            "[VEHICLE_INVENTORY] apply-pharmacy-lot vehicle_id=%s lot_id=%s target_view=%s created=%s",
+            payload.vehicle_id,
+            payload.lot_id,
+            target_view,
+            len(created_item_ids),
+        )
+
         _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
+        return models.VehiclePharmacyLotApplyResult(
+            created_item_ids=created_item_ids,
+            created_count=len(created_item_ids),
+        )
 
 
 def assign_vehicle_item_from_remise(
