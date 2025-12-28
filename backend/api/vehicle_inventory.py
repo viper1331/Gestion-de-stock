@@ -4,6 +4,7 @@ from __future__ import annotations
 import html
 import io
 import logging
+import os
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request
@@ -253,12 +254,11 @@ async def delete_vehicle_item(
 ) -> None:
     _require_permission(user, action="edit")
     logger.info(
-        "[VEHICLE_INVENTORY] Delete request",
-        extra={
-            "vehicle_item_id": item_id,
-            "username": user.username,
-            "stock_db_path": db.STOCK_DB_PATH.resolve(),
-        },
+        "[VEHICLE_INVENTORY] Delete request pid=%s db=%s item_id=%s user=%s",
+        os.getpid(),
+        db.STOCK_DB_PATH.resolve(),
+        item_id,
+        user.username,
     )
     try:
         services.delete_vehicle_item(item_id)

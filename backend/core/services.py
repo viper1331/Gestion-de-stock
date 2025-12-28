@@ -6,6 +6,7 @@ import io
 import json
 import logging
 import math
+import os
 import shutil
 from collections import defaultdict
 import sqlite3
@@ -2418,12 +2419,12 @@ def delete_vehicle_item(item_id: int) -> None:
             (item_id,),
         ).fetchone()
         logger.info(
-            "[VEHICLE_INVENTORY] Delete lookup",
-            extra={
-                "vehicle_item_id": item_id,
-                "total_items": total_count["n"] if total_count else None,
-                "exists": bool(existence),
-            },
+            "[VEHICLE_INVENTORY] Delete lookup pid=%s db=%s item_id=%s vehicle_items_count=%s exists=%s",
+            os.getpid(),
+            db.STOCK_DB_PATH.resolve(),
+            item_id,
+            total_count["n"] if total_count else None,
+            None if existence is None else existence["id"],
         )
         row = conn.execute(
             f"""
