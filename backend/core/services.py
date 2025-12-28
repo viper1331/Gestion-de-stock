@@ -559,6 +559,34 @@ def _ensure_pharmacy_lot_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE pharmacy_lots ADD COLUMN image_path TEXT")
 
 
+def _ensure_pharmacy_lot_item_columns(conn: sqlite3.Connection) -> None:
+    lot_item_info = conn.execute("PRAGMA table_info(pharmacy_lot_items)").fetchall()
+    if not lot_item_info:
+        return
+    lot_item_columns = {row["name"] for row in lot_item_info}
+    if "compartment_name" in lot_item_columns:
+        return
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS pharmacy_lot_items_new (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            lot_id INTEGER NOT NULL REFERENCES pharmacy_lots(id) ON DELETE CASCADE,
+            pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
+            quantity INTEGER NOT NULL CHECK(quantity > 0),
+            compartment_name TEXT,
+            UNIQUE(lot_id, pharmacy_item_id, compartment_name)
+        );
+        INSERT INTO pharmacy_lot_items_new (id, lot_id, pharmacy_item_id, quantity, compartment_name)
+        SELECT id, lot_id, pharmacy_item_id, quantity, NULL
+        FROM pharmacy_lot_items;
+        DROP TABLE pharmacy_lot_items;
+        ALTER TABLE pharmacy_lot_items_new RENAME TO pharmacy_lot_items;
+        CREATE INDEX IF NOT EXISTS idx_pharmacy_lot_items_lot ON pharmacy_lot_items(lot_id);
+        CREATE INDEX IF NOT EXISTS idx_pharmacy_lot_items_item ON pharmacy_lot_items(pharmacy_item_id);
+        """
+    )
+
+
 def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
     vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
     vehicle_item_columns = {row["name"] for row in vehicle_item_info}
@@ -738,7 +766,8 @@ def _apply_schema_migrations() -> None:
                 lot_id INTEGER NOT NULL REFERENCES pharmacy_lots(id) ON DELETE CASCADE,
                 pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
                 quantity INTEGER NOT NULL CHECK(quantity > 0),
-                UNIQUE(lot_id, pharmacy_item_id)
+                compartment_name TEXT,
+                UNIQUE(lot_id, pharmacy_item_id, compartment_name)
             );
             CREATE INDEX IF NOT EXISTS idx_pharmacy_lot_items_lot ON pharmacy_lot_items(lot_id);
             CREATE INDEX IF NOT EXISTS idx_pharmacy_lot_items_item ON pharmacy_lot_items(pharmacy_item_id);
@@ -863,6 +892,7 @@ def _apply_schema_migrations() -> None:
         _ensure_remise_item_columns(conn)
         _ensure_remise_lot_columns(conn)
         _ensure_pharmacy_lot_columns(conn)
+        _ensure_pharmacy_lot_item_columns(conn)
         _ensure_vehicle_category_columns(conn)
         _ensure_vehicle_view_settings_columns(conn)
         _ensure_vehicle_item_columns(conn)
@@ -3680,12 +3710,12 @@ def list_pharmacy_lots_with_items() -> list[models.PharmacyLotWithItems]:
         placeholders = ",".join("?" for _ in lot_ids)
         item_rows = conn.execute(
             f"""
-            SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity,
+            SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity, pli.compartment_name,
                    pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku, pi.quantity AS available_quantity
             FROM pharmacy_lot_items AS pli
             JOIN pharmacy_items AS pi ON pi.id = pli.pharmacy_item_id
             WHERE pli.lot_id IN ({placeholders})
-            ORDER BY pli.lot_id, pi.name
+            ORDER BY pli.lot_id, COALESCE(pli.compartment_name, ''), pi.name
             """,
             lot_ids,
         ).fetchall()
@@ -3824,6 +3854,7 @@ def _build_pharmacy_lot_item(row: sqlite3.Row) -> models.PharmacyLotItem:
         lot_id=row["lot_id"],
         pharmacy_item_id=row["pharmacy_item_id"],
         quantity=row["quantity"],
+        compartment_name=row["compartment_name"],
         pharmacy_name=row["pharmacy_name"],
         pharmacy_sku=row["pharmacy_sku"],
         available_quantity=row["available_quantity"],
@@ -3835,7 +3866,7 @@ def _get_pharmacy_lot_item(
 ) -> sqlite3.Row:
     row = conn.execute(
         """
-        SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity,
+        SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity, pli.compartment_name,
                pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku, pi.quantity AS available_quantity
         FROM pharmacy_lot_items AS pli
         JOIN pharmacy_items AS pi ON pi.id = pli.pharmacy_item_id
@@ -3881,12 +3912,12 @@ def list_pharmacy_lot_items(lot_id: int) -> list[models.PharmacyLotItem]:
         _require_pharmacy_lot(conn, lot_id)
         rows = conn.execute(
             """
-            SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity,
+            SELECT pli.id, pli.lot_id, pli.pharmacy_item_id, pli.quantity, pli.compartment_name,
                    pi.name AS pharmacy_name, pi.barcode AS pharmacy_sku, pi.quantity AS available_quantity
             FROM pharmacy_lot_items AS pli
             JOIN pharmacy_items AS pi ON pi.id = pli.pharmacy_item_id
             WHERE pli.lot_id = ?
-            ORDER BY pi.name
+            ORDER BY COALESCE(pli.compartment_name, ''), pi.name
             """,
             (lot_id,),
         ).fetchall()
@@ -3897,15 +3928,16 @@ def add_pharmacy_lot_item(
     lot_id: int, payload: models.PharmacyLotItemBase
 ) -> models.PharmacyLotItem:
     ensure_database_ready()
+    compartment_name = (payload.compartment_name or "").strip() or None
     with db.get_stock_connection() as conn:
         _require_pharmacy_lot(conn, lot_id)
         existing = conn.execute(
             """
             SELECT id, quantity
             FROM pharmacy_lot_items
-            WHERE lot_id = ? AND pharmacy_item_id = ?
+            WHERE lot_id = ? AND pharmacy_item_id = ? AND compartment_name IS ?
             """,
-            (lot_id, payload.pharmacy_item_id),
+            (lot_id, payload.pharmacy_item_id, compartment_name),
         ).fetchone()
         if existing:
             new_quantity = existing["quantity"] + payload.quantity
@@ -3923,8 +3955,11 @@ def add_pharmacy_lot_item(
         else:
             _ensure_pharmacy_lot_capacity(conn, payload.pharmacy_item_id, payload.quantity)
             cur = conn.execute(
-                "INSERT INTO pharmacy_lot_items (lot_id, pharmacy_item_id, quantity) VALUES (?, ?, ?)",
-                (lot_id, payload.pharmacy_item_id, payload.quantity),
+                """
+                INSERT INTO pharmacy_lot_items (lot_id, pharmacy_item_id, quantity, compartment_name)
+                VALUES (?, ?, ?, ?)
+                """,
+                (lot_id, payload.pharmacy_item_id, payload.quantity, compartment_name),
             )
             lot_item_id = cur.lastrowid
         _persist_after_commit(conn, "pharmacy")
@@ -3940,6 +3975,7 @@ def update_pharmacy_lot_item(
     ensure_database_ready()
     with db.get_stock_connection() as conn:
         row = _get_pharmacy_lot_item(conn, lot_id, lot_item_id)
+        compartment_name = (payload.compartment_name or "").strip() or None
         target_quantity = payload.quantity if payload.quantity is not None else row["quantity"]
         _ensure_pharmacy_lot_capacity(
             conn,
@@ -3947,10 +3983,29 @@ def update_pharmacy_lot_item(
             target_quantity,
             exclude_lot_item_id=lot_item_id,
         )
+        updates: list[str] = []
+        params: list[object] = []
         if target_quantity != row["quantity"]:
+            updates.append("quantity = ?")
+            params.append(target_quantity)
+        if payload.compartment_name is not None and compartment_name != row["compartment_name"]:
+            conflict = conn.execute(
+                """
+                SELECT 1
+                FROM pharmacy_lot_items
+                WHERE lot_id = ? AND pharmacy_item_id = ? AND compartment_name IS ? AND id != ?
+                """,
+                (lot_id, row["pharmacy_item_id"], compartment_name, lot_item_id),
+            ).fetchone()
+            if conflict:
+                raise ValueError("Ce compartiment contient déjà cet article.")
+            updates.append("compartment_name = ?")
+            params.append(compartment_name)
+        if updates:
+            params.append(lot_item_id)
             conn.execute(
-                "UPDATE pharmacy_lot_items SET quantity = ? WHERE id = ?",
-                (target_quantity, lot_item_id),
+                f"UPDATE pharmacy_lot_items SET {', '.join(updates)} WHERE id = ?",
+                params,
             )
         _persist_after_commit(conn, "pharmacy")
 
