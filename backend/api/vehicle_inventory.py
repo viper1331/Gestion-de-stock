@@ -5,6 +5,7 @@ import html
 import io
 import logging
 import os
+import asyncio
 from datetime import datetime
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request
@@ -82,7 +83,7 @@ class VehicleInventoryExportOptions(VehiclePdfOptions):
     pointer_targets: dict[str, models.PointerTarget] | None = None
 
 
-def _vehicle_inventory_pdf_response(
+async def _vehicle_inventory_pdf_response(
     *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
 ):
     _require_permission(user, action="view")
@@ -91,7 +92,8 @@ def _vehicle_inventory_pdf_response(
         log_playwright_context(diagnostics.status)
         raise HTTPException(status_code=503, detail=build_playwright_error_message(diagnostics.status))
     try:
-        pdf_bytes = services.generate_vehicle_inventory_pdf(
+        pdf_bytes = await asyncio.to_thread(
+            services.generate_vehicle_inventory_pdf,
             pointer_targets=pointer_targets,
             options=options,
         )
@@ -101,7 +103,8 @@ def _vehicle_inventory_pdf_response(
     except FileNotFoundError:
         fallback_options = options.model_copy()
         fallback_options.table_fallback = True
-        pdf_bytes = services.generate_vehicle_inventory_pdf(
+        pdf_bytes = await asyncio.to_thread(
+            services.generate_vehicle_inventory_pdf,
             pointer_targets=pointer_targets,
             options=fallback_options,
         )
@@ -122,14 +125,18 @@ async def export_vehicle_inventory_pdf(
 ):
     pointer_targets = payload.pointer_targets if payload else None
     options = payload or VehiclePdfOptions()
-    return _vehicle_inventory_pdf_response(pointer_targets=pointer_targets, options=options, user=user)
+    return await _vehicle_inventory_pdf_response(pointer_targets=pointer_targets, options=options, user=user)
 
 
 @router.get("/export/pdf")
 async def export_vehicle_inventory_pdf_legacy(
     user: models.User = Depends(get_current_user),
 ):
-    return _vehicle_inventory_pdf_response(pointer_targets=None, options=VehiclePdfOptions(), user=user)
+    return await _vehicle_inventory_pdf_response(
+        pointer_targets=None,
+        options=VehiclePdfOptions(),
+        user=user,
+    )
 
 
 @router.get("/export/pdf/diagnostics")
