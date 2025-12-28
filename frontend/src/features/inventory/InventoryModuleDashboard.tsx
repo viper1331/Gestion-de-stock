@@ -7,11 +7,14 @@ import {
 } from "@tanstack/react-query";
 
 import { ColumnManager } from "../../components/ColumnManager";
+import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
+import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
 import { persistValue, readPersistedValue } from "../../lib/persist";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
+import { useAuth } from "../auth/useAuth";
 import {
   DEFAULT_INVENTORY_CONFIG,
   type FrenchGender,
@@ -44,6 +47,7 @@ interface Item {
   lot_names?: string[];
   is_in_lot?: boolean;
   assigned_vehicle_names?: string[];
+  extra?: Record<string, unknown>;
 }
 
 interface Movement {
@@ -65,6 +69,7 @@ interface ItemFormValues {
   supplier_id: number | null;
   requires_expiration_date: boolean;
   expiration_date: string;
+  extra: Record<string, unknown>;
 }
 
 interface ItemFormSubmitPayload {
@@ -118,6 +123,8 @@ type InventoryColumnKey =
 type ExpirationStatus = "expired" | "expiring-soon" | null;
 
 export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: InventoryModuleDashboardProps) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
   const [searchValue, setSearchValue] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -173,6 +180,22 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       return response.data;
     }
   });
+
+  const customFieldScope = config.customFieldScope ?? null;
+  const { data: customFieldDefinitions = [] } = useQuery({
+    queryKey: ["custom-fields", customFieldScope],
+    queryFn: async () => {
+      const response = await api.get<CustomFieldDefinition[]>("/admin/custom-fields", {
+        params: customFieldScope ? { scope: customFieldScope } : undefined
+      });
+      return response.data;
+    },
+    enabled: isAdmin && Boolean(customFieldScope)
+  });
+  const activeCustomFields = useMemo(
+    () => customFieldDefinitions.filter((definition) => definition.is_active),
+    [customFieldDefinitions]
+  );
 
   const suppliersQuery = useQuery({
     queryKey: [
@@ -478,6 +501,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   }, [error]);
 
   const formInitialValues: ItemFormValues = useMemo(() => {
+    const extraDefaults = buildCustomFieldDefaults(
+      activeCustomFields,
+      selectedItem?.extra ?? {}
+    );
     if (formMode === "edit" && selectedItem) {
       return {
         name: selectedItem.name,
@@ -489,7 +516,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
         track_low_stock: selectedItem.track_low_stock,
         supplier_id: selectedItem.supplier_id,
         requires_expiration_date: Boolean(selectedItem.expiration_date),
-        expiration_date: selectedItem.expiration_date ?? ""
+        expiration_date: selectedItem.expiration_date ?? "",
+        extra: extraDefaults
       };
     }
     return {
@@ -502,9 +530,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       track_low_stock: true,
       supplier_id: null,
       requires_expiration_date: false,
-      expiration_date: ""
+      expiration_date: "",
+      extra: buildCustomFieldDefaults(activeCustomFields, {})
     };
-  }, [formMode, selectedItem]);
+  }, [activeCustomFields, formMode, selectedItem]);
 
   const initialImageUrl =
     supportsItemImages && selectedItem ? resolveMediaUrl(selectedItem.image_url) : null;
@@ -938,6 +967,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                 barcodePrefix={barcodePrefix}
                 currentItemId={selectedItem?.id ?? null}
                 enableLowStockOptOut={supportsLowStockOptOut}
+                customFieldDefinitions={activeCustomFields}
               />
             </div>
 
@@ -1061,7 +1091,8 @@ function ItemForm({
   existingSkus,
   barcodePrefix,
   currentItemId,
-  enableLowStockOptOut = false
+  enableLowStockOptOut = false,
+  customFieldDefinitions
 }: {
   initialValues: ItemFormValues;
   categories: Category[];
@@ -1078,6 +1109,7 @@ function ItemForm({
   barcodePrefix: string;
   currentItemId: number | null;
   enableLowStockOptOut?: boolean;
+  customFieldDefinitions: CustomFieldDefinition[];
 }) {
   const [values, setValues] = useState<ItemFormValues>(initialValues);
   const [imageFile, setImageFile] = useState<File | null>(null);
@@ -1097,6 +1129,9 @@ function ItemForm({
     selectedCategory && selectedCategory.sizes.length > 0
       ? `category-size-options-${selectedCategory.id}`
       : undefined;
+  const handleExtraChange = (next: Record<string, unknown>) => {
+    setValues((previous) => ({ ...previous, extra: next }));
+  };
 
   useEffect(() => {
     setValues(initialValues);
@@ -1234,7 +1269,8 @@ function ItemForm({
         track_low_stock: true,
         supplier_id: null,
         requires_expiration_date: false,
-        expiration_date: ""
+        expiration_date: "",
+        extra: buildCustomFieldDefaults(activeCustomFields, {})
       });
       setIsSkuAuto(true);
       if (supportsItemImages) {
@@ -1495,6 +1531,21 @@ function ItemForm({
           ))}
         </select>
       </div>
+      {customFieldDefinitions.length > 0 ? (
+        <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Champs personnalisés
+          </p>
+          <div className="mt-3">
+            <CustomFieldsForm
+              definitions={customFieldDefinitions}
+              values={values.extra}
+              onChange={handleExtraChange}
+              disabled={isSubmitting}
+            />
+          </div>
+        </div>
+      ) : null}
       <div className="flex justify-end gap-2 pt-2">
         {mode === "edit" ? (
           <button

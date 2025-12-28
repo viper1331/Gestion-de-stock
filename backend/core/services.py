@@ -463,6 +463,435 @@ def _load_supplier_modules(
     return modules_map
 
 
+def _normalize_custom_field_scope(scope: str) -> str:
+    normalized = scope.strip()
+    if not normalized:
+        raise ValueError("Le scope est obligatoire")
+    return normalized
+
+
+def _normalize_custom_field_key(key: str) -> str:
+    normalized = key.strip()
+    if not normalized:
+        raise ValueError("La clé du champ est obligatoire")
+    return normalized
+
+
+def _normalize_custom_field_label(label: str) -> str:
+    normalized = label.strip()
+    if not normalized:
+        raise ValueError("Le libellé est obligatoire")
+    return normalized
+
+
+def _normalize_custom_field_type(field_type: str) -> str:
+    normalized = field_type.strip().lower()
+    allowed = {"text", "number", "date", "bool", "select"}
+    if normalized not in allowed:
+        raise ValueError("Type de champ personnalisé invalide")
+    return normalized
+
+
+def _load_custom_field_definitions(
+    conn: sqlite3.Connection,
+    scope: str,
+    *,
+    active_only: bool = True,
+) -> list[models.CustomFieldDefinition]:
+    normalized_scope = _normalize_custom_field_scope(scope)
+    query = (
+        "SELECT * FROM custom_field_definitions WHERE scope = ?"
+        + (" AND is_active = 1" if active_only else "")
+        + " ORDER BY sort_order, label COLLATE NOCASE"
+    )
+    rows = conn.execute(query, (normalized_scope,)).fetchall()
+    definitions: list[models.CustomFieldDefinition] = []
+    for row in rows:
+        default_json = None
+        options_json = None
+        if row["default_json"]:
+            try:
+                default_json = json.loads(row["default_json"])
+            except json.JSONDecodeError:
+                default_json = None
+        if row["options_json"]:
+            try:
+                options_json = json.loads(row["options_json"])
+            except json.JSONDecodeError:
+                options_json = None
+        definitions.append(
+            models.CustomFieldDefinition(
+                id=row["id"],
+                scope=row["scope"],
+                key=row["key"],
+                label=row["label"],
+                field_type=row["field_type"],
+                required=bool(row["required"]),
+                default_json=default_json,
+                options_json=options_json,
+                is_active=bool(row["is_active"]),
+                sort_order=row["sort_order"],
+            )
+        )
+    return definitions
+
+
+def get_custom_fields(scope: str) -> list[models.CustomFieldDefinition]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        return _load_custom_field_definitions(conn, scope, active_only=True)
+
+
+def validate_and_merge_extra(
+    scope: str,
+    extra_json: str | None,
+    payload_extra: dict[str, Any] | None,
+) -> dict[str, Any]:
+    existing = _parse_extra_json(extra_json)
+    if payload_extra is None:
+        return existing
+    if not isinstance(payload_extra, dict):
+        raise ValueError("Les champs personnalisés doivent être un objet JSON")
+    with db.get_stock_connection() as conn:
+        definitions = _load_custom_field_definitions(conn, scope, active_only=True)
+    definitions_by_key = {definition.key: definition for definition in definitions}
+    for key in payload_extra:
+        if key not in definitions_by_key:
+            raise ValueError(f"Champ personnalisé inconnu: {key}")
+    merged = {**existing, **payload_extra}
+    for definition in definitions:
+        raw_value = merged.get(definition.key)
+        if raw_value is None and definition.default_json is not None:
+            merged[definition.key] = definition.default_json
+            raw_value = merged.get(definition.key)
+        if raw_value is None:
+            if definition.required:
+                raise ValueError(f"Champ personnalisé requis: {definition.key}")
+            merged.pop(definition.key, None)
+            continue
+        field_type = definition.field_type
+        if field_type == "text":
+            if not isinstance(raw_value, str):
+                raise ValueError(f"Champ {definition.key} invalide")
+            if definition.required and not raw_value.strip():
+                raise ValueError(f"Champ personnalisé requis: {definition.key}")
+        elif field_type == "number":
+            if isinstance(raw_value, bool) or not isinstance(raw_value, (int, float)):
+                raise ValueError(f"Champ {definition.key} invalide")
+        elif field_type == "date":
+            if not isinstance(raw_value, str):
+                raise ValueError(f"Champ {definition.key} invalide")
+            try:
+                date.fromisoformat(raw_value)
+            except ValueError as exc:
+                raise ValueError(f"Champ {definition.key} invalide") from exc
+        elif field_type == "bool":
+            if not isinstance(raw_value, bool):
+                raise ValueError(f"Champ {definition.key} invalide")
+        elif field_type == "select":
+            options = definition.options_json
+            if options is not None and isinstance(options, list):
+                if raw_value not in options:
+                    raise ValueError(f"Champ {definition.key} invalide")
+        else:
+            raise ValueError(f"Type de champ personnalisé invalide: {field_type}")
+    return merged
+
+
+def list_vehicle_types() -> list[models.VehicleTypeEntry]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            "SELECT id, code, label, is_active, created_at FROM vehicle_types ORDER BY label COLLATE NOCASE"
+        ).fetchall()
+    return [
+        models.VehicleTypeEntry(
+            id=row["id"],
+            code=row["code"],
+            label=row["label"],
+            is_active=bool(row["is_active"]),
+            created_at=_coerce_datetime(row["created_at"]),
+        )
+        for row in rows
+    ]
+
+
+def create_vehicle_type(payload: models.VehicleTypeCreate) -> models.VehicleTypeEntry:
+    ensure_database_ready()
+    code = payload.code.strip()
+    label = payload.label.strip()
+    if not code:
+        raise ValueError("Le code du type de véhicule est obligatoire")
+    if not label:
+        raise ValueError("Le libellé du type de véhicule est obligatoire")
+    with db.get_stock_connection() as conn:
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO vehicle_types (code, label, is_active)
+                VALUES (?, ?, ?)
+                """,
+                (code, label, int(payload.is_active)),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Ce code de véhicule est déjà utilisé") from exc
+        vehicle_type_id = cur.lastrowid
+        conn.commit()
+    return get_vehicle_type(vehicle_type_id)
+
+
+def get_vehicle_type(vehicle_type_id: int) -> models.VehicleTypeEntry:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT id, code, label, is_active, created_at FROM vehicle_types WHERE id = ?",
+            (vehicle_type_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Type de véhicule introuvable")
+    return models.VehicleTypeEntry(
+        id=row["id"],
+        code=row["code"],
+        label=row["label"],
+        is_active=bool(row["is_active"]),
+        created_at=_coerce_datetime(row["created_at"]),
+    )
+
+
+def update_vehicle_type(
+    vehicle_type_id: int, payload: models.VehicleTypeUpdate
+) -> models.VehicleTypeEntry:
+    ensure_database_ready()
+    updates: list[str] = []
+    values: list[object] = []
+    if payload.code is not None:
+        code = payload.code.strip()
+        if not code:
+            raise ValueError("Le code du type de véhicule est obligatoire")
+        updates.append("code = ?")
+        values.append(code)
+    if payload.label is not None:
+        label = payload.label.strip()
+        if not label:
+            raise ValueError("Le libellé du type de véhicule est obligatoire")
+        updates.append("label = ?")
+        values.append(label)
+    if payload.is_active is not None:
+        updates.append("is_active = ?")
+        values.append(int(payload.is_active))
+    if not updates:
+        return get_vehicle_type(vehicle_type_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM vehicle_types WHERE id = ?", (vehicle_type_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Type de véhicule introuvable")
+        values.append(vehicle_type_id)
+        try:
+            conn.execute(
+                f"UPDATE vehicle_types SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Ce code de véhicule est déjà utilisé") from exc
+        conn.commit()
+    return get_vehicle_type(vehicle_type_id)
+
+
+def delete_vehicle_type(vehicle_type_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM vehicle_types WHERE id = ?", (vehicle_type_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Type de véhicule introuvable")
+        conn.execute("UPDATE vehicle_types SET is_active = 0 WHERE id = ?", (vehicle_type_id,))
+        conn.commit()
+
+
+def list_custom_field_definitions(scope: str | None = None) -> list[models.CustomFieldDefinition]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        if scope:
+            return _load_custom_field_definitions(conn, scope, active_only=False)
+        rows = conn.execute(
+            "SELECT * FROM custom_field_definitions ORDER BY scope, sort_order, label COLLATE NOCASE"
+        ).fetchall()
+        definitions: list[models.CustomFieldDefinition] = []
+        for row in rows:
+            default_json = None
+            options_json = None
+            if row["default_json"]:
+                try:
+                    default_json = json.loads(row["default_json"])
+                except json.JSONDecodeError:
+                    default_json = None
+            if row["options_json"]:
+                try:
+                    options_json = json.loads(row["options_json"])
+                except json.JSONDecodeError:
+                    options_json = None
+            definitions.append(
+                models.CustomFieldDefinition(
+                    id=row["id"],
+                    scope=row["scope"],
+                    key=row["key"],
+                    label=row["label"],
+                    field_type=row["field_type"],
+                    required=bool(row["required"]),
+                    default_json=default_json,
+                    options_json=options_json,
+                    is_active=bool(row["is_active"]),
+                    sort_order=row["sort_order"],
+                )
+            )
+        return definitions
+
+
+def create_custom_field_definition(
+    payload: models.CustomFieldDefinitionCreate,
+) -> models.CustomFieldDefinition:
+    ensure_database_ready()
+    scope = _normalize_custom_field_scope(payload.scope)
+    key = _normalize_custom_field_key(payload.key)
+    label = _normalize_custom_field_label(payload.label)
+    field_type = _normalize_custom_field_type(payload.field_type)
+    default_json = (
+        json.dumps(payload.default_json, ensure_ascii=False)
+        if payload.default_json is not None
+        else None
+    )
+    options_json = (
+        json.dumps(payload.options_json, ensure_ascii=False)
+        if payload.options_json is not None
+        else None
+    )
+    with db.get_stock_connection() as conn:
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO custom_field_definitions (
+                    scope, key, label, field_type, required, default_json, options_json, is_active, sort_order
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    scope,
+                    key,
+                    label,
+                    field_type,
+                    int(payload.required),
+                    default_json,
+                    options_json,
+                    int(payload.is_active),
+                    payload.sort_order,
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Ce champ personnalisé existe déjà") from exc
+        custom_field_id = cur.lastrowid
+        conn.commit()
+    return get_custom_field_definition(custom_field_id)
+
+
+def get_custom_field_definition(custom_field_id: int) -> models.CustomFieldDefinition:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT * FROM custom_field_definitions WHERE id = ?",
+            (custom_field_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Champ personnalisé introuvable")
+    default_json = None
+    options_json = None
+    if row["default_json"]:
+        try:
+            default_json = json.loads(row["default_json"])
+        except json.JSONDecodeError:
+            default_json = None
+    if row["options_json"]:
+        try:
+            options_json = json.loads(row["options_json"])
+        except json.JSONDecodeError:
+            options_json = None
+    return models.CustomFieldDefinition(
+        id=row["id"],
+        scope=row["scope"],
+        key=row["key"],
+        label=row["label"],
+        field_type=row["field_type"],
+        required=bool(row["required"]),
+        default_json=default_json,
+        options_json=options_json,
+        is_active=bool(row["is_active"]),
+        sort_order=row["sort_order"],
+    )
+
+
+def update_custom_field_definition(
+    custom_field_id: int,
+    payload: models.CustomFieldDefinitionUpdate,
+) -> models.CustomFieldDefinition:
+    ensure_database_ready()
+    updates: list[str] = []
+    values: list[object] = []
+    if payload.scope is not None:
+        updates.append("scope = ?")
+        values.append(_normalize_custom_field_scope(payload.scope))
+    if payload.key is not None:
+        updates.append("key = ?")
+        values.append(_normalize_custom_field_key(payload.key))
+    if payload.label is not None:
+        updates.append("label = ?")
+        values.append(_normalize_custom_field_label(payload.label))
+    if payload.field_type is not None:
+        updates.append("field_type = ?")
+        values.append(_normalize_custom_field_type(payload.field_type))
+    if payload.required is not None:
+        updates.append("required = ?")
+        values.append(int(payload.required))
+    if payload.default_json is not None:
+        updates.append("default_json = ?")
+        values.append(json.dumps(payload.default_json, ensure_ascii=False))
+    if payload.options_json is not None:
+        updates.append("options_json = ?")
+        values.append(json.dumps(payload.options_json, ensure_ascii=False))
+    if payload.is_active is not None:
+        updates.append("is_active = ?")
+        values.append(int(payload.is_active))
+    if payload.sort_order is not None:
+        updates.append("sort_order = ?")
+        values.append(payload.sort_order)
+    if not updates:
+        return get_custom_field_definition(custom_field_id)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM custom_field_definitions WHERE id = ?", (custom_field_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Champ personnalisé introuvable")
+        values.append(custom_field_id)
+        try:
+            conn.execute(
+                f"UPDATE custom_field_definitions SET {', '.join(updates)} WHERE id = ?",
+                values,
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Ce champ personnalisé existe déjà") from exc
+        conn.commit()
+    return get_custom_field_definition(custom_field_id)
+
+
+def delete_custom_field_definition(custom_field_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM custom_field_definitions WHERE id = ?", (custom_field_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Champ personnalisé introuvable")
+        conn.execute(
+            "UPDATE custom_field_definitions SET is_active = 0 WHERE id = ?",
+            (custom_field_id,),
+        )
+        conn.commit()
+
+
 def ensure_database_ready() -> None:
     global _db_initialized
     db.init_databases()
@@ -472,6 +901,22 @@ def ensure_database_ready() -> None:
         _restore_inventory_snapshots()
         seed_default_admin()
         _db_initialized = True
+
+
+def _parse_extra_json(raw: str | None) -> dict[str, Any]:
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if isinstance(parsed, dict):
+        return parsed
+    return {}
+
+
+def _dump_extra_json(payload: dict[str, Any]) -> str:
+    return json.dumps(payload, ensure_ascii=False)
 
 
 def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
@@ -506,6 +951,8 @@ def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
 
     if "pharmacy_item_id" not in vehicle_item_columns:
         conn.execute("ALTER TABLE vehicle_items ADD COLUMN pharmacy_item_id INTEGER REFERENCES pharmacy_items(id)")
+    if "extra_json" not in vehicle_item_columns:
+        conn.execute("ALTER TABLE vehicle_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _ensure_vehicle_category_columns(conn: sqlite3.Connection) -> None:
@@ -514,6 +961,8 @@ def _ensure_vehicle_category_columns(conn: sqlite3.Connection) -> None:
 
     if "vehicle_type" not in category_columns:
         conn.execute("ALTER TABLE vehicle_categories ADD COLUMN vehicle_type TEXT")
+    if "extra_json" not in category_columns:
+        conn.execute("ALTER TABLE vehicle_categories ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _ensure_vehicle_view_settings_columns(conn: sqlite3.Connection) -> None:
@@ -541,6 +990,8 @@ def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
         )
     if "expiration_date" not in remise_item_columns:
         conn.execute("ALTER TABLE remise_items ADD COLUMN expiration_date TEXT")
+    if "extra_json" not in remise_item_columns:
+        conn.execute("ALTER TABLE remise_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _ensure_remise_lot_columns(conn: sqlite3.Connection) -> None:
@@ -549,6 +1000,8 @@ def _ensure_remise_lot_columns(conn: sqlite3.Connection) -> None:
 
     if "image_path" not in lot_columns:
         conn.execute("ALTER TABLE remise_lots ADD COLUMN image_path TEXT")
+    if "extra_json" not in lot_columns:
+        conn.execute("ALTER TABLE remise_lots ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _ensure_pharmacy_lot_columns(conn: sqlite3.Connection) -> None:
@@ -557,6 +1010,8 @@ def _ensure_pharmacy_lot_columns(conn: sqlite3.Connection) -> None:
 
     if "image_path" not in lot_columns:
         conn.execute("ALTER TABLE pharmacy_lots ADD COLUMN image_path TEXT")
+    if "extra_json" not in lot_columns:
+        conn.execute("ALTER TABLE pharmacy_lots ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
 def _ensure_pharmacy_lot_item_columns(conn: sqlite3.Connection) -> None:
@@ -689,6 +1144,8 @@ def _apply_schema_migrations() -> None:
             conn.execute(
                 "ALTER TABLE pharmacy_items ADD COLUMN low_stock_threshold INTEGER NOT NULL DEFAULT 5"
             )
+        if "extra_json" not in pharmacy_columns:
+            conn.execute("ALTER TABLE pharmacy_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
         conn.execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_pharmacy_items_barcode
@@ -735,6 +1192,27 @@ def _apply_schema_migrations() -> None:
                 module TEXT NOT NULL,
                 PRIMARY KEY (supplier_id, module)
             );
+            CREATE TABLE IF NOT EXISTS vehicle_types (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                code TEXT NOT NULL UNIQUE,
+                label TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS custom_field_definitions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                scope TEXT NOT NULL,
+                key TEXT NOT NULL,
+                label TEXT NOT NULL,
+                field_type TEXT NOT NULL,
+                required INTEGER NOT NULL DEFAULT 0,
+                default_json TEXT,
+                options_json TEXT,
+                is_active INTEGER NOT NULL DEFAULT 1,
+                sort_order INTEGER NOT NULL DEFAULT 0,
+                UNIQUE(scope, key)
+            );
+            CREATE INDEX IF NOT EXISTS idx_custom_fields_scope ON custom_field_definitions(scope);
             CREATE TABLE IF NOT EXISTS pharmacy_categories (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL
@@ -758,6 +1236,7 @@ def _apply_schema_migrations() -> None:
                 name TEXT NOT NULL,
                 description TEXT,
                 image_path TEXT,
+                extra_json TEXT NOT NULL DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name)
             );
@@ -775,7 +1254,8 @@ def _apply_schema_migrations() -> None:
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 name TEXT UNIQUE NOT NULL,
                 image_path TEXT,
-                vehicle_type TEXT
+                vehicle_type TEXT,
+                extra_json TEXT NOT NULL DEFAULT '{}'
             );
             CREATE TABLE IF NOT EXISTS vehicle_category_sizes (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -797,11 +1277,14 @@ def _apply_schema_migrations() -> None:
                 position_x REAL,
                 position_y REAL,
                 remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL,
+                pharmacy_item_id INTEGER REFERENCES pharmacy_items(id),
                 documentation_url TEXT,
                 tutorial_url TEXT,
                 shared_file_url TEXT,
                 qr_token TEXT,
-                show_in_qr INTEGER NOT NULL DEFAULT 1
+                show_in_qr INTEGER NOT NULL DEFAULT 1,
+                lot_id INTEGER REFERENCES remise_lots(id) ON DELETE SET NULL,
+                extra_json TEXT NOT NULL DEFAULT '{}'
             );
             CREATE TABLE IF NOT EXISTS vehicle_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -845,7 +1328,8 @@ def _apply_schema_migrations() -> None:
                 low_stock_threshold INTEGER NOT NULL DEFAULT 0,
                 track_low_stock INTEGER NOT NULL DEFAULT 1,
                 expiration_date TEXT,
-                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
+                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                extra_json TEXT NOT NULL DEFAULT '{}'
             );
             CREATE TABLE IF NOT EXISTS remise_movements (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -860,6 +1344,7 @@ def _apply_schema_migrations() -> None:
                 name TEXT NOT NULL,
                 description TEXT,
                 image_path TEXT,
+                extra_json TEXT NOT NULL DEFAULT '{}',
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(name)
             );
@@ -888,6 +1373,16 @@ def _apply_schema_migrations() -> None:
                 quantity_received INTEGER NOT NULL DEFAULT 0
             );
             """
+        )
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO vehicle_types (code, label, is_active)
+            VALUES (?, ?, 1)
+            """,
+            [
+                ("incendie", "Incendie"),
+                ("secours_a_personne", "Secours à personne"),
+            ],
         )
         _ensure_remise_item_columns(conn)
         _ensure_remise_lot_columns(conn)
@@ -1189,6 +1684,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
             if name and name.strip()
         ]
     size_value = row["resolved_size"] if "resolved_size" in row.keys() else row["size"]
+    extra = _parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None)
 
     return models.Item(
         id=row["id"],
@@ -1219,6 +1715,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         show_in_qr=show_in_qr,
         vehicle_type=row["vehicle_type"] if "vehicle_type" in row.keys() else None,
         assigned_vehicle_names=assigned_vehicle_names,
+        extra=extra,
     )
 
 
@@ -1552,6 +2049,11 @@ def _create_inventory_item_internal(
 ) -> models.Item:
     ensure_database_ready()
     config = _get_inventory_config(module)
+    extra_scope = None
+    if module == "inventory_remise":
+        extra_scope = "remise_items"
+    elif module == "vehicle_inventory":
+        extra_scope = "vehicle_items"
     if (
         module == "vehicle_inventory"
         and payload.category_id is not None
@@ -1561,6 +2063,7 @@ def _create_inventory_item_internal(
     with db.get_stock_connection() as conn:
         if module == "inventory_remise":
             _ensure_remise_item_columns(conn)
+        extra = validate_and_merge_extra(extra_scope, None, payload.extra) if extra_scope else {}
         vehicle_type = payload.vehicle_type
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
@@ -1751,6 +2254,9 @@ def _create_inventory_item_internal(
             if cloned_image_path:
                 columns.append("image_path")
                 values.append(cloned_image_path)
+        if extra_scope:
+            columns.append("extra_json")
+            values.append(_dump_extra_json(extra))
         placeholders = ",".join("?" for _ in columns)
         cur = conn.execute(
             f"INSERT INTO {config.tables.items} ({', '.join(columns)}) VALUES ({placeholders})",
@@ -1772,6 +2278,12 @@ def _update_inventory_item_internal(
     fields.pop("image_url", None)
     fields.pop("qr_token", None)
     fields.pop("lot_id", None)
+    extra_payload = fields.pop("extra", None)
+    extra_scope = None
+    if module == "inventory_remise":
+        extra_scope = "remise_items"
+    elif module == "vehicle_inventory":
+        extra_scope = "vehicle_items"
     if module != "vehicle_inventory":
         fields.pop("show_in_qr", None)
         fields.pop("vehicle_type", None)
@@ -1801,7 +2313,7 @@ def _update_inventory_item_internal(
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
             current_row = conn.execute(
-                f"SELECT quantity, remise_item_id, pharmacy_item_id, category_id, image_path, lot_id, vehicle_type FROM {config.tables.items} WHERE id = ?",
+                f"SELECT quantity, remise_item_id, pharmacy_item_id, category_id, image_path, lot_id, vehicle_type, extra_json FROM {config.tables.items} WHERE id = ?",
                 (item_id,),
             ).fetchone()
             if current_row is None:
@@ -1917,6 +2429,21 @@ def _update_inventory_item_internal(
                 if current_source_id is not None and current_quantity:
                     _update_source_quantity(current_source, current_source_id, current_quantity)
                 _update_source_quantity(target_source, target_source_id, -target_quantity)
+        if extra_scope and extra_payload is not None:
+            if module == "vehicle_inventory":
+                if current_row is None:
+                    raise ValueError("Article introuvable")
+                existing_extra = current_row["extra_json"]
+            else:
+                row = conn.execute(
+                    f"SELECT extra_json FROM {config.tables.items} WHERE id = ?",
+                    (item_id,),
+                ).fetchone()
+                if row is None:
+                    raise ValueError("Article introuvable")
+                existing_extra = row["extra_json"]
+            merged_extra = validate_and_merge_extra(extra_scope, existing_extra, extra_payload)
+            fields["extra_json"] = _dump_extra_json(merged_extra)
         if not fields:
             return _get_inventory_item_internal(module, item_id)
         assignments = ", ".join(f"{col} = ?" for col in fields)
@@ -2008,7 +2535,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
             _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path, vehicle_type"
+            select_columns += ", image_path, vehicle_type, extra_json"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
         )
@@ -2072,6 +2599,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
             image_url = None
             if module == "vehicle_inventory" and "image_path" in row.keys():
                 image_url = _build_media_url(row["image_path"])
+            extra = _parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None)
             categories.append(
                 models.Category(
                     id=category_id,
@@ -2080,6 +2608,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
                     view_configs=category_view_configs,
                     image_url=image_url,
                     vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
+                    extra=extra,
                 )
             )
         return categories
@@ -2095,7 +2624,7 @@ def _get_inventory_category_internal(
             _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path, vehicle_type"
+            select_columns += ", image_path, vehicle_type, extra_json"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
@@ -2133,6 +2662,7 @@ def _get_inventory_category_internal(
         image_url = None
         if "image_path" in row.keys():
             image_url = _build_media_url(row["image_path"])
+        extra = _parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None)
         return models.Category(
             id=row["id"],
             name=row["name"],
@@ -2140,6 +2670,7 @@ def _get_inventory_category_internal(
             view_configs=view_configs,
             image_url=image_url,
             vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
+            extra=extra,
         )
 
 
@@ -2149,6 +2680,7 @@ def _create_inventory_category_internal(
     ensure_database_ready()
     config = _get_inventory_config(module)
     normalized_sizes = _normalize_sizes(payload.sizes)
+    extra = validate_and_merge_extra("vehicles", None, payload.extra) if module == "vehicle_inventory" else {}
     with db.get_stock_connection() as conn:
         columns = ["name"]
         values: list[object] = [payload.name]
@@ -2156,6 +2688,8 @@ def _create_inventory_category_internal(
             _ensure_vehicle_category_columns(conn)
             columns.append("vehicle_type")
             values.append(payload.vehicle_type)
+            columns.append("extra_json")
+            values.append(_dump_extra_json(extra))
         cur = conn.execute(
             f"INSERT INTO {config.tables.categories} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
             values,
@@ -2196,6 +2730,16 @@ def _update_inventory_category_internal(
         if module == "vehicle_inventory" and payload.vehicle_type is not None:
             updates.append("vehicle_type = ?")
             values.append(payload.vehicle_type)
+        if module == "vehicle_inventory" and payload.extra is not None:
+            row = conn.execute(
+                "SELECT extra_json FROM vehicle_categories WHERE id = ?",
+                (category_id,),
+            ).fetchone()
+            if row is None:
+                raise ValueError("Catégorie introuvable")
+            extra = validate_and_merge_extra("vehicles", row["extra_json"], payload.extra)
+            updates.append("extra_json = ?")
+            values.append(_dump_extra_json(extra))
         if updates:
             values.append(category_id)
             conn.execute(
@@ -3285,6 +3829,7 @@ def _build_remise_lot(row: sqlite3.Row) -> models.RemiseLot:
         image_url=_build_media_url(row["image_path"]),
         item_count=row["item_count"],
         total_quantity=row["total_quantity"],
+        extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
     )
 
 
@@ -3299,7 +3844,7 @@ def list_remise_lots() -> list[models.RemiseLot]:
     with db.get_stock_connection() as conn:
         rows = conn.execute(
             """
-            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path,
+            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path, rl.extra_json,
                    COUNT(rli.id) AS item_count,
                    COALESCE(SUM(rli.quantity), 0) AS total_quantity
             FROM remise_lots AS rl
@@ -3316,7 +3861,7 @@ def get_remise_lot(lot_id: int) -> models.RemiseLot:
     with db.get_stock_connection() as conn:
         row = conn.execute(
             """
-            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path,
+            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path, rl.extra_json,
                    COUNT(rli.id) AS item_count,
                    COALESCE(SUM(rli.quantity), 0) AS total_quantity
             FROM remise_lots AS rl
@@ -3336,7 +3881,7 @@ def list_remise_lots_with_items() -> list[models.RemiseLotWithItems]:
     with db.get_stock_connection() as conn:
         lot_rows = conn.execute(
             """
-            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path,
+            SELECT rl.id, rl.name, rl.description, rl.created_at, rl.image_path, rl.extra_json,
                    COUNT(rli.id) AS item_count,
                    COALESCE(SUM(rli.quantity), 0) AS total_quantity
             FROM remise_lots AS rl
@@ -3383,10 +3928,12 @@ def list_remise_lots_with_items() -> list[models.RemiseLotWithItems]:
 def create_remise_lot(payload: models.RemiseLotCreate) -> models.RemiseLot:
     ensure_database_ready()
     description = payload.description.strip() if payload.description else None
+    extra = validate_and_merge_extra("remise_lots", None, payload.extra)
     with db.get_stock_connection() as conn:
+        _ensure_remise_lot_columns(conn)
         cur = conn.execute(
-            "INSERT INTO remise_lots (name, description) VALUES (?, ?)",
-            (payload.name.strip(), description),
+            "INSERT INTO remise_lots (name, description, extra_json) VALUES (?, ?, ?)",
+            (payload.name.strip(), description, _dump_extra_json(extra)),
         )
         lot_id = cur.lastrowid
         _persist_after_commit(conn)
@@ -3403,10 +3950,20 @@ def update_remise_lot(lot_id: int, payload: models.RemiseLotUpdate) -> models.Re
     if payload.description is not None:
         assignments.append("description = ?")
         values.append(payload.description.strip() or None)
+    if payload.extra is not None:
+        with db.get_stock_connection() as conn:
+            _ensure_remise_lot_columns(conn)
+            row = conn.execute("SELECT extra_json FROM remise_lots WHERE id = ?", (lot_id,)).fetchone()
+        if row is None:
+            raise ValueError("Lot introuvable")
+        extra = validate_and_merge_extra("remise_lots", row["extra_json"], payload.extra)
+        assignments.append("extra_json = ?")
+        values.append(_dump_extra_json(extra))
     if not assignments:
         return get_remise_lot(lot_id)
 
     with db.get_stock_connection() as conn:
+        _ensure_remise_lot_columns(conn)
         cur = conn.execute(
             f"UPDATE remise_lots SET {', '.join(assignments)} WHERE id = ?",
             (*values, lot_id),
@@ -3645,6 +4202,7 @@ def _build_pharmacy_lot(row: sqlite3.Row) -> models.PharmacyLot:
         image_url=_build_media_url(row["image_path"]),
         item_count=row["item_count"],
         total_quantity=row["total_quantity"],
+        extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
     )
 
 
@@ -3659,7 +4217,7 @@ def list_pharmacy_lots() -> list[models.PharmacyLot]:
     with db.get_stock_connection() as conn:
         rows = conn.execute(
             """
-            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at,
+            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at, pl.extra_json,
                    COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
             FROM pharmacy_lots AS pl
             LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
@@ -3675,7 +4233,7 @@ def get_pharmacy_lot(lot_id: int) -> models.PharmacyLot:
     with db.get_stock_connection() as conn:
         row = conn.execute(
             """
-            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at,
+            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at, pl.extra_json,
                    COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
             FROM pharmacy_lots AS pl
             LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
@@ -3694,7 +4252,7 @@ def list_pharmacy_lots_with_items() -> list[models.PharmacyLotWithItems]:
     with db.get_stock_connection() as conn:
         lot_rows = conn.execute(
             """
-            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at,
+            SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at, pl.extra_json,
                    COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
             FROM pharmacy_lots AS pl
             LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
@@ -3740,10 +4298,12 @@ def list_pharmacy_lots_with_items() -> list[models.PharmacyLotWithItems]:
 def create_pharmacy_lot(payload: models.PharmacyLotCreate) -> models.PharmacyLot:
     ensure_database_ready()
     description = payload.description.strip() if payload.description else None
+    extra = validate_and_merge_extra("pharmacy_lots", None, payload.extra)
     with db.get_stock_connection() as conn:
+        _ensure_pharmacy_lot_columns(conn)
         cur = conn.execute(
-            "INSERT INTO pharmacy_lots (name, description) VALUES (?, ?)",
-            (payload.name.strip(), description),
+            "INSERT INTO pharmacy_lots (name, description, extra_json) VALUES (?, ?, ?)",
+            (payload.name.strip(), description, _dump_extra_json(extra)),
         )
         lot_id = cur.lastrowid
         _persist_after_commit(conn, "pharmacy")
@@ -3760,10 +4320,20 @@ def update_pharmacy_lot(lot_id: int, payload: models.PharmacyLotUpdate) -> model
     if payload.description is not None:
         assignments.append("description = ?")
         values.append(payload.description.strip() or None)
+    if payload.extra is not None:
+        with db.get_stock_connection() as conn:
+            _ensure_pharmacy_lot_columns(conn)
+            row = conn.execute("SELECT extra_json FROM pharmacy_lots WHERE id = ?", (lot_id,)).fetchone()
+        if row is None:
+            raise ValueError("Lot introuvable")
+        extra = validate_and_merge_extra("pharmacy_lots", row["extra_json"], payload.extra)
+        assignments.append("extra_json = ?")
+        values.append(_dump_extra_json(extra))
     if not assignments:
         return get_pharmacy_lot(lot_id)
 
     with db.get_stock_connection() as conn:
+        _ensure_pharmacy_lot_columns(conn)
         cur = conn.execute(
             f"UPDATE pharmacy_lots SET {', '.join(assignments)} WHERE id = ?",
             (*values, lot_id),
@@ -5428,6 +5998,7 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 expiration_date=row["expiration_date"],
                 location=row["location"],
                 category_id=row["category_id"],
+                extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
             )
             for row in cur.fetchall()
         ]
@@ -5657,6 +6228,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
             expiration_date=row["expiration_date"],
             location=row["location"],
             category_id=row["category_id"],
+            extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
         )
 
 
@@ -5665,6 +6237,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
     expiration_date = (
         payload.expiration_date.isoformat() if payload.expiration_date is not None else None
     )
+    extra = validate_and_merge_extra("pharmacy_items", None, payload.extra)
     with db.get_stock_connection() as conn:
         barcode = _normalize_barcode(payload.barcode)
         try:
@@ -5679,9 +6252,10 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     low_stock_threshold,
                     expiration_date,
                     location,
-                    category_id
+                    category_id,
+                    extra_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
@@ -5693,6 +6267,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     expiration_date,
                     payload.location,
                     payload.category_id,
+                    _dump_extra_json(extra),
                 ),
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
@@ -5704,10 +6279,21 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
 def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> models.PharmacyItem:
     ensure_database_ready()
     fields = {k: v for k, v in payload.model_dump(exclude_unset=True).items()}
+    extra_payload = fields.pop("extra", None)
     if "barcode" in fields:
         fields["barcode"] = _normalize_barcode(fields["barcode"])
     if "expiration_date" in fields and fields["expiration_date"] is not None:
         fields["expiration_date"] = fields["expiration_date"].isoformat()
+    if extra_payload is not None:
+        with db.get_stock_connection() as conn:
+            row = conn.execute(
+                "SELECT extra_json FROM pharmacy_items WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+        if row is None:
+            raise ValueError("Produit pharmaceutique introuvable")
+        merged_extra = validate_and_merge_extra("pharmacy_items", row["extra_json"], extra_payload)
+        fields["extra_json"] = _dump_extra_json(merged_extra)
     if not fields:
         return get_pharmacy_item(item_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)

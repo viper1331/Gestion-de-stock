@@ -14,6 +14,7 @@ import { DotationsPage } from "../features/dotations/DotationsPage";
 import { PharmacyPage } from "../features/pharmacy/PharmacyPage";
 import { ModulePermissionsPage } from "../features/permissions/ModulePermissionsPage";
 import { AdminUsersPage } from "../features/users/AdminUsersPage";
+import { AdminSettingsPage } from "../features/admin/AdminSettingsPage";
 import { PurchaseOrdersPage } from "../features/inventory/PurchaseOrdersPage";
 import { VehicleInventoryPage } from "../features/inventory/VehicleInventoryPage";
 import { RemiseInventoryPage } from "../features/inventory/RemiseInventoryPage";
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "users", element: <AdminUsersPage /> },
       { path: "permissions", element: <ModulePermissionsPage /> },
       { path: "updates", element: <UpdatesPage /> },
+      { path: "admin-settings", element: <AdminSettingsPage /> },
       { path: "system-config", element: <SystemConfigPage /> },
       { path: "about", element: <AboutPage /> }
     ]

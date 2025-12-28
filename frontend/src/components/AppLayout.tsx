@@ -316,6 +316,13 @@ export function AppLayout() {
                   icon: "⚙️",
                 },
                 {
+                  to: "/admin-settings",
+                  label: "Paramètres avancés",
+                  tooltip: "Configurer les types de véhicules et champs personnalisés",
+                  icon: "🧩",
+                  adminOnly: true
+                },
+                {
                   to: "/system-config",
                   label: "Configuration système",
                   tooltip: "Ajuster les URLs publiques et les origines autorisées",

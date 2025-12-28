@@ -16,7 +16,9 @@ import clsx from "clsx";
 import vanIllustration from "../../assets/vehicles/vehicle-van.svg";
 import pickupIllustration from "../../assets/vehicles/vehicle-pickup.svg";
 import ambulanceIllustration from "../../assets/vehicles/vehicle-ambulance.svg";
+import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
+import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
 import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
@@ -30,7 +32,14 @@ interface VehicleViewConfig {
   background_url: string | null;
 }
 
-type VehicleType = "incendie" | "secours_a_personne";
+type VehicleType = string;
+
+interface VehicleTypeEntry {
+  id: number;
+  code: string;
+  label: string;
+  is_active: boolean;
+}
 
 type InventoryItem =
   | {
@@ -59,6 +68,7 @@ interface VehicleCategory {
   image_url: string | null;
   vehicle_type: VehicleType | null;
   view_configs?: VehicleViewConfig[] | null;
+  extra?: Record<string, unknown>;
 }
 
 interface VehicleItem {
@@ -81,6 +91,7 @@ interface VehicleItem {
   show_in_qr: boolean;
   vehicle_type: VehicleType | null;
   available_quantity?: number | null;
+  extra?: Record<string, unknown>;
 }
 
 interface VehicleLibraryItem {
@@ -130,6 +141,7 @@ interface VehicleFormValues {
   name: string;
   sizes: string[];
   vehicleType: VehicleType;
+  extra: Record<string, unknown>;
 }
 
 interface UploadVehicleImagePayload {
@@ -142,6 +154,7 @@ interface UpdateVehiclePayload {
   name: string;
   sizes: string[];
   vehicleType: VehicleType;
+  extra: Record<string, unknown>;
 }
 
 interface UpdateItemPayload {
@@ -156,7 +169,7 @@ interface UpdateItemPayload {
   remiseItemId?: number | null;
   pharmacyItemId?: number | null;
   suppressFeedback?: boolean;
-  targetView?: string;
+  extra?: Record<string, unknown>;
 }
 
 const VEHICLE_ILLUSTRATIONS = [
@@ -165,10 +178,10 @@ const VEHICLE_ILLUSTRATIONS = [
   ambulanceIllustration
 ];
 
-const VEHICLE_TYPE_LABELS: Record<VehicleType, string> = {
-  incendie: "Incendie",
-  secours_a_personne: "Secours à personne"
-};
+const DEFAULT_VEHICLE_TYPES: Array<{ code: VehicleType; label: string }> = [
+  { code: "incendie", label: "Incendie" },
+  { code: "secours_a_personne", label: "Secours à personne" }
+];
 
 function getAvailableQuantity(item: VehicleItem): number {
   if (item.remise_item_id !== null) {
@@ -511,6 +524,7 @@ export function VehicleInventoryPage() {
   const queryClient = useQueryClient();
   const moduleTitle = useModuleTitle("vehicle_inventory");
   const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const debugEnabled = useMemo(
     () => user?.role === "admin" || INVENTORY_DEBUG_ENABLED,
     [user?.role]
@@ -544,12 +558,14 @@ export function VehicleInventoryPage() {
   const [vehicleName, setVehicleName] = useState("");
   const [vehicleViewsInput, setVehicleViewsInput] = useState("");
   const [vehicleType, setVehicleType] = useState<VehicleType>("incendie");
+  const [vehicleExtra, setVehicleExtra] = useState<Record<string, unknown>>({});
   const [vehicleImageFile, setVehicleImageFile] = useState<File | null>(null);
   const vehicleImageInputRef = useRef<HTMLInputElement | null>(null);
   const [isEditingVehicle, setIsEditingVehicle] = useState(false);
   const [editedVehicleName, setEditedVehicleName] = useState("");
   const [editedVehicleViewsInput, setEditedVehicleViewsInput] = useState("");
   const [editedVehicleType, setEditedVehicleType] = useState<VehicleType | null>(null);
+  const [editedVehicleExtra, setEditedVehicleExtra] = useState<Record<string, unknown>>({});
   const [editedVehicleImageFile, setEditedVehicleImageFile] = useState<File | null>(null);
   const editedVehicleImageInputRef = useRef<HTMLInputElement | null>(null);
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
@@ -567,6 +583,71 @@ export function VehicleInventoryPage() {
       return response.data;
     }
   });
+
+  const { data: vehicleTypes = [] } = useQuery({
+    queryKey: ["admin-vehicle-types"],
+    queryFn: async () => {
+      const response = await api.get<VehicleTypeEntry[]>("/admin/vehicle-types");
+      return response.data;
+    },
+    enabled: isAdmin
+  });
+
+  const { data: vehicleCustomFields = [] } = useQuery({
+    queryKey: ["custom-fields", "vehicles"],
+    queryFn: async () => {
+      const response = await api.get<CustomFieldDefinition[]>("/admin/custom-fields", {
+        params: { scope: "vehicles" }
+      });
+      return response.data;
+    },
+    enabled: isAdmin
+  });
+
+  const { data: vehicleItemCustomFields = [] } = useQuery({
+    queryKey: ["custom-fields", "vehicle_items"],
+    queryFn: async () => {
+      const response = await api.get<CustomFieldDefinition[]>("/admin/custom-fields", {
+        params: { scope: "vehicle_items" }
+      });
+      return response.data;
+    },
+    enabled: isAdmin
+  });
+
+  const activeVehicleCustomFields = useMemo(
+    () => vehicleCustomFields.filter((definition) => definition.is_active),
+    [vehicleCustomFields]
+  );
+  const activeVehicleItemCustomFields = useMemo(
+    () => vehicleItemCustomFields.filter((definition) => definition.is_active),
+    [vehicleItemCustomFields]
+  );
+
+  const vehicleTypeOptions = useMemo(() => {
+    const active = vehicleTypes.filter((entry) => entry.is_active);
+    if (active.length > 0) {
+      return active.map((entry) => ({ code: entry.code, label: entry.label }));
+    }
+    return DEFAULT_VEHICLE_TYPES;
+  }, [vehicleTypes]);
+
+  const vehicleTypeLabels = useMemo(() => {
+    const map = new Map<string, string>();
+    DEFAULT_VEHICLE_TYPES.forEach((entry) => map.set(entry.code, entry.label));
+    vehicleTypeOptions.forEach((entry) => map.set(entry.code, entry.label));
+    return map;
+  }, [vehicleTypeOptions]);
+
+  useEffect(() => {
+    if (!vehicleTypeOptions.some((entry) => entry.code === vehicleType)) {
+      setVehicleType(vehicleTypeOptions[0]?.code ?? "incendie");
+    }
+  }, [vehicleType, vehicleTypeOptions]);
+
+  useEffect(() => {
+    setVehicleExtra((previous) => buildCustomFieldDefaults(activeVehicleCustomFields, previous));
+  }, [activeVehicleCustomFields]);
 
   const selectedVehicle = useMemo(
     () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
@@ -637,7 +718,8 @@ export function VehicleInventoryPage() {
     quantity,
     sourceCategoryId,
     remiseItemId,
-    pharmacyItemId
+    pharmacyItemId,
+    extra
   }: UpdateItemPayload): Record<string, unknown> => ({
     category_id: categoryId,
     ...(size !== undefined ? { size } : {}),
@@ -652,7 +734,8 @@ export function VehicleInventoryPage() {
       : position === null
         ? { position_x: null, position_y: null }
         : {}),
-    ...(typeof quantity === "number" ? { quantity } : {})
+    ...(typeof quantity === "number" ? { quantity } : {}),
+    ...(extra ? { extra } : {})
   });
 
   const ensureValidSizeForMutation = (value: string | null | undefined) => {
@@ -727,6 +810,19 @@ export function VehicleInventoryPage() {
       ]);
     }
   });
+
+  const handleUpdateExtra = useCallback(
+    (item: VehicleItem, extra: Record<string, unknown>) => {
+      updateVehicleItem.mutate({
+        itemId: item.id,
+        categoryId: item.category_id,
+        extra,
+        suppressFeedback: true,
+        successMessage: "Champs personnalisés mis à jour."
+      });
+    },
+    [updateVehicleItem]
+  );
 
   const removeVehicleItem = useMutation({
     mutationFn: async ({ itemId }: UpdateItemPayload) => {
@@ -891,11 +987,12 @@ export function VehicleInventoryPage() {
     setFeedback(entry);
   };
   const createVehicle = useMutation({
-    mutationFn: async ({ name, sizes, vehicleType }: VehicleFormValues) => {
+    mutationFn: async ({ name, sizes, vehicleType, extra }: VehicleFormValues) => {
       const response = await api.post<VehicleCategory>("/vehicle-inventory/categories/", {
         name,
         sizes,
-        vehicle_type: vehicleType
+        vehicle_type: vehicleType,
+        extra
       });
       return response.data;
     },
@@ -1026,13 +1123,14 @@ export function VehicleInventoryPage() {
   });
 
   const updateVehicle = useMutation({
-    mutationFn: async ({ categoryId, name, sizes, vehicleType }: UpdateVehiclePayload) => {
+    mutationFn: async ({ categoryId, name, sizes, vehicleType, extra }: UpdateVehiclePayload) => {
       const response = await api.put<VehicleCategory>(
         `/vehicle-inventory/categories/${categoryId}`,
         {
           name,
           sizes,
-          vehicle_type: vehicleType
+          vehicle_type: vehicleType,
+          extra
         }
       );
       return response.data;
@@ -1057,6 +1155,7 @@ export function VehicleInventoryPage() {
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
       setEditedVehicleType(null);
+      setEditedVehicleExtra({});
     },
     onError: () => {
       setFeedback({ type: "error", text: "Impossible de supprimer ce véhicule." });
@@ -1520,7 +1619,8 @@ export function VehicleInventoryPage() {
       const createdVehicle = await createVehicle.mutateAsync({
         name: trimmedName,
         sizes: parsedViews,
-        vehicleType
+        vehicleType,
+        extra: vehicleExtra
       });
       let finalVehicle = createdVehicle;
       if (vehicleImageFile) {
@@ -1535,7 +1635,8 @@ export function VehicleInventoryPage() {
       });
       setVehicleName("");
       setVehicleViewsInput("");
-      setVehicleType("incendie");
+      setVehicleType(vehicleTypeOptions[0]?.code ?? "incendie");
+      setVehicleExtra(buildCustomFieldDefaults(activeVehicleCustomFields, {}));
       clearVehicleImageSelection();
       setIsCreatingVehicle(false);
       setSelectedVehicleId(finalVehicle.id);
@@ -1560,11 +1661,13 @@ export function VehicleInventoryPage() {
       setEditedVehicleViewsInput("");
       clearEditedVehicleImageSelection();
       setEditedVehicleType(null);
+      setEditedVehicleExtra({});
       return;
     }
     setEditedVehicleName(selectedVehicle.name);
     setEditedVehicleViewsInput(getVehicleViews(selectedVehicle).join(", "));
     setEditedVehicleType(selectedVehicle.vehicle_type ?? "incendie");
+    setEditedVehicleExtra(buildCustomFieldDefaults(activeVehicleCustomFields, selectedVehicle.extra ?? {}));
     clearEditedVehicleImageSelection();
     setIsEditingVehicle(true);
   };
@@ -1581,6 +1684,7 @@ export function VehicleInventoryPage() {
     setEditedVehicleName("");
     setEditedVehicleViewsInput("");
     setEditedVehicleType(null);
+    setEditedVehicleExtra({});
     clearEditedVehicleImageSelection();
   };
 
@@ -1601,7 +1705,8 @@ export function VehicleInventoryPage() {
         categoryId: selectedVehicle.id,
         name: trimmedName,
         sizes: parsedViews,
-        vehicleType: targetVehicleType
+        vehicleType: targetVehicleType,
+        extra: editedVehicleExtra
       });
       if (editedVehicleImageFile) {
         await uploadVehicleImage.mutateAsync({
@@ -1614,6 +1719,7 @@ export function VehicleInventoryPage() {
       setEditedVehicleName("");
       setEditedVehicleViewsInput("");
       setEditedVehicleType(null);
+      setEditedVehicleExtra({});
       clearEditedVehicleImageSelection();
     } catch {
       // feedback handled in mutation callbacks
@@ -1695,11 +1801,29 @@ export function VehicleInventoryPage() {
                     className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
                     disabled={createVehicle.isPending}
                   >
-                    <option value="incendie">{VEHICLE_TYPE_LABELS.incendie}</option>
-                    <option value="secours_a_personne">{VEHICLE_TYPE_LABELS.secours_a_personne}</option>
+                    {vehicleTypeOptions.map((entry) => (
+                      <option key={entry.code} value={entry.code}>
+                        {entry.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
               </div>
+              {activeVehicleCustomFields.length > 0 ? (
+                <div className="rounded-md border border-slate-300 bg-white px-3 py-2 dark:border-slate-600 dark:bg-slate-950">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Champs personnalisés
+                  </p>
+                  <div className="mt-3">
+                    <CustomFieldsForm
+                      definitions={activeVehicleCustomFields}
+                      values={vehicleExtra}
+                      onChange={setVehicleExtra}
+                      disabled={createVehicle.isPending}
+                    />
+                  </div>
+                </div>
+              ) : null}
                 <label className="block space-y-1" htmlFor="vehicle-image">
                   <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                     Photo du véhicule (optionnel)
@@ -1822,6 +1946,7 @@ export function VehicleInventoryPage() {
               }
               itemCount={vehicleItemCountMap.get(vehicle.id) ?? 0}
               onClick={() => setSelectedVehicleId(vehicle.id)}
+              vehicleTypeLabels={vehicleTypeLabels}
             />
           ))}
           {vehicles.length === 0 && !isLoading && (
@@ -1844,6 +1969,7 @@ export function VehicleInventoryPage() {
             isEditing={isEditingVehicle}
             isUpdating={updateVehicle.isPending}
             isDeleting={deleteVehicle.isPending}
+            vehicleTypeLabels={vehicleTypeLabels}
           />
 
           {isEditingVehicle ? (
@@ -1903,11 +2029,29 @@ export function VehicleInventoryPage() {
                       uploadVehicleImage.isPending
                     }
                   >
-                    <option value="incendie">{VEHICLE_TYPE_LABELS.incendie}</option>
-                    <option value="secours_a_personne">{VEHICLE_TYPE_LABELS.secours_a_personne}</option>
+                    {vehicleTypeOptions.map((entry) => (
+                      <option key={entry.code} value={entry.code}>
+                        {entry.label}
+                      </option>
+                    ))}
                   </select>
                 </label>
               </div>
+              {activeVehicleCustomFields.length > 0 ? (
+                <div className="rounded-md border border-slate-200 bg-white px-3 py-2 dark:border-slate-700 dark:bg-slate-950">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                    Champs personnalisés
+                  </p>
+                  <div className="mt-3">
+                    <CustomFieldsForm
+                      definitions={activeVehicleCustomFields}
+                      values={editedVehicleExtra}
+                      onChange={setEditedVehicleExtra}
+                      disabled={updateVehicle.isPending || deleteVehicle.isPending}
+                    />
+                  </div>
+                </div>
+              ) : null}
               <p className="text-xs text-slate-500 dark:text-slate-400">
                 Séparez les différentes vues par des virgules ou des retours à la ligne. La vue "{DEFAULT_VIEW_LABEL}" sera utilisée par défaut si aucune vue n'est fournie.
               </p>
@@ -2192,6 +2336,8 @@ export function VehicleInventoryPage() {
                 onItemFeedback={pushFeedback}
                 storageKey="vehicleInventory:panel:otherViews"
                 onDragStartCapture={lockViewSelection}
+                customFieldDefinitions={activeVehicleItemCustomFields}
+                onUpdateExtra={handleUpdateExtra}
               />
 
               <VehicleItemsPanel
@@ -2202,6 +2348,8 @@ export function VehicleInventoryPage() {
                 onItemFeedback={pushFeedback}
                 storageKey="vehicleInventory:panel:pendingAssignment"
                 onDragStartCapture={lockViewSelection}
+                customFieldDefinitions={activeVehicleItemCustomFields}
+                onUpdateExtra={handleUpdateExtra}
               />
 
               <DroppableLibrary
@@ -2256,6 +2404,8 @@ export function VehicleInventoryPage() {
                   returnItemToLibrary(itemId);
                 }}
                 onItemFeedback={pushFeedback}
+                customFieldDefinitions={activeVehicleItemCustomFields}
+                onUpdateExtra={handleUpdateExtra}
               />
             </aside>
           </div>
@@ -2271,9 +2421,16 @@ interface VehicleCardProps {
   fallbackIllustration: string;
   itemCount: number;
   onClick: () => void;
+  vehicleTypeLabels: Map<string, string>;
 }
 
-function VehicleCard({ vehicle, fallbackIllustration, itemCount, onClick }: VehicleCardProps) {
+function VehicleCard({
+  vehicle,
+  fallbackIllustration,
+  itemCount,
+  onClick,
+  vehicleTypeLabels
+}: VehicleCardProps) {
   const [hasImageError, setHasImageError] = useState(false);
   const resolvedImageUrl = resolveMediaUrl(vehicle.image_url);
   useEffect(() => {
@@ -2317,7 +2474,7 @@ function VehicleCard({ vehicle, fallbackIllustration, itemCount, onClick }: Vehi
           </p>
           {vehicle.vehicle_type ? (
             <span className="mt-1 inline-flex items-center rounded-full bg-slate-100 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-              {VEHICLE_TYPE_LABELS[vehicle.vehicle_type]}
+              {vehicleTypeLabels.get(vehicle.vehicle_type) ?? vehicle.vehicle_type}
             </span>
           ) : null}
         </div>
@@ -2339,6 +2496,7 @@ interface VehicleHeaderProps {
   isEditing: boolean;
   isUpdating: boolean;
   isDeleting: boolean;
+  vehicleTypeLabels: Map<string, string>;
 }
 
 function VehicleHeader({
@@ -2349,7 +2507,8 @@ function VehicleHeader({
   onDelete,
   isEditing,
   isUpdating,
-  isDeleting
+  isDeleting,
+  vehicleTypeLabels
 }: VehicleHeaderProps) {
   const [hasImageError, setHasImageError] = useState(false);
   const resolvedImageUrl = resolveMediaUrl(vehicle.image_url);
@@ -2382,7 +2541,7 @@ function VehicleHeader({
               </p>
               {vehicle.vehicle_type ? (
                 <span className="mt-1 inline-flex items-center rounded-full bg-slate-100 px-3 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-700 dark:bg-slate-800 dark:text-slate-200">
-                  {VEHICLE_TYPE_LABELS[vehicle.vehicle_type]}
+                  {vehicleTypeLabels.get(vehicle.vehicle_type) ?? vehicle.vehicle_type}
                 </span>
               ) : null}
             </div>
@@ -3427,6 +3586,8 @@ interface VehicleItemsPanelProps {
   onItemFeedback?: (feedback: Feedback) => void;
   storageKey: string;
   onDragStartCapture?: () => void;
+  customFieldDefinitions?: CustomFieldDefinition[];
+  onUpdateExtra?: (item: VehicleItem, extra: Record<string, unknown>) => void;
 }
 
 function VehicleItemsPanel({
@@ -3436,7 +3597,9 @@ function VehicleItemsPanel({
   items,
   onItemFeedback,
   storageKey,
-  onDragStartCapture
+  onDragStartCapture,
+  customFieldDefinitions = [],
+  onUpdateExtra
 }: VehicleItemsPanelProps) {
   const [isCollapsed, setIsCollapsed] = usePersistentBoolean(storageKey, false);
 
@@ -3468,6 +3631,8 @@ function VehicleItemsPanel({
               item={item}
               onFeedback={onItemFeedback}
               onDragStartCapture={onDragStartCapture}
+              customFieldDefinitions={customFieldDefinitions}
+              onUpdateExtra={onUpdateExtra ? (extra) => onUpdateExtra(item, extra) : undefined}
             />
           ))}
           {items.length === 0 && (
@@ -3494,6 +3659,8 @@ interface DroppableLibraryProps {
   onRemoveFromVehicle: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
   onDragStartCapture: () => void;
+  customFieldDefinitions?: CustomFieldDefinition[];
+  onUpdateExtra?: (item: VehicleItem, extra: Record<string, unknown>) => void;
 }
 
 function DroppableLibrary({
@@ -3508,7 +3675,9 @@ function DroppableLibrary({
   onDropLot,
   onRemoveFromVehicle,
   onItemFeedback,
-  onDragStartCapture
+  onDragStartCapture,
+  customFieldDefinitions = [],
+  onUpdateExtra
 }: DroppableLibraryProps) {
   const hover = useThrottledHoverState();
   const [isCollapsed, setIsCollapsed] = usePersistentBoolean(
@@ -3758,6 +3927,8 @@ function DroppableLibrary({
                   onRemove={() => onRemoveFromVehicle(item.id)}
                   onFeedback={onItemFeedback}
                   onDragStartCapture={onDragStartCapture}
+                  customFieldDefinitions={customFieldDefinitions}
+                  onUpdateExtra={onUpdateExtra ? (extra) => onUpdateExtra(item, extra) : undefined}
                 />
               ))}
               {items.length === 0 && (
@@ -3784,6 +3955,8 @@ interface ItemCardProps {
   onUpdatePosition?: (position: { x: number; y: number }) => void;
   onUpdateQuantity?: (quantity: number) => void;
   onDragStartCapture?: () => void;
+  customFieldDefinitions?: CustomFieldDefinition[];
+  onUpdateExtra?: (extra: Record<string, unknown>) => void;
 }
 
 function ItemCard({
@@ -3792,7 +3965,9 @@ function ItemCard({
   onFeedback,
   onUpdatePosition,
   onUpdateQuantity,
-  onDragStartCapture
+  onDragStartCapture,
+  customFieldDefinitions = [],
+  onUpdateExtra
 }: ItemCardProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -3803,6 +3978,10 @@ function ItemCard({
   }));
   const [draftQuantity, setDraftQuantity] = useState(item.quantity);
   const [isSavingQuantity, setIsSavingQuantity] = useState(false);
+  const [isEditingExtra, setIsEditingExtra] = useState(false);
+  const [extraDraft, setExtraDraft] = useState<Record<string, unknown>>(() =>
+    buildCustomFieldDefaults(customFieldDefinitions, item.extra ?? {})
+  );
 
   const imageUrl = resolveMediaUrl(item.image_url);
   const hasImage = Boolean(imageUrl);
@@ -3831,6 +4010,10 @@ function ItemCard({
     setDraftQuantity(item.quantity);
     setIsSavingQuantity(false);
   }, [item.quantity]);
+
+  useEffect(() => {
+    setExtraDraft(buildCustomFieldDefaults(customFieldDefinitions, item.extra ?? {}));
+  }, [customFieldDefinitions, item.extra]);
 
   const uploadImage = useMutation({
     mutationFn: async (file: File) => {
@@ -4184,6 +4367,63 @@ function ItemCard({
               Cliquez sur « Ajuster » pour saisir des coordonnées précises (0 à 100&nbsp;%).
             </p>
           )}
+        </div>
+      ) : null}
+      {customFieldDefinitions.length > 0 ? (
+        <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-[11px] text-slate-600 dark:border-slate-600/70 dark:bg-slate-800/40 dark:text-slate-200">
+          <div className="flex items-center justify-between gap-2">
+            <span className="font-semibold text-slate-600 dark:text-slate-200">
+              Champs personnalisés
+            </span>
+            <button
+              type="button"
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                setIsEditingExtra((previous) => !previous);
+              }}
+              className="rounded-full border border-slate-300 px-3 py-1 font-medium transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-500 dark:hover:border-slate-400"
+            >
+              {isEditingExtra ? "Fermer" : "Modifier"}
+            </button>
+          </div>
+          {isEditingExtra ? (
+            <form
+              className="mt-3 space-y-3"
+              onSubmit={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onUpdateExtra?.(extraDraft);
+                setIsEditingExtra(false);
+              }}
+            >
+              <CustomFieldsForm
+                definitions={customFieldDefinitions}
+                values={extraDraft}
+                onChange={setExtraDraft}
+              />
+              <div className="flex flex-wrap justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    setExtraDraft(buildCustomFieldDefaults(customFieldDefinitions, item.extra ?? {}));
+                    setIsEditingExtra(false);
+                  }}
+                  className="rounded-full border border-slate-300 px-3 py-1 font-medium transition hover:border-slate-400 hover:text-slate-800 dark:border-slate-500 dark:hover:border-slate-400"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-full border border-blue-500 bg-blue-500 px-3 py-1 font-semibold text-white transition hover:bg-blue-600 focus:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+                >
+                  Enregistrer
+                </button>
+              </div>
+            </form>
+          ) : null}
         </div>
       ) : null}
     </div>

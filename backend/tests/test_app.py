@@ -42,6 +42,7 @@ def setup_module(_: object) -> None:
         conn.execute("DELETE FROM pharmacy_lot_items")
         conn.execute("DELETE FROM pharmacy_lots")
         conn.execute("DELETE FROM pharmacy_items")
+        conn.execute("DELETE FROM custom_field_definitions")
         conn.execute("DELETE FROM vehicle_movements")
         conn.execute("DELETE FROM vehicle_items")
         conn.execute("DELETE FROM vehicle_photos")
@@ -2943,3 +2944,66 @@ def test_update_settings_invalid_remote(monkeypatch: Any) -> None:
 
     with pytest.raises(update_service.UpdateConfigurationError):
         update_service._get_settings()
+
+
+def test_vehicle_types_crud_admin() -> None:
+    headers = _login_headers("admin", "admin123")
+    create_resp = client.post(
+        "/admin/vehicle-types",
+        json={"code": "vsav", "label": "VSAV"},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    created = create_resp.json()
+    assert created["code"] == "vsav"
+    list_resp = client.get("/admin/vehicle-types", headers=headers)
+    assert list_resp.status_code == 200, list_resp.text
+    assert any(entry["code"] == "vsav" for entry in list_resp.json())
+    update_resp = client.patch(
+        f"/admin/vehicle-types/{created['id']}",
+        json={"label": "VSAV (Secours)"},
+        headers=headers,
+    )
+    assert update_resp.status_code == 200, update_resp.text
+    delete_resp = client.delete(f"/admin/vehicle-types/{created['id']}", headers=headers)
+    assert delete_resp.status_code == 204, delete_resp.text
+    refreshed = client.get("/admin/vehicle-types", headers=headers).json()
+    entry = next(entry for entry in refreshed if entry["id"] == created["id"])
+    assert entry["is_active"] is False
+
+
+def test_custom_fields_validation() -> None:
+    headers = _login_headers("admin", "admin123")
+    field_resp = client.post(
+        "/admin/custom-fields",
+        json={
+            "scope": "remise_items",
+            "key": "custom_note",
+            "label": "Note personnalisée",
+            "field_type": "text",
+            "required": True,
+            "sort_order": 1,
+        },
+        headers=headers,
+    )
+    assert field_resp.status_code == 201, field_resp.text
+    create_resp = client.post(
+        "/remise-inventory/",
+        json={"name": "Test extra", "sku": "REM-EXTRA-1", "extra": {"custom_note": "Ok"}},
+        headers=headers,
+    )
+    assert create_resp.status_code == 201, create_resp.text
+    assert create_resp.json()["extra"]["custom_note"] == "Ok"
+    invalid_resp = client.post(
+        "/remise-inventory/",
+        json={"name": "Test extra bad", "sku": "REM-EXTRA-2", "extra": {"custom_note": 12}},
+        headers=headers,
+    )
+    assert invalid_resp.status_code == 400, invalid_resp.text
+
+
+def test_admin_settings_permissions() -> None:
+    _create_user("settings_user", "password123")
+    headers = _login_headers("settings_user", "password123")
+    response = client.get("/admin/vehicle-types", headers=headers)
+    assert response.status_code == 403

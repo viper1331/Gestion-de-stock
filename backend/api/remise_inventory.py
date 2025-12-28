@@ -46,7 +46,10 @@ async def create_remise_item(
     payload: models.ItemCreate, user: models.User = Depends(get_current_user)
 ) -> models.Item:
     _require_permission(user, action="edit")
-    return services.create_remise_item(payload)
+    try:
+        return services.create_remise_item(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/{item_id}", response_model=models.Item)
@@ -59,7 +62,9 @@ async def update_remise_item(
     try:
         return services.update_remise_item(item_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.delete("/{item_id}", status_code=204)
@@ -147,7 +152,10 @@ async def create_remise_lot(
     payload: models.RemiseLotCreate, user: models.User = Depends(get_current_user)
 ) -> models.RemiseLot:
     _require_permission(user, action="edit")
-    return services.create_remise_lot(payload)
+    try:
+        return services.create_remise_lot(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/lots/{lot_id}", response_model=models.RemiseLot)
@@ -160,7 +168,9 @@ async def update_remise_lot(
     try:
         return services.update_remise_lot(lot_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/lots/{lot_id}/image", response_model=models.RemiseLot)

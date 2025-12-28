@@ -1,8 +1,11 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
+import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
+import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
+import { useAuth } from "../auth/useAuth";
 
 interface PharmacyItemOption {
   id: number;
@@ -19,6 +22,7 @@ interface PharmacyLot {
   image_url: string | null;
   item_count: number;
   total_quantity: number;
+  extra?: Record<string, unknown>;
 }
 
 interface PharmacyLotItem {
@@ -41,9 +45,15 @@ function formatDate(value: string) {
 }
 
 export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
   const [selectedLotId, setSelectedLotId] = useState<number | null>(null);
-  const [lotForm, setLotForm] = useState<{ name: string; description: string }>({ name: "", description: "" });
+  const [lotForm, setLotForm] = useState<{ name: string; description: string; extra: Record<string, unknown> }>({
+    name: "",
+    description: "",
+    extra: {}
+  });
   const [lotItemForm, setLotItemForm] = useState<{ pharmacy_item_id: string; quantity: number; compartment_name: string }>(
     {
       pharmacy_item_id: "",
@@ -65,6 +75,21 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
   });
   const lots = lotsQuery.data ?? [];
 
+  const { data: customFieldDefinitions = [] } = useQuery({
+    queryKey: ["custom-fields", "pharmacy_lots"],
+    queryFn: async () => {
+      const response = await api.get<CustomFieldDefinition[]>("/admin/custom-fields", {
+        params: { scope: "pharmacy_lots" }
+      });
+      return response.data;
+    },
+    enabled: isAdmin
+  });
+  const activeCustomFields = useMemo(
+    () => customFieldDefinitions.filter((definition) => definition.is_active),
+    [customFieldDefinitions]
+  );
+
   const selectedLot = useMemo(() => lots.find((lot) => lot.id === selectedLotId) ?? null, [lots, selectedLotId]);
 
   useEffect(() => {
@@ -78,10 +103,18 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
       setEditingLotId(selectedLot?.id ?? null);
       setLotForm({
         name: selectedLot?.name ?? "",
-        description: selectedLot?.description ?? ""
+        description: selectedLot?.description ?? "",
+        extra: buildCustomFieldDefaults(activeCustomFields, selectedLot?.extra ?? {})
       });
     }
-  }, [selectedLot, editingLotId]);
+  }, [activeCustomFields, selectedLot, editingLotId]);
+
+  useEffect(() => {
+    setLotForm((previous) => ({
+      ...previous,
+      extra: buildCustomFieldDefaults(activeCustomFields, previous.extra ?? {})
+    }));
+  }, [activeCustomFields]);
 
   const { data: lotItems = [], isLoading: isLoadingLotItems } = useQuery({
     queryKey: ["pharmacy-lot-items", selectedLotId],
@@ -101,7 +134,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
   });
 
   const createLot = useMutation({
-    mutationFn: async (payload: { name: string; description: string | null }) => {
+    mutationFn: async (payload: { name: string; description: string | null; extra: Record<string, unknown> }) => {
       const response = await api.post<PharmacyLot>("/pharmacy/lots/", payload);
       return response.data;
     },
@@ -109,14 +142,24 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
       setMessage("Lot créé.");
       setSelectedLotId(data.id);
       await queryClient.invalidateQueries({ queryKey: ["pharmacy-lots"] });
-      setLotForm({ name: "", description: "" });
+      setLotForm({
+        name: "",
+        description: "",
+        extra: buildCustomFieldDefaults(activeCustomFields, {})
+      });
     },
     onError: () => setError("Impossible de créer le lot."),
     onSettled: () => setTimeout(() => setMessage(null), 3000)
   });
 
   const updateLot = useMutation({
-    mutationFn: async ({ lotId, payload }: { lotId: number; payload: { name?: string; description?: string | null } }) => {
+    mutationFn: async ({
+      lotId,
+      payload
+    }: {
+      lotId: number;
+      payload: { name?: string; description?: string | null; extra?: Record<string, unknown> };
+    }) => {
       const response = await api.put<PharmacyLot>(`/pharmacy/lots/${lotId}`, payload);
       return response.data;
     },
@@ -227,9 +270,19 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
     }
     setError(null);
     if (editingLotId) {
-      void updateLot.mutateAsync({ lotId: editingLotId, payload: { ...lotForm, description: lotForm.description || null } });
+      void updateLot.mutateAsync({
+        lotId: editingLotId,
+        payload: {
+          ...lotForm,
+          description: lotForm.description || null
+        }
+      });
     } else {
-      void createLot.mutateAsync({ name: lotForm.name.trim(), description: lotForm.description.trim() || null });
+      void createLot.mutateAsync({
+        name: lotForm.name.trim(),
+        description: lotForm.description.trim() || null,
+        extra: lotForm.extra
+      });
     }
   };
 
@@ -379,6 +432,21 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                     rows={3}
                   />
                 </div>
+                {activeCustomFields.length > 0 ? (
+                  <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Champs personnalisés
+                    </p>
+                    <div className="mt-3">
+                      <CustomFieldsForm
+                        definitions={activeCustomFields}
+                        values={lotForm.extra}
+                        onChange={(next) => setLotForm((prev) => ({ ...prev, extra: next }))}
+                        disabled={!canEdit || createLot.isPending || updateLot.isPending}
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 <button
                   type="submit"
                   className="rounded bg-indigo-500 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
