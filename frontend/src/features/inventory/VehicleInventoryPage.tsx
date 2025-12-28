@@ -429,6 +429,12 @@ type Feedback = { type: "success" | "error"; text: string };
 type PointerTarget = { x: number; y: number };
 type PointerTargetMap = Record<string, PointerTarget>;
 
+function buildItemsPanelStorageKey(vehicleId: number | null, viewName: string): string {
+  const vehicleIdentifier = vehicleId ? `vehicle-${vehicleId}` : "no-vehicle";
+  const viewIdentifier = normalizeViewName(viewName).replace(/\s+/g, "-");
+  return `vehicleInventory:itemsPanel:${vehicleIdentifier}:${viewIdentifier}`;
+}
+
 function collectPointerTargetsPayload(targetVehicleId: number | null = null): PointerTargetMap {
   if (typeof window === "undefined") {
     return {};
@@ -460,6 +466,26 @@ function collectPointerTargetsPayload(targetVehicleId: number | null = null): Po
   }
 
   return collected;
+}
+
+function collectPointerModePayload(
+  targetVehicleId: number | null,
+  views: string[]
+): Record<string, boolean> {
+  if (typeof window === "undefined") {
+    return {};
+  }
+  const modes: Record<string, boolean> = {};
+  for (const view of views) {
+    const storageKey = `${buildItemsPanelStorageKey(targetVehicleId, view)}:pointer-mode`;
+    const stored = window.localStorage.getItem(storageKey);
+    if (stored === "true") {
+      modes[normalizeViewName(view)] = true;
+    } else if (stored === "false") {
+      modes[normalizeViewName(view)] = false;
+    }
+  }
+  return modes;
 }
 
 function readPointerTargetsFromStorage(storageKey: string): PointerTargetMap {
@@ -1046,7 +1072,14 @@ export function VehicleInventoryPage() {
   const exportInventoryPdf = useMutation({
     mutationFn: async () => {
       const pointerTargets = collectPointerTargetsPayload(selectedVehicle?.id ?? null);
-      const payload: Record<string, unknown> = { pointer_targets: pointerTargets };
+      const pointerModeByView = collectPointerModePayload(
+        selectedVehicle?.id ?? null,
+        normalizedVehicleViews
+      );
+      const payload: Record<string, unknown> = {
+        pointer_targets: pointerTargets,
+        pointer_mode_by_view: pointerModeByView
+      };
 
       if (selectedVehicle) {
         payload.category_ids = [selectedVehicle.id];

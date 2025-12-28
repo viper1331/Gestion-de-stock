@@ -13,6 +13,7 @@ class VehiclePdfOptions(BaseModel):
     """Options provided by the frontend to customize the PDF output."""
 
     pointer_mode_enabled: bool = False
+    pointer_mode_by_view: dict[str, bool] | None = None
     hide_edit_buttons: bool = False
     theme: str = "default"
     include_footer: bool = True
@@ -31,6 +32,7 @@ class VehicleViewEntry:
     category_id: int | None
     category_name: str | None
     view_name: str
+    lot_label: str | None
     bubble_x: float | None
     bubble_y: float | None
     anchor_x: float | None
@@ -46,6 +48,7 @@ class VehicleView:
     background_path: Path | None
     background_photo_id: int | None
     entries: list[VehicleViewEntry]
+    vehicle_type: str | None
     pointer_mode: bool
     hide_edit_buttons: bool
     has_positions: bool

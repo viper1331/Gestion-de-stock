@@ -5,11 +5,16 @@ from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+import logging
+
 from backend.core import models
+from .html_renderer import render_vehicle_inventory_pdf_html
 from .layout import build_plan, render_page
 from .models import VehiclePdfOptions
 from .style_engine import PdfStyleEngine
 from .utils import PageCounter, PdfBuffer, format_date, page_size_for_orientation
+
+logger = logging.getLogger(__name__)
 
 
 def render_vehicle_inventory_pdf(
@@ -22,6 +27,18 @@ def render_vehicle_inventory_pdf(
     media_root: Path | None = None,
 ) -> bytes:
     """Public entry point for vehicle inventory PDF rendering."""
+
+    try:
+        return render_vehicle_inventory_pdf_html(
+            categories=categories,
+            items=items,
+            generated_at=generated_at,
+            pointer_targets=pointer_targets,
+            options=options,
+            media_root=media_root,
+        )
+    except RuntimeError as exc:
+        logger.warning("Falling back to ReportLab PDF renderer: %s", exc)
 
     buffer = PdfBuffer()
     canvas = buffer.build_canvas()
@@ -43,7 +60,8 @@ def render_vehicle_inventory_pdf(
         if options.include_footer:
             canvas.saveState()
             _, _, margin_bottom, margin_right = style_engine.margins
-            footer_label = f"Généré le {format_date(generated_at)} — Page {page_number}/{page_count}"
+            vehicle_label = page.view.category_name or "Véhicule"
+            footer_label = f"Généré le {format_date(generated_at)} — Page {page_number}/{page_count} — {vehicle_label}"
             canvas.setFont(*style_engine.font("small"))
             canvas.setFillColor(style_engine.color("muted"))
             canvas.drawRightString(canvas._pagesize[0] - margin_right, margin_bottom + style_engine.footer_height() / 2, footer_label)
