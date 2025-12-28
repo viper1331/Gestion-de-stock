@@ -1345,15 +1345,20 @@ def _update_remise_quantity(
 
 def _update_pharmacy_quantity(
     conn: sqlite3.Connection, pharmacy_item_id: int, delta: int
-) -> None:
+) -> bool:
     if delta == 0:
-        return
+        return True
     row = conn.execute(
         "SELECT quantity FROM pharmacy_items WHERE id = ?",
         (pharmacy_item_id,),
     ).fetchone()
     if row is None:
-        raise ValueError("Article de pharmacie introuvable")
+        logger.info(
+            "[VEHICLE_INVENTORY] Delete rowcount step=update-pharmacy-quantity pharmacy_item_id=%s rowcount=%s",
+            pharmacy_item_id,
+            0,
+        )
+        return False
     updated = row["quantity"] + delta
     if updated < 0:
         raise ValueError("Stock insuffisant en pharmacie pour cette affectation.")
@@ -1366,6 +1371,123 @@ def _update_pharmacy_quantity(
         pharmacy_item_id,
         cursor.rowcount,
     )
+    return cursor.rowcount > 0
+
+
+def resolve_or_create_pharmacy_item(
+    conn: sqlite3.Connection,
+    vehicle_row: dict,
+) -> int:
+    pharmacy_item_id = vehicle_row.get("pharmacy_item_id")
+    if pharmacy_item_id is not None:
+        row = conn.execute(
+            "SELECT id FROM pharmacy_items WHERE id = ?",
+            (pharmacy_item_id,),
+        ).fetchone()
+        if row is not None:
+            logger.info(
+                "[VEHICLE_INVENTORY] Delete step=resolve-pharmacy-item found_by=id pharmacy_item_id=%s",
+                pharmacy_item_id,
+            )
+            return row["id"]
+
+    try:
+        barcode = _normalize_barcode(vehicle_row.get("sku"))
+    except ValueError:
+        barcode = None
+
+    if barcode:
+        row = conn.execute(
+            "SELECT id FROM pharmacy_items WHERE barcode = ?",
+            (barcode,),
+        ).fetchone()
+        if row is not None:
+            logger.info(
+                "[VEHICLE_INVENTORY] Delete step=resolve-pharmacy-item found_by=sku pharmacy_item_id=%s",
+                row["id"],
+            )
+            return row["id"]
+
+    row = conn.execute(
+        """
+        SELECT id
+        FROM pharmacy_items
+        WHERE name = ? COLLATE NOCASE
+          AND category_id IS ?
+        """,
+        (vehicle_row.get("name"), vehicle_row.get("category_id")),
+    ).fetchone()
+    if row is not None:
+        logger.info(
+            "[VEHICLE_INVENTORY] Delete step=resolve-pharmacy-item found_by=name pharmacy_item_id=%s",
+            row["id"],
+        )
+        return row["id"]
+
+    low_stock_threshold = vehicle_row.get("low_stock_threshold") or 0
+    try:
+        cursor = conn.execute(
+            """
+            INSERT INTO pharmacy_items (
+                name,
+                dosage,
+                packaging,
+                barcode,
+                quantity,
+                low_stock_threshold,
+                expiration_date,
+                location,
+                category_id
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                vehicle_row.get("name"),
+                None,
+                None,
+                barcode,
+                0,
+                low_stock_threshold,
+                None,
+                None,
+                vehicle_row.get("category_id"),
+            ),
+        )
+    except sqlite3.IntegrityError:
+        if barcode:
+            row = conn.execute(
+                "SELECT id FROM pharmacy_items WHERE barcode = ?",
+                (barcode,),
+            ).fetchone()
+            if row is not None:
+                logger.info(
+                    "[VEHICLE_INVENTORY] Delete step=resolve-pharmacy-item found_by=sku pharmacy_item_id=%s",
+                    row["id"],
+                )
+                return row["id"]
+        row = conn.execute(
+            """
+            SELECT id
+            FROM pharmacy_items
+            WHERE name = ? COLLATE NOCASE
+              AND category_id IS ?
+            """,
+            (vehicle_row.get("name"), vehicle_row.get("category_id")),
+        ).fetchone()
+        if row is not None:
+            logger.info(
+                "[VEHICLE_INVENTORY] Delete step=resolve-pharmacy-item found_by=name pharmacy_item_id=%s",
+                row["id"],
+            )
+            return row["id"]
+        raise
+
+    pharmacy_item_id = cursor.lastrowid
+    logger.info(
+        "[VEHICLE_INVENTORY] Delete step=resolve-pharmacy-item found_by=created pharmacy_item_id=%s",
+        pharmacy_item_id,
+    )
+    return pharmacy_item_id
 
 
 def _restack_vehicle_item_template(
@@ -2483,11 +2605,12 @@ def delete_vehicle_item(item_id: int) -> bool:
                        quantity,
                        size,
                        vehicle_type,
+                       low_stock_threshold,
                        position_x,
                        position_y,
                        remise_item_id,
                        pharmacy_item_id,
-                       image_path,
+                        image_path,
                        lot_id,
                        category_id
                 FROM {config.tables.items}
@@ -2553,13 +2676,18 @@ def delete_vehicle_item(item_id: int) -> bool:
                 )
                 _update_remise_quantity(conn, row["remise_item_id"], quantity)
             elif row["pharmacy_item_id"] is not None:
+                pharmacy_item_id = resolve_or_create_pharmacy_item(conn, row)
                 logger.info(
                     "[VEHICLE_INVENTORY] Delete step=update-pharmacy-quantity id=%s pharmacy_item_id=%s delta=%s",
                     item_id,
-                    row["pharmacy_item_id"],
+                    pharmacy_item_id,
                     quantity,
                 )
-                _update_pharmacy_quantity(conn, row["pharmacy_item_id"], quantity)
+                updated = _update_pharmacy_quantity(conn, pharmacy_item_id, quantity)
+                if not updated:
+                    raise RuntimeError(
+                        "Echec de restitution : article pharmacie introuvable après résolution."
+                    )
 
             logger.info(
                 "[VEHICLE_INVENTORY] Delete step=delete-vehicle-item id=%s",
