@@ -5424,12 +5424,14 @@ def list_vehicle_library_items(
         return [
             models.VehicleLibraryItem(
                 id=row["id"],
+                pharmacy_item_id=row["id"],
                 name=row["name"],
                 sku=row["sku"],
-                category_id=row["category_id"],
+                category_id=None,
                 quantity=row["quantity"],
                 expiration_date=row["expiration_date"],
                 image_url=None,
+                vehicle_type="secours_a_personne",
                 track_low_stock=True,
                 low_stock_threshold=row["low_stock_threshold"],
             )

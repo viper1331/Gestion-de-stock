@@ -681,12 +681,14 @@ class PharmacyItem(PharmacyItemBase):
 
 class VehicleLibraryItem(BaseModel):
     id: int
+    pharmacy_item_id: int
     name: str
     sku: Optional[str] = Field(default=None, max_length=64)
     category_id: Optional[int] = Field(default=None, gt=0)
     quantity: int = Field(default=0, ge=0)
     expiration_date: Optional[date] = None
     image_url: Optional[str] = None
+    vehicle_type: Optional[str] = None
     track_low_stock: bool = True
     low_stock_threshold: int = Field(default=0, ge=0)
 

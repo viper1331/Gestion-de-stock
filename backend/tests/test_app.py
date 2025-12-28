@@ -2478,16 +2478,21 @@ def test_pharmacy_items_available_in_vehicle_library() -> None:
     assert item_resp.status_code == 201, item_resp.text
     pharmacy_item_id = item_resp.json()["id"]
 
-    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    vehicle_items_resp = client.get(
+        "/vehicle-inventory/library",
+        params={"vehicle_type": "secours_a_personne"},
+        headers=admin_headers,
+    )
     assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
     library_entries = [
         entry
         for entry in vehicle_items_resp.json()
-        if entry["pharmacy_item_id"] == pharmacy_item_id and entry["category_id"] is None
+        if entry["pharmacy_item_id"] == pharmacy_item_id
     ]
 
     assert library_entries, "Le matériel de pharmacie devrait être visible dans la bibliothèque."
     assert library_entries[0]["vehicle_type"] == "secours_a_personne"
+    assert library_entries[0]["category_id"] is None
 
 
 def test_vehicle_qr_visibility_toggle() -> None:
