@@ -35,6 +35,10 @@ from backend.core.logging_config import configure_logging
 from backend.core.services import _ensure_vehicle_pharmacy_templates
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
+from backend.services.pdf.vehicle_inventory.playwright_support import (
+    PLAYWRIGHT_OK,
+    maybe_install_chromium_on_startup,
+)
 from backend.core.system_config import get_effective_cors_origins, rebuild_cors_middleware
 from backend.ws import camera, voice
 
@@ -49,6 +53,11 @@ async def _lifespan(_: FastAPI):
     except sqlite3.IntegrityError:
         if logger:
             logger.warning("Vehicle pharmacy templates already exist; skipping seed.")
+    diagnostics = maybe_install_chromium_on_startup()
+    if diagnostics.status != PLAYWRIGHT_OK:
+        logger.warning(
+            "Playwright diagnostics at startup: status=%s", diagnostics.status
+        )
     await backup_scheduler.start()
     try:
         yield

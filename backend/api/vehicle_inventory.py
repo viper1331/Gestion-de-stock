@@ -14,6 +14,14 @@ from backend.api.auth import get_current_user
 from backend.core import db, models, services
 from backend.core.config import settings
 from backend.services.pdf import VehiclePdfOptions
+from backend.services.pdf.vehicle_inventory.playwright_support import (
+    PLAYWRIGHT_OK,
+    build_diagnostics_payload,
+    build_playwright_error_message,
+    check_playwright_status,
+    log_playwright_context,
+)
+from backend.services.pdf.vehicle_inventory.renderer import PlaywrightPdfError
 from backend.services import qrcode_service
 from backend.services.debug_service import load_debug_config
 
@@ -78,11 +86,18 @@ def _vehicle_inventory_pdf_response(
     *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
 ):
     _require_permission(user, action="view")
+    diagnostics = check_playwright_status()
+    if settings.PDF_RENDERER == "html" and diagnostics.status != PLAYWRIGHT_OK:
+        log_playwright_context(diagnostics.status)
+        raise HTTPException(status_code=503, detail=build_playwright_error_message(diagnostics.status))
     try:
         pdf_bytes = services.generate_vehicle_inventory_pdf(
             pointer_targets=pointer_targets,
             options=options,
         )
+    except PlaywrightPdfError as exc:
+        log_playwright_context(exc.status)
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     except FileNotFoundError:
         fallback_options = options.model_copy()
         fallback_options.table_fallback = True
@@ -115,6 +130,14 @@ async def export_vehicle_inventory_pdf_legacy(
     user: models.User = Depends(get_current_user),
 ):
     return _vehicle_inventory_pdf_response(pointer_targets=None, options=VehiclePdfOptions(), user=user)
+
+
+@router.get("/export/pdf/diagnostics")
+async def export_vehicle_inventory_pdf_diagnostics(
+    user: models.User = Depends(get_current_user),
+):
+    _require_permission(user, action="view")
+    return build_diagnostics_payload()
 
 
 @router.get("/{item_id}/qr-code")
