@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import html
 import io
+import asyncio
 import logging
 import os
 import asyncio
@@ -244,7 +245,7 @@ async def apply_pharmacy_lot_to_vehicle(
 ) -> None:
     _require_permission(user, action="edit")
     try:
-        services.apply_pharmacy_lot(payload)
+        await asyncio.to_thread(services.apply_pharmacy_lot, payload)
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400
