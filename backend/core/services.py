@@ -900,6 +900,19 @@ def _apply_schema_migrations() -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)"
         )
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS vehicle_pharmacy_lot_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_category_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+                lot_id INTEGER NOT NULL REFERENCES pharmacy_lots(id) ON DELETE CASCADE,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(vehicle_category_id, lot_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_vehicle_pharmacy_lot_assignments_vehicle
+            ON vehicle_pharmacy_lot_assignments(vehicle_category_id);
+            """
+        )
 
         _sync_vehicle_inventory_with_remise(conn)
 
@@ -2541,6 +2554,129 @@ def _ensure_vehicle_pharmacy_templates() -> None:
 
 def create_vehicle_item(payload: models.ItemCreate) -> models.Item:
     return _create_inventory_item_internal("vehicle_inventory", payload)
+
+
+def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
+    ensure_database_ready()
+    target_view = payload.target_view.strip() if payload.target_view else None
+    if target_view == "":
+        target_view = None
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_item_columns(conn)
+        _ensure_vehicle_category_columns(conn)
+        _ensure_pharmacy_lot_item_columns(conn)
+        _require_pharmacy_lot(conn, payload.lot_id)
+
+        vehicle_row = conn.execute(
+            "SELECT id, vehicle_type FROM vehicle_categories WHERE id = ?",
+            (payload.vehicle_id,),
+        ).fetchone()
+        if vehicle_row is None:
+            raise ValueError("Catégorie de véhicule introuvable")
+        if vehicle_row["vehicle_type"] and vehicle_row["vehicle_type"] != "secours_a_personne":
+            raise ValueError("Ce lot pharmacie est réservé aux véhicules VSAV.")
+
+        existing = conn.execute(
+            """
+            SELECT 1
+            FROM vehicle_pharmacy_lot_assignments
+            WHERE vehicle_category_id = ? AND lot_id = ?
+            """,
+            (payload.vehicle_id, payload.lot_id),
+        ).fetchone()
+        if existing:
+            raise ValueError("Ce lot pharmacie a déjà été appliqué à ce véhicule.")
+
+        lot_items = conn.execute(
+            """
+            SELECT pli.pharmacy_item_id,
+                   pli.quantity,
+                   pi.name,
+                   pi.barcode AS sku,
+                   pi.quantity AS available_quantity
+            FROM pharmacy_lot_items AS pli
+            JOIN pharmacy_items AS pi ON pi.id = pli.pharmacy_item_id
+            WHERE pli.lot_id = ?
+            ORDER BY pi.name COLLATE NOCASE
+            """,
+            (payload.lot_id,),
+        ).fetchall()
+        if not lot_items:
+            raise ValueError("Ce lot ne contient aucun matériel.")
+
+        missing_items: list[str] = []
+        for row in lot_items:
+            available = row["available_quantity"] or 0
+            required = row["quantity"] or 0
+            if available < required:
+                shortage = required - available
+                missing_items.append(f"{row['name']} ({shortage} manquant(s))")
+        if missing_items:
+            details = ", ".join(missing_items)
+            raise ValueError(
+                "Stock insuffisant en pharmacie pour appliquer ce lot. "
+                f"Manquants : {details}."
+            )
+
+        for row in lot_items:
+            pharmacy_item_id = row["pharmacy_item_id"]
+            sku = row["sku"] or f"PHARM-{pharmacy_item_id}"
+            insert_sku = f"{sku}-{uuid4().hex[:6]}"
+            conn.execute(
+                """
+                INSERT INTO vehicle_items (
+                    name,
+                    sku,
+                    category_id,
+                    vehicle_type,
+                    size,
+                    quantity,
+                    low_stock_threshold,
+                    supplier_id,
+                    remise_item_id,
+                    pharmacy_item_id,
+                    position_x,
+                    position_y,
+                    documentation_url,
+                    tutorial_url,
+                    shared_file_url,
+                    qr_token,
+                    show_in_qr,
+                    lot_id
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    row["name"],
+                    insert_sku,
+                    payload.vehicle_id,
+                    vehicle_row["vehicle_type"],
+                    target_view,
+                    row["quantity"],
+                    0,
+                    None,
+                    None,
+                    pharmacy_item_id,
+                    None,
+                    None,
+                    None,
+                    None,
+                    None,
+                    uuid4().hex,
+                    1,
+                    None,
+                ),
+            )
+            _update_pharmacy_quantity(conn, pharmacy_item_id, -row["quantity"])
+
+        conn.execute(
+            """
+            INSERT INTO vehicle_pharmacy_lot_assignments (vehicle_category_id, lot_id)
+            VALUES (?, ?)
+            """,
+            (payload.vehicle_id, payload.lot_id),
+        )
+
+        _persist_after_commit(conn, *_inventory_modules_to_persist("vehicle_inventory"))
 
 
 def assign_vehicle_item_from_remise(
@@ -5492,6 +5628,12 @@ def list_vehicle_library_items(
             )
             for row in cur.fetchall()
         ]
+
+
+def list_vehicle_pharmacy_lots(vehicle_type: str) -> list[models.PharmacyLotWithItems]:
+    if vehicle_type != "secours_a_personne":
+        return []
+    return list_pharmacy_lots_with_items()
 
 
 def _iter_module_barcode_values(

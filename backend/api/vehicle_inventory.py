@@ -79,6 +79,17 @@ async def list_vehicle_library(
     )
 
 
+@router.get("/library/lots", response_model=list[models.PharmacyLotWithItems])
+async def list_vehicle_library_lots(
+    vehicle_type: str = Query(..., description="Type de véhicule ciblé"),
+    user: models.User = Depends(get_current_user),
+) -> list[models.PharmacyLotWithItems]:
+    _require_permission(user, action="view")
+    if vehicle_type != "secours_a_personne":
+        return []
+    return services.list_vehicle_pharmacy_lots(vehicle_type)
+
+
 class VehicleInventoryExportOptions(VehiclePdfOptions):
     pointer_targets: dict[str, models.PointerTarget] | None = None
 
@@ -224,6 +235,20 @@ async def create_vehicle_item(
     except Exception:
         logger.error("[INVENTORY_DEBUG] Vehicle assignment failed", exc_info=True)
         raise
+
+
+@router.post("/apply-pharmacy-lot", status_code=204)
+async def apply_pharmacy_lot_to_vehicle(
+    payload: models.VehiclePharmacyLotApply,
+    user: models.User = Depends(get_current_user),
+) -> None:
+    _require_permission(user, action="edit")
+    try:
+        services.apply_pharmacy_lot(payload)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.post("/assign-from-remise", response_model=models.Item, status_code=201)

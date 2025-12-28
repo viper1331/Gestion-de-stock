@@ -120,6 +120,54 @@ interface RemiseLotWithItems extends RemiseLot {
   items: RemiseLotItem[];
 }
 
+interface PharmacyLot {
+  id: number;
+  name: string;
+  description: string | null;
+  created_at: string;
+  image_url: string | null;
+  item_count: number;
+  total_quantity: number;
+}
+
+interface PharmacyLotItem {
+  id: number;
+  lot_id: number;
+  pharmacy_item_id: number;
+  quantity: number;
+  compartment_name: string | null;
+  pharmacy_name: string;
+  pharmacy_sku: string;
+  available_quantity: number;
+}
+
+interface PharmacyLotWithItems extends PharmacyLot {
+  items: PharmacyLotItem[];
+}
+
+type LibraryLotSource = "remise" | "pharmacy";
+
+interface LibraryLotItem {
+  id: number;
+  name: string;
+  quantity: number;
+  available_quantity: number;
+  remise_item_id: number | null;
+  pharmacy_item_id: number | null;
+  sku: string | null;
+}
+
+interface LibraryLot {
+  id: number;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  item_count: number;
+  total_quantity: number;
+  items: LibraryLotItem[];
+  source: LibraryLotSource;
+}
+
 interface VehiclePhoto {
   id: number;
   image_url: string;
@@ -602,10 +650,21 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const { data: remiseLots = [], isLoading: isLoadingLots } = useQuery({
+  const { data: remiseLots = [], isLoading: isLoadingRemiseLots } = useQuery({
     queryKey: ["remise-lots-with-items"],
     queryFn: async () => {
       const response = await api.get<RemiseLotWithItems[]>("/remise-inventory/lots/with-items");
+      return response.data;
+    }
+  });
+
+  const { data: pharmacyLots = [], isLoading: isLoadingPharmacyLots } = useQuery({
+    queryKey: ["vehicle-library-lots", selectedVehicleType],
+    enabled: selectedVehicleType === "secours_a_personne",
+    queryFn: async () => {
+      const response = await api.get<PharmacyLotWithItems[]>("/vehicle-inventory/library/lots", {
+        params: { vehicle_type: "secours_a_personne" }
+      });
       return response.data;
     }
   });
@@ -620,6 +679,11 @@ export function VehicleInventoryPage() {
       return response.data;
     }
   });
+
+  const isLoadingLots =
+    selectedVehicleType === "secours_a_personne"
+      ? isLoadingPharmacyLots
+      : isLoadingRemiseLots;
 
   const { data: vehiclePhotos = [] } = useQuery({
     queryKey: ["vehicle-photos"],
@@ -914,20 +978,31 @@ export function VehicleInventoryPage() {
       view,
       position
     }: {
-      lot: RemiseLotWithItems;
+      lot: LibraryLot;
       categoryId: number;
       view: string;
       position: { x: number; y: number } | null;
     }) => {
-      const created: VehicleItem[] = [];
       const normalizedView = normalizeViewName(view);
+      if (lot.source === "pharmacy") {
+        await api.post("/vehicle-inventory/apply-pharmacy-lot", {
+          vehicle_id: categoryId,
+          lot_id: lot.id,
+          target_view: normalizedView
+        });
+        return { source: "pharmacy" as const };
+      }
+      const created: VehicleItem[] = [];
       const basePosition = position ?? { x: 0.5, y: 0.5 };
       const distributedPositions = generateLotPositions(basePosition, lot.items.length);
       for (const [index, item] of lot.items.entries()) {
+        if (!item.remise_item_id) {
+          throw new Error("Lot remise invalide.");
+        }
         const coords = distributedPositions[index] ?? null;
         const response = await api.post<VehicleItem>("/vehicle-inventory/", {
-          name: item.remise_name,
-          sku: item.remise_sku,
+          name: item.name,
+          sku: item.sku ?? `REM-${item.id}`,
           category_id: categoryId,
           size: normalizedView,
           quantity: item.quantity,
@@ -938,7 +1013,7 @@ export function VehicleInventoryPage() {
         });
         created.push(response.data);
       }
-      return created;
+      return { source: "remise" as const, created };
     },
     onSuccess: async (data, variables) => {
       logDebug("MUTATION SUCCESS", { data, vars: variables });
@@ -950,12 +1025,22 @@ export function VehicleInventoryPage() {
           ? `Le lot${lotName ? ` ${lotName}` : ""} a été ajouté au véhicule ${vehicleName}.`
           : "Le lot a été ajouté au véhicule."
       });
-      await Promise.all([
+      const invalidations = [
         queryClient.invalidateQueries({ queryKey: ["vehicle-items"] }),
-        queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
-        queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] }),
         queryClient.invalidateQueries({ queryKey: ["items"] })
-      ]);
+      ];
+      if (variables.lot.source === "pharmacy") {
+        invalidations.push(
+          queryClient.invalidateQueries({ queryKey: ["vehicle-library", selectedVehicleType] }),
+          queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots", selectedVehicleType] })
+        );
+      } else {
+        invalidations.push(
+          queryClient.invalidateQueries({ queryKey: ["remise-lots"] }),
+          queryClient.invalidateQueries({ queryKey: ["remise-lots-with-items"] })
+        );
+      }
+      await Promise.all(invalidations);
     },
     onError: (error) => {
       logDebug("MUTATION ERROR", error);
@@ -1330,6 +1415,52 @@ export function VehicleInventoryPage() {
     return map;
   }, [items]);
 
+  const remiseLibraryLots = useMemo<LibraryLot[]>(
+    () =>
+      remiseLots.map((lot) => ({
+        id: lot.id,
+        name: lot.name,
+        description: lot.description,
+        image_url: lot.image_url,
+        item_count: lot.item_count,
+        total_quantity: lot.total_quantity,
+        source: "remise",
+        items: lot.items.map((item) => ({
+          id: item.id,
+          name: item.remise_name,
+          quantity: item.quantity,
+          available_quantity: item.available_quantity,
+          remise_item_id: item.remise_item_id,
+          pharmacy_item_id: null,
+          sku: item.remise_sku
+        }))
+      })),
+    [remiseLots]
+  );
+
+  const pharmacyLibraryLots = useMemo<LibraryLot[]>(
+    () =>
+      pharmacyLots.map((lot) => ({
+        id: lot.id,
+        name: lot.name,
+        description: lot.description,
+        image_url: lot.image_url,
+        item_count: lot.item_count,
+        total_quantity: lot.total_quantity,
+        source: "pharmacy",
+        items: lot.items.map((item) => ({
+          id: item.id,
+          name: item.pharmacy_name,
+          quantity: item.quantity,
+          available_quantity: item.available_quantity,
+          remise_item_id: null,
+          pharmacy_item_id: item.pharmacy_item_id,
+          sku: item.pharmacy_sku
+        }))
+      })),
+    [pharmacyLots]
+  );
+
   const pharmacyLibraryInventoryItems = useMemo(
     () =>
       pharmacyLibraryItems.map((item) => ({
@@ -1421,21 +1552,32 @@ export function VehicleInventoryPage() {
   );
 
   const availableLots = useMemo(() => {
-    if (selectedVehicleType === "secours_a_personne") {
-      return [];
-    }
-    return remiseLots.filter(
-      (lot) =>
-        lot.items.length > 0 &&
-        lot.items.every(
-          (item) =>
-            item.quantity > 0 &&
-            item.available_quantity >= item.quantity &&
-            isCompatibleWithVehicle(remiseItemTypeMap.get(item.remise_item_id) ?? null)
+    const isVsav = selectedVehicleType === "secours_a_personne";
+    const sourceLots = isVsav ? pharmacyLibraryLots : remiseLibraryLots;
+    return sourceLots.filter((lot) => {
+      if (lot.items.length === 0) {
+        return false;
+      }
+      if (
+        lot.items.some(
+          (item) => item.quantity <= 0 || item.available_quantity < item.quantity
         )
-    );
+      ) {
+        return false;
+      }
+      if (isVsav) {
+        return true;
+      }
+      return lot.items.every((item) => {
+        if (!item.remise_item_id) {
+          return false;
+        }
+        return isCompatibleWithVehicle(remiseItemTypeMap.get(item.remise_item_id) ?? null);
+      });
+    });
   }, [
-    remiseLots,
+    pharmacyLibraryLots,
+    remiseLibraryLots,
     remiseItemTypeMap,
     isCompatibleWithVehicle,
     selectedVehicleType
@@ -2240,8 +2382,10 @@ export function VehicleInventoryPage() {
                   });
                   returnItemToLibrary(itemId);
                 }}
-                onDropLot={(lotId, categoryId) =>
-                  removeLotFromVehicle.mutate({ lotId, categoryId })
+                onDropLot={
+                  selectedVehicleType === "secours_a_personne"
+                    ? undefined
+                    : (lotId, categoryId) => removeLotFromVehicle.mutate({ lotId, categoryId })
                 }
                 onRemoveFromVehicle={(itemId) => {
                   logDebug("DROP EVENT", {
@@ -3483,12 +3627,12 @@ function VehicleItemsPanel({
 
 interface DroppableLibraryProps {
   items: VehicleItem[];
-  lots?: RemiseLotWithItems[];
+  lots?: LibraryLot[];
   isLoadingLots?: boolean;
   isAssigningLot?: boolean;
   vehicleName: string | null;
   vehicleType?: VehicleType | null;
-  onAssignLot?: (lot: RemiseLotWithItems) => void;
+  onAssignLot?: (lot: LibraryLot) => void;
   onDropItem: (itemId: number) => void;
   onDropLot?: (lotId: number, categoryId: number) => void;
   onRemoveFromVehicle: (itemId: number) => void;
@@ -3658,7 +3802,7 @@ function DroppableLibrary({
                 {lots.map((lot) => {
                   const lotTooltip =
                     lot.items.length > 0
-                      ? lot.items.map((entry) => `${entry.quantity} × ${entry.remise_name}`).join("\n")
+                      ? lot.items.map((entry) => `${entry.quantity} × ${entry.name}`).join("\n")
                       : "Ce lot est encore vide.";
                   const lotImageUrl = resolveMediaUrl(lot.image_url);
                   return (
@@ -3704,7 +3848,7 @@ function DroppableLibrary({
                       >
                         {lot.items.map((item) => (
                           <li key={item.id} className="flex items-center justify-between gap-2">
-                            <span className="truncate">{item.remise_name}</span>
+                            <span className="truncate">{item.name}</span>
                             <span className="text-[10px] text-slate-500 dark:text-slate-400">
                               {item.quantity} prévu(s) • {item.available_quantity} en stock
                             </span>
