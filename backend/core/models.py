@@ -63,7 +63,7 @@ class TokenPayload(BaseModel):
     type: str | None = None
 
 
-VehicleType = Literal["incendie", "secours_a_personne"]
+VehicleType = str
 
 
 class UserBase(BaseModel):
@@ -118,18 +118,21 @@ class Category(BaseModel):
     view_configs: list[VehicleViewConfig] | None = None
     image_url: str | None = None
     vehicle_type: VehicleType | None = None
+    extra: dict[str, object] = Field(default_factory=dict)
 
 
 class CategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     sizes: list[str] = Field(default_factory=list)
     vehicle_type: VehicleType | None = None
+    extra: dict[str, object] | None = None
 
 
 class CategoryUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     sizes: Optional[list[str]] = None
     vehicle_type: VehicleType | None = None
+    extra: dict[str, object] | None = None
 
 
 class Item(BaseModel):
@@ -161,6 +164,7 @@ class Item(BaseModel):
     show_in_qr: bool = True
     vehicle_type: VehicleType | None = None
     assigned_vehicle_names: list[str] = Field(default_factory=list)
+    extra: dict[str, object] = Field(default_factory=dict)
 
 
 class PointerTarget(BaseModel):
@@ -188,6 +192,7 @@ class ItemCreate(BaseModel):
     lot_id: Optional[int] = None
     show_in_qr: bool = True
     vehicle_type: VehicleType | None = None
+    extra: dict[str, object] | None = None
 
 
 class ItemUpdate(BaseModel):
@@ -211,6 +216,7 @@ class ItemUpdate(BaseModel):
     lot_id: Optional[int] = None
     show_in_qr: Optional[bool] = None
     vehicle_type: VehicleType | None = None
+    extra: dict[str, object] | None = None
 
 
 class VehicleAssignmentFromRemise(BaseModel):
@@ -265,6 +271,7 @@ class MovementCreate(BaseModel):
 class RemiseLotBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=256)
+    extra: dict[str, object] | None = None
 
 
 class RemiseLotCreate(RemiseLotBase):
@@ -274,6 +281,7 @@ class RemiseLotCreate(RemiseLotBase):
 class RemiseLotUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     description: Optional[str] = Field(default=None, max_length=256)
+    extra: dict[str, object] | None = None
 
 
 class RemiseLot(RemiseLotBase):
@@ -282,6 +290,7 @@ class RemiseLot(RemiseLotBase):
     image_url: str | None = None
     item_count: int = 0
     total_quantity: int = 0
+    extra: dict[str, object] = Field(default_factory=dict)
 
 
 class RemiseLotWithItems(RemiseLot):
@@ -309,6 +318,7 @@ class RemiseLotItem(RemiseLotItemBase):
 class PharmacyLotBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     description: str | None = Field(default=None, max_length=256)
+    extra: dict[str, object] | None = None
 
 
 class PharmacyLotCreate(PharmacyLotBase):
@@ -318,6 +328,7 @@ class PharmacyLotCreate(PharmacyLotBase):
 class PharmacyLotUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     description: Optional[str] = Field(default=None, max_length=256)
+    extra: dict[str, object] | None = None
 
 
 class PharmacyLot(PharmacyLotBase):
@@ -326,6 +337,7 @@ class PharmacyLot(PharmacyLotBase):
     image_url: str | None = None
     item_count: int = 0
     total_quantity: int = 0
+    extra: dict[str, object] = Field(default_factory=dict)
 
 
 class PharmacyLotWithItems(PharmacyLot):
@@ -671,6 +683,7 @@ class PharmacyItemBase(BaseModel):
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
     category_id: Optional[int] = Field(default=None, gt=0)
+    extra: dict[str, object] | None = None
 
 
 class PharmacyItemCreate(PharmacyItemBase):
@@ -687,10 +700,69 @@ class PharmacyItemUpdate(BaseModel):
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
     category_id: Optional[int] = Field(default=None, gt=0)
+    extra: dict[str, object] | None = None
 
 
 class PharmacyItem(PharmacyItemBase):
     id: int
+    extra: dict[str, object] = Field(default_factory=dict)
+
+
+class VehicleTypeEntry(BaseModel):
+    id: int
+    code: str
+    label: str
+    is_active: bool = True
+    created_at: datetime
+
+
+class VehicleTypeCreate(BaseModel):
+    code: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=128)
+    is_active: bool = True
+
+
+class VehicleTypeUpdate(BaseModel):
+    code: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    label: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    is_active: Optional[bool] = None
+
+
+class CustomFieldDefinition(BaseModel):
+    id: int
+    scope: str
+    key: str
+    label: str
+    field_type: str
+    required: bool = False
+    default_json: object | None = None
+    options_json: object | None = None
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class CustomFieldDefinitionCreate(BaseModel):
+    scope: str = Field(..., min_length=1, max_length=64)
+    key: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=128)
+    field_type: str = Field(..., min_length=1, max_length=32)
+    required: bool = False
+    default_json: object | None = None
+    options_json: object | None = None
+    is_active: bool = True
+    sort_order: int = 0
+
+
+class CustomFieldDefinitionUpdate(BaseModel):
+    scope: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    key: Optional[str] = Field(default=None, min_length=1, max_length=64)
+    label: Optional[str] = Field(default=None, min_length=1, max_length=128)
+    field_type: Optional[str] = Field(default=None, min_length=1, max_length=32)
+    required: Optional[bool] = None
+    default_json: object | None = None
+    options_json: object | None = None
+    is_active: Optional[bool] = None
+    sort_order: Optional[int] = None
 
 
 class VehicleLibraryItem(BaseModel):

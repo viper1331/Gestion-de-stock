@@ -163,7 +163,10 @@ async def create_pharmacy_lot(
     payload: models.PharmacyLotCreate, user: models.User = Depends(get_current_user)
 ) -> models.PharmacyLot:
     _require_permission(user, action="edit")
-    return services.create_pharmacy_lot(payload)
+    try:
+        return services.create_pharmacy_lot(payload)
+    except ValueError as exc:
+        raise _pharmacy_http_error(exc) from exc
 
 
 @router.put("/lots/{lot_id}", response_model=models.PharmacyLot)
@@ -268,5 +271,4 @@ async def remove_pharmacy_lot_item(
         services.remove_pharmacy_lot_item(lot_id, lot_item_id)
     except ValueError as exc:
         raise _pharmacy_http_error(exc) from exc
-
 

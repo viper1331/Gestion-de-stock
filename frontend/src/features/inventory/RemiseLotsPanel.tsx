@@ -1,8 +1,11 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "react";
 
+import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
+import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
+import { useAuth } from "../auth/useAuth";
 
 const LOT_CARDS_COLLAPSED_STORAGE_KEY = "remiseLots:lotCardsCollapsed";
 const STOCK_CARDS_COLLAPSED_STORAGE_KEY = "remiseLots:stockCardsCollapsed";
@@ -15,6 +18,7 @@ interface RemiseLot {
   image_url: string | null;
   item_count: number;
   total_quantity: number;
+  extra?: Record<string, unknown>;
 }
 
 interface RemiseLotItem {
@@ -43,6 +47,7 @@ interface RemiseLotWithItems extends RemiseLot {
 interface LotFormState {
   name: string;
   description: string;
+  extra: Record<string, unknown>;
 }
 
 interface LotItemFormState {
@@ -60,9 +65,11 @@ function formatDate(value: string) {
 }
 
 export function RemiseLotsPanel() {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
   const [selectedLotId, setSelectedLotId] = useState<number | null>(null);
-  const [lotForm, setLotForm] = useState<LotFormState>({ name: "", description: "" });
+  const [lotForm, setLotForm] = useState<LotFormState>({ name: "", description: "", extra: {} });
   const [editingLotId, setEditingLotId] = useState<number | null>(null);
   const [lotItemForm, setLotItemForm] = useState<LotItemFormState>({ remise_item_id: "", quantity: 1 });
   const [editQuantities, setEditQuantities] = useState<Record<number, number>>({});
@@ -102,6 +109,21 @@ export function RemiseLotsPanel() {
 
   const lots = lotsQuery.data ?? [];
 
+  const { data: customFieldDefinitions = [] } = useQuery({
+    queryKey: ["custom-fields", "remise_lots"],
+    queryFn: async () => {
+      const response = await api.get<CustomFieldDefinition[]>("/admin/custom-fields", {
+        params: { scope: "remise_lots" }
+      });
+      return response.data;
+    },
+    enabled: isAdmin
+  });
+  const activeCustomFields = useMemo(
+    () => customFieldDefinitions.filter((definition) => definition.is_active),
+    [customFieldDefinitions]
+  );
+
   const lotsWithItemsQuery = useQuery({
     queryKey: ["remise-lots-with-items"],
     queryFn: async () => {
@@ -117,6 +139,13 @@ export function RemiseLotsPanel() {
       setSelectedLotId(lots[0].id);
     }
   }, [lots, selectedLotId]);
+
+  useEffect(() => {
+    setLotForm((prev) => ({
+      ...prev,
+      extra: buildCustomFieldDefaults(activeCustomFields, prev.extra ?? {})
+    }));
+  }, [activeCustomFields]);
 
   const selectedLot = useMemo(
     () => lots.find((lot) => lot.id === selectedLotId) ?? null,
@@ -174,7 +203,11 @@ export function RemiseLotsPanel() {
 
   const resetLotForm = () => {
     setEditingLotId(null);
-    setLotForm({ name: "", description: "" });
+    setLotForm({
+      name: "",
+      description: "",
+      extra: buildCustomFieldDefaults(activeCustomFields, {})
+    });
   };
 
   const createLot = useMutation({
@@ -336,7 +369,8 @@ export function RemiseLotsPanel() {
     setError(null);
     const payload: LotFormState = {
       name: lotForm.name.trim(),
-      description: lotForm.description.trim()
+      description: lotForm.description.trim(),
+      extra: lotForm.extra
     };
     if (editingLotId) {
       await updateLot.mutateAsync({ lotId: editingLotId, payload });
@@ -479,7 +513,8 @@ export function RemiseLotsPanel() {
                         setEditingLotId(lot.id);
                         setLotForm({
                           name: lot.name,
-                          description: lot.description ?? ""
+                          description: lot.description ?? "",
+                          extra: buildCustomFieldDefaults(activeCustomFields, lot.extra ?? {})
                         });
                       }}
                       className={`w-full rounded-md border px-3 py-2 text-left transition ${
@@ -553,6 +588,21 @@ export function RemiseLotsPanel() {
                   placeholder="Détails internes ou destination du lot"
                 />
               </div>
+              {activeCustomFields.length > 0 ? (
+                <div className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Champs personnalisés
+                  </p>
+                  <div className="mt-3">
+                    <CustomFieldsForm
+                      definitions={activeCustomFields}
+                      values={lotForm.extra}
+                      onChange={(next) => setLotForm((prev) => ({ ...prev, extra: next }))}
+                      disabled={createLot.isPending || updateLot.isPending}
+                    />
+                  </div>
+                </div>
+              ) : null}
               <div className="flex items-center gap-2">
                 <button
                   type="submit"
@@ -893,4 +943,3 @@ function Alert({ tone, message }: { tone: "success" | "error"; message: string }
     </div>
   );
 }
-

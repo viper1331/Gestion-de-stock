@@ -7,7 +7,7 @@ import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { resolveMediaUrl } from "../../lib/media";
 import { useModuleTitle } from "../../lib/moduleTitles";
 
-type VehicleType = "incendie" | "secours_a_personne";
+type VehicleType = string;
 
 interface VehicleItem {
   id: number;

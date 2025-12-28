@@ -30,6 +30,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   barcodePrefix: "IS",
   exportPdfPath: "/remise-inventory/export/pdf",
   exportPdfFilenamePrefix: "inventaire_remises",
+  customFieldScope: "remise_items",
   itemNoun: {
     singular: "matériel",
     plural: "matériels",

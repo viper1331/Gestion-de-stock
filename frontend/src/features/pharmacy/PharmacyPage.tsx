@@ -2,7 +2,9 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ColumnManager } from "../../components/ColumnManager";
+import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
+import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { persistValue, readPersistedValue } from "../../lib/persist";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { useAuth } from "../auth/useAuth";
@@ -24,6 +26,7 @@ interface PharmacyItem {
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
+  extra?: Record<string, unknown>;
 }
 
 interface PharmacyPayload {
@@ -36,6 +39,7 @@ interface PharmacyPayload {
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
+  extra: Record<string, unknown>;
 }
 
 const EMPTY_PHARMACY_PAYLOAD: PharmacyPayload = {
@@ -47,7 +51,8 @@ const EMPTY_PHARMACY_PAYLOAD: PharmacyPayload = {
   low_stock_threshold: DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
   expiration_date: null,
   location: null,
-  category_id: null
+  category_id: null,
+  extra: {}
 };
 
 interface PharmacyFormDraft {
@@ -60,6 +65,7 @@ interface PharmacyFormDraft {
   expiration_date: string;
   location: string;
   category_id: string;
+  extra: Record<string, unknown>;
 }
 
 function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
@@ -73,7 +79,8 @@ function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
       payload.low_stock_threshold ?? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
     expiration_date: payload.expiration_date ?? "",
     location: payload.location ?? "",
-    category_id: payload.category_id ? String(payload.category_id) : ""
+    category_id: payload.category_id ? String(payload.category_id) : "",
+    extra: payload.extra ?? {}
   };
 }
 
@@ -194,6 +201,21 @@ export function PharmacyPage() {
     enabled: canView
   });
 
+  const { data: customFieldDefinitions = [] } = useQuery({
+    queryKey: ["custom-fields", "pharmacy_items"],
+    queryFn: async () => {
+      const response = await api.get<CustomFieldDefinition[]>("/admin/custom-fields", {
+        params: { scope: "pharmacy_items" }
+      });
+      return response.data;
+    },
+    enabled: user?.role === "admin"
+  });
+  const activeCustomFields = useMemo(
+    () => customFieldDefinitions.filter((definition) => definition.is_active),
+    [customFieldDefinitions]
+  );
+
   const existingBarcodes = useMemo<ExistingSkuEntry[]>(
     () =>
       items
@@ -311,6 +333,7 @@ export function PharmacyPage() {
   const apiBaseUrl = (api.defaults.baseURL ?? "").replace(/\/$/, "");
 
   const formValues = useMemo<PharmacyPayload>(() => {
+    const extraDefaults = buildCustomFieldDefaults(activeCustomFields, selected?.extra ?? {});
     if (formMode === "edit" && selected) {
       return {
         name: selected.name,
@@ -321,11 +344,12 @@ export function PharmacyPage() {
         low_stock_threshold: selected.low_stock_threshold,
         expiration_date: selected.expiration_date,
         location: selected.location,
-        category_id: selected.category_id
+        category_id: selected.category_id,
+        extra: extraDefaults
       };
     }
-    return { ...EMPTY_PHARMACY_PAYLOAD };
-  }, [formMode, selected]);
+    return { ...EMPTY_PHARMACY_PAYLOAD, extra: buildCustomFieldDefaults(activeCustomFields, {}) };
+  }, [activeCustomFields, formMode, selected]);
 
   const [draft, setDraft] = useState<PharmacyFormDraft>(() => createPharmacyFormDraft(formValues));
   const [isBarcodeAuto, setIsBarcodeAuto] = useState<boolean>(
@@ -435,7 +459,8 @@ export function PharmacyPage() {
       low_stock_threshold: normalizedThreshold,
       expiration_date: draft.expiration_date.trim() ? draft.expiration_date : null,
       location: draft.location.trim() ? draft.location.trim() : null,
-      category_id: draft.category_id.trim() ? Number(draft.category_id) : null
+      category_id: draft.category_id.trim() ? Number(draft.category_id) : null,
+      extra: draft.extra
     };
 
     setDraft((previous) => ({ ...previous, barcode: finalBarcode }));
@@ -446,7 +471,12 @@ export function PharmacyPage() {
       await updateItem.mutateAsync({ id: selected.id, payload });
     } else {
       await createItem.mutateAsync(payload);
-      setDraft(createPharmacyFormDraft(EMPTY_PHARMACY_PAYLOAD));
+      setDraft(
+        createPharmacyFormDraft({
+          ...EMPTY_PHARMACY_PAYLOAD,
+          extra: buildCustomFieldDefaults(activeCustomFields, {})
+        })
+      );
       setIsBarcodeAuto(true);
     }
   };
@@ -817,6 +847,21 @@ export function PharmacyPage() {
                     title="Emplacement de stockage (armoire, pièce...)"
                   />
                 </div>
+                {activeCustomFields.length > 0 ? (
+                  <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Champs personnalisés
+                    </p>
+                    <div className="mt-3">
+                      <CustomFieldsForm
+                        definitions={activeCustomFields}
+                        values={draft.extra}
+                        onChange={(next) => updateDraft({ extra: next })}
+                        disabled={createItem.isPending || updateItem.isPending}
+                      />
+                    </div>
+                  </div>
+                ) : null}
                 <div className="flex gap-2">
                   <button
                     type="submit"
@@ -1251,4 +1296,3 @@ function getExpirationStatus(value: string | null): ExpirationStatus {
 
   return null;
 }
-

@@ -32,6 +32,7 @@ export interface InventoryModuleConfig {
   barcodePrefix?: string;
   exportPdfPath?: string;
   exportPdfFilenamePrefix?: string;
+  customFieldScope?: string;
 }
 
 export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
