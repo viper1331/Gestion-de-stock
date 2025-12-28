@@ -542,6 +542,20 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const selectedVehicle = useMemo(
+    () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
+    [vehicles, selectedVehicleId]
+  );
+
+  const selectedVehicleType = selectedVehicle?.vehicle_type ?? null;
+
+  useEffect(() => {
+    logDebug("SELECTED VEHICLE TYPE", {
+      selectedVehicleId,
+      selectedVehicleType
+    });
+  }, [logDebug, selectedVehicleId, selectedVehicleType]);
+
   const vehicleFallbackMap = useMemo(() => {
     const map = new Map<number, string>();
     vehicles.forEach((vehicle, index) => {
@@ -572,7 +586,7 @@ export function VehicleInventoryPage() {
 
   const { data: pharmacyLibraryItems = [] } = useQuery({
     queryKey: ["vehicle-library", selectedVehicleType],
-    enabled: selectedVehicleType === "secours_a_personne",
+    enabled: !!selectedVehicle?.id && selectedVehicleType === "secours_a_personne",
     queryFn: async () => {
       const response = await api.get<VehicleLibraryItem[]>("/vehicle-inventory/library", {
         params: { vehicle_type: "secours_a_personne" }
@@ -1073,13 +1087,6 @@ export function VehicleInventoryPage() {
       setFeedback({ type: "error", text: message });
     }
   });
-
-  const selectedVehicle = useMemo(
-    () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
-    [vehicles, selectedVehicleId]
-  );
-
-  const selectedVehicleType = selectedVehicle?.vehicle_type ?? null;
 
   const selectedVehicleFallback = useMemo(() => {
     if (!selectedVehicle) {
