@@ -5378,6 +5378,65 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
         ]
 
 
+def list_vehicle_library_items(
+    vehicle_type: str,
+    search: str | None = None,
+    category_id: int | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+) -> list[models.VehicleLibraryItem]:
+    if vehicle_type != "secours_a_personne":
+        return []
+    ensure_database_ready()
+    filters = ["quantity > 0"]
+    params: list[object] = []
+    if search:
+        filters.append("(name LIKE ? OR barcode LIKE ?)")
+        like = f"%{search.strip()}%"
+        params.extend([like, like])
+    if category_id is not None:
+        filters.append("category_id = ?")
+        params.append(category_id)
+    where_clause = " AND ".join(filters)
+    query = f"""
+        SELECT id,
+               name,
+               barcode AS sku,
+               category_id,
+               quantity,
+               expiration_date,
+               low_stock_threshold
+        FROM pharmacy_items
+        WHERE {where_clause}
+        ORDER BY name COLLATE NOCASE
+    """
+    if limit is not None:
+        query += " LIMIT ?"
+        params.append(limit)
+        if offset is not None:
+            query += " OFFSET ?"
+            params.append(offset)
+    elif offset is not None:
+        query += " LIMIT -1 OFFSET ?"
+        params.append(offset)
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(query, params)
+        return [
+            models.VehicleLibraryItem(
+                id=row["id"],
+                name=row["name"],
+                sku=row["sku"],
+                category_id=row["category_id"],
+                quantity=row["quantity"],
+                expiration_date=row["expiration_date"],
+                image_url=None,
+                track_low_stock=True,
+                low_stock_threshold=row["low_stock_threshold"],
+            )
+            for row in cur.fetchall()
+        ]
+
+
 def _iter_module_barcode_values(
     conn: sqlite3.Connection, module: str, table: str, column: str
 ) -> Iterator[str]:
