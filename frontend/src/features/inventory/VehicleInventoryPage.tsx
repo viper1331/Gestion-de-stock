@@ -200,6 +200,12 @@ interface VehicleAppliedLot {
   created_at: string | null;
 }
 
+interface VehicleAppliedLotDeleteResult {
+  restored: boolean;
+  lot_id: number | null;
+  items_removed: number;
+}
+
 interface VehicleFormValues {
   name: string;
   sizes: string[];
@@ -755,7 +761,8 @@ export function VehicleInventoryPage() {
   const {
     data: items = [],
     isLoading: isLoadingItems,
-    error: itemsError
+    error: itemsError,
+    refetch: refetchVehicleItems
   } = useQuery({
     queryKey: ["vehicle-items"],
     queryFn: async () => {
@@ -772,12 +779,16 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const { data: pharmacyLots = [], isLoading: isLoadingPharmacyLots } = useQuery({
+  const {
+    data: pharmacyLots = [],
+    isLoading: isLoadingPharmacyLots,
+    refetch: refetchLibraryLots
+  } = useQuery({
     queryKey: ["vehicle-library-lots", selectedVehicleType],
     enabled: selectedVehicleType === "secours_a_personne",
     queryFn: async () => {
       const response = await api.get<PharmacyLotWithItems[]>("/vehicle-inventory/library/lots", {
-        params: { vehicle_type: "secours_a_personne" }
+        params: { vehicle_type: "secours_a_personne", vehicle_id: selectedVehicle?.id }
       });
       return response.data;
     }
@@ -1164,7 +1175,8 @@ export function VehicleInventoryPage() {
         invalidations.push(
           queryClient.invalidateQueries({ queryKey: ["vehicle-library", selectedVehicleType] }),
           queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots", selectedVehicleType] }),
-          queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] })
+          queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] }),
+          queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots-library"] })
         );
       } else {
         invalidations.push(
@@ -1251,6 +1263,37 @@ export function VehicleInventoryPage() {
     },
     onSettled: async () => {
       await queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] });
+    }
+  });
+
+  const removeAppliedLot = useMutation({
+    mutationFn: async (assignmentId: number) => {
+      const response = await api.delete<VehicleAppliedLotDeleteResult>(
+        `/vehicle-inventory/applied-lots/${assignmentId}`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setFeedback({
+        type: "success",
+        text: "Le lot appliqué a été retiré."
+      });
+      await Promise.all([
+        refetchAppliedLots(),
+        refetchAppliedLotsForLibrary(),
+        refetchLibraryLots(),
+        refetchVehicleItems()
+      ]);
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.data?.detail) {
+        setFeedback({ type: "error", text: error.response.data.detail });
+        return;
+      }
+      setFeedback({
+        type: "error",
+        text: "Impossible de retirer ce lot appliqué."
+      });
     }
   });
 
@@ -1419,7 +1462,7 @@ export function VehicleInventoryPage() {
     [selectedView]
   );
 
-  const { data: appliedLots = [] } = useQuery({
+  const { data: appliedLots = [], refetch: refetchAppliedLots } = useQuery({
     queryKey: ["vehicle-applied-lots", selectedVehicle?.id, normalizedSelectedView],
     enabled: !!selectedVehicle?.id,
     queryFn: async () => {
@@ -1427,6 +1470,19 @@ export function VehicleInventoryPage() {
         params: {
           vehicle_id: selectedVehicle?.id,
           view: normalizedSelectedView
+        }
+      });
+      return response.data;
+    }
+  });
+
+  const { data: appliedLotsForLibrary = [], refetch: refetchAppliedLotsForLibrary } = useQuery({
+    queryKey: ["vehicle-applied-lots-library", selectedVehicle?.id],
+    enabled: !!selectedVehicle?.id && selectedVehicleType === "secours_a_personne",
+    queryFn: async () => {
+      const response = await api.get<VehicleAppliedLot[]>("/vehicle-inventory/applied-lots", {
+        params: {
+          vehicle_id: selectedVehicle?.id
         }
       });
       return response.data;
@@ -1637,9 +1693,21 @@ export function VehicleInventoryPage() {
     [remiseLots]
   );
 
+  const filteredPharmacyLots = useMemo(() => {
+    if (appliedLotsForLibrary.length === 0) {
+      return pharmacyLots;
+    }
+    const appliedLotIds = new Set(
+      appliedLotsForLibrary
+        .map((lot) => lot.pharmacy_lot_id)
+        .filter((lotId): lotId is number => typeof lotId === "number")
+    );
+    return pharmacyLots.filter((lot) => !appliedLotIds.has(lot.id));
+  }, [appliedLotsForLibrary, pharmacyLots]);
+
   const pharmacyLibraryLots = useMemo<LibraryLot[]>(
     () =>
-      pharmacyLots.map((lot) => ({
+      filteredPharmacyLots.map((lot) => ({
         id: lot.id,
         name: lot.name,
         description: lot.description,
@@ -1657,7 +1725,7 @@ export function VehicleInventoryPage() {
           sku: item.pharmacy_sku
         }))
       })),
-    [pharmacyLots]
+    [filteredPharmacyLots]
   );
 
   const pharmacyLibraryInventoryItems = useMemo(
@@ -3503,6 +3571,8 @@ function VehicleCompartment({
                 isPointerTargetPending={pendingPointerKey === entry.key}
                 hidePointerActions={hidePointerActions}
                 onDragStartCapture={onDragStartCapture}
+                onRemoveAppliedLot={removeAppliedLot.mutate}
+                isRemovingAppliedLot={removeAppliedLot.isPending}
               />
             );
           })}
@@ -3648,6 +3718,8 @@ interface VehicleItemMarkerProps {
   isPointerTargetPending?: boolean;
   hidePointerActions?: boolean;
   onDragStartCapture?: () => void;
+  onRemoveAppliedLot?: (assignmentId: number) => void;
+  isRemovingAppliedLot?: boolean;
 }
 
 function VehicleItemMarker({
@@ -3659,7 +3731,9 @@ function VehicleItemMarker({
   onClearPointerTarget,
   isPointerTargetPending,
   hidePointerActions = false,
-  onDragStartCapture
+  onDragStartCapture,
+  onRemoveAppliedLot,
+  isRemovingAppliedLot = false
 }: VehicleItemMarkerProps) {
   const positionX = clamp(entry.position_x ?? 0.5, 0, 1);
   const positionY = clamp(entry.position_y ?? 0.5, 0, 1);
@@ -3683,6 +3757,15 @@ function VehicleItemMarker({
   const handleCloseAppliedLot = (event: MouseEvent<HTMLButtonElement>) => {
     event.preventDefault();
     event.stopPropagation();
+    setIsAppliedLotOpen(false);
+  };
+  const handleRemoveAppliedLot = (event: MouseEvent<HTMLButtonElement>) => {
+    event.preventDefault();
+    event.stopPropagation();
+    if (!entry.applied_lot_id || !onRemoveAppliedLot) {
+      return;
+    }
+    onRemoveAppliedLot(entry.applied_lot_id);
     setIsAppliedLotOpen(false);
   };
 
@@ -3882,13 +3965,28 @@ function VehicleItemMarker({
               </>
             )}
             {isAppliedLot ? (
-              <button
-                type="button"
-                onClick={handleToggleAppliedLot}
-                className="rounded-full border border-emerald-300 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/70 dark:text-emerald-200 dark:hover:bg-emerald-900/30"
-              >
-                Voir contenu
-              </button>
+              <>
+                <button
+                  type="button"
+                  onClick={handleToggleAppliedLot}
+                  className="rounded-full border border-emerald-300 px-2 py-0.5 text-[10px] font-semibold text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/70 dark:text-emerald-200 dark:hover:bg-emerald-900/30"
+                >
+                  Voir contenu
+                </button>
+                <button
+                  type="button"
+                  onClick={handleRemoveAppliedLot}
+                  disabled={!entry.applied_lot_id || !onRemoveAppliedLot || isRemovingAppliedLot}
+                  className={clsx(
+                    "rounded-full border px-2 py-0.5 text-[10px] font-semibold",
+                    isRemovingAppliedLot
+                      ? "border-slate-200 text-slate-400"
+                      : "border-rose-300 text-rose-600 hover:bg-rose-50 dark:border-rose-500/70 dark:text-rose-200 dark:hover:bg-rose-900/30"
+                  )}
+                >
+                  🗑 Retirer le lot
+                </button>
+              </>
             ) : null}
           </div>
         </div>
@@ -3954,6 +4052,19 @@ function VehicleItemMarker({
             className="rounded-full border border-emerald-300 px-2 py-0.5 text-emerald-700 hover:bg-emerald-50 dark:border-emerald-500/70 dark:text-emerald-200 dark:hover:bg-emerald-900/30"
           >
             Voir contenu
+          </button>
+          <button
+            type="button"
+            onClick={handleRemoveAppliedLot}
+            disabled={!entry.applied_lot_id || !onRemoveAppliedLot || isRemovingAppliedLot}
+            className={clsx(
+              "rounded-full border px-2 py-0.5",
+              isRemovingAppliedLot
+                ? "border-slate-200 text-slate-400"
+                : "border-rose-300 text-rose-600 hover:bg-rose-50 dark:border-rose-500/70 dark:text-rose-200 dark:hover:bg-rose-900/30"
+            )}
+          >
+            🗑 Retirer le lot
           </button>
         </div>
       ) : null}

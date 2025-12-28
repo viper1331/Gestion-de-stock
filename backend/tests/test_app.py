@@ -2002,6 +2002,101 @@ def test_incendie_lot_assignment_structure_regression() -> None:
     assert cleanup_remise_category.status_code == 204
 
 
+def test_incendie_lot_assignment_non_regression() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    remise_category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": f"Depot-{uuid4().hex[:6]}", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert remise_category_resp.status_code == 201, remise_category_resp.text
+    remise_category_id = remise_category_resp.json()["id"]
+
+    remise_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Lot incendie",
+            "sku": f"REM-{uuid4().hex[:6]}",
+            "quantity": 3,
+            "category_id": remise_category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert remise_item_resp.status_code == 201, remise_item_resp.text
+    remise_item_id = remise_item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": f"Lot-{uuid4().hex[:6]}", "description": "Lot incendie"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    add_lot_item = client.post(
+        f"/remise-inventory/lots/{lot_id}/items",
+        json={"remise_item_id": remise_item_id, "quantity": 1},
+        headers=admin_headers,
+    )
+    assert add_lot_item.status_code == 201, add_lot_item.text
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={
+            "name": f"Véhicule-{uuid4().hex[:6]}",
+            "sizes": ["VUE PRINCIPALE"],
+            "vehicle_type": "incendie",
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    assign_resp = client.post(
+        "/vehicle-inventory/",
+        json={
+            "name": "Lot incendie",
+            "sku": f"VEH-{uuid4().hex[:6]}",
+            "quantity": 1,
+            "category_id": vehicle_category_id,
+            "size": "VUE PRINCIPALE",
+            "remise_item_id": remise_item_id,
+            "lot_id": lot_id,
+        },
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    entry = next(
+        item
+        for item in vehicle_items_resp.json()
+        if item["category_id"] == vehicle_category_id and item["lot_id"] == lot_id
+    )
+    assert entry["is_in_lot"] is True
+    assert entry["applied_lot_assignment_id"] is None
+    assert entry["applied_lot_source"] is None
+
+    cleanup_lot = client.delete(f"/remise-inventory/lots/{lot_id}", headers=admin_headers)
+    assert cleanup_lot.status_code == 204
+
+    cleanup_remise_item = client.delete(
+        f"/remise-inventory/{remise_item_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_item.status_code == 204
+
+    cleanup_remise_category = client.delete(
+        f"/remise-inventory/categories/{remise_category_id}",
+        headers=admin_headers,
+    )
+    assert cleanup_remise_category.status_code == 204
+
+
 def test_vehicle_inventory_restack_when_removed_from_vehicle() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
@@ -2868,7 +2963,11 @@ def test_vehicle_applied_lot_update_and_delete() -> None:
         f"/vehicle-inventory/applied-lots/{assignment_id}",
         headers=admin_headers,
     )
-    assert delete_resp.status_code == 204, delete_resp.text
+    assert delete_resp.status_code == 200, delete_resp.text
+    delete_payload = delete_resp.json()
+    assert delete_payload["restored"] is True
+    assert delete_payload["lot_id"] == lot_id
+    assert delete_payload["items_removed"] == 1
 
     remaining_applied = client.get(
         "/vehicle-inventory/applied-lots",
@@ -2888,6 +2987,102 @@ def test_vehicle_applied_lot_update_and_delete() -> None:
     pharmacy_item_resp = client.get(f"/pharmacy/{pharmacy_item_id}", headers=admin_headers)
     assert pharmacy_item_resp.status_code == 200, pharmacy_item_resp.text
     assert pharmacy_item_resp.json()["quantity"] == 5
+
+
+def test_pharmacy_lot_can_be_applied_and_removed() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    vehicle_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={
+            "name": f"VSAV-{uuid4().hex[:6]}",
+            "sizes": ["VUE PRINCIPALE"],
+            "vehicle_type": "secours_a_personne",
+        },
+        headers=admin_headers,
+    )
+    assert vehicle_resp.status_code == 201, vehicle_resp.text
+    vehicle_id = vehicle_resp.json()["id"]
+
+    item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Lot apply remove",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "quantity": 4,
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    pharmacy_item_id = item_resp.json()["id"]
+
+    lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": f"Lot-apply-rem-{uuid4().hex[:6]}", "description": "Lot apply remove"},
+        headers=admin_headers,
+    )
+    assert lot_resp.status_code == 201, lot_resp.text
+    lot_id = lot_resp.json()["id"]
+
+    add_item_resp = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": pharmacy_item_id, "quantity": 2},
+        headers=admin_headers,
+    )
+    assert add_item_resp.status_code == 201, add_item_resp.text
+
+    apply_resp = client.post(
+        "/vehicle-inventory/apply-pharmacy-lot",
+        json={
+            "vehicle_id": vehicle_id,
+            "lot_id": lot_id,
+            "target_view": "VUE PRINCIPALE",
+        },
+        headers=admin_headers,
+    )
+    assert apply_resp.status_code == 200, apply_resp.text
+
+    library_resp = client.get(
+        "/vehicle-inventory/library/lots",
+        params={"vehicle_type": "secours_a_personne", "vehicle_id": vehicle_id},
+        headers=admin_headers,
+    )
+    assert library_resp.status_code == 200, library_resp.text
+    assert all(entry["id"] != lot_id for entry in library_resp.json())
+
+    applied_lots_resp = client.get(
+        "/vehicle-inventory/applied-lots",
+        params={"vehicle_id": vehicle_id},
+        headers=admin_headers,
+    )
+    assert applied_lots_resp.status_code == 200, applied_lots_resp.text
+    applied_lot_id = applied_lots_resp.json()[0]["id"]
+
+    delete_resp = client.delete(
+        f"/vehicle-inventory/applied-lots/{applied_lot_id}",
+        headers=admin_headers,
+    )
+    assert delete_resp.status_code == 200, delete_resp.text
+    delete_payload = delete_resp.json()
+    assert delete_payload["restored"] is True
+    assert delete_payload["lot_id"] == lot_id
+    assert delete_payload["items_removed"] == 1
+
+    library_after = client.get(
+        "/vehicle-inventory/library/lots",
+        params={"vehicle_type": "secours_a_personne", "vehicle_id": vehicle_id},
+        headers=admin_headers,
+    )
+    assert library_after.status_code == 200, library_after.text
+    assert any(entry["id"] == lot_id for entry in library_after.json())
+
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    assert all(
+        entry["applied_lot_assignment_id"] != applied_lot_id
+        for entry in vehicle_items_resp.json()
+    )
 
 
 def test_vehicle_qr_visibility_toggle() -> None:

@@ -83,12 +83,13 @@ async def list_vehicle_library(
 @router.get("/library/lots", response_model=list[models.PharmacyLotWithItems])
 async def list_vehicle_library_lots(
     vehicle_type: str = Query(..., description="Type de véhicule ciblé"),
+    vehicle_id: int | None = Query(default=None, ge=1, description="ID du véhicule ciblé"),
     user: models.User = Depends(get_current_user),
 ) -> list[models.PharmacyLotWithItems]:
     _require_permission(user, action="view")
     if vehicle_type != "secours_a_personne":
         return []
-    return services.list_vehicle_pharmacy_lots(vehicle_type)
+    return services.list_vehicle_pharmacy_lots(vehicle_type, vehicle_id=vehicle_id)
 
 
 class VehicleInventoryExportOptions(VehiclePdfOptions):
@@ -284,14 +285,17 @@ async def update_vehicle_applied_lot(
         raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
-@router.delete("/applied-lots/{assignment_id}", status_code=204)
+@router.delete(
+    "/applied-lots/{assignment_id}",
+    response_model=models.VehicleAppliedLotDeleteResult,
+)
 async def delete_vehicle_applied_lot(
     assignment_id: int,
     user: models.User = Depends(get_current_user),
-) -> None:
+) -> models.VehicleAppliedLotDeleteResult:
     _require_permission(user, action="edit")
     try:
-        services.delete_vehicle_applied_lot(assignment_id)
+        return services.delete_vehicle_applied_lot(assignment_id)
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400

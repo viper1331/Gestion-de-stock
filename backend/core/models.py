@@ -275,6 +275,12 @@ class VehicleAppliedLotUpdate(BaseModel):
     position_y: float = Field(..., ge=0.0, le=1.0)
 
 
+class VehicleAppliedLotDeleteResult(BaseModel):
+    restored: bool
+    lot_id: int | None = None
+    items_removed: int
+
+
 class Movement(BaseModel):
     id: int
     item_id: int
