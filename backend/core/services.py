@@ -7,7 +7,10 @@ import json
 import logging
 import math
 import os
+import random
 import shutil
+import threading
+import time
 from collections import defaultdict
 import sqlite3
 from dataclasses import dataclass
@@ -221,10 +224,44 @@ def _get_inventory_config(module: str) -> _InventoryModuleConfig:
 
 _INVENTORY_SNAPSHOT_DIR = db.DATA_DIR / "inventory_snapshots"
 _INVENTORY_SNAPSHOT_DIR.mkdir(parents=True, exist_ok=True)
+_INVENTORY_SNAPSHOT_LOCKS: defaultdict[str, threading.Lock] = defaultdict(threading.Lock)
 
 
 def _inventory_snapshot_path(module: str) -> Path:
     return _INVENTORY_SNAPSHOT_DIR / f"{module}_snapshot.json"
+
+
+def _replace_snapshot_file(tmp_path: Path, path: Path, module: str) -> None:
+    attempts = 3
+    for attempt in range(1, attempts + 1):
+        try:
+            tmp_path.replace(path)
+            return
+        except OSError as exc:
+            winerror = getattr(exc, "winerror", None)
+            is_win32_share = isinstance(exc, PermissionError) or winerror == 32
+            if not is_win32_share or attempt >= attempts:
+                logger.error(
+                    "[INVENTORY_SNAPSHOT] Replace failed pid=%s module=%s tmp=%s dest=%s",
+                    os.getpid(),
+                    module,
+                    tmp_path,
+                    path,
+                    exc_info=True,
+                )
+                raise
+            delay = 0.05 + random.random() * 0.1
+            logger.warning(
+                "[INVENTORY_SNAPSHOT] Replace retry pid=%s module=%s attempt=%s/%s tmp=%s dest=%s delay=%.3fs",
+                os.getpid(),
+                module,
+                attempt,
+                attempts,
+                tmp_path,
+                path,
+                delay,
+            )
+            time.sleep(delay)
 
 
 def _fetch_table_rows(conn: sqlite3.Connection, table: str) -> list[dict[str, Any]]:
@@ -244,9 +281,10 @@ def _persist_inventory_module(conn: sqlite3.Connection, module: str) -> None:
     }
     path = _inventory_snapshot_path(module)
     tmp_path = path.with_suffix(".tmp")
-    with open(tmp_path, "w", encoding="utf-8") as buffer:
-        json.dump(snapshot, buffer, ensure_ascii=False, indent=2)
-    tmp_path.replace(path)
+    with _INVENTORY_SNAPSHOT_LOCKS[module]:
+        with open(tmp_path, "w", encoding="utf-8") as buffer:
+            json.dump(snapshot, buffer, ensure_ascii=False, indent=2)
+        _replace_snapshot_file(tmp_path, path, module)
 
 
 def _inventory_modules_to_persist(module: str) -> tuple[str, ...]:
@@ -2416,7 +2454,7 @@ def update_vehicle_item(item_id: int, payload: models.ItemUpdate) -> models.Item
     return _update_inventory_item_internal("vehicle_inventory", item_id, payload)
 
 
-def delete_vehicle_item(item_id: int) -> None:
+def delete_vehicle_item(item_id: int) -> bool:
     ensure_database_ready()
     config = _get_inventory_config("vehicle_inventory")
     try:
@@ -2440,10 +2478,13 @@ def delete_vehicle_item(item_id: int) -> None:
             row = conn.execute(
                 f"""
                 SELECT id,
+                       name,
                        sku,
                        quantity,
                        size,
                        vehicle_type,
+                       position_x,
+                       position_y,
                        remise_item_id,
                        pharmacy_item_id,
                        image_path,
@@ -2456,16 +2497,20 @@ def delete_vehicle_item(item_id: int) -> None:
             ).fetchone()
             if row is None:
                 raise ValueError("Article introuvable")
+            row = dict(row)
+            safe_snapshot = {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "category_id": row.get("category_id"),
+                "vehicle_type": row.get("vehicle_type"),
+                "size": row.get("size"),
+                "quantity": row.get("quantity"),
+                "position_x": row.get("position_x"),
+                "position_y": row.get("position_y"),
+            }
             logger.info(
-                "[VEHICLE_INVENTORY] Delete row snapshot id=%s sku=%s qty=%s size=%s vehicle_type=%s pharmacy_item_id=%s remise_item_id=%s lot_id=%s",
-                row["id"],
-                row["sku"],
-                row["quantity"],
-                row["size"],
-                row.get("vehicle_type"),
-                row.get("pharmacy_item_id"),
-                row.get("remise_item_id"),
-                row.get("lot_id"),
+                "[VEHICLE_INVENTORY] Delete row snapshot %s",
+                safe_snapshot,
             )
             if row["lot_id"]:
                 raise ValueError(
@@ -2494,7 +2539,7 @@ def delete_vehicle_item(item_id: int) -> None:
                     _persist_after_commit(
                         conn, *_inventory_modules_to_persist("vehicle_inventory")
                     )
-                    return
+                    return True
                 raise ValueError(
                     "Impossible de restituer ce matériel : la quantité en véhicule est nulle."
                 )
@@ -2548,6 +2593,7 @@ def delete_vehicle_item(item_id: int) -> None:
             "quantity": quantity,
         },
     )
+    return True
 
 
 def list_remise_items(search: str | None = None) -> list[models.Item]:
