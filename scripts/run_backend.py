@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import logging
 import os
 import subprocess
 import sys
@@ -13,6 +14,9 @@ ROOT_DIR = Path(__file__).resolve().parents[1]
 BACKEND_DIR = ROOT_DIR / "backend"
 VENV_DIR = BACKEND_DIR / ".venv"
 REQUIREMENTS_FILE = BACKEND_DIR / "requirements.txt"
+LOGGER = logging.getLogger(__name__)
+
+logging.basicConfig(level=logging.INFO, format="%(message)s")
 
 
 def parse_args() -> argparse.Namespace:
@@ -54,6 +58,45 @@ def run_step(description: str, command: list[str], cwd: Path) -> None:
     subprocess.run(command, cwd=str(cwd), check=True)
 
 
+def _try_launch_playwright() -> bool:
+    try:
+        from playwright.sync_api import sync_playwright
+    except Exception:
+        return False
+
+    try:
+        with sync_playwright() as playwright:
+            browser = playwright.chromium.launch(headless=True)
+            browser.close()
+        return True
+    except Exception:
+        return False
+
+
+def ensure_playwright_ready() -> bool:
+    python_executable = sys.executable
+    if _try_launch_playwright():
+        LOGGER.info("[PDF] Playwright OK: chromium ready")
+        return True
+
+    if os.getenv("AUTO_INSTALL_PLAYWRIGHT") == "1":
+        LOGGER.info("[PDF] Auto-install enabled: installing playwright/chromium...")
+        subprocess.check_call(
+            [python_executable, "-m", "pip", "install", "-U", "playwright"]
+        )
+        subprocess.check_call([python_executable, "-m", "playwright", "install", "chromium"])
+        if _try_launch_playwright():
+            LOGGER.info("[PDF] Playwright OK: chromium ready")
+            return True
+
+    LOGGER.warning(
+        '[PDF] Playwright missing: run "%s -m pip install -U playwright" then "%s -m playwright install chromium"',
+        python_executable,
+        python_executable,
+    )
+    return False
+
+
 def main() -> int:
     args = parse_args()
     if not VENV_DIR.exists():
@@ -79,6 +122,8 @@ def main() -> int:
 
     if not args.skip_tests:
         run_step("Exécution des tests", [str(python_bin), "-m", "pytest"], BACKEND_DIR)
+
+    ensure_playwright_ready()
 
     command = [
         str(python_bin),
