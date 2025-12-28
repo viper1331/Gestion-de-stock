@@ -3425,26 +3425,27 @@ def delete_vehicle_applied_lot(assignment_id: int) -> models.VehicleAppliedLotDe
         ).fetchone()
         if row is None:
             raise ValueError("Lot appliqué introuvable")
+        if row["source"] != "pharmacy":
+            raise ValueError("Lot appliqué introuvable")
 
-        items = conn.execute(
+        item_rows = conn.execute(
             """
-            SELECT id, pharmacy_item_id, quantity
+            SELECT id
             FROM vehicle_items
-            WHERE applied_lot_assignment_id = ?
+            WHERE applied_lot_source = ? AND applied_lot_assignment_id = ?
             """,
-            (assignment_id,),
+            ("pharmacy", assignment_id),
         ).fetchall()
-        items_removed = len(items)
-        for item in items:
-            pharmacy_item_id = item["pharmacy_item_id"]
-            if pharmacy_item_id is None:
-                continue
-            _update_pharmacy_quantity(conn, pharmacy_item_id, item["quantity"])
+        item_ids = [int(item["id"]) for item in item_rows]
 
-        conn.execute(
-            "DELETE FROM vehicle_items WHERE applied_lot_assignment_id = ?",
-            (assignment_id,),
-        )
+    deleted_item_ids: list[int] = []
+    for item_id in item_ids:
+        delete_vehicle_item(item_id)
+        deleted_item_ids.append(item_id)
+
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_applied_lot_table(conn)
+        _ensure_vehicle_item_columns(conn)
         conn.execute("DELETE FROM vehicle_applied_lots WHERE id = ?", (assignment_id,))
 
         pharmacy_lot_id = row["pharmacy_lot_id"] if "pharmacy_lot_id" in row.keys() else None
@@ -3462,7 +3463,10 @@ def delete_vehicle_applied_lot(assignment_id: int) -> models.VehicleAppliedLotDe
         return models.VehicleAppliedLotDeleteResult(
             restored=True,
             lot_id=pharmacy_lot_id,
-            items_removed=items_removed,
+            items_removed=len(deleted_item_ids),
+            deleted_assignment_id=assignment_id,
+            deleted_item_ids=deleted_item_ids,
+            deleted_items_count=len(deleted_item_ids),
         )
 
 

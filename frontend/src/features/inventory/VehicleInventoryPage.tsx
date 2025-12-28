@@ -204,6 +204,9 @@ interface VehicleAppliedLotDeleteResult {
   restored: boolean;
   lot_id: number | null;
   items_removed: number;
+  deleted_assignment_id: number;
+  deleted_item_ids: number[];
+  deleted_items_count: number;
 }
 
 interface VehicleFormValues {
@@ -761,8 +764,7 @@ export function VehicleInventoryPage() {
   const {
     data: items = [],
     isLoading: isLoadingItems,
-    error: itemsError,
-    refetch: refetchVehicleItems
+    error: itemsError
   } = useQuery({
     queryKey: ["vehicle-items"],
     queryFn: async () => {
@@ -781,8 +783,7 @@ export function VehicleInventoryPage() {
 
   const {
     data: pharmacyLots = [],
-    isLoading: isLoadingPharmacyLots,
-    refetch: refetchLibraryLots
+    isLoading: isLoadingPharmacyLots
   } = useQuery({
     queryKey: ["vehicle-library-lots", selectedVehicleType],
     enabled: selectedVehicleType === "secours_a_personne",
@@ -1279,10 +1280,15 @@ export function VehicleInventoryPage() {
         text: "Le lot appliqué a été retiré."
       });
       await Promise.all([
-        refetchAppliedLots(),
-        refetchAppliedLotsForLibrary(),
-        refetchLibraryLots(),
-        refetchVehicleItems()
+        queryClient.invalidateQueries({
+          queryKey: ["vehicle-applied-lots", selectedVehicle?.id, normalizedSelectedView]
+        }),
+        queryClient.invalidateQueries({
+          queryKey: ["vehicle-applied-lots-library", selectedVehicle?.id]
+        }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-library", selectedVehicleType] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots", selectedVehicleType] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-items"] })
       ]);
     },
     onError: (error) => {
@@ -1462,7 +1468,7 @@ export function VehicleInventoryPage() {
     [selectedView]
   );
 
-  const { data: appliedLots = [], refetch: refetchAppliedLots } = useQuery({
+  const { data: appliedLots = [] } = useQuery({
     queryKey: ["vehicle-applied-lots", selectedVehicle?.id, normalizedSelectedView],
     enabled: !!selectedVehicle?.id,
     queryFn: async () => {
@@ -1476,7 +1482,7 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const { data: appliedLotsForLibrary = [], refetch: refetchAppliedLotsForLibrary } = useQuery({
+  const { data: appliedLotsForLibrary = [] } = useQuery({
     queryKey: ["vehicle-applied-lots-library", selectedVehicle?.id],
     enabled: !!selectedVehicle?.id && selectedVehicleType === "secours_a_personne",
     queryFn: async () => {

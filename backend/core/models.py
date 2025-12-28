@@ -279,6 +279,9 @@ class VehicleAppliedLotDeleteResult(BaseModel):
     restored: bool
     lot_id: int | None = None
     items_removed: int
+    deleted_assignment_id: int
+    deleted_item_ids: list[int]
+    deleted_items_count: int
 
 
 class Movement(BaseModel):

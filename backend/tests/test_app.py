@@ -2965,9 +2965,9 @@ def test_vehicle_applied_lot_update_and_delete() -> None:
     )
     assert delete_resp.status_code == 200, delete_resp.text
     delete_payload = delete_resp.json()
-    assert delete_payload["restored"] is True
-    assert delete_payload["lot_id"] == lot_id
-    assert delete_payload["items_removed"] == 1
+    assert delete_payload["deleted_assignment_id"] == assignment_id
+    assert delete_payload["deleted_items_count"] == 1
+    assert delete_payload["deleted_item_ids"]
 
     remaining_applied = client.get(
         "/vehicle-inventory/applied-lots",
@@ -3017,6 +3017,18 @@ def test_pharmacy_lot_can_be_applied_and_removed() -> None:
     assert item_resp.status_code == 201, item_resp.text
     pharmacy_item_id = item_resp.json()["id"]
 
+    second_item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Lot apply remove 2",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "quantity": 6,
+        },
+        headers=admin_headers,
+    )
+    assert second_item_resp.status_code == 201, second_item_resp.text
+    second_pharmacy_item_id = second_item_resp.json()["id"]
+
     lot_resp = client.post(
         "/pharmacy/lots/",
         json={"name": f"Lot-apply-rem-{uuid4().hex[:6]}", "description": "Lot apply remove"},
@@ -3028,6 +3040,13 @@ def test_pharmacy_lot_can_be_applied_and_removed() -> None:
     add_item_resp = client.post(
         f"/pharmacy/lots/{lot_id}/items",
         json={"pharmacy_item_id": pharmacy_item_id, "quantity": 2},
+        headers=admin_headers,
+    )
+    assert add_item_resp.status_code == 201, add_item_resp.text
+
+    add_item_resp = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": second_pharmacy_item_id, "quantity": 1},
         headers=admin_headers,
     )
     assert add_item_resp.status_code == 201, add_item_resp.text
@@ -3059,15 +3078,24 @@ def test_pharmacy_lot_can_be_applied_and_removed() -> None:
     assert applied_lots_resp.status_code == 200, applied_lots_resp.text
     applied_lot_id = applied_lots_resp.json()[0]["id"]
 
+    vehicle_items_resp = client.get("/vehicle-inventory/", headers=admin_headers)
+    assert vehicle_items_resp.status_code == 200, vehicle_items_resp.text
+    applied_items = [
+        entry
+        for entry in vehicle_items_resp.json()
+        if entry["applied_lot_assignment_id"] == applied_lot_id
+    ]
+    assert len(applied_items) == 2
+
     delete_resp = client.delete(
         f"/vehicle-inventory/applied-lots/{applied_lot_id}",
         headers=admin_headers,
     )
     assert delete_resp.status_code == 200, delete_resp.text
     delete_payload = delete_resp.json()
-    assert delete_payload["restored"] is True
-    assert delete_payload["lot_id"] == lot_id
-    assert delete_payload["items_removed"] == 1
+    assert delete_payload["deleted_assignment_id"] == applied_lot_id
+    assert delete_payload["deleted_items_count"] == 2
+    assert len(delete_payload["deleted_item_ids"]) == 2
 
     library_after = client.get(
         "/vehicle-inventory/library/lots",
@@ -3083,6 +3111,14 @@ def test_pharmacy_lot_can_be_applied_and_removed() -> None:
         entry["applied_lot_assignment_id"] != applied_lot_id
         for entry in vehicle_items_resp.json()
     )
+
+    pharmacy_item_resp = client.get(f"/pharmacy/{pharmacy_item_id}", headers=admin_headers)
+    assert pharmacy_item_resp.status_code == 200, pharmacy_item_resp.text
+    assert pharmacy_item_resp.json()["quantity"] == 4
+
+    second_item_check = client.get(f"/pharmacy/{second_pharmacy_item_id}", headers=admin_headers)
+    assert second_item_check.status_code == 200, second_item_check.text
+    assert second_item_check.json()["quantity"] == 6
 
 
 def test_vehicle_qr_visibility_toggle() -> None:
