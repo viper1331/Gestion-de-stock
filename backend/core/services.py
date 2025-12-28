@@ -2556,6 +2556,24 @@ def create_vehicle_item(payload: models.ItemCreate) -> models.Item:
     return _create_inventory_item_internal("vehicle_inventory", payload)
 
 
+def _generate_lot_positions(
+    base: models.PointerTarget, count: int
+) -> list[tuple[float, float]]:
+    if count <= 0:
+        return []
+    if count == 1:
+        return [(min(max(base.x, 0.0), 1.0), min(max(base.y, 0.0), 1.0))]
+
+    radius = min(0.18, 0.04 + count * 0.015)
+    positions: list[tuple[float, float]] = []
+    for index in range(count):
+        angle = (index / count) * math.pi * 2
+        x = min(max(base.x + math.cos(angle) * radius, 0.0), 1.0)
+        y = min(max(base.y + math.sin(angle) * radius, 0.0), 1.0)
+        positions.append((x, y))
+    return positions
+
+
 def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
     ensure_database_ready()
     target_view = payload.target_view.strip() if payload.target_view else None
@@ -2604,6 +2622,9 @@ def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
         if not lot_items:
             raise ValueError("Ce lot ne contient aucun matériel.")
 
+        base_position = payload.drop_position or models.PointerTarget(x=0.5, y=0.5)
+        distributed_positions = _generate_lot_positions(base_position, len(lot_items))
+
         missing_items: list[str] = []
         for row in lot_items:
             available = row["available_quantity"] or 0
@@ -2618,10 +2639,11 @@ def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
                 f"Manquants : {details}."
             )
 
-        for row in lot_items:
+        for index, row in enumerate(lot_items):
             pharmacy_item_id = row["pharmacy_item_id"]
             sku = row["sku"] or f"PHARM-{pharmacy_item_id}"
             insert_sku = f"{sku}-{uuid4().hex[:6]}"
+            position_x, position_y = distributed_positions[index]
             conn.execute(
                 """
                 INSERT INTO vehicle_items (
@@ -2656,8 +2678,8 @@ def apply_pharmacy_lot(payload: models.VehiclePharmacyLotApply) -> None:
                     None,
                     None,
                     pharmacy_item_id,
-                    None,
-                    None,
+                    position_x,
+                    position_y,
                     None,
                     None,
                     None,

@@ -241,6 +241,7 @@ class VehiclePharmacyLotApply(BaseModel):
     vehicle_id: int = Field(..., ge=1)
     lot_id: int = Field(..., ge=1)
     target_view: str | None = Field(default=None, max_length=128)
+    drop_position: PointerTarget | None = None
 
 
 class Movement(BaseModel):

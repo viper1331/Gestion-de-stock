@@ -2591,6 +2591,18 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
     assert item_resp.status_code == 201, item_resp.text
     pharmacy_item_id = item_resp.json()["id"]
 
+    second_item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Lot apply item second",
+            "barcode": f"PHARM-{uuid4().hex[:6]}",
+            "quantity": 3,
+        },
+        headers=admin_headers,
+    )
+    assert second_item_resp.status_code == 201, second_item_resp.text
+    pharmacy_item_id_second = second_item_resp.json()["id"]
+
     lot_resp = client.post(
         "/pharmacy/lots/",
         json={"name": f"Lot apply-{uuid4().hex[:6]}", "description": "Kit apply"},
@@ -2606,12 +2618,21 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
     )
     assert add_item_resp.status_code == 201, add_item_resp.text
 
+    add_item_resp_second = client.post(
+        f"/pharmacy/lots/{lot_id}/items",
+        json={"pharmacy_item_id": pharmacy_item_id_second, "quantity": 1},
+        headers=admin_headers,
+    )
+    assert add_item_resp_second.status_code == 201, add_item_resp_second.text
+
+    drop_position = {"x": 0.22, "y": 0.37}
     apply_resp = client.post(
         "/vehicle-inventory/apply-pharmacy-lot",
         json={
             "vehicle_id": vehicle_id,
             "lot_id": lot_id,
             "target_view": "VUE PRINCIPALE",
+            "drop_position": drop_position,
         },
         headers=admin_headers,
     )
@@ -2622,10 +2643,21 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
     vehicle_items = [
         entry
         for entry in vehicle_items_resp.json()
-        if entry["category_id"] == vehicle_id and entry["pharmacy_item_id"] == pharmacy_item_id
+        if entry["category_id"] == vehicle_id
+        and entry["pharmacy_item_id"] in {pharmacy_item_id, pharmacy_item_id_second}
     ]
     assert vehicle_items
-    assert vehicle_items[0]["quantity"] == 2
+    assert {entry["pharmacy_item_id"] for entry in vehicle_items} == {
+        pharmacy_item_id,
+        pharmacy_item_id_second,
+    }
+    for entry in vehicle_items:
+        assert entry["position_x"] is not None
+        assert entry["position_y"] is not None
+    avg_x = sum(entry["position_x"] for entry in vehicle_items) / len(vehicle_items)
+    avg_y = sum(entry["position_y"] for entry in vehicle_items) / len(vehicle_items)
+    assert abs(avg_x - drop_position["x"]) < 0.02
+    assert abs(avg_y - drop_position["y"]) < 0.02
 
     pharmacy_items_resp = client.get("/pharmacy/", headers=admin_headers)
     assert pharmacy_items_resp.status_code == 200, pharmacy_items_resp.text
@@ -2635,6 +2667,12 @@ def test_apply_pharmacy_lot_to_vehicle() -> None:
     )
     assert pharmacy_item is not None
     assert pharmacy_item["quantity"] == 2
+    second_pharmacy_item = next(
+        (entry for entry in pharmacy_items_resp.json() if entry["id"] == pharmacy_item_id_second),
+        None,
+    )
+    assert second_pharmacy_item is not None
+    assert second_pharmacy_item["quantity"] == 2
 
     duplicate_apply_resp = client.post(
         "/vehicle-inventory/apply-pharmacy-lot",

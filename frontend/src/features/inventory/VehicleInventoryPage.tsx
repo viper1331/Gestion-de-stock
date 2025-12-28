@@ -988,7 +988,8 @@ export function VehicleInventoryPage() {
         await api.post("/vehicle-inventory/apply-pharmacy-lot", {
           vehicle_id: categoryId,
           lot_id: lot.id,
-          target_view: normalizedView
+          target_view: normalizedView,
+          ...(position ? { drop_position: position } : {})
         });
         return { source: "pharmacy" as const };
       }
