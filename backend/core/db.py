@@ -4,6 +4,7 @@ from __future__ import annotations
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
+import logging
 import sqlite3
 from threading import RLock
 from typing import ContextManager
@@ -13,7 +14,10 @@ DATA_DIR = BASE_DIR / "data"
 USERS_DB_PATH = DATA_DIR / "users.db"
 STOCK_DB_PATH = DATA_DIR / "stock.db"
 
+logger = logging.getLogger(__name__)
+
 DATA_DIR.mkdir(parents=True, exist_ok=True)
+logger.info("[DB] STOCK_DB_PATH=%s", STOCK_DB_PATH.resolve())
 
 _db_lock = RLock()
 
