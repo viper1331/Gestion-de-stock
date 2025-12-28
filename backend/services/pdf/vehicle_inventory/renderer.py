@@ -9,7 +9,7 @@ import logging
 
 from backend.core import models
 from backend.core.config import settings
-from .html_renderer import render_vehicle_inventory_pdf_html
+from .html_renderer import render_vehicle_inventory_pdf_html_sync
 from .layout import build_plan, render_page
 from .models import VehiclePdfOptions
 from .playwright_support import (
@@ -54,7 +54,7 @@ def render_vehicle_inventory_pdf(
             message = build_playwright_error_message(diagnostics.status)
             raise PlaywrightPdfError(diagnostics.status, message)
         try:
-            return render_vehicle_inventory_pdf_html(
+            return render_vehicle_inventory_pdf_html_sync(
                 categories=categories,
                 items=items,
                 generated_at=generated_at,

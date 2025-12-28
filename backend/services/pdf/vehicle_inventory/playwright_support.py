@@ -3,8 +3,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import logging
+import os
 import platform
-import subprocess
+from pathlib import Path
 import sys
 from importlib import metadata
 
@@ -12,7 +13,7 @@ from backend.core.config import settings
 
 logger = logging.getLogger(__name__)
 
-PLAYWRIGHT_OK = "PLAYWRIGHT_OK"
+PLAYWRIGHT_OK = "READY"
 PLAYWRIGHT_MISSING = "PLAYWRIGHT_MISSING"
 BROWSER_MISSING = "BROWSER_MISSING"
 RENDERER_HTML = "html"
@@ -35,9 +36,27 @@ def _get_playwright_version() -> str | None:
         return None
 
 
+def _chromium_install_hint() -> str:
+    return f"{sys.executable} -m playwright install chromium"
+
+
+def _browser_installed() -> bool:
+    if platform.system().lower() == "windows":
+        local_appdata = os.environ.get("LOCALAPPDATA")
+        if not local_appdata:
+            return False
+        playwright_root = Path(local_appdata) / "ms-playwright"
+        return any(playwright_root.rglob("chrome-headless-shell.exe"))
+
+    playwright_root = Path.home() / ".cache" / "ms-playwright"
+    if not playwright_root.exists():
+        return False
+    return any(playwright_root.rglob("chrome-headless-shell"))
+
+
 def check_playwright_status() -> PlaywrightDiagnostics:
     try:
-        from playwright.sync_api import sync_playwright
+        import playwright  # noqa: F401
     except ImportError:
         return PlaywrightDiagnostics(
             status=PLAYWRIGHT_MISSING,
@@ -47,12 +66,11 @@ def check_playwright_status() -> PlaywrightDiagnostics:
         )
 
     version = _get_playwright_version()
-    try:
-        with sync_playwright() as playwright:
-            browser = playwright.chromium.launch()
-            browser.close()
-    except Exception as exc:  # pragma: no cover - depends on runtime
-        logger.warning("Playwright Chromium launch failed: %s", exc)
+    if not _browser_installed():
+        logger.warning(
+            "Playwright Chromium not found. Install with: %s",
+            _chromium_install_hint(),
+        )
         return PlaywrightDiagnostics(
             status=BROWSER_MISSING,
             playwright_available=True,
@@ -84,7 +102,7 @@ def build_playwright_error_message(status: str) -> str:
     if status == BROWSER_MISSING:
         return (
             "Chromium n'est pas installé pour Playwright. Installez-le avec : "
-            f"{sys.executable} -m playwright install chromium"
+            f"{_chromium_install_hint()}"
         )
     return "Playwright est disponible."
 
@@ -95,35 +113,10 @@ def log_playwright_context(status: str) -> None:
 
 def maybe_install_chromium_on_startup() -> PlaywrightDiagnostics:
     diagnostics = check_playwright_status()
-    if settings.PDF_RENDERER != RENDERER_AUTO:
-        return diagnostics
-
-    if diagnostics.status != BROWSER_MISSING:
-        return diagnostics
-
-    log_playwright_context(diagnostics.status)
-    install_command = [sys.executable, "-m", "playwright", "install", "chromium"]
-    logger.warning(
-        "Attempting Playwright Chromium installation with: %s",
-        " ".join(install_command),
-    )
-    try:
-        result = subprocess.run(install_command, check=False, capture_output=True, text=True)
-    except Exception as exc:
-        logger.error("Playwright Chromium installation failed: %s", exc)
-        return diagnostics
-
-    if result.returncode == 0:
-        logger.warning("Playwright Chromium installation succeeded.")
-    else:
-        logger.error(
-            "Playwright Chromium installation failed (code=%s). stdout=%s stderr=%s",
-            result.returncode,
-            result.stdout.strip(),
-            result.stderr.strip(),
-        )
-
-    return check_playwright_status()
+    if diagnostics.status == BROWSER_MISSING:
+        log_playwright_context(diagnostics.status)
+        logger.warning("Install Playwright Chromium with: %s", _chromium_install_hint())
+    return diagnostics
 
 
 def build_diagnostics_payload() -> dict[str, str | bool | None]:

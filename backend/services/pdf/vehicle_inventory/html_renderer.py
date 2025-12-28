@@ -19,7 +19,7 @@ VEHICLE_TYPE_LABELS = {
 }
 
 
-def render_vehicle_inventory_pdf_html(
+def render_vehicle_inventory_pdf_html_sync(
     *,
     categories: Iterable[models.Category],
     items: Iterable[models.Item],
@@ -44,6 +44,25 @@ def render_vehicle_inventory_pdf_html(
         options=options,
     )
     return _render_html_to_pdf(html_content)
+
+
+def render_vehicle_inventory_pdf_html(
+    *,
+    categories: Iterable[models.Category],
+    items: Iterable[models.Item],
+    generated_at: datetime,
+    pointer_targets: dict[str, models.PointerTarget] | None,
+    options: VehiclePdfOptions,
+    media_root: Path | None = None,
+) -> bytes:
+    return render_vehicle_inventory_pdf_html_sync(
+        categories=categories,
+        items=items,
+        generated_at=generated_at,
+        pointer_targets=pointer_targets,
+        options=options,
+        media_root=media_root,
+    )
 
 
 def _build_html(
