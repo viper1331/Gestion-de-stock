@@ -40,6 +40,14 @@ async def list_inbox(
     )
 
 
+@router.get("/sent", response_model=list[models.SentMessage])
+async def list_sent(
+    limit: int = Query(50, ge=1, le=200),
+    current_user: models.User = Depends(get_current_user),
+) -> list[models.SentMessage]:
+    return services.list_sent_messages(current_user, limit=limit)
+
+
 @router.post("/{message_id}/read", status_code=status.HTTP_200_OK)
 async def mark_read(
     message_id: int,

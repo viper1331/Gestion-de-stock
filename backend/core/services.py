@@ -3223,6 +3223,68 @@ def list_inbox_messages(
     ]
 
 
+def list_sent_messages(user: models.User, *, limit: int = 50) -> list[models.SentMessage]:
+    ensure_database_ready()
+    limit_value = max(1, min(limit, 200))
+
+    with db.get_users_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT
+                m.id,
+                m.category,
+                m.content,
+                m.created_at,
+                COUNT(mr.id) AS recipients_total,
+                SUM(CASE WHEN mr.read_at IS NOT NULL THEN 1 ELSE 0 END) AS recipients_read
+            FROM messages m
+            JOIN message_recipients mr ON mr.message_id = m.id
+            WHERE m.sender_username = ?
+            GROUP BY m.id
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            (user.username, limit_value),
+        ).fetchall()
+
+        if not rows:
+            return []
+
+        message_ids = [row["id"] for row in rows]
+        placeholders = ", ".join("?" for _ in message_ids)
+        recipient_rows = conn.execute(
+            f"""
+            SELECT message_id, recipient_username, read_at
+            FROM message_recipients
+            WHERE message_id IN ({placeholders})
+            ORDER BY recipient_username COLLATE NOCASE
+            """,
+            message_ids,
+        ).fetchall()
+
+    recipients_by_message: dict[int, list[models.MessageRecipientReadInfo]] = {msg_id: [] for msg_id in message_ids}
+    for row in recipient_rows:
+        recipients_by_message[int(row["message_id"])].append(
+            models.MessageRecipientReadInfo(
+                username=row["recipient_username"],
+                read_at=row["read_at"],
+            )
+        )
+
+    return [
+        models.SentMessage(
+            id=row["id"],
+            category=row["category"],
+            content=row["content"],
+            created_at=row["created_at"],
+            recipients_total=int(row["recipients_total"] or 0),
+            recipients_read=int(row["recipients_read"] or 0),
+            recipients=recipients_by_message.get(int(row["id"]), []),
+        )
+        for row in rows
+    ]
+
+
 def mark_message_read(message_id: int, user: models.User) -> None:
     ensure_database_ready()
     with db.get_users_connection() as conn:

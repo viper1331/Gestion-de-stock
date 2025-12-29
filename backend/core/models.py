@@ -114,6 +114,21 @@ class InboxMessage(BaseModel):
     is_archived: bool
 
 
+class MessageRecipientReadInfo(BaseModel):
+    username: str
+    read_at: str | None
+
+
+class SentMessage(BaseModel):
+    id: int
+    category: str
+    content: str
+    created_at: str
+    recipients_total: int
+    recipients_read: int
+    recipients: list[MessageRecipientReadInfo] | None = None
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str

@@ -26,6 +26,21 @@ interface MessageInboxEntry {
   is_archived: boolean;
 }
 
+interface SentMessageRecipient {
+  username: string;
+  read_at: string | null;
+}
+
+interface SentMessageEntry {
+  id: number;
+  category: string;
+  content: string;
+  created_at: string;
+  recipients_total: number;
+  recipients_read: number;
+  recipients: SentMessageRecipient[] | null;
+}
+
 interface SendMessagePayload {
   category: string;
   content: string;
@@ -43,6 +58,7 @@ export function MessagesPage() {
   const [includeArchived, setIncludeArchived] = useState<boolean>(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"inbox" | "sent">("inbox");
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
 
   const { data: availableRecipients = [], isFetching: isFetchingRecipients } = useQuery({
@@ -71,6 +87,23 @@ export function MessagesPage() {
     enabled: Boolean(user)
   });
 
+  const {
+    data: sentMessages = [],
+    isFetching: isFetchingSent
+  } = useQuery({
+    queryKey: ["messages", "sent"],
+    queryFn: async () => {
+      const response = await api.get<SentMessageEntry[]>("/messages/sent", {
+        params: {
+          limit: 50
+        }
+      });
+      return response.data;
+    },
+    enabled: Boolean(user) && activeTab === "sent",
+    refetchInterval: activeTab === "sent" ? 12000 : false
+  });
+
   const clearFeedbackLater = () => {
     window.setTimeout(() => {
       setMessage(null);
@@ -89,7 +122,10 @@ export function MessagesPage() {
       setContent("");
       setRecipients([]);
       setBroadcast(false);
-      await queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] }),
+        queryClient.invalidateQueries({ queryKey: ["messages", "sent"] })
+      ]);
       clearFeedbackLater();
       contentRef.current?.focus();
     },
@@ -112,7 +148,10 @@ export function MessagesPage() {
       await api.post(`/messages/${messageId}/read`);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] });
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] }),
+        queryClient.invalidateQueries({ queryKey: ["messages", "sent"] })
+      ]);
     }
   });
 
@@ -178,6 +217,7 @@ export function MessagesPage() {
   };
 
   const inboxIsEmpty = inboxMessages.length === 0 && !isFetchingInbox;
+  const sentIsEmpty = sentMessages.length === 0 && !isFetchingSent;
 
   return (
     <section className="space-y-6">
@@ -275,77 +315,150 @@ export function MessagesPage() {
         <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
           <header className="flex flex-wrap items-center justify-between gap-2">
             <div>
-              <h3 className="text-base font-semibold text-white">Boîte de réception</h3>
+              <h3 className="text-base font-semibold text-white">Messagerie</h3>
               <p className="text-xs text-slate-400">Vos 50 derniers messages.</p>
             </div>
-            <label className="flex items-center gap-2 text-xs text-slate-300">
-              <input
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
-                checked={includeArchived}
-                onChange={(event) => setIncludeArchived(event.target.checked)}
-              />
-              Afficher archives
-            </label>
+            <div className="flex items-center gap-2 text-xs">
+              <button
+                type="button"
+                onClick={() => setActiveTab("inbox")}
+                className={`rounded-md border px-3 py-1 font-semibold ${
+                  activeTab === "inbox"
+                    ? "border-indigo-400 bg-indigo-500/20 text-white"
+                    : "border-slate-700 text-slate-300 hover:border-indigo-400 hover:text-white"
+                }`}
+              >
+                Réception
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveTab("sent")}
+                className={`rounded-md border px-3 py-1 font-semibold ${
+                  activeTab === "sent"
+                    ? "border-indigo-400 bg-indigo-500/20 text-white"
+                    : "border-slate-700 text-slate-300 hover:border-indigo-400 hover:text-white"
+                }`}
+              >
+                Envoyés
+              </button>
+            </div>
           </header>
 
-          {isFetchingInbox ? (
+          {activeTab === "inbox" ? (
+            <>
+              <div className="mt-3 flex items-center justify-end">
+                <label className="flex items-center gap-2 text-xs text-slate-300">
+                  <input
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                    checked={includeArchived}
+                    onChange={(event) => setIncludeArchived(event.target.checked)}
+                  />
+                  Afficher archives
+                </label>
+              </div>
+              {isFetchingInbox ? (
+                <p className="mt-4 text-sm text-slate-400">Chargement des messages...</p>
+              ) : inboxIsEmpty ? (
+                <p className="mt-4 text-sm text-slate-400">Aucun message pour le moment.</p>
+              ) : (
+                <div className="mt-4 space-y-3">
+                  {inboxMessages.map((entry) => (
+                    <article
+                      key={entry.id}
+                      className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 shadow-sm"
+                    >
+                      <header className="flex flex-wrap items-center justify-between gap-2">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span
+                            className={`rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${
+                              entry.sender_role === "admin"
+                                ? "bg-red-500/20 text-red-200"
+                                : "bg-indigo-500/20 text-indigo-200"
+                            }`}
+                          >
+                            {entry.sender_username}
+                          </span>
+                          <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
+                            {entry.category}
+                          </span>
+                          {!entry.is_read ? (
+                            <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+                              Non lu
+                            </span>
+                          ) : null}
+                          {entry.is_archived ? (
+                            <span className="rounded border border-slate-600 px-2 py-0.5 text-[10px] text-slate-300">
+                              Archivé
+                            </span>
+                          ) : null}
+                        </div>
+                        <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
+                      </header>
+                      <p className="mt-3 text-sm text-slate-200">{entry.content}</p>
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                          onClick={() => markRead.mutate(entry.id)}
+                          disabled={entry.is_read || markRead.isPending}
+                        >
+                          Marquer comme lu
+                        </button>
+                        <button
+                          type="button"
+                          className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-red-400 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
+                          onClick={() => archiveMessage.mutate(entry.id)}
+                          disabled={entry.is_archived || archiveMessage.isPending}
+                        >
+                          Archiver
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </div>
+              )}
+            </>
+          ) : isFetchingSent ? (
             <p className="mt-4 text-sm text-slate-400">Chargement des messages...</p>
-          ) : inboxIsEmpty ? (
-            <p className="mt-4 text-sm text-slate-400">Aucun message pour le moment.</p>
+          ) : sentIsEmpty ? (
+            <p className="mt-4 text-sm text-slate-400">Aucun message envoyé pour le moment.</p>
           ) : (
             <div className="mt-4 space-y-3">
-              {inboxMessages.map((entry) => (
+              {sentMessages.map((entry) => (
                 <article
                   key={entry.id}
                   className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 shadow-sm"
                 >
                   <header className="flex flex-wrap items-center justify-between gap-2">
                     <div className="flex flex-wrap items-center gap-2">
-                      <span
-                        className={`rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${
-                          entry.sender_role === "admin"
-                            ? "bg-red-500/20 text-red-200"
-                            : "bg-indigo-500/20 text-indigo-200"
-                        }`}
-                      >
-                        {entry.sender_username}
-                      </span>
                       <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
                         {entry.category}
                       </span>
-                      {!entry.is_read ? (
-                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
-                          Non lu
-                        </span>
-                      ) : null}
-                      {entry.is_archived ? (
-                        <span className="rounded border border-slate-600 px-2 py-0.5 text-[10px] text-slate-300">
-                          Archivé
-                        </span>
-                      ) : null}
+                      <span className="rounded border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">
+                        Lu {entry.recipients_read}/{entry.recipients_total}
+                      </span>
                     </div>
                     <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
                   </header>
                   <p className="mt-3 text-sm text-slate-200">{entry.content}</p>
-                  <div className="mt-3 flex flex-wrap gap-2">
-                    <button
-                      type="button"
-                      className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                      onClick={() => markRead.mutate(entry.id)}
-                      disabled={entry.is_read || markRead.isPending}
-                    >
-                      Marquer comme lu
-                    </button>
-                    <button
-                      type="button"
-                      className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-red-400 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
-                      onClick={() => archiveMessage.mutate(entry.id)}
-                      disabled={entry.is_archived || archiveMessage.isPending}
-                    >
-                      Archiver
-                    </button>
-                  </div>
+                  {entry.recipients?.length ? (
+                    <details className="mt-3 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
+                      <summary className="cursor-pointer text-xs font-semibold text-slate-200">
+                        Détails des destinataires
+                      </summary>
+                      <ul className="mt-2 space-y-1">
+                        {entry.recipients.map((recipient) => (
+                          <li key={`${entry.id}-${recipient.username}`} className="flex flex-wrap gap-2">
+                            <span className="font-semibold text-white">{recipient.username}</span>
+                            <span className="text-slate-400">
+                              {recipient.read_at ? `Lu le ${formatDateTime(recipient.read_at)}` : "Non lu"}
+                            </span>
+                          </li>
+                        ))}
+                      </ul>
+                    </details>
+                  ) : null}
                 </article>
               ))}
             </div>
