@@ -3639,6 +3639,140 @@ def test_admin_settings_permissions() -> None:
     assert response.status_code == 403
 
 
+def test_sent_message_read_counts() -> None:
+    _create_user("sender_user", "password123")
+    _create_user("recipient_one", "password123")
+    _create_user("recipient_two", "password123")
+    headers = _login_headers("sender_user", "password123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    response = client.post(
+        "/messages/send",
+        json={
+            "category": "Info",
+            "content": "Message avec accusé",
+            "recipients": ["recipient_one", "recipient_two"],
+            "broadcast": False,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    message_id = response.json()["message_id"]
+
+    recipient_headers = _login_headers("recipient_one", "password123")
+    read_response = client.post(f"/messages/{message_id}/read", headers=recipient_headers)
+    assert read_response.status_code == 200, read_response.text
+
+    sent_response = client.get("/messages/sent", headers=headers)
+    assert sent_response.status_code == 200, sent_response.text
+    sent_entry = next(entry for entry in sent_response.json() if entry["id"] == message_id)
+    assert sent_entry["recipients_total"] == 2
+    assert sent_entry["recipients_read"] == 1
+
+
+def test_message_read_idempotent() -> None:
+    _create_user("sender_idempotent", "password123")
+    _create_user("recipient_idempotent", "password123")
+    headers = _login_headers("sender_idempotent", "password123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    response = client.post(
+        "/messages/send",
+        json={
+            "category": "Info",
+            "content": "Idempotent read",
+            "recipients": ["recipient_idempotent"],
+            "broadcast": False,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    message_id = response.json()["message_id"]
+
+    recipient_headers = _login_headers("recipient_idempotent", "password123")
+    first_read = client.post(f"/messages/{message_id}/read", headers=recipient_headers)
+    assert first_read.status_code == 200, first_read.text
+    with db.get_users_connection() as conn:
+        first_row = conn.execute(
+            """
+            SELECT read_at
+            FROM message_recipients
+            WHERE message_id = ? AND recipient_username = ?
+            """,
+            (message_id, "recipient_idempotent"),
+        ).fetchone()
+    assert first_row is not None
+    first_read_at = first_row["read_at"]
+    assert first_read_at is not None
+
+    second_read = client.post(f"/messages/{message_id}/read", headers=recipient_headers)
+    assert second_read.status_code == 200, second_read.text
+    with db.get_users_connection() as conn:
+        second_row = conn.execute(
+            """
+            SELECT read_at
+            FROM message_recipients
+            WHERE message_id = ? AND recipient_username = ?
+            """,
+            (message_id, "recipient_idempotent"),
+        ).fetchone()
+    assert second_row is not None
+    assert second_row["read_at"] == first_read_at
+
+
+def test_message_broadcast_read_counts() -> None:
+    _create_user("broadcast_sender", "password123")
+    _create_user("broadcast_recipient", "password123")
+    headers = _login_headers("broadcast_sender", "password123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    response = client.post(
+        "/messages/send",
+        json={
+            "category": "Info",
+            "content": "Broadcast read",
+            "recipients": [],
+            "broadcast": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    message_id = response.json()["message_id"]
+
+    recipient_headers = _login_headers("broadcast_recipient", "password123")
+    read_response = client.post(f"/messages/{message_id}/read", headers=recipient_headers)
+    assert read_response.status_code == 200, read_response.text
+
+    with db.get_users_connection() as conn:
+        total_row = conn.execute(
+            "SELECT COUNT(*) AS total FROM message_recipients WHERE message_id = ?",
+            (message_id,),
+        ).fetchone()
+    assert total_row is not None
+    expected_total = int(total_row["total"])
+
+    sent_response = client.get("/messages/sent", headers=headers)
+    assert sent_response.status_code == 200, sent_response.text
+    sent_entry = next(entry for entry in sent_response.json() if entry["id"] == message_id)
+    assert sent_entry["recipients_total"] == expected_total
+    assert sent_entry["recipients_read"] == 1
+
+
 def test_message_rate_limit_429() -> None:
     _create_user("recipient_user", "password123")
     headers = _login_headers("admin", "admin123")
