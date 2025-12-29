@@ -86,6 +86,34 @@ class UserUpdate(BaseModel):
     is_active: Optional[bool] = None
 
 
+class MessageRecipientInfo(BaseModel):
+    username: str
+    role: str
+
+
+class MessageSendRequest(BaseModel):
+    category: str
+    content: str
+    recipients: list[str] = Field(default_factory=list)
+    broadcast: bool = False
+
+
+class MessageSendResponse(BaseModel):
+    message_id: int
+    recipients_count: int
+
+
+class InboxMessage(BaseModel):
+    id: int
+    category: str
+    content: str
+    created_at: str
+    sender_username: str
+    sender_role: str
+    is_read: bool
+    is_archived: bool
+
+
 class LoginRequest(BaseModel):
     username: str
     password: str

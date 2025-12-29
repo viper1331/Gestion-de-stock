@@ -47,6 +47,8 @@ logger = logging.getLogger(__name__)
 
 _AUTO_PO_CLOSED_STATUSES = ("CANCELLED", "RECEIVED")
 
+MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
+
 _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("barcode", "Code-barres"),
     ("clothing", "Habillement"),
@@ -3003,6 +3005,236 @@ def list_users() -> list[models.User]:
             )
             for row in rows
         ]
+
+
+def list_message_recipients(current_user: models.User) -> list[models.MessageRecipientInfo]:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            """
+            SELECT username, role
+            FROM users
+            WHERE is_active = 1 AND username != ?
+            ORDER BY username COLLATE NOCASE
+            """,
+            (current_user.username,),
+        )
+        rows = cur.fetchall()
+    return [models.MessageRecipientInfo(username=row["username"], role=row["role"]) for row in rows]
+
+
+def send_message(payload: models.MessageSendRequest, sender: models.User) -> models.MessageSendResponse:
+    ensure_database_ready()
+    content = payload.content.strip()
+    category = payload.category.strip()
+    if not content:
+        raise ValueError("Le contenu du message est requis")
+    if not category:
+        raise ValueError("La catégorie est requise")
+
+    with db.get_users_connection() as conn:
+        if payload.broadcast:
+            cur = conn.execute(
+                "SELECT username FROM users WHERE is_active = 1 ORDER BY username COLLATE NOCASE"
+            )
+            recipients = [row["username"] for row in cur.fetchall()]
+        else:
+            recipients = [recipient.strip() for recipient in payload.recipients if recipient.strip()]
+
+        recipients = list(dict.fromkeys(recipients))
+        if not recipients:
+            raise ValueError("Aucun destinataire sélectionné")
+
+        placeholders = ", ".join("?" for _ in recipients)
+        cur = conn.execute(
+            f"""
+            SELECT username
+            FROM users
+            WHERE is_active = 1 AND username IN ({placeholders})
+            """,
+            recipients,
+        )
+        valid_recipients = [row["username"] for row in cur.fetchall()]
+        if not valid_recipients:
+            raise ValueError("Aucun destinataire valide")
+
+        cur = conn.execute(
+            """
+            INSERT INTO messages (sender_username, sender_role, category, content)
+            VALUES (?, ?, ?, ?)
+            """,
+            (sender.username, sender.role, category, content),
+        )
+        message_id = int(cur.lastrowid)
+        conn.executemany(
+            """
+            INSERT INTO message_recipients (message_id, recipient_username)
+            VALUES (?, ?)
+            """,
+            [(message_id, recipient) for recipient in valid_recipients],
+        )
+        conn.commit()
+
+        created_row = conn.execute(
+            "SELECT created_at FROM messages WHERE id = ?",
+            (message_id,),
+        ).fetchone()
+        created_at = created_row["created_at"] if created_row else None
+
+    _archive_message_safe(
+        message_id=message_id,
+        created_at=created_at,
+        sender_username=sender.username,
+        sender_role=sender.role,
+        recipients=valid_recipients,
+        category=category,
+        content=content,
+    )
+
+    return models.MessageSendResponse(message_id=message_id, recipients_count=len(valid_recipients))
+
+
+def list_inbox_messages(
+    user: models.User, *, limit: int = 50, include_archived: bool = False
+) -> list[models.InboxMessage]:
+    ensure_database_ready()
+    limit_value = max(1, min(limit, 200))
+    params: list[object] = [user.username]
+    archive_clause = ""
+    if not include_archived:
+        archive_clause = "AND mr.is_archived = 0"
+    params.append(limit_value)
+
+    with db.get_users_connection() as conn:
+        cur = conn.execute(
+            f"""
+            SELECT
+                m.id,
+                m.category,
+                m.content,
+                m.created_at,
+                m.sender_username,
+                m.sender_role,
+                mr.is_read,
+                mr.is_archived
+            FROM message_recipients mr
+            JOIN messages m ON m.id = mr.message_id
+            WHERE mr.recipient_username = ?
+            {archive_clause}
+            ORDER BY m.created_at DESC
+            LIMIT ?
+            """,
+            params,
+        )
+        rows = cur.fetchall()
+
+    return [
+        models.InboxMessage(
+            id=row["id"],
+            category=row["category"],
+            content=row["content"],
+            created_at=row["created_at"],
+            sender_username=row["sender_username"],
+            sender_role=row["sender_role"],
+            is_read=bool(row["is_read"]),
+            is_archived=bool(row["is_archived"]),
+        )
+        for row in rows
+    ]
+
+
+def mark_message_read(message_id: int, user: models.User) -> None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, is_read
+            FROM message_recipients
+            WHERE message_id = ? AND recipient_username = ?
+            """,
+            (message_id, user.username),
+        ).fetchone()
+        if not row:
+            raise PermissionError("Accès interdit")
+        if not row["is_read"]:
+            conn.execute(
+                """
+                UPDATE message_recipients
+                SET is_read = 1, read_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (row["id"],),
+            )
+            conn.commit()
+
+
+def archive_message(message_id: int, user: models.User) -> None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, is_archived
+            FROM message_recipients
+            WHERE message_id = ? AND recipient_username = ?
+            """,
+            (message_id, user.username),
+        ).fetchone()
+        if not row:
+            raise PermissionError("Accès interdit")
+        if not row["is_archived"]:
+            conn.execute(
+                """
+                UPDATE message_recipients
+                SET is_archived = 1, archived_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (row["id"],),
+            )
+            conn.commit()
+
+
+def _format_archive_timestamp(value: str | None) -> tuple[str, datetime]:
+    now = datetime.now(timezone.utc)
+    if not value:
+        return now.isoformat().replace("+00:00", "Z"), now
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return now.isoformat().replace("+00:00", "Z"), now
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc).isoformat().replace("+00:00", "Z"), parsed
+
+
+def _archive_message_safe(
+    *,
+    message_id: int,
+    created_at: str | None,
+    sender_username: str,
+    sender_role: str,
+    recipients: list[str],
+    category: str,
+    content: str,
+) -> None:
+    created_at_iso, created_at_dt = _format_archive_timestamp(created_at)
+    archive_month = created_at_dt.strftime("%Y-%m")
+    archive_dir = MESSAGE_ARCHIVE_ROOT / archive_month
+    archive_path = archive_dir / "messages.jsonl"
+    payload = {
+        "id": message_id,
+        "created_at": created_at_iso,
+        "sender_username": sender_username,
+        "sender_role": sender_role,
+        "recipients": recipients,
+        "category": category,
+        "content": content,
+    }
+    try:
+        archive_dir.mkdir(parents=True, exist_ok=True)
+        with archive_path.open("a", encoding="utf-8") as handle:
+            handle.write(json.dumps(payload, ensure_ascii=False) + "\n")
+    except OSError as exc:
+        logger.warning("Impossible d'archiver le message sur disque: %s", exc)
 
 
 def create_user(payload: models.UserCreate) -> models.User:

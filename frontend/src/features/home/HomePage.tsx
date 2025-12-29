@@ -83,6 +83,17 @@ interface RemiseItem {
   expiration_date: string | null;
 }
 
+interface InboxMessagePreview {
+  id: number;
+  category: string;
+  content: string;
+  created_at: string;
+  sender_username: string;
+  sender_role: "admin" | "user";
+  is_read: boolean;
+  is_archived: boolean;
+}
+
 type ExpirationStatus = "expired" | "expiring-soon" | null;
 
 export function HomePage() {
@@ -427,6 +438,20 @@ export function HomePage() {
     return "Impossible de récupérer l'état des mises à jour.";
   }, [isAdmin, isUpdateAvailabilityError, isUpdateStatusError, updateAvailabilityError, updateStatusError]);
 
+  const {
+    data: inboxMessages = [],
+    isFetching: isFetchingMessages
+  } = useQuery({
+    queryKey: ["messages", "inbox", "home"],
+    queryFn: async () => {
+      const response = await api.get<InboxMessagePreview[]>("/messages/inbox", {
+        params: { limit: 5, include_archived: false }
+      });
+      return response.data;
+    },
+    enabled: Boolean(user)
+  });
+
   const hasPendingUpdate = isAdmin
     ? Boolean(updateStatus?.pending_update)
     : Boolean(updateAvailability?.pending_update);
@@ -473,6 +498,54 @@ export function HomePage() {
           <p className="mt-2 text-sm leading-relaxed">{config.announcement}</p>
         </div>
       ) : null}
+
+      <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
+        <header className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h2 className="text-base font-semibold text-white">Messages</h2>
+            <p className="text-xs text-slate-400">Vos 5 derniers messages non archivés.</p>
+          </div>
+          <Link
+            to="/messages"
+            className="inline-flex items-center justify-center rounded-md border border-indigo-500 px-3 py-1.5 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-indigo-300"
+          >
+            Voir tout
+          </Link>
+        </header>
+        {isFetchingMessages ? (
+          <p className="mt-3 text-sm text-slate-400">Chargement des messages...</p>
+        ) : inboxMessages.length > 0 ? (
+          <ul className="mt-4 space-y-3">
+            {inboxMessages.map((entry) => (
+              <li key={`message-preview-${entry.id}`} className="rounded-lg border border-slate-800 bg-slate-950/60 p-3">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span
+                      className={`rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${getRoleTone(
+                        entry.sender_role
+                      )}`}
+                    >
+                      {entry.sender_username}
+                    </span>
+                    <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
+                      {entry.category}
+                    </span>
+                    {!entry.is_read ? (
+                      <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+                        Non lu
+                      </span>
+                    ) : null}
+                  </div>
+                  <span className="text-xs text-slate-500">{formatDate(entry.created_at)}</span>
+                </div>
+                <p className="mt-2 text-sm text-slate-200 line-clamp-2">{entry.content}</p>
+              </li>
+            ))}
+          </ul>
+        ) : (
+          <p className="mt-3 text-sm text-slate-400">Aucun message récent.</p>
+        )}
+      </section>
 
       {showLowStockSection ? (
         <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
@@ -739,6 +812,10 @@ export function HomePage() {
       ) : null}
     </section>
   );
+}
+
+function getRoleTone(role: "admin" | "user"): string {
+  return role === "admin" ? "bg-red-500/20 text-red-200" : "bg-indigo-500/20 text-indigo-200";
 }
 
 function getExpirationStatus(value: string | null): ExpirationStatus {
