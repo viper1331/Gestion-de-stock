@@ -49,6 +49,16 @@ _AUTO_PO_CLOSED_STATUSES = ("CANCELLED", "RECEIVED")
 
 MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
 
+_MESSAGE_RATE_LIMIT_DEFAULT_COUNT = 5
+_MESSAGE_RATE_LIMIT_DEFAULT_WINDOW_SECONDS = 60
+
+
+class MessageRateLimitError(RuntimeError):
+    def __init__(self, *, count: int, window_seconds: int) -> None:
+        self.count = count
+        self.window_seconds = window_seconds
+        super().__init__("Trop de messages envoyés. Réessayez dans quelques secondes.")
+
 _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("barcode", "Code-barres"),
     ("clothing", "Habillement"),
@@ -3023,6 +3033,64 @@ def list_message_recipients(current_user: models.User) -> list[models.MessageRec
     return [models.MessageRecipientInfo(username=row["username"], role=row["role"]) for row in rows]
 
 
+def _get_message_rate_limit_settings() -> tuple[int, int]:
+    raw_count = os.getenv("MESSAGE_RATE_LIMIT_COUNT")
+    raw_window = os.getenv("MESSAGE_RATE_LIMIT_WINDOW_SECONDS")
+    try:
+        max_count = int(raw_count) if raw_count else _MESSAGE_RATE_LIMIT_DEFAULT_COUNT
+    except ValueError:
+        max_count = _MESSAGE_RATE_LIMIT_DEFAULT_COUNT
+    try:
+        window_seconds = int(raw_window) if raw_window else _MESSAGE_RATE_LIMIT_DEFAULT_WINDOW_SECONDS
+    except ValueError:
+        window_seconds = _MESSAGE_RATE_LIMIT_DEFAULT_WINDOW_SECONDS
+    max_count = max(1, max_count)
+    window_seconds = max(1, window_seconds)
+    return max_count, window_seconds
+
+
+def _enforce_message_rate_limit(conn: sqlite3.Connection, sender_username: str) -> None:
+    max_count, window_seconds = _get_message_rate_limit_settings()
+    now_ts = int(time.time())
+    row = conn.execute(
+        """
+        SELECT window_start_ts, count
+        FROM message_rate_limits
+        WHERE sender_username = ?
+        """,
+        (sender_username,),
+    ).fetchone()
+    if row:
+        window_start = int(row["window_start_ts"])
+        count = int(row["count"])
+        if now_ts - window_start < window_seconds:
+            if count >= max_count:
+                logger.info(
+                    "[MESSAGE] rate_limit sender=%s count=%s window=%s",
+                    sender_username,
+                    count,
+                    window_seconds,
+                )
+                raise MessageRateLimitError(count=count, window_seconds=window_seconds)
+            conn.execute(
+                "UPDATE message_rate_limits SET count = ? WHERE sender_username = ?",
+                (count + 1, sender_username),
+            )
+            return
+        conn.execute(
+            "UPDATE message_rate_limits SET window_start_ts = ?, count = 1 WHERE sender_username = ?",
+            (now_ts, sender_username),
+        )
+        return
+    conn.execute(
+        """
+        INSERT INTO message_rate_limits (sender_username, window_start_ts, count)
+        VALUES (?, ?, 1)
+        """,
+        (sender_username, now_ts),
+    )
+
+
 def send_message(payload: models.MessageSendRequest, sender: models.User) -> models.MessageSendResponse:
     ensure_database_ready()
     content = payload.content.strip()
@@ -3058,6 +3126,8 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
         if not valid_recipients:
             raise ValueError("Aucun destinataire valide")
 
+        _enforce_message_rate_limit(conn, sender.username)
+
         cur = conn.execute(
             """
             INSERT INTO messages (sender_username, sender_role, category, content)
@@ -3089,6 +3159,16 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
         recipients=valid_recipients,
         category=category,
         content=content,
+    )
+
+    logger.info(
+        "[MESSAGE] send id=%s sender=%s role=%s recipients=%s broadcast=%s category=%s",
+        message_id,
+        sender.username,
+        sender.role,
+        len(valid_recipients),
+        payload.broadcast,
+        category,
     )
 
     return models.MessageSendResponse(message_id=message_id, recipients_count=len(valid_recipients))
@@ -3191,6 +3271,7 @@ def archive_message(message_id: int, user: models.User) -> None:
                 (row["id"],),
             )
             conn.commit()
+            logger.info("[MESSAGE] archive id=%s by=%s", message_id, user.username)
 
 
 def _format_archive_timestamp(value: str | None) -> tuple[str, datetime]:

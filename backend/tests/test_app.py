@@ -1,10 +1,12 @@
 import asyncio
 from contextlib import closing
+import json
 import sqlite3
 import sys
 import zipfile
 
 import io
+from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copy2
 from tempfile import TemporaryDirectory
@@ -64,6 +66,9 @@ def setup_module(_: object) -> None:
         conn.commit()
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM module_permissions")
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
         conn.execute("DELETE FROM users WHERE username != 'admin'")
         conn.commit()
 
@@ -3632,3 +3637,64 @@ def test_admin_settings_permissions() -> None:
     headers = _login_headers("settings_user", "password123")
     response = client.get("/admin/vehicle-types", headers=headers)
     assert response.status_code == 403
+
+
+def test_message_rate_limit_429() -> None:
+    _create_user("recipient_user", "password123")
+    headers = _login_headers("admin", "admin123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    payload = {
+        "category": "Info",
+        "content": "Message test",
+        "recipients": ["recipient_user"],
+        "broadcast": False,
+    }
+
+    for _ in range(5):
+        response = client.post("/messages/send", json=payload, headers=headers)
+        assert response.status_code == 201, response.text
+
+    response = client.post("/messages/send", json=payload, headers=headers)
+    assert response.status_code == 429, response.text
+    assert response.json()["detail"] == "Trop de messages envoyés. Réessayez dans quelques secondes."
+
+
+def test_message_broadcast_archive_jsonl() -> None:
+    _create_user("broadcast_recipient", "password123")
+    headers = _login_headers("admin", "admin123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.commit()
+
+    archive_month = datetime.now(timezone.utc).strftime("%Y-%m")
+    archive_path = services.MESSAGE_ARCHIVE_ROOT / archive_month / "messages.jsonl"
+    before_lines: list[str] = []
+    if archive_path.exists():
+        before_lines = archive_path.read_text(encoding="utf-8").splitlines()
+
+    response = client.post(
+        "/messages/send",
+        json={
+            "category": "Info",
+            "content": "Broadcast test",
+            "recipients": [],
+            "broadcast": True,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    message_id = response.json()["message_id"]
+
+    assert archive_path.exists()
+    after_lines = archive_path.read_text(encoding="utf-8").splitlines()
+    assert len(after_lines) >= len(before_lines) + 1
+    entries = [json.loads(line) for line in after_lines]
+    entry = next(item for item in entries if item["id"] == message_id)
+    assert "broadcast_recipient" in entry["recipients"]
