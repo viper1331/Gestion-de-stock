@@ -82,6 +82,11 @@ def init_databases() -> None:
                     read_at TIMESTAMP,
                     archived_at TIMESTAMP
                 );
+                CREATE TABLE IF NOT EXISTS message_rate_limits (
+                    sender_username TEXT PRIMARY KEY,
+                    window_start_ts INTEGER NOT NULL,
+                    count INTEGER NOT NULL
+                );
                 CREATE INDEX IF NOT EXISTS idx_messages_created_at
                 ON messages(created_at);
                 CREATE INDEX IF NOT EXISTS idx_message_recipients_recipient

@@ -21,6 +21,8 @@ async def send_message(
 ) -> models.MessageSendResponse:
     try:
         return services.send_message(payload, current_user)
+    except services.MessageRateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 

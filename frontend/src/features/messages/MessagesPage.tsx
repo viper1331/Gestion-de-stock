@@ -1,6 +1,7 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -42,6 +43,7 @@ export function MessagesPage() {
   const [includeArchived, setIncludeArchived] = useState<boolean>(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
 
   const { data: availableRecipients = [], isFetching: isFetchingRecipients } = useQuery({
     queryKey: ["messages", "recipients"],
@@ -81,17 +83,26 @@ export function MessagesPage() {
       const response = await api.post("/messages/send", payload);
       return response.data as { message_id: number; recipients_count: number };
     },
-    onSuccess: async (data) => {
-      setMessage(`Message envoyé à ${data.recipients_count} destinataire(s).`);
+    onSuccess: async () => {
+      setMessage("Message envoyé.");
       setError(null);
       setContent("");
       setRecipients([]);
       setBroadcast(false);
       await queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] });
       clearFeedbackLater();
+      contentRef.current?.focus();
     },
-    onError: () => {
-      setError("Impossible d'envoyer le message.");
+    onError: (err) => {
+      let errorMessage = "Impossible d'envoyer le message.";
+      if (err instanceof AxiosError) {
+        const status = err.response?.status;
+        const detail = (err.response?.data as { detail?: string } | undefined)?.detail;
+        if (status === 429 && detail) {
+          errorMessage = detail;
+        }
+      }
+      setError(errorMessage);
       clearFeedbackLater();
     }
   });
@@ -115,12 +126,28 @@ export function MessagesPage() {
   });
 
   const selectedRecipients = useMemo(() => new Set(recipients), [recipients]);
+  const trimmedContent = content.trim();
+  const isCategoryValid = category.trim().length > 0;
+  const hasRecipients = recipients.length > 0;
+  const canSend =
+    Boolean(trimmedContent) &&
+    isCategoryValid &&
+    (broadcast || hasRecipients) &&
+    !sendMessage.isPending;
+  const sendScopeLabel = broadcast
+    ? "Envoi à tous les utilisateurs"
+    : `Envoi à ${recipients.length} destinataire(s)`;
 
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const trimmedContent = content.trim();
     if (!trimmedContent) {
       setError("Veuillez saisir un message.");
+      clearFeedbackLater();
+      return;
+    }
+
+    if (!isCategoryValid) {
+      setError("Veuillez sélectionner une catégorie.");
       clearFeedbackLater();
       return;
     }
@@ -187,6 +214,7 @@ export function MessagesPage() {
                 value={content}
                 onChange={(event) => setContent(event.target.value)}
                 placeholder="Écrivez votre message..."
+                ref={contentRef}
               />
             </label>
 
@@ -232,11 +260,12 @@ export function MessagesPage() {
 
             {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
             {error ? <p className="text-sm text-red-300">{error}</p> : null}
+            <p className="text-xs text-slate-400">{sendScopeLabel}</p>
 
             <button
               type="submit"
               className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-              disabled={sendMessage.isPending}
+              disabled={!canSend}
             >
               {sendMessage.isPending ? "Envoi en cours..." : "Envoyer"}
             </button>
