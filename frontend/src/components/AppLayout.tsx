@@ -278,6 +278,27 @@ export function AppLayout() {
           ]
         },
         {
+          id: "communication",
+          label: "Communication",
+          tooltip: "Échanger des messages internes",
+          icon: "💬",
+          sections: [
+            {
+              id: "communication-messages",
+              label: "Messagerie",
+              tooltip: "Consulter et envoyer des messages internes",
+              links: [
+                {
+                  to: "/messages",
+                  label: "Messagerie",
+                  tooltip: "Ouvrir la messagerie interne",
+                  icon: "✉️"
+                }
+              ]
+            }
+          ]
+        },
+        {
           id: "support",
           label: "Support",
           tooltip: "Consulter les informations du programme",

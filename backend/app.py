@@ -30,6 +30,7 @@ from backend.api import (
     about,
     system_config as system_config_api,
     logs,
+    messages,
 )
 from backend.core.logging_config import configure_logging
 from backend.core.services import _ensure_vehicle_pharmacy_templates
@@ -95,6 +96,7 @@ app.include_router(updates.router, prefix="/updates", tags=["updates"])
 app.include_router(system_config_api.router, prefix="/system", tags=["system"])
 app.include_router(about.router, prefix="/about", tags=["about"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
+app.include_router(messages.router, prefix="/messages", tags=["messages"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
