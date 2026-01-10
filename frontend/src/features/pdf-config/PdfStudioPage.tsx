@@ -14,6 +14,7 @@ import {
   fetchPdfConfig,
   fetchPdfConfigMeta,
   previewPdfConfig,
+  normalizePdfExportConfig,
   updatePdfConfig
 } from "../../lib/pdfConfig";
 
@@ -168,6 +169,23 @@ const ensureColumns = (config: PdfConfig, meta?: PdfModuleMeta): PdfConfig => {
   };
 };
 
+const configSectionKeys: Array<keyof PdfConfig> = [
+  "format",
+  "branding",
+  "header",
+  "content",
+  "footer",
+  "watermark",
+  "filename",
+  "advanced",
+  "theme"
+];
+
+const collectNullSections = (config: Partial<PdfConfig> | null | undefined): string[] => {
+  if (!config) return ["<config>"];
+  return configSectionKeys.filter((key) => config[key] === null).map((key) => key.toString());
+};
+
 export function PdfStudioPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -194,8 +212,9 @@ export function PdfStudioPage() {
 
   useEffect(() => {
     if (!pdfConfig) return;
-    setDraft(pdfConfig);
-    setInitialConfig(pdfConfig);
+    const normalized = normalizePdfExportConfig(pdfConfig);
+    setDraft(normalized);
+    setInitialConfig(normalized);
     const moduleKeys = Object.keys(pdfConfig.module_meta ?? {});
     if (moduleKeys.length > 0 && selectedModule && selectedModule !== "global") {
       if (!moduleKeys.includes(selectedModule)) {
@@ -408,10 +427,37 @@ export function PdfStudioPage() {
   const saveMutation = useMutation({
     mutationFn: updatePdfConfig,
     onSuccess: (payload) => {
-      setDraft(payload);
-      setInitialConfig(payload);
+      const normalized = normalizePdfExportConfig(payload);
+      setDraft(normalized);
+      setInitialConfig(normalized);
     }
   });
+
+  const handleSave = useCallback(() => {
+    if (!draft) return;
+    const warnings: Array<{ scope: string; sections: string[] }> = [];
+    const globalNulls = collectNullSections(draft.global_config);
+    if (globalNulls.length > 0) {
+      warnings.push({ scope: "global_config", sections: globalNulls });
+    }
+    Object.entries(draft.modules ?? {}).forEach(([key, moduleConfig]) => {
+      const moduleNulls = collectNullSections(moduleConfig?.config as Partial<PdfConfig> | null | undefined);
+      if (moduleNulls.length > 0) {
+        warnings.push({ scope: `modules.${key}.config`, sections: moduleNulls });
+      }
+    });
+    Object.entries(draft.presets ?? {}).forEach(([key, preset]) => {
+      const presetNulls = collectNullSections(preset?.config as Partial<PdfConfig> | null | undefined);
+      if (presetNulls.length > 0) {
+        warnings.push({ scope: `presets.${key}.config`, sections: presetNulls });
+      }
+    });
+    if (warnings.length > 0) {
+      console.warn("[PdfStudioPage] Sections null détectées avant sauvegarde", warnings);
+    }
+    const safeDraft = normalizePdfExportConfig(draft);
+    saveMutation.mutate(safeDraft);
+  }, [draft, saveMutation]);
 
   const handleReset = () => {
     if (initialConfig) {
@@ -517,7 +563,7 @@ export function PdfStudioPage() {
           </button>
           <button
             type="button"
-            onClick={() => draft && saveMutation.mutate(draft)}
+            onClick={handleSave}
             className="rounded-md bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-500"
           >
             Enregistrer
