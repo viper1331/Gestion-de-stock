@@ -9,6 +9,8 @@ import {
   PdfModuleConfig,
   PdfModuleMeta,
   PdfThemeConfig,
+  DEFAULT_PDF_THEME,
+  deepMerge,
   fetchPdfConfig,
   fetchPdfConfigMeta,
   previewPdfConfig,
@@ -16,24 +18,7 @@ import {
 } from "../../lib/pdfConfig";
 
 const DEFAULT_PREVIEW_MESSAGE = "Utilisez le bouton Aperçu pour générer un PDF.";
-const DEFAULT_THEME: PdfThemeConfig = {
-  font_family: "Helvetica",
-  base_font_size: 10,
-  heading_font_size: 14,
-  text_color: "#111827",
-  muted_text_color: "#64748b",
-  accent_color: "#4f46e5",
-  table_header_bg: "#1f2937",
-  table_header_text: "#f8fafc",
-  table_row_alt_bg: "#f1f5f9",
-  border_color: "#e2e8f0",
-  background_mode: "none",
-  background_color: "#ffffff",
-  background_image: "",
-  background_opacity: 1,
-  background_fit: "cover",
-  background_position: "center"
-};
+const DEFAULT_THEME: PdfThemeConfig = DEFAULT_PDF_THEME;
 
 const LoadingState = () => (
   <section className="space-y-2">
@@ -138,26 +123,6 @@ const marginPresets: Record<string, PdfConfig["format"]["margins"]> = {
   normal: { top_mm: 15, right_mm: 15, bottom_mm: 15, left_mm: 15 },
   narrow: { top_mm: 10, right_mm: 10, bottom_mm: 10, left_mm: 10 },
   wide: { top_mm: 20, right_mm: 20, bottom_mm: 20, left_mm: 20 }
-};
-
-const deepMerge = <T,>(base: T, overrides?: Partial<T>): T => {
-  if (!overrides) return base;
-  const baseValue = base as Record<string, unknown>;
-  const result: Record<string, unknown> = { ...baseValue };
-  Object.entries(overrides).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
-      result[key] = value;
-      return;
-    }
-    if (value && typeof value === "object" && typeof baseValue[key] === "object") {
-      result[key] = deepMerge(baseValue[key], value as Partial<T>);
-      return;
-    }
-    if (value !== undefined) {
-      result[key] = value;
-    }
-  });
-  return result as T;
 };
 
 const cloneConfig = (config: PdfConfig): PdfConfig => JSON.parse(JSON.stringify(config)) as PdfConfig;

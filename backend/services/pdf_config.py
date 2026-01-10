@@ -343,11 +343,41 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
 def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     merged: dict[str, Any] = dict(base)
     for key, value in updates.items():
+        if value is None and isinstance(merged.get(key), dict):
+            continue
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge(merged[key], value)
         else:
             merged[key] = value
     return merged
+
+
+def _normalize_config_data(raw: dict[str, Any] | None, defaults: PdfConfig) -> dict[str, Any]:
+    return _deep_merge(defaults.model_dump(), raw or {})
+
+
+def _normalize_export_config_data(raw: dict[str, Any], defaults: PdfExportConfig) -> dict[str, Any]:
+    data = dict(raw)
+    global_config = _normalize_config_data(data.get("global_config"), defaults.global_config)
+    presets: dict[str, Any] = {}
+    for name, preset in (data.get("presets") or {}).items():
+        preset_data = dict(preset or {})
+        preset_data["config"] = _normalize_config_data(preset_data.get("config"), defaults.global_config)
+        presets[name] = preset_data
+    modules: dict[str, Any] = {}
+    for key, module in (data.get("modules") or {}).items():
+        module_data = dict(module or {})
+        override_global = bool(module_data.get("override_global"))
+        module_config = module_data.get("config")
+        if override_global:
+            module_data["config"] = _deep_merge(global_config, module_config or {})
+        else:
+            module_data["config"] = module_config or {}
+        modules[key] = module_data
+    data["global_config"] = global_config
+    data["presets"] = presets
+    data["modules"] = modules
+    return data
 
 
 def _apply_overrides(base: PdfConfig, overrides: PdfConfigOverrides) -> PdfConfig:
@@ -406,7 +436,8 @@ def get_pdf_export_config() -> PdfExportConfig:
     if isinstance(stored, PdfExportConfig):
         config = stored
     else:
-        config = PdfExportConfig.model_validate(stored)
+        normalized = _normalize_export_config_data(stored, defaults)
+        config = PdfExportConfig.model_validate(normalized)
 
     merged_presets = defaults.presets | config.presets
     module_meta = get_module_meta()
