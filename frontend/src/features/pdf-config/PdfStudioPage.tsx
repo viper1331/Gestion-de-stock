@@ -16,6 +16,31 @@ import {
 } from "../../lib/pdfConfig";
 
 const DEFAULT_PREVIEW_MESSAGE = "Utilisez le bouton Aperçu pour générer un PDF.";
+const DEFAULT_THEME: PdfThemeConfig = {
+  font_family: "Helvetica",
+  base_font_size: 10,
+  heading_font_size: 14,
+  text_color: "#111827",
+  muted_text_color: "#64748b",
+  accent_color: "#4f46e5",
+  table_header_bg: "#1f2937",
+  table_header_text: "#f8fafc",
+  table_row_alt_bg: "#f1f5f9",
+  border_color: "#e2e8f0",
+  background_mode: "none",
+  background_color: "#ffffff",
+  background_image: "",
+  background_opacity: 1,
+  background_fit: "cover",
+  background_position: "center"
+};
+
+const LoadingState = () => (
+  <section className="space-y-2">
+    <h2 className="text-xl font-semibold text-white">PDF Studio</h2>
+    <p className="text-sm text-slate-400">Chargement des configurations...</p>
+  </section>
+);
 
 const toHexColor = (value: string, fallback = "#000000"): string => {
   const trimmed = value.trim();
@@ -137,6 +162,9 @@ const deepMerge = <T,>(base: T, overrides?: Partial<T>): T => {
 
 const cloneConfig = (config: PdfConfig): PdfConfig => JSON.parse(JSON.stringify(config)) as PdfConfig;
 
+const mergeThemes = (...themes: Array<Partial<PdfThemeConfig> | null | undefined>): PdfThemeConfig =>
+  themes.reduce<PdfThemeConfig>((acc, theme) => ({ ...acc, ...(theme ?? {}) }), { ...DEFAULT_THEME });
+
 const resolveModuleConfig = (
   exportConfig: PdfExportConfig,
   moduleKey: string,
@@ -178,16 +206,17 @@ const ensureColumns = (config: PdfConfig, meta?: PdfModuleMeta): PdfConfig => {
 export function PdfStudioPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
-  const { data, isFetching } = useQuery({
+  const { data: pdfConfig, isFetching, isLoading: isConfigLoading } = useQuery({
     queryKey: ["pdf-config"],
     queryFn: fetchPdfConfig,
     enabled: isAdmin
   });
-  const { data: configMeta } = useQuery({
+  const { data: configMeta, isLoading: isMetaLoading } = useQuery({
     queryKey: ["pdf-config-meta"],
     queryFn: fetchPdfConfigMeta,
     enabled: isAdmin
   });
+  const isLoading = isConfigLoading || isMetaLoading;
   const [draft, setDraft] = useState<PdfExportConfig | null>(null);
   const [initialConfig, setInitialConfig] = useState<PdfExportConfig | null>(null);
   const [selectedModule, setSelectedModule] = useState<string>("global");
@@ -199,20 +228,20 @@ export function PdfStudioPage() {
   const debounceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!data) return;
-    setDraft(data);
-    setInitialConfig(data);
-    const moduleKeys = Object.keys(data.module_meta ?? {});
+    if (!pdfConfig) return;
+    setDraft(pdfConfig);
+    setInitialConfig(pdfConfig);
+    const moduleKeys = Object.keys(pdfConfig.module_meta ?? {});
     if (moduleKeys.length > 0 && selectedModule && selectedModule !== "global") {
       if (!moduleKeys.includes(selectedModule)) {
         setSelectedModule(moduleKeys[0]);
       }
     }
     if (!selectedPreset) {
-      const presets = Object.keys(data.presets ?? {});
+      const presets = Object.keys(pdfConfig.presets ?? {});
       setSelectedPreset(presets[0] ?? null);
     }
-  }, [data, selectedModule, selectedPreset]);
+  }, [pdfConfig, selectedModule, selectedPreset]);
 
   useEffect(() => {
     return () => {
@@ -237,47 +266,78 @@ export function PdfStudioPage() {
   const isOverride = selectedModule !== "global" && moduleConfig?.override_global;
   const canResetTheme = selectedModule !== "global" && !!isOverride;
 
+  const resolvedTheme = useMemo(() => {
+    if (!draft) return DEFAULT_THEME;
+    const globalTheme = draft.global_config?.theme;
+    if (selectedModule === "global") {
+      return mergeThemes(globalTheme);
+    }
+    const presetTheme = selectedPreset ? draft.presets[selectedPreset]?.config?.theme : undefined;
+    const moduleTheme = moduleConfig?.override_global
+      ? (moduleConfig.config as Partial<PdfConfig>)?.theme
+      : undefined;
+    return mergeThemes(globalTheme, presetTheme, moduleTheme);
+  }, [draft, moduleConfig, selectedModule, selectedPreset]);
+
+  const fallbackTheme = useMemo(() => {
+    if (!draft) return DEFAULT_THEME;
+    const globalTheme = draft.global_config?.theme;
+    if (selectedModule === "global") {
+      return mergeThemes(globalTheme);
+    }
+    const presetTheme = selectedPreset ? draft.presets[selectedPreset]?.config?.theme : undefined;
+    return mergeThemes(globalTheme, presetTheme);
+  }, [draft, selectedModule, selectedPreset]);
+
   const resolvedConfig = useMemo(() => {
     if (!draft) return null;
     if (selectedModule === "global") {
-      return ensureColumns(cloneConfig(draft.global_config), currentModuleMeta);
+      return ensureColumns(
+        { ...cloneConfig(draft.global_config), theme: mergeThemes(draft.global_config.theme) },
+        currentModuleMeta
+      );
     }
     const merged = resolveModuleConfig(draft, selectedModule, selectedPreset);
-    return ensureColumns(merged, currentModuleMeta);
-  }, [draft, selectedModule, selectedPreset, currentModuleMeta]);
+    return ensureColumns({ ...merged, theme: resolvedTheme }, currentModuleMeta);
+  }, [draft, selectedModule, selectedPreset, currentModuleMeta, resolvedTheme]);
 
   const fallbackConfig = useMemo(() => {
     if (!draft) return null;
     if (selectedModule === "global") {
-      return ensureColumns(cloneConfig(draft.global_config), currentModuleMeta);
+      return ensureColumns(
+        { ...cloneConfig(draft.global_config), theme: mergeThemes(draft.global_config.theme) },
+        currentModuleMeta
+      );
     }
     const base = cloneConfig(draft.global_config);
     const presetConfig = selectedPreset ? draft.presets[selectedPreset]?.config : undefined;
     const merged = presetConfig ? deepMerge(base, presetConfig) : base;
-    return ensureColumns(merged, currentModuleMeta);
-  }, [draft, selectedModule, selectedPreset, currentModuleMeta]);
+    return ensureColumns({ ...merged, theme: fallbackTheme }, currentModuleMeta);
+  }, [draft, selectedModule, selectedPreset, currentModuleMeta, fallbackTheme]);
 
   const contrastWarning = useMemo(() => {
     if (!resolvedConfig) return null;
-    const theme = resolvedConfig.theme;
-    const background =
-      theme.background_mode === "color" ? theme.background_color : "#ffffff";
+    const theme = { ...DEFAULT_THEME, ...(resolvedTheme ?? {}) };
+    const background = theme.background_mode === "color" ? theme.background_color : "#ffffff";
     const ratio = contrastRatio(theme.text_color, background);
     if (ratio !== null && ratio < 4.5) {
       return `Contraste faible (ratio ${ratio.toFixed(2)}).`;
     }
     return null;
-  }, [resolvedConfig]);
+  }, [resolvedConfig, resolvedTheme]);
 
   const editableConfig = useMemo(() => {
     if (!draft) return null;
     if (selectedModule === "global") {
-      return ensureColumns(cloneConfig(draft.global_config), currentModuleMeta);
+      const config = cloneConfig(draft.global_config);
+      return ensureColumns({ ...config, theme: mergeThemes(config.theme) }, currentModuleMeta);
     }
     if (moduleConfig?.override_global) {
-      return ensureColumns(cloneConfig(moduleConfig.config as PdfConfig), currentModuleMeta);
+      const config = cloneConfig(moduleConfig.config as PdfConfig);
+      return ensureColumns({ ...config, theme: mergeThemes(config.theme) }, currentModuleMeta);
     }
-    return ensureColumns(cloneConfig(draft.global_config), currentModuleMeta);
+    const config = cloneConfig(draft.global_config);
+    return ensureColumns({ ...config, theme: mergeThemes(config.theme) }, currentModuleMeta);
   }, [draft, moduleConfig, selectedModule, currentModuleMeta]);
 
   const updateConfigState = useCallback(
@@ -437,6 +497,10 @@ export function PdfStudioPage() {
         <p className="text-sm text-slate-400">Cette page est réservée aux administrateurs.</p>
       </section>
     );
+  }
+
+  if (isLoading || !pdfConfig || !configMeta) {
+    return <LoadingState />;
   }
 
   return (
