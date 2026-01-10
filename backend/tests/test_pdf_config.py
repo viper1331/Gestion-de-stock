@@ -6,7 +6,7 @@ from backend.app import app
 from backend.core import db, security, services
 from backend.core.system_config import get_config, save_config
 from backend.services.pdf_config import get_pdf_export_config, resolve_pdf_config
-from backend.core.pdf_config_models import PdfConfig, PdfHeaderConfig, PdfModuleConfig
+from backend.core.pdf_config_models import PdfConfig, PdfConfigOverrides, PdfHeaderConfig, PdfModuleConfig
 
 
 client = TestClient(app)
@@ -78,3 +78,54 @@ def test_pdf_config_merge_global_preset_module() -> None:
     )
     resolved = resolve_pdf_config("barcode", preset_name="Sans en-tête", config=export_config)
     assert resolved.config.header.enabled is True
+
+
+def test_pdf_config_empty_returns_defaults() -> None:
+    original = get_config().model_copy(deep=True)
+    try:
+        system_config = get_config()
+        system_config.pdf_exports = None
+        save_config(system_config)
+        headers = _login_headers("admin", "admin123")
+        response = client.get("/admin/pdf-config", headers=headers)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["global_config"]["branding"]["logo_enabled"] is True
+        assert payload["global_config"]["header"]["enabled"] is True
+        assert payload["global_config"]["footer"]["enabled"] is True
+        assert payload["global_config"]["theme"]["font_family"] == "Helvetica"
+    finally:
+        save_config(original)
+
+
+def test_pdf_config_null_blocks_normalized() -> None:
+    original = get_config().model_copy(deep=True)
+    try:
+        system_config = get_config()
+        system_config.pdf_exports = {
+            "global_config": {"branding": None, "header": None, "footer": None, "theme": None},
+            "modules": {},
+            "presets": {},
+            "module_meta": {},
+        }
+        save_config(system_config)
+        headers = _login_headers("admin", "admin123")
+        response = client.get("/admin/pdf-config", headers=headers)
+        assert response.status_code == 200
+        payload = response.json()
+        assert payload["global_config"]["branding"]["logo_enabled"] is True
+        assert payload["global_config"]["header"]["enabled"] is True
+        assert payload["global_config"]["footer"]["enabled"] is True
+        assert payload["global_config"]["theme"]["font_family"] == "Helvetica"
+    finally:
+        save_config(original)
+
+
+def test_pdf_config_module_override_null_does_not_override() -> None:
+    export_config = get_pdf_export_config()
+    export_config.modules["barcode"] = PdfModuleConfig(
+        override_global=True,
+        config=PdfConfigOverrides(branding=None),
+    )
+    resolved = resolve_pdf_config("barcode", config=export_config)
+    assert resolved.config.branding.logo_enabled is True
