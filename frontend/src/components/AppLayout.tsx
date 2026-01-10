@@ -351,6 +351,13 @@ export function AppLayout() {
                   adminOnly: true
                 },
                 {
+                  to: "/pdf-config",
+                  label: "Configuration PDF",
+                  tooltip: "Personnaliser les exports PDF",
+                  icon: "📄",
+                  adminOnly: true
+                },
+                {
                   to: "/users",
                   label: "Utilisateurs",
                   tooltip: "Administrer les comptes utilisateurs",

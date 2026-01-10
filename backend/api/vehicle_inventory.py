@@ -26,6 +26,7 @@ from backend.services.pdf.vehicle_inventory.playwright_support import (
 from backend.services.pdf.vehicle_inventory.renderer import PlaywrightPdfError
 from backend.services import qrcode_service
 from backend.services.debug_service import load_debug_config
+from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 logger = logging.getLogger("inventory_debug")
 
@@ -100,6 +101,13 @@ async def _vehicle_inventory_pdf_response(
     *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
 ):
     _require_permission(user, action="view")
+    resolved = resolve_pdf_config(FALLBACK_MODULE_KEY)
+    options = options.model_copy(
+        update={
+            "include_header": resolved.config.header.enabled,
+            "include_footer": resolved.config.footer.enabled,
+        }
+    )
     diagnostics = check_playwright_status()
     if settings.PDF_RENDERER == "html" and diagnostics.status != PLAYWRIGHT_OK:
         log_playwright_context(diagnostics.status)
@@ -121,7 +129,11 @@ async def _vehicle_inventory_pdf_response(
             pointer_targets=pointer_targets,
             options=fallback_options,
         )
-    filename = f"inventaire_vehicules_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+    filename = render_filename(
+        resolved.config.filename.pattern,
+        module_key=FALLBACK_MODULE_KEY,
+        module_title=resolved.module_label,
+    )
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",
