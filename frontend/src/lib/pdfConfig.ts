@@ -77,6 +77,25 @@ export interface PdfAdvancedConfig {
   row_alt_bg_color: string;
 }
 
+export interface PdfThemeConfig {
+  font_family: string;
+  base_font_size: number;
+  heading_font_size: number;
+  text_color: string;
+  muted_text_color: string;
+  accent_color: string;
+  table_header_bg: string;
+  table_header_text: string;
+  table_row_alt_bg: string;
+  border_color: string;
+  background_mode: "none" | "color" | "image";
+  background_color: string;
+  background_image?: string | null;
+  background_opacity: number;
+  background_fit: "cover" | "contain";
+  background_position: string;
+}
+
 export interface PdfConfig {
   format: PdfFormatConfig;
   branding: PdfBrandingConfig;
@@ -86,6 +105,7 @@ export interface PdfConfig {
   watermark: PdfWatermarkConfig;
   filename: PdfFilenameConfig;
   advanced: PdfAdvancedConfig;
+  theme: PdfThemeConfig;
 }
 
 export interface PdfModuleConfig {
@@ -121,6 +141,12 @@ export interface PdfExportConfig {
   module_meta: Record<string, PdfModuleMeta>;
 }
 
+export interface PdfConfigMeta {
+  supported_fonts: string[];
+  accepted_color_formats: string[];
+  renderer_compatibility: Record<string, Record<string, unknown>>;
+}
+
 export async function fetchPdfConfig(): Promise<PdfExportConfig> {
   const { data } = await api.get<PdfExportConfig>("/admin/pdf-config");
   return data;
@@ -139,5 +165,10 @@ export async function previewPdfConfig(payload: {
   const { data } = await api.post("/admin/pdf-config/preview", payload, {
     responseType: "blob"
   });
+  return data;
+}
+
+export async function fetchPdfConfigMeta(): Promise<PdfConfigMeta> {
+  const { data } = await api.get<PdfConfigMeta>("/admin/pdf-config/meta");
   return data;
 }
