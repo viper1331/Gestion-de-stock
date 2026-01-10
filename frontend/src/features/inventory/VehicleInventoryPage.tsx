@@ -25,6 +25,7 @@ import { VehiclePhotosPanel } from "./VehiclePhotosPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { useAuth } from "../auth/useAuth";
 import { useThrottledHoverState } from "./useThrottledHoverState";
+import { AppTextInput } from "components/AppTextInput";
 
 interface VehicleViewConfig {
   name: string;
@@ -2081,7 +2082,7 @@ export function VehicleInventoryPage() {
                     <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                       Nom du véhicule
                     </span>
-                    <input
+                    <AppTextInput
                       id="vehicle-name"
                       type="text"
                       value={vehicleName}
@@ -2096,7 +2097,7 @@ export function VehicleInventoryPage() {
                   <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                     Vues (optionnel)
                   </span>
-                  <input
+                  <AppTextInput
                       id="vehicle-views"
                       type="text"
                       value={vehicleViewsInput}
@@ -2144,7 +2145,7 @@ export function VehicleInventoryPage() {
                   <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                     Photo du véhicule (optionnel)
                   </span>
-                  <input
+                  <AppTextInput
                     id="vehicle-image"
                     ref={vehicleImageInputRef}
                     type="file"
@@ -2298,7 +2299,7 @@ export function VehicleInventoryPage() {
                   <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                     Nom du véhicule
                   </span>
-                  <input
+                  <AppTextInput
                     id="edit-vehicle-name"
                     type="text"
                     value={editedVehicleName}
@@ -2316,7 +2317,7 @@ export function VehicleInventoryPage() {
                   <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                     Vues
                   </span>
-                  <input
+                  <AppTextInput
                     id="edit-vehicle-views"
                     type="text"
                     value={editedVehicleViewsInput}
@@ -2375,7 +2376,7 @@ export function VehicleInventoryPage() {
                 <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                   Photo du véhicule (optionnel)
                 </span>
-                <input
+                <AppTextInput
                   id="edit-vehicle-image"
                   ref={editedVehicleImageInputRef}
                   type="file"
@@ -2461,7 +2462,7 @@ export function VehicleInventoryPage() {
                     <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
                       Nom de la sous-vue
                     </span>
-                    <input
+                    <AppTextInput
                       id="sub-view-name"
                       type="text"
                       value={newSubViewName}
@@ -3478,7 +3479,7 @@ function VehicleCompartment({
                   )}
                 </div>
 
-                <input
+                <AppTextInput
                   ref={fileInputRef}
                   type="file"
                   accept="image/*"
@@ -3597,7 +3598,7 @@ function VehicleCompartment({
 
         <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs text-slate-600 dark:border-slate-700 dark:bg-slate-800/40 dark:text-slate-300">
           <label className="flex items-start gap-3 font-semibold text-slate-700 dark:text-slate-100">
-            <input
+            <AppTextInput
               type="checkbox"
               className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900"
               checked={isPointerModeEnabled}
@@ -3620,7 +3621,7 @@ function VehicleCompartment({
                 tout moment.
               </p>
               <label className="flex items-start gap-2">
-                <input
+                <AppTextInput
                   type="checkbox"
                   className="mt-0.5 h-4 w-4 rounded border-slate-300 text-blue-600 focus:ring-blue-500 dark:border-slate-600 dark:bg-slate-900"
                   checked={hidePointerActions}
@@ -4730,7 +4731,7 @@ function ItemCard({
         });
       }}
     >
-      <input
+      <AppTextInput
         ref={fileInputRef}
         type="file"
         accept="image/*"
@@ -4820,7 +4821,7 @@ function ItemCard({
               >
                 −
               </button>
-              <input
+              <AppTextInput
                 type="number"
                 min={0}
                 value={draftQuantity}
@@ -4874,7 +4875,7 @@ function ItemCard({
                   <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-200">
                     Axe horizontal (X)
                   </span>
-                  <input
+                  <AppTextInput
                     type="number"
                     min={0}
                     max={100}
@@ -4889,7 +4890,7 @@ function ItemCard({
                   <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-200">
                     Axe vertical (Y)
                   </span>
-                  <input
+                  <AppTextInput
                     type="number"
                     min={0}
                     max={100}

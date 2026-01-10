@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
+import { AppTextInput } from "components/AppTextInput";
 
 type UserRole = "admin" | "user";
 
@@ -235,7 +236,7 @@ export function AdminUsersPage() {
       >
         <div className="flex flex-1 flex-col">
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">Identifiant</label>
-          <input
+          <AppTextInput
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             value={createForm.username}
             onChange={(event) => setCreateForm((prev) => ({ ...prev, username: event.target.value }))}
@@ -245,7 +246,7 @@ export function AdminUsersPage() {
         </div>
         <div className="flex flex-1 flex-col">
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">Mot de passe</label>
-          <input
+          <AppTextInput
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             value={createForm.password}
             type="password"
@@ -310,7 +311,7 @@ export function AdminUsersPage() {
                   </td>
                   <td className="px-4 py-3">
                     <label className="flex items-center gap-2 text-xs text-slate-300">
-                      <input
+                      <AppTextInput
                         type="checkbox"
                         checked={draft.is_active}
                         onChange={(event) =>
@@ -322,7 +323,7 @@ export function AdminUsersPage() {
                     </label>
                   </td>
                   <td className="px-4 py-3">
-                    <input
+                    <AppTextInput
                       type="password"
                       value={draft.password}
                       onChange={(event) => handleDraftChange(entry, { password: event.target.value })}

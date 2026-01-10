@@ -9,6 +9,8 @@ import {
   updateSystemConfig
 } from "../../lib/systemConfig";
 import { ResolvedApiConfig, resolveApiBaseUrl, resolveApiBaseUrlFromConfig } from "../../lib/apiConfig";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 interface ConnectivityResult {
   status: "idle" | "success" | "error";
@@ -162,7 +164,7 @@ export function SystemConfigPage() {
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               URL backend LAN
             </span>
-            <input
+            <AppTextInput
               type="url"
               value={form?.backend_url_lan ?? ""}
               onChange={(event) => handleFieldChange("backend_url_lan", event.target.value)}
@@ -173,7 +175,7 @@ export function SystemConfigPage() {
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               URL backend publique
             </span>
-            <input
+            <AppTextInput
               type="url"
               value={form?.backend_url_public ?? ""}
               onChange={(event) => handleFieldChange("backend_url_public", event.target.value)}
@@ -182,7 +184,7 @@ export function SystemConfigPage() {
           </label>
           <label className="space-y-2 text-sm text-slate-200">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Hôte backend</span>
-            <input
+            <AppTextInput
               type="text"
               value={form?.backend_host ?? ""}
               onChange={(event) => handleFieldChange("backend_host", event.target.value)}
@@ -191,7 +193,7 @@ export function SystemConfigPage() {
           </label>
           <label className="space-y-2 text-sm text-slate-200">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Port backend</span>
-            <input
+            <AppTextInput
               type="number"
               min={1}
               max={65535}
@@ -202,7 +204,7 @@ export function SystemConfigPage() {
           </label>
           <label className="space-y-2 text-sm text-slate-200">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Hôte frontend</span>
-            <input
+            <AppTextInput
               type="text"
               value={form?.frontend_host ?? ""}
               onChange={(event) => handleFieldChange("frontend_host", event.target.value)}
@@ -211,7 +213,7 @@ export function SystemConfigPage() {
           </label>
           <label className="space-y-2 text-sm text-slate-200">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Port frontend</span>
-            <input
+            <AppTextInput
               type="number"
               min={1}
               max={65535}
@@ -224,7 +226,7 @@ export function SystemConfigPage() {
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
               URL publique du frontend
             </span>
-            <input
+            <AppTextInput
               type="url"
               value={form?.frontend_url ?? ""}
               onChange={(event) => handleFieldChange("frontend_url", event.target.value)}
@@ -250,7 +252,7 @@ export function SystemConfigPage() {
           <div className="space-y-2">
             <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">Origines CORS autorisées</span>
             <p className="text-xs text-slate-500">Séparez les origines par des retours à la ligne.</p>
-            <textarea
+            <AppTextArea
               value={corsValue}
               onChange={(event) => handleCorsChange(event.target.value)}
               className="min-h-[160px] w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
@@ -306,7 +308,7 @@ export function SystemConfigPage() {
             {Object.entries(form?.extra ?? {}).map(([key, value]) => (
               <label key={key} className="space-y-1 text-xs text-slate-200">
                 <span className="font-semibold uppercase tracking-wide text-slate-400">{key}</span>
-                <input
+                <AppTextInput
                   type="text"
                   value={value}
                   onChange={(event) => {

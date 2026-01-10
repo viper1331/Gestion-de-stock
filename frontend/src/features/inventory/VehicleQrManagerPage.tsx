@@ -6,6 +6,7 @@ import { api } from "../../lib/api";
 import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { resolveMediaUrl } from "../../lib/media";
 import { useModuleTitle } from "../../lib/moduleTitles";
+import { AppTextInput } from "components/AppTextInput";
 
 type VehicleType = string;
 
@@ -337,7 +338,7 @@ export function VehicleQrManagerPage() {
 
         <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
           Fichier associé (OneDrive)
-          <input
+          <AppTextInput
             type="url"
             value={draft.shared_file_url}
             onChange={(event) => handleUpdateDraft(group.key, { shared_file_url: event.target.value })}
@@ -351,7 +352,7 @@ export function VehicleQrManagerPage() {
 
         <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
           Documentation
-          <input
+          <AppTextInput
             type="url"
             value={draft.documentation_url}
             onChange={(event) => handleUpdateDraft(group.key, { documentation_url: event.target.value })}
@@ -362,7 +363,7 @@ export function VehicleQrManagerPage() {
 
         <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
           Tutoriel
-          <input
+          <AppTextInput
             type="url"
             value={draft.tutorial_url}
             onChange={(event) => handleUpdateDraft(group.key, { tutorial_url: event.target.value })}
@@ -381,7 +382,7 @@ export function VehicleQrManagerPage() {
             </div>
             <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
               <span>{draft.show_in_qr ? "Visible" : "Masqué"}</span>
-              <input
+              <AppTextInput
                 type="checkbox"
                 className="h-4 w-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
                 checked={draft.show_in_qr}
@@ -467,7 +468,7 @@ export function VehicleQrManagerPage() {
           </p>
         </div>
         <div className="flex w-full flex-col gap-2 sm:flex-row sm:items-center sm:justify-end">
-          <input
+          <AppTextInput
             type="search"
             value={search}
             onChange={(event) => setSearch(event.target.value)}

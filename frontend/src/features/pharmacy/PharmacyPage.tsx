@@ -12,6 +12,7 @@ import { useModulePermissions } from "../permissions/useModulePermissions";
 import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
 import { PharmacyLotsPanel } from "./PharmacyLotsPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
+import { AppTextInput } from "components/AppTextInput";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -709,7 +710,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-name">
                     Nom
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-name"
                     value={draft.name}
                     onChange={(event) => updateDraft({ name: event.target.value }, true)}
@@ -722,7 +723,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-dosage">
                     Dosage
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-dosage"
                     value={draft.dosage}
                     onChange={(event) => updateDraft({ dosage: event.target.value }, true)}
@@ -734,7 +735,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-packaging">
                     Conditionnement
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-packaging"
                     value={draft.packaging}
                     onChange={(event) => updateDraft({ packaging: event.target.value }, true)}
@@ -746,7 +747,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-barcode">
                     Code-barres
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-barcode"
                     value={draft.barcode}
                     onChange={handleBarcodeChange}
@@ -779,7 +780,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-quantity">
                     Quantité
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-quantity"
                     type="number"
                     min={0}
@@ -800,7 +801,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-low-stock-threshold">
                     Seuil de stock faible
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-low-stock-threshold"
                     type="number"
                     min={0}
@@ -826,7 +827,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-expiration">
                     Date d'expiration
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-expiration"
                     type="date"
                     value={draft.expiration_date}
@@ -839,7 +840,7 @@ export function PharmacyPage() {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-location">
                     Localisation
                   </label>
-                  <input
+                  <AppTextInput
                     id="pharmacy-location"
                     value={draft.location}
                     onChange={(event) => updateDraft({ location: event.target.value })}
@@ -1017,7 +1018,7 @@ function PharmacyMovementForm({
           <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-delta">
             Variation
           </label>
-          <input
+          <AppTextInput
             id="pharmacy-movement-delta"
             type="number"
             value={delta}
@@ -1030,7 +1031,7 @@ function PharmacyMovementForm({
           <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-reason">
             Motif
           </label>
-          <input
+          <AppTextInput
             id="pharmacy-movement-reason"
             value={reason}
             onChange={(event) => setReason(event.target.value)}
@@ -1146,14 +1147,14 @@ function PharmacyCategoryManager({
     <div className="mt-3 space-y-3">
       <form className="space-y-2" onSubmit={handleSubmit}>
         <div className="flex gap-2">
-          <input
+          <AppTextInput
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Nouvelle catégorie"
             className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             title="Nom de la catégorie"
           />
-          <input
+          <AppTextInput
             value={sizes}
             onChange={(event) => setSizes(event.target.value)}
             placeholder="Tailles ou formats"
@@ -1199,7 +1200,7 @@ function PharmacyCategoryManager({
             <label className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor={`category-sizes-${category.id}`}>
               Tailles / formats
             </label>
-            <input
+            <AppTextInput
               id={`category-sizes-${category.id}`}
               value={editedSizes[category.id] ?? category.sizes.join(", ")}
               onChange={(event) =>

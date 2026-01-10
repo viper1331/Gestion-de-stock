@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
+import { AppTextInput } from "components/AppTextInput";
 
 interface ModulePermissionEntry {
   id: number;
@@ -279,7 +280,7 @@ export function ModulePermissionsPage() {
           </p>
         ) : null}
         <label className="flex items-center gap-2 text-xs text-slate-300">
-          <input
+          <AppTextInput
             type="checkbox"
             checked={formValues.can_view}
             onChange={(event) =>
@@ -294,7 +295,7 @@ export function ModulePermissionsPage() {
           Lecture
         </label>
         <label className="flex items-center gap-2 text-xs text-slate-300">
-          <input
+          <AppTextInput
             type="checkbox"
             checked={formValues.can_edit}
             onChange={(event) =>
@@ -360,7 +361,7 @@ export function ModulePermissionsPage() {
                           </td>
                           <td className="px-4 py-2">
                             <label className="inline-flex items-center gap-2 text-xs">
-                              <input
+                              <AppTextInput
                                 type="checkbox"
                                 checked={entry.can_view}
                                 disabled={disableEdits || isProcessing}
@@ -386,7 +387,7 @@ export function ModulePermissionsPage() {
                           </td>
                           <td className="px-4 py-2">
                             <label className="inline-flex items-center gap-2 text-xs">
-                              <input
+                              <AppTextInput
                                 type="checkbox"
                                 checked={entry.can_edit}
                                 disabled={disableEdits || isProcessing}

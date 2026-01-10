@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { AppTextInput } from "components/AppTextInput";
 
 interface ColumnOption {
   key: string;
@@ -72,7 +73,7 @@ export function ColumnManager({
                 return (
                   <li key={option.key} className="flex items-center justify-between gap-2">
                     <label className="flex items-center gap-2">
-                      <input
+                      <AppTextInput
                         type="checkbox"
                         checked={checked}
                         onChange={() => onToggle(option.key)}

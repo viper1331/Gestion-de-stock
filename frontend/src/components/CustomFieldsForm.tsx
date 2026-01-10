@@ -5,6 +5,7 @@ import {
   normalizeCustomFieldOptions,
   sortCustomFields
 } from "../lib/customFields";
+import { AppTextInput } from "components/AppTextInput";
 
 type CustomFieldValues = Record<string, unknown>;
 
@@ -53,7 +54,7 @@ export function CustomFieldsForm({
         if (definition.field_type === "bool") {
           return (
             <label key={definition.id} className="flex items-center gap-2 text-xs text-slate-300">
-              <input
+              <AppTextInput
                 id={id}
                 type="checkbox"
                 checked={Boolean(rawValue)}
@@ -90,7 +91,7 @@ export function CustomFieldsForm({
         return (
           <label key={definition.id} className="block space-y-1">
             <span className="text-xs font-semibold text-slate-300">{label}</span>
-            <input
+            <AppTextInput
               id={id}
               type={definition.field_type === "date" ? "date" : definition.field_type === "number" ? "number" : "text"}
               value={rawValue === null || rawValue === undefined ? "" : String(rawValue)}
