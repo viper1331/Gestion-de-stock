@@ -7,9 +7,10 @@ from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
 from backend.api.admin import require_admin
-from backend.core.pdf_config_models import PdfExportConfig
+from backend.core.pdf_config_models import PdfConfigMeta, PdfExportConfig
 from backend.services.pdf_config import (
     get_pdf_export_config,
+    get_pdf_config_meta,
     render_preview_pdf,
     resolve_pdf_config,
     save_pdf_export_config,
@@ -50,3 +51,8 @@ def preview_pdf_config_draft(payload: PdfPreviewRequest, _: object = Depends(req
     resolved = resolve_pdf_config(payload.module, payload.preset, config=payload.config)
     pdf_bytes = render_preview_pdf(resolved)
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf")
+
+
+@router.get("/pdf-config/meta", response_model=PdfConfigMeta)
+def pdf_config_meta(_: object = Depends(require_admin)) -> PdfConfigMeta:
+    return PdfConfigMeta.model_validate(get_pdf_config_meta())

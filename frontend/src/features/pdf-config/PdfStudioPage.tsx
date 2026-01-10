@@ -8,14 +8,118 @@ import {
   PdfExportConfig,
   PdfModuleConfig,
   PdfModuleMeta,
+  PdfThemeConfig,
+  DEFAULT_PDF_THEME,
+  deepMerge,
   fetchPdfConfig,
+  fetchPdfConfigMeta,
   previewPdfConfig,
+  normalizePdfExportConfig,
   updatePdfConfig
 } from "../../lib/pdfConfig";
 import { AppTextInput } from "components/AppTextInput";
 
 const DEFAULT_PREVIEW_MESSAGE = "Utilisez le bouton Aperçu pour générer un PDF.";
+const DEFAULT_THEME: PdfThemeConfig = DEFAULT_PDF_THEME;
 
+const LoadingState = () => (
+  <section className="space-y-2">
+    <h2 className="text-xl font-semibold text-white">PDF Studio</h2>
+    <p className="text-sm text-slate-400">Chargement des configurations...</p>
+  </section>
+);
+
+const toHexColor = (value: string, fallback = "#000000"): string => {
+  const trimmed = value.trim();
+  if (!trimmed) return fallback;
+  if (trimmed.toLowerCase() === "transparent") return fallback;
+  const hexMatch = trimmed.match(/^#([0-9a-f]{3})$/i);
+  if (hexMatch) {
+    const [r, g, b] = hexMatch[1].split("");
+    return `#${r}${r}${g}${g}${b}${b}`.toLowerCase();
+  }
+  const hexLong = trimmed.match(/^#([0-9a-f]{6})/i);
+  if (hexLong) {
+    return `#${hexLong[1]}`.toLowerCase();
+  }
+  const rgbaMatch = trimmed.match(/^rgba?\\(([^)]+)\\)$/i);
+  if (rgbaMatch) {
+    const parts = rgbaMatch[1].split(",").map((part) => part.trim());
+    if (parts.length >= 3) {
+      const r = Math.min(255, Math.max(0, Number(parts[0])));
+      const g = Math.min(255, Math.max(0, Number(parts[1])));
+      const b = Math.min(255, Math.max(0, Number(parts[2])));
+      return (
+        "#" +
+        [r, g, b]
+          .map((channel) => Math.round(channel).toString(16).padStart(2, "0"))
+          .join("")
+      );
+    }
+  }
+  return fallback;
+};
+
+const colorToRgb = (value: string): { r: number; g: number; b: number } | null => {
+  const hex = toHexColor(value, "");
+  if (!hex || hex.length !== 7) return null;
+  const r = Number.parseInt(hex.slice(1, 3), 16);
+  const g = Number.parseInt(hex.slice(3, 5), 16);
+  const b = Number.parseInt(hex.slice(5, 7), 16);
+  return { r, g, b };
+};
+
+const contrastRatio = (foreground: string, background: string): number | null => {
+  const fg = colorToRgb(foreground);
+  const bg = colorToRgb(background);
+  if (!fg || !bg) return null;
+  const luminance = (color: { r: number; g: number; b: number }) => {
+    const channel = (value: number) => {
+      const scaled = value / 255;
+      return scaled <= 0.03928 ? scaled / 12.92 : Math.pow((scaled + 0.055) / 1.055, 2.4);
+    };
+    return 0.2126 * channel(color.r) + 0.7152 * channel(color.g) + 0.0722 * channel(color.b);
+  };
+  const l1 = luminance(fg);
+  const l2 = luminance(bg);
+  const light = Math.max(l1, l2);
+  const dark = Math.min(l1, l2);
+  return (light + 0.05) / (dark + 0.05);
+};
+
+type ColorFieldProps = {
+  label: string;
+  value: string;
+  onChange: (value: string) => void;
+  onReset?: () => void;
+};
+
+const ColorField = ({ label, value, onChange, onReset }: ColorFieldProps) => (
+  <label className="space-y-2 text-sm text-slate-200">
+    <span className="flex items-center justify-between gap-2">
+      {label}
+      {onReset ? (
+        <button type="button" onClick={onReset} className="text-xs text-indigo-300 hover:text-indigo-200">
+          Réinitialiser
+        </button>
+      ) : null}
+    </span>
+    <div className="grid gap-2 sm:grid-cols-[120px_1fr]">
+      <input
+        type="color"
+        value={toHexColor(value, "#000000")}
+        onChange={(event) => onChange(event.target.value)}
+        className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
+      />
+      <input
+        type="text"
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+      />
+    </div>
+  </label>
+);
 
 const marginPresets: Record<string, PdfConfig["format"]["margins"]> = {
   normal: { top_mm: 15, right_mm: 15, bottom_mm: 15, left_mm: 15 },
@@ -23,27 +127,10 @@ const marginPresets: Record<string, PdfConfig["format"]["margins"]> = {
   wide: { top_mm: 20, right_mm: 20, bottom_mm: 20, left_mm: 20 }
 };
 
-const deepMerge = <T,>(base: T, overrides?: Partial<T>): T => {
-  if (!overrides) return base;
-  const baseValue = base as Record<string, unknown>;
-  const result: Record<string, unknown> = { ...baseValue };
-  Object.entries(overrides).forEach(([key, value]) => {
-    if (Array.isArray(value)) {
-      result[key] = value;
-      return;
-    }
-    if (value && typeof value === "object" && typeof baseValue[key] === "object") {
-      result[key] = deepMerge(baseValue[key], value as Partial<T>);
-      return;
-    }
-    if (value !== undefined) {
-      result[key] = value;
-    }
-  });
-  return result as T;
-};
-
 const cloneConfig = (config: PdfConfig): PdfConfig => JSON.parse(JSON.stringify(config)) as PdfConfig;
+
+const mergeThemes = (...themes: Array<Partial<PdfThemeConfig> | null | undefined>): PdfThemeConfig =>
+  themes.reduce<PdfThemeConfig>((acc, theme) => ({ ...acc, ...(theme ?? {}) }), { ...DEFAULT_THEME });
 
 const resolveModuleConfig = (
   exportConfig: PdfExportConfig,
@@ -83,14 +170,37 @@ const ensureColumns = (config: PdfConfig, meta?: PdfModuleMeta): PdfConfig => {
   };
 };
 
+const configSectionKeys: Array<keyof PdfConfig> = [
+  "format",
+  "branding",
+  "header",
+  "content",
+  "footer",
+  "watermark",
+  "filename",
+  "advanced",
+  "theme"
+];
+
+const collectNullSections = (config: Partial<PdfConfig> | null | undefined): string[] => {
+  if (!config) return ["<config>"];
+  return configSectionKeys.filter((key) => config[key] === null).map((key) => key.toString());
+};
+
 export function PdfStudioPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
-  const { data, isFetching } = useQuery({
+  const { data: pdfConfig, isFetching, isLoading: isConfigLoading } = useQuery({
     queryKey: ["pdf-config"],
     queryFn: fetchPdfConfig,
     enabled: isAdmin
   });
+  const { data: configMeta, isLoading: isMetaLoading } = useQuery({
+    queryKey: ["pdf-config-meta"],
+    queryFn: fetchPdfConfigMeta,
+    enabled: isAdmin
+  });
+  const isLoading = isConfigLoading || isMetaLoading;
   const [draft, setDraft] = useState<PdfExportConfig | null>(null);
   const [initialConfig, setInitialConfig] = useState<PdfExportConfig | null>(null);
   const [selectedModule, setSelectedModule] = useState<string>("global");
@@ -102,20 +212,21 @@ export function PdfStudioPage() {
   const debounceRef = useRef<number | null>(null);
 
   useEffect(() => {
-    if (!data) return;
-    setDraft(data);
-    setInitialConfig(data);
-    const moduleKeys = Object.keys(data.module_meta ?? {});
+    if (!pdfConfig) return;
+    const normalized = normalizePdfExportConfig(pdfConfig);
+    setDraft(normalized);
+    setInitialConfig(normalized);
+    const moduleKeys = Object.keys(pdfConfig.module_meta ?? {});
     if (moduleKeys.length > 0 && selectedModule && selectedModule !== "global") {
       if (!moduleKeys.includes(selectedModule)) {
         setSelectedModule(moduleKeys[0]);
       }
     }
     if (!selectedPreset) {
-      const presets = Object.keys(data.presets ?? {});
+      const presets = Object.keys(pdfConfig.presets ?? {});
       setSelectedPreset(presets[0] ?? null);
     }
-  }, [data, selectedModule, selectedPreset]);
+  }, [pdfConfig, selectedModule, selectedPreset]);
 
   useEffect(() => {
     return () => {
@@ -128,29 +239,90 @@ export function PdfStudioPage() {
   const moduleMeta = draft?.module_meta ?? {};
   const moduleOptions = useMemo(() => Object.values(moduleMeta), [moduleMeta]);
   const presetOptions = useMemo(() => Object.keys(draft?.presets ?? {}), [draft]);
+  const supportedFonts = configMeta?.supported_fonts ?? ["Helvetica"];
+  const acceptedColorFormats = configMeta?.accepted_color_formats ?? [];
+  const reportlabNotes = useMemo(() => {
+    const notes = configMeta?.renderer_compatibility?.reportlab?.notes;
+    return Array.isArray(notes) ? notes : [];
+  }, [configMeta]);
 
   const currentModuleMeta = selectedModule === "global" ? undefined : moduleMeta[selectedModule];
   const moduleConfig = draft?.modules[selectedModule];
   const isOverride = selectedModule !== "global" && moduleConfig?.override_global;
+  const canResetTheme = selectedModule !== "global" && !!isOverride;
+
+  const resolvedTheme = useMemo(() => {
+    if (!draft) return DEFAULT_THEME;
+    const globalTheme = draft.global_config?.theme;
+    if (selectedModule === "global") {
+      return mergeThemes(globalTheme);
+    }
+    const presetTheme = selectedPreset ? draft.presets[selectedPreset]?.config?.theme : undefined;
+    const moduleTheme = moduleConfig?.override_global
+      ? (moduleConfig.config as Partial<PdfConfig>)?.theme
+      : undefined;
+    return mergeThemes(globalTheme, presetTheme, moduleTheme);
+  }, [draft, moduleConfig, selectedModule, selectedPreset]);
+
+  const fallbackTheme = useMemo(() => {
+    if (!draft) return DEFAULT_THEME;
+    const globalTheme = draft.global_config?.theme;
+    if (selectedModule === "global") {
+      return mergeThemes(globalTheme);
+    }
+    const presetTheme = selectedPreset ? draft.presets[selectedPreset]?.config?.theme : undefined;
+    return mergeThemes(globalTheme, presetTheme);
+  }, [draft, selectedModule, selectedPreset]);
 
   const resolvedConfig = useMemo(() => {
     if (!draft) return null;
     if (selectedModule === "global") {
-      return ensureColumns(cloneConfig(draft.global_config), currentModuleMeta);
+      return ensureColumns(
+        { ...cloneConfig(draft.global_config), theme: mergeThemes(draft.global_config.theme) },
+        currentModuleMeta
+      );
     }
     const merged = resolveModuleConfig(draft, selectedModule, selectedPreset);
-    return ensureColumns(merged, currentModuleMeta);
-  }, [draft, selectedModule, selectedPreset, currentModuleMeta]);
+    return ensureColumns({ ...merged, theme: resolvedTheme }, currentModuleMeta);
+  }, [draft, selectedModule, selectedPreset, currentModuleMeta, resolvedTheme]);
+
+  const fallbackConfig = useMemo(() => {
+    if (!draft) return null;
+    if (selectedModule === "global") {
+      return ensureColumns(
+        { ...cloneConfig(draft.global_config), theme: mergeThemes(draft.global_config.theme) },
+        currentModuleMeta
+      );
+    }
+    const base = cloneConfig(draft.global_config);
+    const presetConfig = selectedPreset ? draft.presets[selectedPreset]?.config : undefined;
+    const merged = presetConfig ? deepMerge(base, presetConfig) : base;
+    return ensureColumns({ ...merged, theme: fallbackTheme }, currentModuleMeta);
+  }, [draft, selectedModule, selectedPreset, currentModuleMeta, fallbackTheme]);
+
+  const contrastWarning = useMemo(() => {
+    if (!resolvedConfig) return null;
+    const theme = { ...DEFAULT_THEME, ...(resolvedTheme ?? {}) };
+    const background = theme.background_mode === "color" ? theme.background_color : "#ffffff";
+    const ratio = contrastRatio(theme.text_color, background);
+    if (ratio !== null && ratio < 4.5) {
+      return `Contraste faible (ratio ${ratio.toFixed(2)}).`;
+    }
+    return null;
+  }, [resolvedConfig, resolvedTheme]);
 
   const editableConfig = useMemo(() => {
     if (!draft) return null;
     if (selectedModule === "global") {
-      return ensureColumns(cloneConfig(draft.global_config), currentModuleMeta);
+      const config = cloneConfig(draft.global_config);
+      return ensureColumns({ ...config, theme: mergeThemes(config.theme) }, currentModuleMeta);
     }
     if (moduleConfig?.override_global) {
-      return ensureColumns(cloneConfig(moduleConfig.config as PdfConfig), currentModuleMeta);
+      const config = cloneConfig(moduleConfig.config as PdfConfig);
+      return ensureColumns({ ...config, theme: mergeThemes(config.theme) }, currentModuleMeta);
     }
-    return ensureColumns(cloneConfig(draft.global_config), currentModuleMeta);
+    const config = cloneConfig(draft.global_config);
+    return ensureColumns({ ...config, theme: mergeThemes(config.theme) }, currentModuleMeta);
   }, [draft, moduleConfig, selectedModule, currentModuleMeta]);
 
   const updateConfigState = useCallback(
@@ -179,6 +351,24 @@ export function PdfStudioPage() {
       });
     },
     [draft, editableConfig, selectedModule]
+  );
+
+  const updateThemeField = useCallback(
+    <K extends keyof PdfThemeConfig>(key: K, value: PdfThemeConfig[K]) => {
+      updateConfigState((config) => ({
+        ...config,
+        theme: { ...config.theme, [key]: value }
+      }));
+    },
+    [updateConfigState]
+  );
+
+  const resetThemeField = useCallback(
+    (key: keyof PdfThemeConfig) => {
+      if (!fallbackConfig) return;
+      updateThemeField(key, fallbackConfig.theme[key]);
+    },
+    [fallbackConfig, updateThemeField]
   );
 
   const handleOverrideToggle = (value: boolean) => {
@@ -238,10 +428,37 @@ export function PdfStudioPage() {
   const saveMutation = useMutation({
     mutationFn: updatePdfConfig,
     onSuccess: (payload) => {
-      setDraft(payload);
-      setInitialConfig(payload);
+      const normalized = normalizePdfExportConfig(payload);
+      setDraft(normalized);
+      setInitialConfig(normalized);
     }
   });
+
+  const handleSave = useCallback(() => {
+    if (!draft) return;
+    const warnings: Array<{ scope: string; sections: string[] }> = [];
+    const globalNulls = collectNullSections(draft.global_config);
+    if (globalNulls.length > 0) {
+      warnings.push({ scope: "global_config", sections: globalNulls });
+    }
+    Object.entries(draft.modules ?? {}).forEach(([key, moduleConfig]) => {
+      const moduleNulls = collectNullSections(moduleConfig?.config as Partial<PdfConfig> | null | undefined);
+      if (moduleNulls.length > 0) {
+        warnings.push({ scope: `modules.${key}.config`, sections: moduleNulls });
+      }
+    });
+    Object.entries(draft.presets ?? {}).forEach(([key, preset]) => {
+      const presetNulls = collectNullSections(preset?.config as Partial<PdfConfig> | null | undefined);
+      if (presetNulls.length > 0) {
+        warnings.push({ scope: `presets.${key}.config`, sections: presetNulls });
+      }
+    });
+    if (warnings.length > 0) {
+      console.warn("[PdfStudioPage] Sections null détectées avant sauvegarde", warnings);
+    }
+    const safeDraft = normalizePdfExportConfig(draft);
+    saveMutation.mutate(safeDraft);
+  }, [draft, saveMutation]);
 
   const handleReset = () => {
     if (initialConfig) {
@@ -294,6 +511,10 @@ export function PdfStudioPage() {
     );
   }
 
+  if (isLoading || !pdfConfig || !configMeta) {
+    return <LoadingState />;
+  }
+
   return (
     <section className="space-y-6">
       <header className="space-y-2">
@@ -343,7 +564,7 @@ export function PdfStudioPage() {
           </button>
           <button
             type="button"
-            onClick={() => draft && saveMutation.mutate(draft)}
+            onClick={handleSave}
             className="rounded-md bg-indigo-600 px-4 py-2 text-sm text-white hover:bg-indigo-500"
           >
             Enregistrer
@@ -965,7 +1186,119 @@ export function PdfStudioPage() {
                     }
                     className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
                   />
-                </label>
+                  <ColorField
+                    label="Texte header tableau"
+                    value={editableConfig?.theme.table_header_text ?? "#f8fafc"}
+                    onChange={(value) => updateThemeField("table_header_text", value)}
+                    onReset={canResetTheme ? () => resetThemeField("table_header_text") : undefined}
+                  />
+                  <ColorField
+                    label="Alternance lignes"
+                    value={editableConfig?.theme.table_row_alt_bg ?? "#f1f5f9"}
+                    onChange={(value) => updateThemeField("table_row_alt_bg", value)}
+                    onReset={canResetTheme ? () => resetThemeField("table_row_alt_bg") : undefined}
+                  />
+                  <ColorField
+                    label="Bordures"
+                    value={editableConfig?.theme.border_color ?? "#e2e8f0"}
+                    onChange={(value) => updateThemeField("border_color", value)}
+                    onReset={canResetTheme ? () => resetThemeField("border_color") : undefined}
+                  />
+                </div>
+                <div className="space-y-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Fond</p>
+                  <div className="flex flex-wrap gap-3 text-sm text-slate-200">
+                    {(["none", "color", "image"] as const).map((mode) => (
+                      <label key={mode} className="flex items-center gap-2">
+                        <input
+                          type="radio"
+                          checked={editableConfig?.theme.background_mode === mode}
+                          onChange={() => updateThemeField("background_mode", mode)}
+                          className="h-4 w-4"
+                        />
+                        {mode === "none" ? "Aucun" : mode === "color" ? "Couleur" : "Image"}
+                      </label>
+                    ))}
+                  </div>
+                  {editableConfig?.theme.background_mode === "color" ? (
+                    <ColorField
+                      label="Couleur de fond"
+                      value={editableConfig?.theme.background_color ?? "#ffffff"}
+                      onChange={(value) => updateThemeField("background_color", value)}
+                      onReset={canResetTheme ? () => resetThemeField("background_color") : undefined}
+                    />
+                  ) : null}
+                  {editableConfig?.theme.background_mode === "image" ? (
+                    <div className="grid gap-4 sm:grid-cols-2">
+                      <label className="space-y-1 text-sm text-slate-200">
+                        Image (URL / chemin)
+                        <input
+                          type="text"
+                          value={editableConfig?.theme.background_image ?? ""}
+                          onChange={(event) => updateThemeField("background_image", event.target.value)}
+                          className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                        />
+                      </label>
+                      <label className="space-y-1 text-sm text-slate-200">
+                        Ajustement
+                        <select
+                          value={editableConfig?.theme.background_fit ?? "cover"}
+                          onChange={(event) =>
+                            updateThemeField("background_fit", event.target.value as PdfThemeConfig["background_fit"])
+                          }
+                          className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                        >
+                          <option value="cover">Cover</option>
+                          <option value="contain">Contain</option>
+                        </select>
+                      </label>
+                      <label className="space-y-1 text-sm text-slate-200">
+                        Position
+                        <input
+                          type="text"
+                          value={editableConfig?.theme.background_position ?? "center"}
+                          onChange={(event) => updateThemeField("background_position", event.target.value)}
+                          className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                        />
+                      </label>
+                    </div>
+                  ) : null}
+                  <label className="space-y-1 text-sm text-slate-200">
+                    Opacité
+                    <input
+                      type="range"
+                      min={0}
+                      max={1}
+                      step={0.05}
+                      value={editableConfig?.theme.background_opacity ?? 1}
+                      onChange={(event) => updateThemeField("background_opacity", Number(event.target.value))}
+                      className="w-full"
+                    />
+                    <span className="text-xs text-slate-400">
+                      {editableConfig?.theme.background_opacity ?? 1}
+                    </span>
+                  </label>
+                </div>
+                {contrastWarning ? (
+                  <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
+                    {contrastWarning}
+                  </p>
+                ) : null}
+                {acceptedColorFormats.length > 0 ? (
+                  <p className="text-xs text-slate-400">
+                    Formats couleur acceptés : {acceptedColorFormats.join(", ")}.
+                  </p>
+                ) : null}
+                {reportlabNotes.length > 0 ? (
+                  <div className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
+                    <p className="font-semibold text-slate-200">Compatibilité ReportLab</p>
+                    <ul className="mt-1 list-disc space-y-1 pl-4">
+                      {reportlabNotes.map((note) => (
+                        <li key={note}>{note}</li>
+                      ))}
+                    </ul>
+                  </div>
+                ) : null}
               </div>
             </details>
           </div>

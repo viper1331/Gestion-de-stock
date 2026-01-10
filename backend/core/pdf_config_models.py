@@ -3,7 +3,9 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
+
+from backend.core.pdf_theme import parse_color
 
 
 class PdfMargins(BaseModel):
@@ -78,6 +80,45 @@ class PdfAdvancedConfig(BaseModel):
     row_alt_bg_color: str = "#0f172a"
 
 
+class PdfThemeConfig(BaseModel):
+    font_family: str = "Helvetica"
+    base_font_size: int = 10
+    heading_font_size: int = 14
+    text_color: str = "#111827"
+    muted_text_color: str = "#64748b"
+    accent_color: str = "#4f46e5"
+    table_header_bg: str = "#1f2937"
+    table_header_text: str = "#f8fafc"
+    table_row_alt_bg: str = "#f1f5f9"
+    border_color: str = "#e2e8f0"
+    background_mode: Literal["none", "color", "image"] = "none"
+    background_color: str = "#ffffff"
+    background_image: str | None = None
+    background_opacity: float = Field(default=1.0, ge=0.0, le=1.0)
+    background_fit: Literal["cover", "contain"] = "cover"
+    background_position: str = "center"
+
+    @field_validator(
+        "text_color",
+        "muted_text_color",
+        "accent_color",
+        "table_header_bg",
+        "table_header_text",
+        "table_row_alt_bg",
+        "border_color",
+        "background_color",
+    )
+    @classmethod
+    def validate_colors(cls, value: str) -> str:
+        try:
+            parse_color(value)
+        except ValueError as exc:
+            raise ValueError(
+                f"Couleur invalide '{value}'. Formats acceptés: #RGB, #RRGGBB, #RRGGBBAA, rgb(), rgba(), transparent."
+            ) from exc
+        return value
+
+
 class PdfConfig(BaseModel):
     format: PdfFormatConfig = Field(default_factory=PdfFormatConfig)
     branding: PdfBrandingConfig = Field(default_factory=PdfBrandingConfig)
@@ -87,6 +128,7 @@ class PdfConfig(BaseModel):
     watermark: PdfWatermarkConfig = Field(default_factory=PdfWatermarkConfig)
     filename: PdfFilenameConfig = Field(default_factory=PdfFilenameConfig)
     advanced: PdfAdvancedConfig = Field(default_factory=PdfAdvancedConfig)
+    theme: PdfThemeConfig = Field(default_factory=PdfThemeConfig)
 
 
 class PdfConfigOverrides(BaseModel):
@@ -100,6 +142,7 @@ class PdfConfigOverrides(BaseModel):
     watermark: PdfWatermarkConfig | None = None
     filename: PdfFilenameConfig | None = None
     advanced: PdfAdvancedConfig | None = None
+    theme: PdfThemeConfig | None = None
 
 
 class PdfModuleConfig(BaseModel):
@@ -133,3 +176,9 @@ class PdfExportConfig(BaseModel):
     modules: dict[str, PdfModuleConfig] = Field(default_factory=dict)
     presets: dict[str, PdfPresetConfig] = Field(default_factory=dict)
     module_meta: dict[str, PdfModuleMeta] = Field(default_factory=dict)
+
+
+class PdfConfigMeta(BaseModel):
+    supported_fonts: list[str] = Field(default_factory=list)
+    accepted_color_formats: list[str] = Field(default_factory=list)
+    renderer_compatibility: dict[str, dict[str, object]] = Field(default_factory=dict)

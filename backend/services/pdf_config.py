@@ -26,9 +26,11 @@ from backend.core.pdf_config_models import (
     PdfModuleConfig,
     PdfModuleMeta,
     PdfPresetConfig,
+    PdfThemeConfig,
     PdfWatermarkConfig,
 )
 from backend.core.system_config import get_config, save_config
+from backend.services.pdf.theme import apply_theme_reportlab, resolve_reportlab_theme, theme_meta
 
 
 @dataclass(frozen=True)
@@ -104,6 +106,27 @@ def _default_advanced() -> PdfAdvancedConfig:
     )
 
 
+def _default_theme() -> PdfThemeConfig:
+    return PdfThemeConfig(
+        font_family="Helvetica",
+        base_font_size=10,
+        heading_font_size=14,
+        text_color="#111827",
+        muted_text_color="#64748b",
+        accent_color="#4f46e5",
+        table_header_bg="#1f2937",
+        table_header_text="#f8fafc",
+        table_row_alt_bg="#f1f5f9",
+        border_color="#e2e8f0",
+        background_mode="none",
+        background_color="#ffffff",
+        background_image=None,
+        background_opacity=1.0,
+        background_fit="cover",
+        background_position="center",
+    )
+
+
 def _default_config() -> PdfConfig:
     return PdfConfig(
         format=_default_format(),
@@ -114,13 +137,14 @@ def _default_config() -> PdfConfig:
         watermark=_default_watermark(),
         filename=_default_filename(),
         advanced=_default_advanced(),
+        theme=_default_theme(),
     )
 
 
 def _build_presets() -> dict[str, PdfPresetConfig]:
     base = _default_config()
     presets: dict[str, PdfPresetConfig] = {
-        "Standard Entreprise": PdfPresetConfig(name="Standard Entreprise", config=base.model_copy(deep=True)),
+        "Entreprise": PdfPresetConfig(name="Entreprise", config=base.model_copy(deep=True)),
         "Compact": PdfPresetConfig(
             name="Compact",
             config=base.model_copy(
@@ -132,14 +156,22 @@ def _build_presets() -> dict[str, PdfPresetConfig]:
                         margins=PdfMargins(top_mm=10, right_mm=10, bottom_mm=10, left_mm=10),
                         density="compact",
                     ),
-                    "advanced": PdfAdvancedConfig(
+                    "theme": PdfThemeConfig(
                         font_family="Helvetica",
                         base_font_size=9,
-                        header_bg_color="#0f172a",
-                        header_text_color="#e2e8f0",
-                        table_header_bg_color="#111827",
-                        table_header_text_color="#e2e8f0",
-                        row_alt_bg_color="#0b1220",
+                        heading_font_size=12,
+                        text_color="#0f172a",
+                        muted_text_color="#475569",
+                        accent_color="#6366f1",
+                        table_header_bg="#111827",
+                        table_header_text="#e2e8f0",
+                        table_row_alt_bg="#f8fafc",
+                        border_color="#e2e8f0",
+                        background_mode="none",
+                        background_color="#ffffff",
+                        background_opacity=1.0,
+                        background_fit="cover",
+                        background_position="center",
                     ),
                 }
             ),
@@ -154,6 +186,23 @@ def _build_presets() -> dict[str, PdfPresetConfig]:
                         show_pagination=True,
                         show_printed_at=True,
                         text="Document réservé à l'audit interne.",
+                    ),
+                    "theme": PdfThemeConfig(
+                        font_family="Helvetica",
+                        base_font_size=10,
+                        heading_font_size=14,
+                        text_color="#111827",
+                        muted_text_color="#4b5563",
+                        accent_color="#0ea5e9",
+                        table_header_bg="#0f172a",
+                        table_header_text="#f8fafc",
+                        table_row_alt_bg="#e2e8f0",
+                        border_color="#cbd5f5",
+                        background_mode="none",
+                        background_color="#ffffff",
+                        background_opacity=1.0,
+                        background_fit="cover",
+                        background_position="center",
                     ),
                 }
             ),
@@ -173,6 +222,23 @@ def _build_presets() -> dict[str, PdfPresetConfig]:
                         show_pagination=True,
                         show_printed_at=False,
                         text="Merci de votre confiance.",
+                    ),
+                    "theme": PdfThemeConfig(
+                        font_family="Helvetica",
+                        base_font_size=10,
+                        heading_font_size=14,
+                        text_color="#0f172a",
+                        muted_text_color="#64748b",
+                        accent_color="#14b8a6",
+                        table_header_bg="#0f172a",
+                        table_header_text="#f8fafc",
+                        table_row_alt_bg="#f1f5f9",
+                        border_color="#e2e8f0",
+                        background_mode="none",
+                        background_color="#ffffff",
+                        background_opacity=1.0,
+                        background_fit="cover",
+                        background_position="center",
                     ),
                 }
             ),
@@ -277,11 +343,41 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
 def _deep_merge(base: dict[str, Any], updates: dict[str, Any]) -> dict[str, Any]:
     merged: dict[str, Any] = dict(base)
     for key, value in updates.items():
+        if value is None and isinstance(merged.get(key), dict):
+            continue
         if isinstance(value, dict) and isinstance(merged.get(key), dict):
             merged[key] = _deep_merge(merged[key], value)
         else:
             merged[key] = value
     return merged
+
+
+def _normalize_config_data(raw: dict[str, Any] | None, defaults: PdfConfig) -> dict[str, Any]:
+    return _deep_merge(defaults.model_dump(), raw or {})
+
+
+def _normalize_export_config_data(raw: dict[str, Any], defaults: PdfExportConfig) -> dict[str, Any]:
+    data = dict(raw)
+    global_config = _normalize_config_data(data.get("global_config"), defaults.global_config)
+    presets: dict[str, Any] = {}
+    for name, preset in (data.get("presets") or {}).items():
+        preset_data = dict(preset or {})
+        preset_data["config"] = _normalize_config_data(preset_data.get("config"), defaults.global_config)
+        presets[name] = preset_data
+    modules: dict[str, Any] = {}
+    for key, module in (data.get("modules") or {}).items():
+        module_data = dict(module or {})
+        override_global = bool(module_data.get("override_global"))
+        module_config = module_data.get("config")
+        if override_global:
+            module_data["config"] = _deep_merge(global_config, module_config or {})
+        else:
+            module_data["config"] = module_config or {}
+        modules[key] = module_data
+    data["global_config"] = global_config
+    data["presets"] = presets
+    data["modules"] = modules
+    return data
 
 
 def _apply_overrides(base: PdfConfig, overrides: PdfConfigOverrides) -> PdfConfig:
@@ -302,6 +398,10 @@ def _diff_config(reference: PdfConfig, candidate: PdfConfig) -> PdfConfigOverrid
 
 def get_module_meta() -> dict[str, PdfModuleMeta]:
     return _build_module_meta()
+
+
+def get_pdf_config_meta() -> dict[str, object]:
+    return theme_meta()
 
 
 def _ensure_module_columns(module_key: str, config: PdfConfig) -> PdfConfig:
@@ -336,7 +436,8 @@ def get_pdf_export_config() -> PdfExportConfig:
     if isinstance(stored, PdfExportConfig):
         config = stored
     else:
-        config = PdfExportConfig.model_validate(stored)
+        normalized = _normalize_export_config_data(stored, defaults)
+        config = PdfExportConfig.model_validate(normalized)
 
     merged_presets = defaults.presets | config.presets
     module_meta = get_module_meta()
@@ -452,7 +553,8 @@ def draw_watermark(canvas: Any, config: PdfConfig, page_size: tuple[float, float
         canvas.setFillAlpha(config.watermark.opacity)
     except AttributeError:
         pass
-    canvas.setFont(config.advanced.font_family, config.advanced.base_font_size * 4)
+    theme = resolve_reportlab_theme(config.theme)
+    canvas.setFont(theme.font_family, theme.base_font_size * 4)
     canvas.setFillColor(colors.grey)
     canvas.translate(width / 2, height / 2)
     canvas.rotate(30)
@@ -469,8 +571,9 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
     pdf = canvas_mod.Canvas(output, pagesize=page_size)
     width, height = page_size
     margin_top, margin_right, margin_bottom, margin_left = margins_for_format(resolved.config.format)
+    theme = resolve_reportlab_theme(resolved.config.theme)
 
-    pdf.setFont(resolved.config.advanced.font_family, resolved.config.advanced.base_font_size)
+    apply_theme_reportlab(pdf, page_size, resolved.config.theme)
     draw_watermark(pdf, resolved.config, page_size)
 
     def draw_header() -> float:
@@ -481,9 +584,11 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
             module=resolved.module_key,
             generated_at=datetime.now().strftime("%d/%m/%Y %H:%M"),
         )
-        pdf.setFont(resolved.config.advanced.font_family, resolved.config.advanced.base_font_size + 4)
+        pdf.setFillColor(theme.text_color)
+        pdf.setFont(theme.font_family, theme.heading_font_size)
         pdf.drawString(margin_left, height - margin_top, title)
-        pdf.setFont(resolved.config.advanced.font_family, resolved.config.advanced.base_font_size)
+        pdf.setFont(theme.font_family, theme.base_font_size)
+        pdf.setFillColor(theme.muted_text_color)
         subtitle = resolved.config.header.subtitle_template.format(
             module_title=resolved.module_label,
             module=resolved.module_key,
@@ -503,14 +608,28 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
         if resolved.config.footer.show_pagination:
             footer_bits.append(f"Page {page_number}")
         footer_text = " — ".join(footer_bits)
-        pdf.setFont(resolved.config.advanced.font_family, resolved.config.advanced.base_font_size - 1)
+        pdf.setFillColor(theme.muted_text_color)
+        pdf.setFont(theme.font_family, theme.base_font_size - 1)
         pdf.drawRightString(width - margin_right, margin_bottom - 4, footer_text)
 
     y = draw_header()
-    pdf.setFont(resolved.config.advanced.font_family, resolved.config.advanced.base_font_size + 1)
+    pdf.setFillColor(theme.text_color)
+    pdf.setFont(theme.font_family, theme.base_font_size)
+    paragraph_lines = [
+        "Ce paragraphe illustre la couleur principale du texte.",
+        "Vous pouvez ajuster police, tailles et accents dans l'onglet Thème.",
+    ]
+    for line in paragraph_lines:
+        pdf.drawString(margin_left, y, line)
+        y -= 14
+    pdf.setFillColor(theme.muted_text_color)
+    pdf.drawString(margin_left, y, "Texte secondaire pour les informations contextuelles.")
+    y -= 20
+    pdf.setFillColor(theme.text_color)
+    pdf.setFont(theme.font_family, theme.base_font_size + 1)
     pdf.drawString(margin_left, y, "Aperçu de tableau")
     y -= 18
-    pdf.setFont(resolved.config.advanced.font_family, resolved.config.advanced.base_font_size)
+    pdf.setFont(theme.font_family, theme.base_font_size)
     columns = resolved.config.content.columns or [
         PdfColumnConfig(key="col1", label="Colonne 1", visible=True),
         PdfColumnConfig(key="col2", label="Colonne 2", visible=True),
@@ -520,11 +639,21 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
         visible_columns = columns[:1]
     table_width = width - margin_left - margin_right
     column_width = table_width / len(visible_columns)
+    header_height = 16
+    pdf.setFillColor(theme.table_header_bg)
+    pdf.rect(margin_left, y - header_height + 10, table_width, header_height, stroke=0, fill=1)
+    pdf.setFillColor(theme.table_header_text)
+    pdf.setStrokeColor(theme.border_color)
+    pdf.rect(margin_left, y - header_height + 10, table_width, header_height, stroke=1, fill=0)
     for index, column in enumerate(visible_columns):
         x = margin_left + index * column_width
         pdf.drawString(x + 4, y, column.label)
-    y -= 14
+    y -= 18
     for row in range(6):
+        if row % 2 == 1:
+            pdf.setFillColor(theme.table_row_alt_bg)
+            pdf.rect(margin_left, y - 10, table_width, 14, stroke=0, fill=1)
+            pdf.setFillColor(theme.text_color)
         for index, column in enumerate(visible_columns):
             x = margin_left + index * column_width
             pdf.drawString(x + 4, y, f"{column.label} {row + 1}")
@@ -532,9 +661,11 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
 
     draw_footer(1)
     pdf.showPage()
+    apply_theme_reportlab(pdf, page_size, resolved.config.theme)
     draw_watermark(pdf, resolved.config, page_size)
     y = draw_header()
-    pdf.setFont(resolved.config.advanced.font_family, resolved.config.advanced.base_font_size)
+    pdf.setFillColor(theme.text_color)
+    pdf.setFont(theme.font_family, theme.base_font_size)
     pdf.drawString(margin_left, y, "Page de démonstration supplémentaire.")
     draw_footer(2)
     pdf.save()
