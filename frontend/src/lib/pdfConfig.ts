@@ -267,16 +267,16 @@ export const normalizePdfConfig = (raw?: Partial<PdfConfig> | null): PdfConfig =
   deepMerge(structuredClone(DEFAULT_PDF_CONFIG), raw ?? {});
 
 export const normalizePdfExportConfig = (raw: PdfExportConfig): PdfExportConfig => {
-  const globalConfig = normalizePdfConfig(raw.global_config ?? null);
+  const globalConfig = normalizePdfConfig(raw?.global_config ?? null);
   const presets: Record<string, PdfPresetConfig> = {};
-  Object.entries(raw.presets ?? {}).forEach(([name, preset]) => {
+  Object.entries(raw?.presets ?? {}).forEach(([name, preset]) => {
     presets[name] = {
       ...preset,
       config: normalizePdfConfig(preset?.config ?? null)
     };
   });
   const modules: Record<string, PdfModuleConfig> = {};
-  Object.entries(raw.modules ?? {}).forEach(([key, moduleConfig]) => {
+  Object.entries(raw?.modules ?? {}).forEach(([key, moduleConfig]) => {
     const overrideGlobal = moduleConfig?.override_global ?? false;
     const rawModuleConfig = moduleConfig?.config ?? {};
     modules[key] = {
@@ -291,7 +291,8 @@ export const normalizePdfExportConfig = (raw: PdfExportConfig): PdfExportConfig 
     ...raw,
     global_config: globalConfig,
     presets,
-    modules
+    modules,
+    module_meta: raw?.module_meta ?? {}
   };
 };
 
@@ -302,7 +303,7 @@ export async function fetchPdfConfig(): Promise<PdfExportConfig> {
 
 export async function updatePdfConfig(payload: PdfExportConfig): Promise<PdfExportConfig> {
   const { data } = await api.post<PdfExportConfig>("/admin/pdf-config", payload);
-  return data;
+  return normalizePdfExportConfig(data);
 }
 
 export async function previewPdfConfig(payload: {
