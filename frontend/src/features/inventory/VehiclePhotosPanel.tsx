@@ -5,6 +5,7 @@ import clsx from "clsx";
 import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
 import { usePersistentBoolean } from "../../hooks/usePersistentBoolean";
+import { AppTextInput } from "components/AppTextInput";
 
 interface VehiclePhoto {
   id: number;
@@ -204,7 +205,7 @@ export function VehiclePhotosPanel() {
             <span className="font-semibold text-slate-700 dark:text-slate-200">
               Ajouter une photo
             </span>
-            <input
+            <AppTextInput
               type="file"
               accept="image/*"
               onChange={handleFileChange}

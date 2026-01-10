@@ -3,6 +3,8 @@ import { QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react
 import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 interface Supplier {
   id: number;
@@ -482,7 +484,7 @@ export function PurchaseOrdersPanel({
                   <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-note">
                     Note
                   </label>
-                  <textarea
+                  <AppTextArea
                     id="edit-po-note"
                     value={editNote}
                     onChange={(event) => setEditNote(event.target.value)}
@@ -557,7 +559,7 @@ export function PurchaseOrdersPanel({
                   <label className="text-xs font-semibold text-slate-300" htmlFor="po-note">
                     Note
                   </label>
-                  <textarea
+                  <AppTextArea
                     id="po-note"
                     value={draftNote}
                     onChange={(event) => setDraftNote(event.target.value)}
@@ -594,7 +596,7 @@ export function PurchaseOrdersPanel({
                           </option>
                         ))}
                       </select>
-                      <input
+                      <AppTextInput
                         type="number"
                         min={1}
                         value={line.quantity}

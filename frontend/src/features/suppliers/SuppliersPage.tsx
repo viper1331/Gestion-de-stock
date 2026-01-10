@@ -5,6 +5,8 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 const DEFAULT_SUPPLIER_MODULE = "suppliers";
 
@@ -310,7 +312,7 @@ export function SuppliersPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-name">
                   Nom de l'entreprise
                 </label>
-                <input
+                <AppTextInput
                   id="supplier-name"
                   name="name"
                   defaultValue={formValues.name}
@@ -323,7 +325,7 @@ export function SuppliersPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-contact">
                   Contact principal
                 </label>
-                <input
+                <AppTextInput
                   id="supplier-contact"
                   name="contact_name"
                   defaultValue={formValues.contact_name ?? ""}
@@ -335,7 +337,7 @@ export function SuppliersPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-phone">
                   Téléphone
                 </label>
-                <input
+                <AppTextInput
                   id="supplier-phone"
                   name="phone"
                   defaultValue={formValues.phone ?? ""}
@@ -347,7 +349,7 @@ export function SuppliersPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-email">
                   Email
                 </label>
-                <input
+                <AppTextInput
                   id="supplier-email"
                   name="email"
                   type="email"
@@ -360,7 +362,7 @@ export function SuppliersPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-address">
                   Adresse
                 </label>
-                <textarea
+                <AppTextArea
                   id="supplier-address"
                   name="address"
                   defaultValue={formValues.address ?? ""}
@@ -377,7 +379,7 @@ export function SuppliersPage() {
                 <div className="flex flex-wrap gap-3">
                   {moduleOptions.map((option) => (
                     <label key={option.key} className="flex items-center gap-2 text-xs text-slate-200">
-                      <input
+                      <AppTextInput
                         type="checkbox"
                         name="modules"
                         value={option.key}

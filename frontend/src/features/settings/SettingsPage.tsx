@@ -17,6 +17,9 @@ import {
   isHomePageConfigKey
 } from "../home/homepageConfig";
 import { DebugFlags } from "../../lib/debug";
+import { useSpellcheckSettings } from "../../app/spellcheckSettings";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
 
@@ -158,6 +161,8 @@ const HOMEPAGE_FIELDS: Array<{
 export function SettingsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const { settings: spellcheckSettings, updateSettings: updateSpellcheckSettings } =
+    useSpellcheckSettings();
   const queryClient = useQueryClient();
   const { data: entries = [], isFetching } = useQuery({
     queryKey: ["config", "global"],
@@ -587,6 +592,53 @@ export function SettingsPage() {
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
         <div className="space-y-4">
+          <header className="space-y-1">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+              Orthographe
+            </h3>
+            <p className="text-xs text-slate-400">
+              Activez le correcteur global et choisissez la langue de vérification.
+            </p>
+          </header>
+          <div className="grid gap-3 sm:grid-cols-3">
+            <label className="flex items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+              <span className="text-xs font-semibold text-slate-200">Correcteur activé</span>
+              <input
+                type="checkbox"
+                checked={spellcheckSettings.enabled}
+                onChange={(event) => updateSpellcheckSettings({ enabled: event.target.checked })}
+                className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+              />
+            </label>
+            <label className="flex items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
+              <span className="text-xs font-semibold text-slate-200">
+                Vérification pendant la saisie
+              </span>
+              <input
+                type="checkbox"
+                checked={spellcheckSettings.live}
+                onChange={(event) => updateSpellcheckSettings({ live: event.target.checked })}
+                className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+              />
+            </label>
+            <label className="flex flex-col gap-2 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200">
+              Langue
+              <select
+                value={spellcheckSettings.language}
+                onChange={(event) =>
+                  updateSpellcheckSettings({ language: event.target.value as "fr" | "en" })
+                }
+                className="rounded-md border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+              >
+                <option value="fr">Français</option>
+                <option value="en">Anglais</option>
+              </select>
+            </label>
+          </div>
+        </div>
+      </div>
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+        <div className="space-y-4">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
             <header className="space-y-1">
               <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
@@ -633,7 +685,7 @@ export function SettingsPage() {
                     </p>
                   </div>
                   {isMultiline ? (
-                    <textarea
+                    <AppTextArea
                       value={pendingValue}
                       onChange={(event) =>
                         setHomepageChanges((prev) => ({ ...prev, [field.key]: event.target.value }))
@@ -642,7 +694,7 @@ export function SettingsPage() {
                       className="h-28 w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                     />
                   ) : (
-                    <input
+                    <AppTextInput
                       type={field.type === "url" ? "text" : "text"}
                       value={pendingValue}
                       onChange={(event) =>
@@ -699,7 +751,7 @@ export function SettingsPage() {
                   <p className="text-sm font-semibold text-slate-200">Frontend debug</p>
                   <p className="text-xs text-slate-400">Journalise les interactions UI en direct.</p>
                 </div>
-                <input
+                <AppTextInput
                   type="checkbox"
                   checked={debugConfig.frontend_debug}
                   onChange={(event) => handleDebugToggle("frontend_debug", event.target.checked)}
@@ -712,7 +764,7 @@ export function SettingsPage() {
                   <p className="text-sm font-semibold text-slate-200">Backend debug</p>
                   <p className="text-xs text-slate-400">Active les journaux enrichis côté serveur.</p>
                 </div>
-                <input
+                <AppTextInput
                   type="checkbox"
                   checked={debugConfig.backend_debug}
                   onChange={(event) => handleDebugToggle("backend_debug", event.target.checked)}
@@ -725,7 +777,7 @@ export function SettingsPage() {
                   <p className="text-sm font-semibold text-slate-200">Inventory debug (drag & drop)</p>
                   <p className="text-xs text-slate-400">Trace les positions et affectations d'inventaire.</p>
                 </div>
-                <input
+                <AppTextInput
                   type="checkbox"
                   checked={debugConfig.inventory_debug}
                   onChange={(event) => handleDebugToggle("inventory_debug", event.target.checked)}
@@ -738,7 +790,7 @@ export function SettingsPage() {
                   <p className="text-sm font-semibold text-slate-200">Network debug (API)</p>
                   <p className="text-xs text-slate-400">Capture les requêtes/réponses API en console.</p>
                 </div>
-                <input
+                <AppTextInput
                   type="checkbox"
                   checked={debugConfig.network_debug}
                   onChange={(event) => handleDebugToggle("network_debug", event.target.checked)}
@@ -789,7 +841,7 @@ export function SettingsPage() {
                               <p className="text-[11px] text-slate-500">{description}</p>
                             ) : null}
                           </div>
-                          <input
+                          <AppTextInput
                             value={pendingValue}
                             onChange={(event) => setChanges((prev) => ({ ...prev, [key]: event.target.value }))}
                             className="flex-1 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
@@ -865,7 +917,7 @@ export function SettingsPage() {
               <h3 className="text-sm font-semibold text-white">Importer une sauvegarde</h3>
               <p className="text-xs text-slate-400">Restaurez une archive créée précédemment.</p>
               <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <input
+                <AppTextInput
                   ref={fileInputRef}
                   type="file"
                   accept=".zip"
@@ -890,7 +942,7 @@ export function SettingsPage() {
               ) : (
                 <form onSubmit={handleScheduleSubmit} className="mt-3 space-y-4">
                   <label className="flex items-center gap-2 text-sm text-slate-200">
-                    <input
+                    <AppTextInput
                       type="checkbox"
                       checked={scheduleForm.enabled}
                       onChange={(event) =>
@@ -910,7 +962,7 @@ export function SettingsPage() {
                           key={day.value}
                           className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-2 text-xs text-slate-200"
                         >
-                          <input
+                          <AppTextInput
                             type="checkbox"
                             checked={scheduleForm.days.includes(day.value)}
                             onChange={() => toggleDay(day.value)}
@@ -927,7 +979,7 @@ export function SettingsPage() {
                     <div className="space-y-2">
                       {backupTimeInputs.map((timeValue, index) => (
                         <div key={`backup-time-${index}`} className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                          <input
+                          <AppTextInput
                             type="time"
                             value={timeValue}
                             onChange={(event) => handleTimeChange(index, event.target.value)}

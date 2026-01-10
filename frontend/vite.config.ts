@@ -8,6 +8,11 @@ const workspaceRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url))
 
 export default defineConfig({
   plugins: [react()],
+  resolve: {
+    alias: {
+      components: path.resolve(workspaceRoot, "frontend/src/components")
+    }
+  },
   server: {
     fs: {
       allow: [workspaceRoot]

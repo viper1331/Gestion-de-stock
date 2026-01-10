@@ -17,6 +17,7 @@ import {
   normalizePdfExportConfig,
   updatePdfConfig
 } from "../../lib/pdfConfig";
+import { AppTextInput } from "components/AppTextInput";
 
 const DEFAULT_PREVIEW_MESSAGE = "Utilisez le bouton Aperçu pour générer un PDF.";
 const DEFAULT_THEME: PdfThemeConfig = DEFAULT_PDF_THEME;
@@ -596,7 +597,7 @@ export function PdfStudioPage() {
                 </p>
               </div>
               <label className="flex items-center gap-2 text-xs font-semibold uppercase text-slate-400">
-                <input
+                <AppTextInput
                   type="checkbox"
                   checked={isOverride}
                   onChange={(event) => handleOverrideToggle(event.target.checked)}
@@ -704,7 +705,7 @@ export function PdfStudioPage() {
                   {(["top_mm", "right_mm", "bottom_mm", "left_mm"] as const).map((key) => (
                     <label key={key} className="space-y-1 text-xs text-slate-300">
                       {key.replace("_mm", "").toUpperCase()} (mm)
-                      <input
+                      <AppTextInput
                         type="number"
                         min={0}
                         value={editableConfig?.format.margins[key] ?? 0}
@@ -731,7 +732,7 @@ export function PdfStudioPage() {
               <summary className="cursor-pointer text-sm font-semibold text-slate-200">Branding</summary>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="flex items-center gap-2 text-sm text-slate-200">
-                  <input
+                  <AppTextInput
                     type="checkbox"
                     checked={editableConfig?.branding.logo_enabled ?? false}
                     onChange={(event) =>
@@ -746,7 +747,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Source logo (URL)
-                  <input
+                  <AppTextInput
                     type="text"
                     value={editableConfig?.branding.logo_url ?? ""}
                     onChange={(event) =>
@@ -760,7 +761,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Taille logo (mm)
-                  <input
+                  <AppTextInput
                     type="number"
                     min={10}
                     value={editableConfig?.branding.logo_width_mm ?? 24}
@@ -795,7 +796,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Nom société / service
-                  <input
+                  <AppTextInput
                     type="text"
                     value={editableConfig?.branding.company_name ?? ""}
                     onChange={(event) =>
@@ -809,7 +810,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Couleur d'accent
-                  <input
+                  <AppTextInput
                     type="color"
                     value={editableConfig?.branding.accent_color ?? "#4f46e5"}
                     onChange={(event) =>
@@ -827,7 +828,7 @@ export function PdfStudioPage() {
               <summary className="cursor-pointer text-sm font-semibold text-slate-200">En-tête</summary>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="flex items-center gap-2 text-sm text-slate-200">
-                  <input
+                  <AppTextInput
                     type="checkbox"
                     checked={editableConfig?.header.enabled ?? false}
                     onChange={(event) =>
@@ -842,7 +843,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Titre
-                  <input
+                  <AppTextInput
                     type="text"
                     value={editableConfig?.header.title_template ?? ""}
                     onChange={(event) =>
@@ -856,7 +857,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Sous-titre
-                  <input
+                  <AppTextInput
                     type="text"
                     value={editableConfig?.header.subtitle_template ?? ""}
                     onChange={(event) =>
@@ -915,7 +916,7 @@ export function PdfStudioPage() {
                     </select>
                   </label>
                   <label className="flex items-center gap-2 text-sm text-slate-200">
-                    <input
+                    <AppTextInput
                       type="checkbox"
                       checked={editableConfig?.content.show_totals ?? false}
                       onChange={(event) =>
@@ -948,7 +949,7 @@ export function PdfStudioPage() {
                           {column.label}
                         </span>
                         <label className="flex items-center gap-2 text-xs text-slate-400">
-                          <input
+                          <AppTextInput
                             type="checkbox"
                             checked={column.visible}
                             onChange={(event) =>
@@ -993,7 +994,7 @@ export function PdfStudioPage() {
               <summary className="cursor-pointer text-sm font-semibold text-slate-200">Pied de page</summary>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="flex items-center gap-2 text-sm text-slate-200">
-                  <input
+                  <AppTextInput
                     type="checkbox"
                     checked={editableConfig?.footer.enabled ?? false}
                     onChange={(event) =>
@@ -1007,7 +1008,7 @@ export function PdfStudioPage() {
                   Afficher le pied de page
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-200">
-                  <input
+                  <AppTextInput
                     type="checkbox"
                     checked={editableConfig?.footer.show_pagination ?? false}
                     onChange={(event) =>
@@ -1021,7 +1022,7 @@ export function PdfStudioPage() {
                   Pagination
                 </label>
                 <label className="flex items-center gap-2 text-sm text-slate-200">
-                  <input
+                  <AppTextInput
                     type="checkbox"
                     checked={editableConfig?.footer.show_printed_at ?? false}
                     onChange={(event) =>
@@ -1036,7 +1037,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Texte libre
-                  <input
+                  <AppTextInput
                     type="text"
                     value={editableConfig?.footer.text ?? ""}
                     onChange={(event) =>
@@ -1054,7 +1055,7 @@ export function PdfStudioPage() {
               <summary className="cursor-pointer text-sm font-semibold text-slate-200">Filigrane</summary>
               <div className="mt-4 grid gap-4 sm:grid-cols-2">
                 <label className="flex items-center gap-2 text-sm text-slate-200">
-                  <input
+                  <AppTextInput
                     type="checkbox"
                     checked={editableConfig?.watermark.enabled ?? false}
                     onChange={(event) =>
@@ -1069,7 +1070,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Texte
-                  <input
+                  <AppTextInput
                     type="text"
                     value={editableConfig?.watermark.text ?? ""}
                     onChange={(event) =>
@@ -1083,7 +1084,7 @@ export function PdfStudioPage() {
                 </label>
                 <label className="space-y-1 text-sm text-slate-200">
                   Opacité
-                  <input
+                  <AppTextInput
                     type="range"
                     min={0}
                     max={0.3}
@@ -1105,7 +1106,7 @@ export function PdfStudioPage() {
               <div className="mt-4 space-y-3">
                 <label className="space-y-1 text-sm text-slate-200">
                   Pattern
-                  <input
+                  <AppTextInput
                     type="text"
                     value={editableConfig?.filename.pattern ?? ""}
                     onChange={(event) =>
@@ -1127,78 +1128,63 @@ export function PdfStudioPage() {
               </div>
             </details>
             <details className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-              <summary className="cursor-pointer text-sm font-semibold text-slate-200">Thème</summary>
-              <div className="mt-4 space-y-6">
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <label className="space-y-1 text-sm text-slate-200">
-                    Police
-                    <select
-                      value={editableConfig?.theme.font_family ?? "Helvetica"}
-                      onChange={(event) => updateThemeField("font_family", event.target.value)}
-                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
-                    >
-                      {supportedFonts.map((font) => (
-                        <option key={font} value={font}>
-                          {font}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label className="space-y-1 text-sm text-slate-200">
-                    Taille base
-                    <input
-                      type="range"
-                      min={8}
-                      max={18}
-                      step={1}
-                      value={editableConfig?.theme.base_font_size ?? 10}
-                      onChange={(event) => updateThemeField("base_font_size", Number(event.target.value))}
-                      className="w-full"
-                    />
-                    <span className="text-xs text-slate-400">
-                      {editableConfig?.theme.base_font_size ?? 10} pt
-                    </span>
-                  </label>
-                  <label className="space-y-1 text-sm text-slate-200">
-                    Taille titres
-                    <input
-                      type="range"
-                      min={10}
-                      max={24}
-                      step={1}
-                      value={editableConfig?.theme.heading_font_size ?? 14}
-                      onChange={(event) => updateThemeField("heading_font_size", Number(event.target.value))}
-                      className="w-full"
-                    />
-                    <span className="text-xs text-slate-400">
-                      {editableConfig?.theme.heading_font_size ?? 14} pt
-                    </span>
-                  </label>
-                </div>
-                <div className="grid gap-4 sm:grid-cols-2">
-                  <ColorField
-                    label="Texte"
-                    value={editableConfig?.theme.text_color ?? "#111827"}
-                    onChange={(value) => updateThemeField("text_color", value)}
-                    onReset={canResetTheme ? () => resetThemeField("text_color") : undefined}
+              <summary className="cursor-pointer text-sm font-semibold text-slate-200">Avancé</summary>
+              <div className="mt-4 grid gap-4 sm:grid-cols-2">
+                <label className="space-y-1 text-sm text-slate-200">
+                  Police
+                  <AppTextInput
+                    type="text"
+                    value={editableConfig?.advanced.font_family ?? ""}
+                    onChange={(event) =>
+                      updateConfigState((config) => ({
+                        ...config,
+                        advanced: { ...config.advanced, font_family: event.target.value }
+                      }))
+                    }
+                    className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
                   />
-                  <ColorField
-                    label="Texte secondaire"
-                    value={editableConfig?.theme.muted_text_color ?? "#64748b"}
-                    onChange={(value) => updateThemeField("muted_text_color", value)}
-                    onReset={canResetTheme ? () => resetThemeField("muted_text_color") : undefined}
+                </label>
+                <label className="space-y-1 text-sm text-slate-200">
+                  Taille base
+                  <AppTextInput
+                    type="number"
+                    min={8}
+                    value={editableConfig?.advanced.base_font_size ?? 10}
+                    onChange={(event) =>
+                      updateConfigState((config) => ({
+                        ...config,
+                        advanced: { ...config.advanced, base_font_size: Number(event.target.value) }
+                      }))
+                    }
+                    className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
                   />
-                  <ColorField
-                    label="Accent"
-                    value={editableConfig?.theme.accent_color ?? "#4f46e5"}
-                    onChange={(value) => updateThemeField("accent_color", value)}
-                    onReset={canResetTheme ? () => resetThemeField("accent_color") : undefined}
+                </label>
+                <label className="space-y-1 text-sm text-slate-200">
+                  Couleur en-tête
+                  <AppTextInput
+                    type="color"
+                    value={editableConfig?.advanced.header_bg_color ?? "#111827"}
+                    onChange={(event) =>
+                      updateConfigState((config) => ({
+                        ...config,
+                        advanced: { ...config.advanced, header_bg_color: event.target.value }
+                      }))
+                    }
+                    className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
                   />
-                  <ColorField
-                    label="Header tableau"
-                    value={editableConfig?.theme.table_header_bg ?? "#1f2937"}
-                    onChange={(value) => updateThemeField("table_header_bg", value)}
-                    onReset={canResetTheme ? () => resetThemeField("table_header_bg") : undefined}
+                </label>
+                <label className="space-y-1 text-sm text-slate-200">
+                  Couleur texte en-tête
+                  <AppTextInput
+                    type="color"
+                    value={editableConfig?.advanced.header_text_color ?? "#f8fafc"}
+                    onChange={(event) =>
+                      updateConfigState((config) => ({
+                        ...config,
+                        advanced: { ...config.advanced, header_text_color: event.target.value }
+                      }))
+                    }
+                    className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
                   />
                   <ColorField
                     label="Texte header tableau"
@@ -1324,7 +1310,7 @@ export function PdfStudioPage() {
               <p className="text-xs text-slate-400">{previewStatus}</p>
             </div>
             <label className="flex items-center gap-2 text-xs text-slate-300">
-              <input
+              <AppTextInput
                 type="checkbox"
                 checked={autoPreview}
                 onChange={(event) => setAutoPreview(event.target.checked)}

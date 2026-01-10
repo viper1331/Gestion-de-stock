@@ -6,6 +6,8 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 interface Collaborator {
   id: number;
@@ -494,7 +496,7 @@ export function DotationsPage() {
                                   <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-quantity-${dotation.id}`}>
                                     Quantité
                                   </label>
-                                  <input
+                                  <AppTextInput
                                     id={`edit-quantity-${dotation.id}`}
                                     type="number"
                                     min={1}
@@ -516,7 +518,7 @@ export function DotationsPage() {
                                   <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-perceived-${dotation.id}`}>
                                     Date de perception
                                   </label>
-                                  <input
+                                  <AppTextInput
                                     id={`edit-perceived-${dotation.id}`}
                                     type="date"
                                     value={editFormValues?.perceived_at ?? dotation.perceived_at.slice(0, 10)}
@@ -538,7 +540,7 @@ export function DotationsPage() {
                                 <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-notes-${dotation.id}`}>
                                   Notes
                                 </label>
-                                <textarea
+                                <AppTextArea
                                   id={`edit-notes-${dotation.id}`}
                                   rows={3}
                                   value={editFormValues?.notes ?? dotation.notes ?? ""}
@@ -557,7 +559,7 @@ export function DotationsPage() {
                               </div>
                               <div className="flex flex-wrap items-center gap-4">
                                 <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-lost-${dotation.id}`}>
-                                  <input
+                                  <AppTextInput
                                     id={`edit-lost-${dotation.id}`}
                                     type="checkbox"
                                     checked={editFormValues?.is_lost ?? dotation.is_lost}
@@ -576,7 +578,7 @@ export function DotationsPage() {
                                   Perte déclarée
                                 </label>
                                 <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-degraded-${dotation.id}`}>
-                                  <input
+                                  <AppTextInput
                                     id={`edit-degraded-${dotation.id}`}
                                     type="checkbox"
                                     checked={editFormValues?.is_degraded ?? dotation.is_degraded}
@@ -700,7 +702,7 @@ export function DotationsPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-quantity">
                   Quantité
                 </label>
-                <input
+                <AppTextInput
                   id="dotation-quantity"
                   type="number"
                   min={1}
@@ -717,7 +719,7 @@ export function DotationsPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-perceived-at">
                   Date de perception
                 </label>
-                <input
+                <AppTextInput
                   id="dotation-perceived-at"
                   type="date"
                   value={formValues.perceived_at}
@@ -731,7 +733,7 @@ export function DotationsPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-notes">
                   Notes
                 </label>
-                <textarea
+                <AppTextArea
                   id="dotation-notes"
                   value={formValues.notes}
                   onChange={(event) => setFormValues((prev) => ({ ...prev, notes: event.target.value }))}
@@ -743,7 +745,7 @@ export function DotationsPage() {
               </div>
               <div className="flex items-center gap-4">
                 <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor="dotation-lost">
-                  <input
+                  <AppTextInput
                     id="dotation-lost"
                     type="checkbox"
                     checked={formValues.is_lost}
@@ -758,7 +760,7 @@ export function DotationsPage() {
                   className="flex items-center gap-2 text-xs font-semibold text-slate-300"
                   htmlFor="dotation-degraded"
                 >
-                  <input
+                  <AppTextInput
                     id="dotation-degraded"
                     type="checkbox"
                     checked={formValues.is_degraded}

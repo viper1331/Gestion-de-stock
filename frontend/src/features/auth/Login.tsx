@@ -1,5 +1,6 @@
 import { FormEvent, useState } from "react";
 import { useAuth } from "./useAuth";
+import { AppTextInput } from "components/AppTextInput";
 
 export function Login() {
   const { login, isLoading, error } = useAuth();
@@ -22,7 +23,7 @@ export function Login() {
         <label className="block text-sm font-medium text-slate-200" htmlFor="username">
           Identifiant
         </label>
-        <input
+        <AppTextInput
           id="username"
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
           value={username}
@@ -34,7 +35,7 @@ export function Login() {
         <label className="block text-sm font-medium text-slate-200" htmlFor="password">
           Mot de passe
         </label>
-        <input
+        <AppTextInput
           id="password"
           type="password"
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
@@ -44,7 +45,7 @@ export function Login() {
         />
       </div>
       <label className="flex items-center gap-2 text-sm text-slate-300">
-        <input
+        <AppTextInput
           type="checkbox"
           checked={remember}
           onChange={(event) => setRemember(event.target.checked)}

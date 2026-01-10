@@ -5,6 +5,7 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
+import { AppTextInput } from "components/AppTextInput";
 
 const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
 
@@ -305,7 +306,7 @@ export function BarcodePage() {
       <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-4">
         <label className="flex flex-col text-sm text-slate-300">
           SKU
-          <input
+          <AppTextInput
             value={sku}
             onChange={(event) => setSku(event.target.value)}
             list="known-barcode-options"

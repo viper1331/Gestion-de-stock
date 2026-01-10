@@ -8,6 +8,7 @@ import {
   CustomFieldDefinition
 } from "../../lib/customFields";
 import { useAuth } from "../auth/useAuth";
+import { AppTextInput } from "components/AppTextInput";
 
 interface VehicleTypeEntry {
   id: number;
@@ -338,7 +339,7 @@ export function AdminSettingsPage() {
             </h3>
             <label className="block space-y-1">
               <span className="text-xs font-semibold text-slate-300">Code</span>
-              <input
+              <AppTextInput
                 value={vehicleTypeForm.code}
                 onChange={(event) => setVehicleTypeForm((prev) => ({ ...prev, code: event.target.value }))}
                 className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
@@ -346,14 +347,14 @@ export function AdminSettingsPage() {
             </label>
             <label className="block space-y-1">
               <span className="text-xs font-semibold text-slate-300">Libellé</span>
-              <input
+              <AppTextInput
                 value={vehicleTypeForm.label}
                 onChange={(event) => setVehicleTypeForm((prev) => ({ ...prev, label: event.target.value }))}
                 className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
               />
             </label>
             <label className="flex items-center gap-2 text-xs text-slate-300">
-              <input
+              <AppTextInput
                 type="checkbox"
                 checked={vehicleTypeForm.is_active}
                 onChange={(event) => setVehicleTypeForm((prev) => ({ ...prev, is_active: event.target.checked }))}
@@ -477,7 +478,7 @@ export function AdminSettingsPage() {
               </h3>
               <label className="block space-y-1">
                 <span className="text-xs font-semibold text-slate-300">Clé</span>
-                <input
+                <AppTextInput
                   value={customFieldForm.key}
                   onChange={(event) => setCustomFieldForm((prev) => ({ ...prev, key: event.target.value }))}
                   className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
@@ -485,7 +486,7 @@ export function AdminSettingsPage() {
               </label>
               <label className="block space-y-1">
                 <span className="text-xs font-semibold text-slate-300">Libellé</span>
-                <input
+                <AppTextInput
                   value={customFieldForm.label}
                   onChange={(event) => setCustomFieldForm((prev) => ({ ...prev, label: event.target.value }))}
                   className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
@@ -506,7 +507,7 @@ export function AdminSettingsPage() {
                 </select>
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-300">
-                <input
+                <AppTextInput
                   type="checkbox"
                   checked={customFieldForm.required}
                   onChange={(event) => setCustomFieldForm((prev) => ({ ...prev, required: event.target.checked }))}
@@ -516,7 +517,7 @@ export function AdminSettingsPage() {
               </label>
               <label className="block space-y-1">
                 <span className="text-xs font-semibold text-slate-300">Valeur par défaut</span>
-                <input
+                <AppTextInput
                   value={customFieldForm.defaultValue}
                   onChange={(event) => setCustomFieldForm((prev) => ({ ...prev, defaultValue: event.target.value }))}
                   className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
@@ -526,7 +527,7 @@ export function AdminSettingsPage() {
               {customFieldForm.field_type === "select" ? (
                 <label className="block space-y-1">
                   <span className="text-xs font-semibold text-slate-300">Options (séparées par des virgules)</span>
-                  <input
+                  <AppTextInput
                     value={customFieldForm.options}
                     onChange={(event) => setCustomFieldForm((prev) => ({ ...prev, options: event.target.value }))}
                     className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
@@ -535,7 +536,7 @@ export function AdminSettingsPage() {
               ) : null}
               <label className="block space-y-1">
                 <span className="text-xs font-semibold text-slate-300">Ordre</span>
-                <input
+                <AppTextInput
                   type="number"
                   value={customFieldForm.sort_order}
                   onChange={(event) =>
@@ -545,7 +546,7 @@ export function AdminSettingsPage() {
                 />
               </label>
               <label className="flex items-center gap-2 text-xs text-slate-300">
-                <input
+                <AppTextInput
                   type="checkbox"
                   checked={customFieldForm.is_active}
                   onChange={(event) => setCustomFieldForm((prev) => ({ ...prev, is_active: event.target.checked }))}

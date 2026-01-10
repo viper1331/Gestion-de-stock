@@ -6,6 +6,8 @@ import { api } from "../../lib/api";
 import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
 import { useAuth } from "../auth/useAuth";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 interface PharmacyItemOption {
   id: number;
@@ -412,7 +414,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="lot-name">
                     Nom
                   </label>
-                  <input
+                  <AppTextInput
                     id="lot-name"
                     value={lotForm.name}
                     onChange={(event) => setLotForm((previous) => ({ ...previous, name: event.target.value }))}
@@ -424,7 +426,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                   <label className="text-xs font-semibold text-slate-300" htmlFor="lot-description">
                     Description
                   </label>
-                  <textarea
+                  <AppTextArea
                     id="lot-description"
                     value={lotForm.description}
                     onChange={(event) => setLotForm((previous) => ({ ...previous, description: event.target.value }))}
@@ -466,7 +468,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
               </div>
               {canEdit && selectedLot ? (
                 <div className="flex items-center gap-2 text-xs text-slate-300">
-                  <input
+                  <AppTextInput
                     type="file"
                     ref={fileInputRef}
                     accept="image/*"
@@ -532,7 +534,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor="pharmacy-lot-compartment">
                         Compartiment
                       </label>
-                      <input
+                      <AppTextInput
                         id="pharmacy-lot-compartment"
                         list="pharmacy-lot-compartment-options"
                         value={lotItemForm.compartment_name}
@@ -554,7 +556,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor="pharmacy-lot-quantity">
                         Quantité
                       </label>
-                      <input
+                      <AppTextInput
                         id="pharmacy-lot-quantity"
                         type="number"
                         min={1}
@@ -613,7 +615,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                             {canEdit ? (
                               <td className="px-3 py-2 text-xs text-slate-200">
                                 <div className="flex flex-wrap gap-2">
-                                  <input
+                                  <AppTextInput
                                     type="number"
                                     min={1}
                                     defaultValue={item.quantity}

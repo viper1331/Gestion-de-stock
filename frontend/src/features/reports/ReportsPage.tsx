@@ -4,6 +4,7 @@ import { useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { AppTextInput } from "components/AppTextInput";
 
 interface LowStockItem {
   item: {
@@ -97,7 +98,7 @@ export function ReportsPage() {
       <form className="flex flex-wrap items-center gap-4" onSubmit={handleExport}>
         <label className="text-sm text-slate-300">
           Seuil minimum
-          <input
+          <AppTextInput
             type="number"
             value={threshold}
             onChange={(event) => setThreshold(Number(event.target.value))}

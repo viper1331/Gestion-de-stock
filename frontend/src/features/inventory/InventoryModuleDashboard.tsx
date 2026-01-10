@@ -21,6 +21,7 @@ import {
   type InventoryItemNounConfig,
   type InventoryModuleConfig
 } from "./config";
+import { AppTextInput } from "components/AppTextInput";
 
 interface Category {
   id: number;
@@ -598,7 +599,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
           <p className="text-sm text-slate-400">{config.description}</p>
         </div>
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <input
+          <AppTextInput
             value={searchValue}
             onChange={(event) => setSearchValue(event.target.value)}
             placeholder={searchPlaceholder}
@@ -1050,7 +1051,7 @@ function ResizableHeader({
     >
       <div className="flex items-center justify-between">
         <span>{label}</span>
-        <input
+        <AppTextInput
           type="range"
           min={120}
           max={320}
@@ -1306,7 +1307,7 @@ function ItemForm({
               )}
             </div>
             <div className="flex flex-1 flex-col gap-2">
-              <input
+              <AppTextInput
                 id="item-image"
                 type="file"
                 accept="image/*"
@@ -1343,7 +1344,7 @@ function ItemForm({
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-name">
           Nom {itemNoun.de}
         </label>
-        <input
+        <AppTextInput
           id="item-name"
           value={values.name}
           onChange={handleNameChange}
@@ -1356,7 +1357,7 @@ function ItemForm({
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-sku">
           SKU / Code-barres
         </label>
-        <input
+        <AppTextInput
           id="item-sku"
           value={values.sku}
           onChange={handleSkuChange}
@@ -1369,7 +1370,7 @@ function ItemForm({
           <label className="text-xs font-semibold text-slate-300" htmlFor="item-quantity">
             Quantité
           </label>
-          <input
+          <AppTextInput
             id="item-quantity"
             type="number"
             value={values.quantity}
@@ -1382,7 +1383,7 @@ function ItemForm({
           <label className="text-xs font-semibold text-slate-300" htmlFor="item-threshold">
             Seuil bas
           </label>
-          <input
+          <AppTextInput
             id="item-threshold"
             type="number"
             value={values.low_stock_threshold}
@@ -1398,7 +1399,7 @@ function ItemForm({
             className="flex items-start gap-3 text-xs font-semibold text-slate-200"
             htmlFor="item-requires-expiration"
           >
-            <input
+            <AppTextInput
               id="item-requires-expiration"
               type="checkbox"
               checked={values.requires_expiration_date}
@@ -1423,7 +1424,7 @@ function ItemForm({
               <label className="text-xs font-semibold text-slate-300" htmlFor="item-expiration-date">
                 Date de péremption
               </label>
-              <input
+              <AppTextInput
                 id="item-expiration-date"
                 type="date"
                 value={values.expiration_date}
@@ -1439,7 +1440,7 @@ function ItemForm({
       {enableLowStockOptOut ? (
         <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
           <label className="flex items-start gap-3 text-xs font-semibold text-slate-200" htmlFor="item-track-low-stock">
-            <input
+            <AppTextInput
               id="item-track-low-stock"
               type="checkbox"
               checked={values.track_low_stock}
@@ -1462,7 +1463,7 @@ function ItemForm({
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-size">
           Taille / Variante
         </label>
-        <input
+        <AppTextInput
           id="item-size"
           value={values.size}
           list={sizeOptionsId}
@@ -1615,7 +1616,7 @@ function MovementForm({
           <label className="text-xs font-semibold text-slate-300" htmlFor="movement-delta">
             Variation
           </label>
-          <input
+          <AppTextInput
             id="movement-delta"
             type="number"
             value={delta}
@@ -1628,7 +1629,7 @@ function MovementForm({
           <label className="text-xs font-semibold text-slate-300" htmlFor="movement-reason">
             Motif
           </label>
-          <input
+          <AppTextInput
             id="movement-reason"
             value={reason}
             onChange={(event) => setReason(event.target.value)}
@@ -1754,7 +1755,7 @@ function CategoryManager({
     <div className="space-y-3">
       <form className="space-y-2" onSubmit={handleSubmit}>
         <div className="flex gap-2">
-          <input
+          <AppTextInput
             value={name}
             onChange={(event) => setName(event.target.value)}
             placeholder="Nouvelle catégorie"
@@ -1770,7 +1771,7 @@ function CategoryManager({
             Ajouter
           </button>
         </div>
-        <input
+        <AppTextInput
           value={sizes}
           onChange={(event) => setSizes(event.target.value)}
           placeholder="Tailles (séparées par des virgules)"
@@ -1789,7 +1790,7 @@ function CategoryManager({
               <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
                 <div className="flex-1 space-y-2">
                   <p className="text-sm font-semibold text-slate-100">{category.name}</p>
-                  <input
+                  <AppTextInput
                     value={currentValue}
                     onChange={(event) =>
                       setEditedSizes((previous) => ({ ...previous, [category.id]: event.target.value }))

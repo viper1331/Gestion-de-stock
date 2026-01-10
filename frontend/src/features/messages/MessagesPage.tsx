@@ -5,6 +5,8 @@ import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 const CATEGORY_OPTIONS = ["Info", "Alerte", "Maintenance", "Divers"] as const;
 
@@ -249,7 +251,7 @@ export function MessagesPage() {
 
             <label className="flex flex-col gap-2 text-sm text-slate-200">
               Message
-              <textarea
+              <AppTextArea
                 className="min-h-[120px] rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
                 value={content}
                 onChange={(event) => setContent(event.target.value)}
@@ -259,7 +261,7 @@ export function MessagesPage() {
             </label>
 
             <label className="flex items-center gap-2 text-sm text-slate-200">
-              <input
+              <AppTextInput
                 type="checkbox"
                 className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
                 checked={broadcast}
@@ -278,7 +280,7 @@ export function MessagesPage() {
                 <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/60 p-3">
                   {availableRecipients.map((recipient) => (
                     <label key={recipient.username} className="flex items-center gap-2 text-xs text-slate-200">
-                      <input
+                      <AppTextInput
                         type="checkbox"
                         className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
                         checked={selectedRecipients.has(recipient.username)}
@@ -348,7 +350,7 @@ export function MessagesPage() {
             <>
               <div className="mt-3 flex items-center justify-end">
                 <label className="flex items-center gap-2 text-xs text-slate-300">
-                  <input
+                  <AppTextInput
                     type="checkbox"
                     className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
                     checked={includeArchived}

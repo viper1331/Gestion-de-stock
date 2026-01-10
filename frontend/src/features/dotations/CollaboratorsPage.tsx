@@ -4,6 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { AppTextInput } from "components/AppTextInput";
 
 interface Collaborator {
   id: number;
@@ -245,7 +246,7 @@ export function CollaboratorsPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="collab-full-name">
                   Nom complet
                 </label>
-                <input
+                <AppTextInput
                   id="collab-full-name"
                   name="full_name"
                   defaultValue={formValues.full_name}
@@ -258,7 +259,7 @@ export function CollaboratorsPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="collab-department">
                   Service
                 </label>
-                <input
+                <AppTextInput
                   id="collab-department"
                   name="department"
                   defaultValue={formValues.department ?? ""}
@@ -270,7 +271,7 @@ export function CollaboratorsPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="collab-email">
                   Email
                 </label>
-                <input
+                <AppTextInput
                   id="collab-email"
                   name="email"
                   type="email"
@@ -283,7 +284,7 @@ export function CollaboratorsPage() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="collab-phone">
                   Téléphone
                 </label>
-                <input
+                <AppTextInput
                   id="collab-phone"
                   name="phone"
                   defaultValue={formValues.phone ?? ""}

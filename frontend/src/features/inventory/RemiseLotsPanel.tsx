@@ -6,6 +6,8 @@ import { api } from "../../lib/api";
 import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
 import { useAuth } from "../auth/useAuth";
+import { AppTextInput } from "components/AppTextInput";
+import { AppTextArea } from "components/AppTextArea";
 
 const LOT_CARDS_COLLAPSED_STORAGE_KEY = "remiseLots:lotCardsCollapsed";
 const STOCK_CARDS_COLLAPSED_STORAGE_KEY = "remiseLots:stockCardsCollapsed";
@@ -563,7 +565,7 @@ export function RemiseLotsPanel() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="lot-name">
                   Nom du lot
                 </label>
-                <input
+                <AppTextInput
                   id="lot-name"
                   type="text"
                   required
@@ -577,7 +579,7 @@ export function RemiseLotsPanel() {
                 <label className="text-xs font-semibold text-slate-300" htmlFor="lot-description">
                   Description
                 </label>
-                <textarea
+                <AppTextArea
                   id="lot-description"
                   value={lotForm.description}
                   onChange={(event) =>
@@ -688,7 +690,7 @@ export function RemiseLotsPanel() {
                       <p className="text-xs text-slate-500">Aucune image n'est associée à ce lot.</p>
                     )}
                   </div>
-                  <input
+                  <AppTextInput
                     ref={lotImageInputRef}
                     type="file"
                     accept="image/*"
@@ -726,7 +728,7 @@ export function RemiseLotsPanel() {
                     <label className="text-xs font-semibold text-slate-300" htmlFor="lot-quantity">
                       Quantité
                     </label>
-                    <input
+                    <AppTextInput
                       id="lot-quantity"
                       type="number"
                       min={1}
@@ -788,7 +790,7 @@ export function RemiseLotsPanel() {
                                 </p>
                               </td>
                               <td className="px-3 py-3 text-sm text-slate-200">
-                                <input
+                                <AppTextInput
                                   type="number"
                                   min={1}
                                   value={quantityValue}
