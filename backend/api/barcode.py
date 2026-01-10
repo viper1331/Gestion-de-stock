@@ -7,6 +7,7 @@ from fastapi.responses import FileResponse, StreamingResponse
 from backend.api.auth import get_current_user
 from backend.core import models, services
 from backend.services import barcode as barcode_service
+from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 router = APIRouter()
 
@@ -81,8 +82,14 @@ async def get_barcode_asset(
 async def export_barcode_pdf(user: models.User = Depends(get_current_user)) -> StreamingResponse:
     _require_permission(user, action="view")
     assets = services.list_accessible_barcode_assets(user)
-    pdf_buffer = barcode_service.generate_barcode_pdf(assets=assets)
+    resolved = resolve_pdf_config(MODULE_KEY)
+    pdf_buffer = barcode_service.generate_barcode_pdf(assets=assets, config=resolved.config)
     if not pdf_buffer:
         raise HTTPException(status_code=404, detail="Aucun code-barres disponible pour l'export")
-    headers = {"Content-Disposition": "attachment; filename=barcodes.pdf"}
+    filename = render_filename(
+        resolved.config.filename.pattern,
+        module_key=MODULE_KEY,
+        module_title=resolved.module_label,
+    )
+    headers = {"Content-Disposition": f"attachment; filename={filename}"}
     return StreamingResponse(pdf_buffer, media_type="application/pdf", headers=headers)

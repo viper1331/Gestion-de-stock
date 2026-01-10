@@ -29,6 +29,7 @@ from backend.api import (
     remise_inventory,
     about,
     system_config as system_config_api,
+    pdf_config as pdf_config_api,
     logs,
     messages,
 )
@@ -94,6 +95,7 @@ app.include_router(permissions.router, prefix="/permissions", tags=["permissions
 app.include_router(users.router, prefix="/users", tags=["users"])
 app.include_router(updates.router, prefix="/updates", tags=["updates"])
 app.include_router(system_config_api.router, prefix="/system", tags=["system"])
+app.include_router(pdf_config_api.router, prefix="/admin", tags=["pdf-config"])
 app.include_router(about.router, prefix="/about", tags=["about"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
 app.include_router(messages.router, prefix="/messages", tags=["messages"])

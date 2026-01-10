@@ -24,6 +24,7 @@ import { VehicleGuidePage } from "../features/inventory/VehicleGuidePage";
 import { AboutPage } from "../features/about/AboutPage";
 import { SystemConfigPage } from "../features/system-config/SystemConfigPage";
 import { MessagesPage } from "../features/messages/MessagesPage";
+import { PdfStudioPage } from "../features/pdf-config/PdfStudioPage";
 
 export const router = createBrowserRouter([
   {
@@ -58,7 +59,8 @@ export const router = createBrowserRouter([
       { path: "admin-settings", element: <AdminSettingsPage /> },
       { path: "system-config", element: <SystemConfigPage /> },
       { path: "about", element: <AboutPage /> },
-      { path: "messages", element: <MessagesPage /> }
+      { path: "messages", element: <MessagesPage /> },
+      { path: "pdf-config", element: <PdfStudioPage /> }
     ]
   }
 ]);

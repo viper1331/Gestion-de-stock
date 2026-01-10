@@ -16,6 +16,8 @@ from typing import Iterable, List, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from backend.core.pdf_config_models import PdfConfig
+
 try:  # pragma: no cover - dépendances requises pour la génération réelle
     import barcode as _barcode_lib
     from barcode.charsets import code128 as _code128_charset
@@ -223,6 +225,8 @@ def get_barcode_asset(filename: str) -> Optional[Path]:
 
 def generate_barcode_pdf(
     assets: Optional[Iterable[BarcodeAsset]] = None,
+    *,
+    config: PdfConfig | None = None,
 ) -> Optional[BytesIO]:
     """Crée un PDF A4 avec une grille de codes-barres.
 
@@ -239,10 +243,17 @@ def generate_barcode_pdf(
     if not assets_list:
         return None
 
+    if config:
+        width_cm, height_cm = _resolve_page_size_cm(config)
+        margin_cm = max(config.format.margins.left_mm, config.format.margins.right_mm) / 10
+    else:
+        width_cm, height_cm = PDF_PAGE_WIDTH_CM, PDF_PAGE_HEIGHT_CM
+        margin_cm = PDF_MARGIN_CM
+
     px_per_cm = PDF_DPI / 2.54
-    page_width_px = int(round(PDF_PAGE_WIDTH_CM * px_per_cm))
-    page_height_px = int(round(PDF_PAGE_HEIGHT_CM * px_per_cm))
-    margin_px = int(round(PDF_MARGIN_CM * px_per_cm))
+    page_width_px = int(round(width_cm * px_per_cm))
+    page_height_px = int(round(height_cm * px_per_cm))
+    margin_px = int(round(margin_cm * px_per_cm))
     cell_padding_px = int(round(PDF_CELL_PADDING_CM * px_per_cm))
 
     usable_width = page_width_px - 2 * margin_px
@@ -299,3 +310,13 @@ def generate_barcode_pdf(
         for page in pages:
             page.close()
     return buffer
+def _resolve_page_size_cm(config: PdfConfig) -> tuple[float, float]:
+    size_map = {
+        "A4": (21.0, 29.7),
+        "A5": (14.8, 21.0),
+        "Letter": (21.59, 27.94),
+    }
+    width_cm, height_cm = size_map.get(config.format.size, (PDF_PAGE_WIDTH_CM, PDF_PAGE_HEIGHT_CM))
+    if config.format.orientation == "landscape":
+        return height_cm, width_cm
+    return width_cm, height_cm

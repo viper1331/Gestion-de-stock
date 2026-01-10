@@ -9,6 +9,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
+from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 router = APIRouter()
 
@@ -32,8 +33,13 @@ async def list_remise_items(
 @router.get("/export/pdf")
 async def export_remise_inventory_pdf(user: models.User = Depends(get_current_user)):
     _require_permission(user, action="view")
+    resolved = resolve_pdf_config("remise_inventory")
     pdf_bytes = services.generate_remise_inventory_pdf()
-    filename = f"inventaire_remises_{datetime.now().strftime('%Y%m%d_%H%M')}.pdf"
+    filename = render_filename(
+        resolved.config.filename.pattern,
+        module_key="remise_inventory",
+        module_title=resolved.module_label,
+    )
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",

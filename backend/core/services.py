@@ -28,6 +28,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 from backend.core import db, models, security
+from backend.core.pdf_config_models import PdfColumnConfig, PdfConfig
 from backend.core.storage import (
     MEDIA_ROOT,
     PHARMACY_LOT_MEDIA_DIR,
@@ -38,6 +39,13 @@ from backend.core.storage import (
     relative_to_media,
 )
 from backend.services import barcode as barcode_service
+from backend.services.pdf_config import (
+    draw_watermark,
+    margins_for_format,
+    page_size_for_format,
+    resolve_color,
+    resolve_pdf_config,
+)
 from backend.services.pdf import VehiclePdfOptions, render_vehicle_inventory_pdf
 
 # Initialisation des bases de données au chargement du module
@@ -5697,35 +5705,55 @@ def _render_purchase_order_pdf(
     meta_lines: list[str],
     note_lines: list[str],
     items: list[tuple[str, int, int]],
+    module_key: str,
 ) -> bytes:
+    resolved = resolve_pdf_config(module_key)
+    pdf_config = resolved.config
     buffer = io.BytesIO()
-    pdf = canvas.Canvas(buffer, pagesize=A4)
-    width, height = A4
-    margin = 20 * mm
+    page_size = page_size_for_format(pdf_config.format)
+    pdf = canvas.Canvas(buffer, pagesize=page_size)
+    width, height = page_size
+    margin_top, margin_right, margin_bottom, margin_left = margins_for_format(pdf_config.format)
 
     def start_page(suffix: str = "") -> float:
-        pdf.setFont("Helvetica-Bold", 16)
-        pdf.drawString(margin, height - margin, f"{title}{suffix}")
-        pdf.setFont("Helvetica", 10)
-        y_position = height - margin - 18
+        draw_watermark(pdf, pdf_config, page_size)
+        if not pdf_config.header.enabled:
+            return height - margin_top
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size + 6)
+        pdf.drawString(margin_left, height - margin_top, f"{title}{suffix}")
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size)
+        y_position = height - margin_top - 18
         for meta in meta_lines:
-            pdf.drawString(margin, y_position, meta)
+            pdf.drawString(margin_left, y_position, meta)
             y_position -= 12
         return y_position - 6
 
     def draw_table_header(y_position: float) -> float:
-        pdf.setFont("Helvetica-Bold", 10)
-        pdf.drawString(margin, y_position, "Article")
-        pdf.drawRightString(width - margin - 60, y_position, "Commandé")
-        pdf.drawRightString(width - margin, y_position, "Réceptionné")
-        pdf.setFont("Helvetica", 10)
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size)
+        columns = [col for col in pdf_config.content.columns if col.visible] or [
+            PdfColumnConfig(key="article", label="Article", visible=True),
+            PdfColumnConfig(key="ordered", label="Commandé", visible=True),
+            PdfColumnConfig(key="received", label="Réceptionné", visible=True),
+        ]
+        table_width = width - margin_left - margin_right
+        column_widths = _resolve_purchase_order_column_widths(columns, table_width)
+        x = margin_left
+        for column in columns:
+            label = column.label
+            if column.key in {"ordered", "received"}:
+                pdf.drawRightString(x + column_widths[column.key], y_position, label)
+            else:
+                pdf.drawString(x, y_position, label)
+            x += column_widths[column.key]
         return y_position - 12
 
     def draw_table_title(y_position: float, *, suffix: str = "") -> float:
-        pdf.setFont("Helvetica-Bold", 12)
-        pdf.drawString(margin, y_position, f"Lignes de commande{suffix}")
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size + 2)
+        pdf.drawString(margin_left, y_position, f"Lignes de commande{suffix}")
         y_position -= 16
         return draw_table_header(y_position)
+
+    page_number = 1
 
     def ensure_space(
         y_position: float,
@@ -5734,8 +5762,18 @@ def _render_purchase_order_pdf(
         on_new_page: Optional[Callable[[float], float]] = None,
         suffix: str = " (suite)",
     ) -> float:
-        if y_position <= margin + needed:
+        nonlocal page_number
+        if y_position <= margin_bottom + needed:
+            _draw_purchase_order_footer(
+                pdf,
+                pdf_config=pdf_config,
+                page_width=width,
+                margin_right=margin_right,
+                margin_bottom=margin_bottom,
+                page_number=page_number,
+            )
             pdf.showPage()
+            page_number += 1
             y_new = start_page(suffix)
             if on_new_page is not None:
                 y_new = on_new_page(y_new)
@@ -5745,10 +5783,10 @@ def _render_purchase_order_pdf(
     y = start_page()
 
     def draw_note_heading(y_position: float) -> float:
-        pdf.setFont("Helvetica-Bold", 10)
-        pdf.drawString(margin, y_position, "Note")
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size + 1)
+        pdf.drawString(margin_left, y_position, "Note")
         y_position -= 12
-        pdf.setFont("Helvetica", 10)
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size)
         return y_position
 
     if note_lines:
@@ -5756,7 +5794,7 @@ def _render_purchase_order_pdf(
         y = draw_note_heading(y)
         for line in note_lines:
             y = ensure_space(y, 18, on_new_page=draw_note_heading)
-            pdf.drawString(margin, y, line)
+            pdf.drawString(margin_left, y, line)
             y -= 12
         y -= 6
 
@@ -5766,23 +5804,108 @@ def _render_purchase_order_pdf(
     y = draw_table_title(y)
     if not items:
         y = ensure_space(y, 24, on_new_page=table_new_page)
-        pdf.drawString(margin, y, "Aucune ligne de commande enregistrée.")
+        pdf.drawString(margin_left, y, "Aucune ligne de commande enregistrée.")
         y -= 12
     else:
+        columns = [col for col in pdf_config.content.columns if col.visible] or [
+            PdfColumnConfig(key="article", label="Article", visible=True),
+            PdfColumnConfig(key="ordered", label="Commandé", visible=True),
+            PdfColumnConfig(key="received", label="Réceptionné", visible=True),
+        ]
+        table_width = width - margin_left - margin_right
+        column_widths = _resolve_purchase_order_column_widths(columns, table_width)
         for name, ordered, received in items:
             name_lines = wrap(name, 80) or ["-"]
             for index, line in enumerate(name_lines):
                 y = ensure_space(y, 24, on_new_page=table_new_page)
-                pdf.drawString(margin, y, line)
-                if index == 0:
-                    pdf.drawRightString(width - margin - 60, y, str(ordered))
-                    pdf.drawRightString(width - margin, y, str(received))
+                _render_purchase_order_row(
+                    pdf,
+                    columns=columns,
+                    column_widths=column_widths,
+                    x_start=margin_left,
+                    y=y,
+                    line=line,
+                    ordered=ordered,
+                    received=received,
+                    is_first_line=index == 0,
+                )
                 y -= 12
             y -= 4
 
+    _draw_purchase_order_footer(
+        pdf,
+        pdf_config=pdf_config,
+        page_width=width,
+        margin_right=margin_right,
+        margin_bottom=margin_bottom,
+        page_number=page_number,
+    )
     pdf.save()
     buffer.seek(0)
     return buffer.getvalue()
+
+
+def _resolve_purchase_order_column_widths(
+    columns: list[PdfColumnConfig],
+    table_width: float,
+) -> dict[str, float]:
+    widths: dict[str, float] = {}
+    has_article = any(column.key == "article" for column in columns)
+    numeric_columns = [column for column in columns if column.key in {"ordered", "received"}]
+    numeric_width = 70 if numeric_columns else 0
+    remaining_width = table_width - (numeric_width * len(numeric_columns))
+    for column in columns:
+        if column.key in {"ordered", "received"}:
+            widths[column.key] = numeric_width
+        else:
+            widths[column.key] = remaining_width if has_article else table_width / len(columns)
+    return widths
+
+
+def _render_purchase_order_row(
+    pdf: canvas.Canvas,
+    *,
+    columns: list[PdfColumnConfig],
+    column_widths: dict[str, float],
+    x_start: float,
+    y: float,
+    line: str,
+    ordered: int,
+    received: int,
+    is_first_line: bool,
+) -> None:
+    x = x_start
+    for column in columns:
+        if column.key == "article":
+            pdf.drawString(x, y, line)
+        elif column.key == "ordered" and is_first_line:
+            pdf.drawRightString(x + column_widths[column.key], y, str(ordered))
+        elif column.key == "received" and is_first_line:
+            pdf.drawRightString(x + column_widths[column.key], y, str(received))
+        x += column_widths[column.key]
+
+
+def _draw_purchase_order_footer(
+    pdf: canvas.Canvas,
+    *,
+    pdf_config: PdfConfig,
+    page_width: float,
+    margin_right: float,
+    margin_bottom: float,
+    page_number: int,
+) -> None:
+    if not pdf_config.footer.enabled:
+        return
+    footer_bits: list[str] = []
+    if pdf_config.footer.text:
+        footer_bits.append(pdf_config.footer.text)
+    if pdf_config.footer.show_printed_at:
+        footer_bits.append(datetime.now().strftime("Édité le %d/%m/%Y %H:%M"))
+    if pdf_config.footer.show_pagination:
+        footer_bits.append(f"Page {page_number}")
+    footer_text = " — ".join(footer_bits)
+    pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size - 1)
+    pdf.drawRightString(page_width - margin_right, margin_bottom - 4, footer_text)
 
 
 def _format_date_label(value: date | None) -> str:
@@ -5794,31 +5917,38 @@ def _format_date_label(value: date | None) -> str:
 def _render_remise_inventory_pdf(
     *, items: list[models.Item], category_map: dict[int, str], module_title: str
 ) -> bytes:
+    resolved = resolve_pdf_config("remise_inventory")
+    pdf_config = resolved.config
     buffer = io.BytesIO()
-    page_size = landscape(A4)
+    page_size = page_size_for_format(pdf_config.format)
     pdf = canvas.Canvas(buffer, pagesize=page_size)
     width, height = page_size
-    margin = 14 * mm
+    margin_top, margin_right, margin_bottom, margin_left = margins_for_format(pdf_config.format)
     base_row_padding = 10
     line_height = 12
     header_height = 24
-    text_color = colors.Color(0.91, 0.93, 0.97)
-    background_color = colors.Color(0.043, 0.059, 0.102)
-    header_bg_color = colors.Color(0.082, 0.105, 0.156)
-    row_bg_color = colors.Color(0.067, 0.082, 0.125)
-    row_alt_bg_color = colors.Color(0.078, 0.098, 0.149)
+    text_color = resolve_color(pdf_config.advanced.header_text_color, colors.Color(0.91, 0.93, 0.97))
+    background_color = resolve_color(pdf_config.advanced.header_bg_color, colors.Color(0.043, 0.059, 0.102))
+    header_bg_color = resolve_color(pdf_config.advanced.table_header_bg_color, colors.Color(0.082, 0.105, 0.156))
+    row_bg_color = resolve_color(pdf_config.advanced.row_alt_bg_color, colors.Color(0.067, 0.082, 0.125))
+    row_alt_bg_color = resolve_color(pdf_config.advanced.row_alt_bg_color, colors.Color(0.078, 0.098, 0.149))
 
-    columns: list[tuple[str, float, str]] = [
-        ("MATÉRIEL", 0.28, "left"),
-        ("QUANTITÉ", 0.10, "center"),
-        ("TAILLE / VARIANTE", 0.14, "center"),
-        ("CATÉGORIE", 0.16, "center"),
-        ("LOT(S)", 0.12, "center"),
-        ("PÉREMPTION", 0.10, "center"),
-        ("SEUIL", 0.10, "center"),
+    base_columns: list[tuple[str, float, str, str]] = [
+        ("name", "MATÉRIEL", 0.28, "left"),
+        ("quantity", "QUANTITÉ", 0.10, "center"),
+        ("size", "TAILLE / VARIANTE", 0.14, "center"),
+        ("category", "CATÉGORIE", 0.16, "center"),
+        ("lots", "LOT(S)", 0.12, "center"),
+        ("expiration", "PÉREMPTION", 0.10, "center"),
+        ("threshold", "SEUIL", 0.10, "center"),
     ]
+    visible_keys = [col.key for col in pdf_config.content.columns if col.visible]
+    if visible_keys:
+        columns = [col for col in base_columns if col[0] in visible_keys]
+    else:
+        columns = base_columns
 
-    table_width = width - 2 * margin
+    table_width = width - margin_left - margin_right
     generated_at = datetime.now()
 
     def _wrap_to_width(value: str, max_width: float, font_name: str, font_size: float) -> list[str]:
@@ -5880,31 +6010,36 @@ def _render_remise_inventory_pdf(
 
     def start_page(page_number: int) -> float:
         draw_page_background()
-        pdf.setFont("Helvetica-Bold", 14)
-        pdf.drawString(margin, height - margin + 4, module_title)
-        pdf.setFont("Helvetica", 9)
-        pdf.drawString(
-            margin,
-            height - margin - 10,
-            f"Généré le {_format_date_label(generated_at.date())} à {generated_at.strftime('%H:%M')}",
-        )
-        pdf.drawRightString(width - margin, margin - 6, f"Page {page_number}")
-        return height - margin - header_height
+        draw_watermark(pdf, pdf_config, page_size)
+        y_offset = height - margin_top
+        if pdf_config.header.enabled:
+            pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size + 4)
+            pdf.drawString(margin_left, y_offset + 4, module_title)
+            pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size)
+            pdf.drawString(
+                margin_left,
+                y_offset - 10,
+                f"Généré le {_format_date_label(generated_at.date())} à {generated_at.strftime('%H:%M')}",
+            )
+            y_offset -= header_height
+        if pdf_config.footer.enabled and pdf_config.footer.show_pagination:
+            pdf.drawRightString(width - margin_right, margin_bottom - 6, f"Page {page_number}")
+        return y_offset
 
     def draw_header(y_position: float) -> float:
         pdf.setFillColor(header_bg_color)
-        pdf.rect(margin, y_position - header_height + 4, table_width, header_height, stroke=0, fill=1)
+        pdf.rect(margin_left, y_position - header_height + 4, table_width, header_height, stroke=0, fill=1)
         pdf.setFillColor(text_color)
-        pdf.setFont("Helvetica-Bold", 9)
-        x = margin
-        for label, ratio, align in columns:
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size - 1)
+        x = margin_left
+        for _, label, ratio, align in columns:
             cell_width = ratio * table_width
             if align == "center":
                 pdf.drawCentredString(x + cell_width / 2, y_position - 6, label)
             else:
                 pdf.drawString(x + 4, y_position - 6, label)
             x += cell_width
-        pdf.setFont("Helvetica", 9)
+        pdf.setFont(pdf_config.advanced.font_family, pdf_config.advanced.base_font_size - 1)
         return y_position - header_height
 
     y = start_page(1)
@@ -5922,37 +6057,45 @@ def _render_remise_inventory_pdf(
         size_label = _format_cell(item.size)
         name_label = _format_cell(item.name)
 
+        column_map = {
+            "name": name_label,
+            "quantity": str(item.quantity or 0),
+            "size": size_label,
+            "category": category_label,
+            "lots": lots_label,
+            "expiration": expiration_label,
+            "threshold": threshold_label,
+        }
         values: list[tuple[str, float, str]] = [
-            (name_label, columns[0][1], "left"),
-            (str(item.quantity or 0), columns[1][1], "center"),
-            (size_label, columns[2][1], "center"),
-            (category_label, columns[3][1], "center"),
-            (lots_label, columns[4][1], "center"),
-            (expiration_label, columns[5][1], "center"),
-            (threshold_label, columns[6][1], "center"),
+            (column_map[key], ratio, align) for key, _, ratio, align in columns
         ]
 
         wrapped_values: list[tuple[list[str], float, str]] = []
         max_line_count = 1
         for value, ratio, align in values:
             cell_width = ratio * table_width
-            lines = _wrap_to_width(str(value), cell_width - 8, "Helvetica", 9)
+            lines = _wrap_to_width(
+                str(value),
+                cell_width - 8,
+                pdf_config.advanced.font_family,
+                pdf_config.advanced.base_font_size - 1,
+            )
             max_line_count = max(max_line_count, len(lines))
             wrapped_values.append((lines, cell_width, align))
 
         row_height = max_line_count * line_height + base_row_padding
 
-        if y <= margin + row_height:
+        if y <= margin_bottom + row_height:
             pdf.showPage()
             page_number += 1
             y = start_page(page_number)
             y = draw_header(y)
 
         pdf.setFillColor(row_alt_bg_color if index % 2 else row_bg_color)
-        pdf.rect(margin, y - row_height + 6, table_width, row_height, stroke=0, fill=1)
+        pdf.rect(margin_left, y - row_height + 6, table_width, row_height, stroke=0, fill=1)
         pdf.setFillColor(text_color)
 
-        x = margin
+        x = margin_left
         for lines, cell_width, align in wrapped_values:
             text_y = y - 8
             for line in lines:
@@ -5995,6 +6138,7 @@ def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
         meta_lines=meta_lines,
         note_lines=note_lines,
         items=item_rows,
+        module_key="purchase_orders",
     )
 
 
@@ -6024,6 +6168,7 @@ def generate_remise_purchase_order_pdf(order: models.RemisePurchaseOrderDetail) 
         meta_lines=meta_lines,
         note_lines=note_lines,
         items=item_rows,
+        module_key="remise_orders",
     )
 
 
@@ -6053,6 +6198,7 @@ def generate_pharmacy_purchase_order_pdf(
         meta_lines=meta_lines,
         note_lines=note_lines,
         items=item_rows,
+        module_key="pharmacy_orders",
     )
 
 

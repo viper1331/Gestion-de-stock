@@ -8,6 +8,7 @@ from fastapi.responses import StreamingResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
+from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 router = APIRouter()
 
@@ -69,8 +70,14 @@ async def download_order_pdf(
         order = services.get_remise_purchase_order(order_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    resolved = resolve_pdf_config("remise_orders")
     pdf_bytes = services.generate_remise_purchase_order_pdf(order)
-    filename = f"bon_commande_remise_{order.id}.pdf"
+    filename = render_filename(
+        resolved.config.filename.pattern,
+        module_key="remise_orders",
+        module_title=resolved.module_label,
+        context={"order_id": order.id, "ref": order.id},
+    )
     return StreamingResponse(
         io.BytesIO(pdf_bytes),
         media_type="application/pdf",

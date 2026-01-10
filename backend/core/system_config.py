@@ -11,6 +11,8 @@ from fastapi.middleware.cors import CORSMiddleware
 from starlette.middleware import Middleware
 from pydantic import BaseModel, ConfigDict, Field, HttpUrl, field_validator, model_validator
 
+from backend.core.pdf_config_models import PdfExportConfig
+
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:5151",
     "http://127.0.0.1:5151",
@@ -44,6 +46,7 @@ class SystemConfig(BaseModel):
         "auto", description="Mode de sélection de l'URL backend"
     )
     extra: dict[str, str] = Field(default_factory=dict, description="Réglages additionnels")
+    pdf_exports: PdfExportConfig | None = Field(default=None, description="Configuration des exports PDF")
 
     @model_validator(mode="before")
     @classmethod
