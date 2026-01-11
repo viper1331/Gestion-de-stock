@@ -715,6 +715,30 @@ class Collaborator(CollaboratorBase):
     id: int
 
 
+class CollaboratorBulkImportRow(BaseModel):
+    full_name: str = Field(..., min_length=1, max_length=128)
+    department: Optional[str] = Field(default=None, max_length=128)
+    email: Optional[str] = Field(default=None, max_length=128)
+    phone: Optional[str] = Field(default=None, max_length=64)
+
+
+class CollaboratorBulkImportPayload(BaseModel):
+    mode: Literal["create", "upsert", "skip_duplicates"]
+    rows: list[CollaboratorBulkImportRow]
+
+
+class CollaboratorBulkImportError(BaseModel):
+    rowIndex: int
+    message: str
+
+
+class CollaboratorBulkImportResult(BaseModel):
+    created: int
+    updated: int
+    skipped: int
+    errors: list[CollaboratorBulkImportError] = Field(default_factory=list)
+
+
 class DotationBase(BaseModel):
     collaborator_id: int
     item_id: int
