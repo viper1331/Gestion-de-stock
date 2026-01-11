@@ -6,7 +6,9 @@ from datetime import datetime
 from typing import Any
 
 from reportlab.lib import colors
-from reportlab.lib.pagesizes import A4, A5, letter, landscape, portrait
+import math
+
+from reportlab.lib.pagesizes import A3, A4, A5, letter, landscape, portrait
 from reportlab.lib.units import mm
 
 from backend.core.pdf_config_models import (
@@ -30,7 +32,12 @@ from backend.core.pdf_config_models import (
     PdfWatermarkConfig,
 )
 from backend.core.system_config import get_config, save_config
-from backend.services.pdf.theme import apply_theme_reportlab, resolve_reportlab_theme, theme_meta
+from backend.services.pdf.theme import (
+    apply_theme_reportlab,
+    resolve_reportlab_theme,
+    scale_reportlab_theme,
+    theme_meta,
+)
 
 
 @dataclass(frozen=True)
@@ -512,11 +519,19 @@ def resolve_pdf_config(module_name: str, preset_name: str | None = None, config:
 
 
 def page_size_for_format(format_config: PdfFormatConfig) -> tuple[float, float]:
-    size_map = {"A4": A4, "A5": A5, "Letter": letter}
+    size_map = {"A3": A3, "A4": A4, "A5": A5, "Letter": letter}
     base = size_map.get(format_config.size, A4)
     if format_config.orientation == "landscape":
         return landscape(base)
     return portrait(base)
+
+
+def effective_density_scale(format_config: PdfFormatConfig) -> float:
+    if format_config.size != "A3":
+        return 1.0
+    format_scale = math.sqrt(2)
+    density_factor = 0.9 if format_config.density == "compact" else 1.0
+    return format_scale * density_factor
 
 
 def margins_for_format(format_config: PdfFormatConfig) -> tuple[float, float, float, float]:
@@ -544,7 +559,9 @@ def resolve_color(hex_value: str | None, fallback: colors.Color) -> colors.Color
         return fallback
 
 
-def draw_watermark(canvas: Any, config: PdfConfig, page_size: tuple[float, float]) -> None:
+def draw_watermark(
+    canvas: Any, config: PdfConfig, page_size: tuple[float, float], *, scale: float = 1.0
+) -> None:
     if not config.watermark.enabled or not config.watermark.text:
         return
     width, height = page_size
@@ -554,6 +571,7 @@ def draw_watermark(canvas: Any, config: PdfConfig, page_size: tuple[float, float
     except AttributeError:
         pass
     theme = resolve_reportlab_theme(config.theme)
+    theme = scale_reportlab_theme(theme, scale)
     canvas.setFont(theme.font_family, theme.base_font_size * 4)
     canvas.setFillColor(colors.grey)
     canvas.translate(width / 2, height / 2)
@@ -568,13 +586,14 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
 
     output = BytesIO()
     page_size = page_size_for_format(resolved.config.format)
+    scale = effective_density_scale(resolved.config.format)
     pdf = canvas_mod.Canvas(output, pagesize=page_size)
     width, height = page_size
     margin_top, margin_right, margin_bottom, margin_left = margins_for_format(resolved.config.format)
-    theme = resolve_reportlab_theme(resolved.config.theme)
+    theme = scale_reportlab_theme(resolve_reportlab_theme(resolved.config.theme), scale)
 
-    apply_theme_reportlab(pdf, page_size, resolved.config.theme)
-    draw_watermark(pdf, resolved.config, page_size)
+    apply_theme_reportlab(pdf, page_size, resolved.config.theme, scale=scale)
+    draw_watermark(pdf, resolved.config, page_size, scale=scale)
 
     def draw_header() -> float:
         if not resolved.config.header.enabled:
@@ -594,8 +613,8 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
             module=resolved.module_key,
             generated_at=datetime.now().strftime("%d/%m/%Y %H:%M"),
         )
-        pdf.drawString(margin_left, height - margin_top - 16, subtitle)
-        return height - margin_top - 32
+        pdf.drawString(margin_left, height - margin_top - (16 * scale), subtitle)
+        return height - margin_top - (32 * scale)
 
     def draw_footer(page_number: int) -> None:
         if not resolved.config.footer.enabled:
@@ -609,8 +628,8 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
             footer_bits.append(f"Page {page_number}")
         footer_text = " — ".join(footer_bits)
         pdf.setFillColor(theme.muted_text_color)
-        pdf.setFont(theme.font_family, theme.base_font_size - 1)
-        pdf.drawRightString(width - margin_right, margin_bottom - 4, footer_text)
+        pdf.setFont(theme.font_family, theme.base_font_size - (1 * scale))
+        pdf.drawRightString(width - margin_right, margin_bottom - (4 * scale), footer_text)
 
     y = draw_header()
     pdf.setFillColor(theme.text_color)
@@ -621,14 +640,14 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
     ]
     for line in paragraph_lines:
         pdf.drawString(margin_left, y, line)
-        y -= 14
+        y -= 14 * scale
     pdf.setFillColor(theme.muted_text_color)
     pdf.drawString(margin_left, y, "Texte secondaire pour les informations contextuelles.")
-    y -= 20
+    y -= 20 * scale
     pdf.setFillColor(theme.text_color)
-    pdf.setFont(theme.font_family, theme.base_font_size + 1)
+    pdf.setFont(theme.font_family, theme.base_font_size + (1 * scale))
     pdf.drawString(margin_left, y, "Aperçu de tableau")
-    y -= 18
+    y -= 18 * scale
     pdf.setFont(theme.font_family, theme.base_font_size)
     columns = resolved.config.content.columns or [
         PdfColumnConfig(key="col1", label="Colonne 1", visible=True),
@@ -639,30 +658,30 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
         visible_columns = columns[:1]
     table_width = width - margin_left - margin_right
     column_width = table_width / len(visible_columns)
-    header_height = 16
+    header_height = 16 * scale
     pdf.setFillColor(theme.table_header_bg)
-    pdf.rect(margin_left, y - header_height + 10, table_width, header_height, stroke=0, fill=1)
+    pdf.rect(margin_left, y - header_height + (10 * scale), table_width, header_height, stroke=0, fill=1)
     pdf.setFillColor(theme.table_header_text)
     pdf.setStrokeColor(theme.border_color)
-    pdf.rect(margin_left, y - header_height + 10, table_width, header_height, stroke=1, fill=0)
+    pdf.rect(margin_left, y - header_height + (10 * scale), table_width, header_height, stroke=1, fill=0)
     for index, column in enumerate(visible_columns):
         x = margin_left + index * column_width
-        pdf.drawString(x + 4, y, column.label)
-    y -= 18
+        pdf.drawString(x + (4 * scale), y, column.label)
+    y -= 18 * scale
     for row in range(6):
         if row % 2 == 1:
             pdf.setFillColor(theme.table_row_alt_bg)
-            pdf.rect(margin_left, y - 10, table_width, 14, stroke=0, fill=1)
+            pdf.rect(margin_left, y - (10 * scale), table_width, 14 * scale, stroke=0, fill=1)
             pdf.setFillColor(theme.text_color)
         for index, column in enumerate(visible_columns):
             x = margin_left + index * column_width
-            pdf.drawString(x + 4, y, f"{column.label} {row + 1}")
-        y -= 12
+            pdf.drawString(x + (4 * scale), y, f"{column.label} {row + 1}")
+        y -= 12 * scale
 
     draw_footer(1)
     pdf.showPage()
-    apply_theme_reportlab(pdf, page_size, resolved.config.theme)
-    draw_watermark(pdf, resolved.config, page_size)
+    apply_theme_reportlab(pdf, page_size, resolved.config.theme, scale=scale)
+    draw_watermark(pdf, resolved.config, page_size, scale=scale)
     y = draw_header()
     pdf.setFillColor(theme.text_color)
     pdf.setFont(theme.font_family, theme.base_font_size)
