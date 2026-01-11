@@ -1,5 +1,5 @@
 import type { ChangeEvent, TextareaHTMLAttributes } from "react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
 
 import { useSpellcheckSettings } from "../app/spellcheckSettings";
 import {
@@ -66,31 +66,41 @@ function buildHighlightHtml(text: string, errors: SpellcheckError[]) {
   return result;
 }
 
-export function AppTextArea({ className, noSpellcheck, onChange, value, ...props }: AppTextAreaProps) {
-  const { settings } = useSpellcheckSettings();
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
-  const mirrorRef = useRef<HTMLDivElement>(null);
-  const [errors, setErrors] = useState<SpellcheckError[]>([]);
-  const [isChecking, setIsChecking] = useState(false);
-  const [activeError, setActiveError] = useState<SpellcheckError | null>(null);
+export const AppTextArea = forwardRef<HTMLTextAreaElement, AppTextAreaProps>(
+  ({ className, noSpellcheck, onChange, value, ...props }, ref) => {
+    const { settings } = useSpellcheckSettings();
+    const textareaRef = useRef<HTMLTextAreaElement>(null);
+    const mirrorRef = useRef<HTMLDivElement>(null);
+    const [errors, setErrors] = useState<SpellcheckError[]>([]);
+    const [isChecking, setIsChecking] = useState(false);
+    const [activeError, setActiveError] = useState<SpellcheckError | null>(null);
 
-  const textValue = typeof value === "string" ? value : "";
-  const placeholderText = props.placeholder ?? "";
-  const hasPlaceholder = !textValue && Boolean(placeholderText);
-  const displayText = hasPlaceholder ? placeholderText : textValue;
+    const textValue = typeof value === "string" ? value : "";
+    const placeholderText = props.placeholder ?? "";
+    const hasPlaceholder = !textValue && Boolean(placeholderText);
+    const displayText = hasPlaceholder ? placeholderText : textValue;
 
-  const isSpellcheckable = settings.enabled && !noSpellcheck && typeof value === "string";
+    const isSpellcheckable = settings.enabled && !noSpellcheck && typeof value === "string";
 
-  const runSpellcheck = async () => {
-    if (!isSpellcheckable || typeof value !== "string") {
-      return;
-    }
-    setIsChecking(true);
-    const result = await spellcheckText(value, settings.language, loadUserDictionary());
-    setErrors(result);
-    setActiveError(result[0] ?? null);
-    setIsChecking(false);
-  };
+    const mergedRef = (node: HTMLTextAreaElement | null) => {
+      textareaRef.current = node;
+      if (typeof ref === "function") {
+        ref(node);
+      } else if (ref) {
+        ref.current = node;
+      }
+    };
+
+    const runSpellcheck = async () => {
+      if (!isSpellcheckable || typeof value !== "string") {
+        return;
+      }
+      setIsChecking(true);
+      const result = await spellcheckText(value, settings.language, loadUserDictionary());
+      setErrors(result);
+      setActiveError(result[0] ?? null);
+      setIsChecking(false);
+    };
 
   useEffect(() => {
     if (!settings.live || !isSpellcheckable) {
@@ -176,103 +186,106 @@ export function AppTextArea({ className, noSpellcheck, onChange, value, ...props
     return buildHighlightHtml(textValue, errors);
   }, [displayText, errors, hasPlaceholder, isSpellcheckable, textValue, value]);
 
-  if (!isSpellcheckable) {
-    return (
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={onChange}
-        className={className}
-        {...props}
-      />
-    );
-  }
+    if (!isSpellcheckable) {
+      return (
+        <textarea
+          ref={mergedRef}
+          value={value}
+          onChange={onChange}
+          className={className}
+          {...props}
+        />
+      );
+    }
 
   const layoutClasses = extractLayoutClasses(className);
 
-  return (
-    <div className={["relative", layoutClasses].filter(Boolean).join(" ")}>
-      <div
-        ref={mirrorRef}
-        aria-hidden
-        className={[
-          "absolute inset-0 overflow-hidden whitespace-pre-wrap break-words rounded-md border border-transparent px-3 py-2 text-sm text-slate-100",
-          hasPlaceholder ? "text-slate-500" : null,
-          className
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        dangerouslySetInnerHTML={{ __html: highlightHtml || "" }}
-      />
-      <textarea
-        ref={textareaRef}
-        value={value}
-        onChange={onChange}
-        onScroll={handleScroll}
-        onClick={handleClick}
-        spellCheck={false}
-        className={[
-          "relative bg-transparent text-transparent caret-slate-100",
-          "rounded-md border border-slate-800 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none",
-          className
-        ]
-          .filter(Boolean)
-          .join(" ")}
-        style={{ caretColor: "#f8fafc", backgroundColor: "transparent", color: "transparent" }}
-        {...props}
-      />
-      <button
-        type="button"
-        onClick={runSpellcheck}
-        className="absolute right-2 top-2 rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-slate-500 hover:bg-slate-800"
-        aria-label="Vérifier l'orthographe"
-      >
-        {isChecking ? "..." : "ABC✓"}
-      </button>
-      {activeError ? (
-        <div className="absolute right-2 top-10 z-10 w-64 rounded-md border border-slate-800 bg-slate-950 p-3 text-xs text-slate-200 shadow-lg">
-          <p className="font-semibold text-red-300">{activeError.word}</p>
-          <div className="mt-2 flex flex-wrap gap-2">
-            {activeError.suggestions.length > 0 ? (
-              activeError.suggestions.map((suggestion) => (
-                <button
-                  key={suggestion}
-                  type="button"
-                  onClick={() => handleReplace(activeError, suggestion)}
-                  className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
-                >
-                  Remplacer par “{suggestion}”
-                </button>
-              ))
-            ) : (
-              <span className="text-[11px] text-slate-500">Aucune suggestion</span>
-            )}
+    return (
+      <div className={["relative", layoutClasses].filter(Boolean).join(" ")}>
+        <div
+          ref={mirrorRef}
+          aria-hidden
+          className={[
+            "absolute inset-0 overflow-hidden whitespace-pre-wrap break-words rounded-md border border-transparent px-3 py-2 text-sm text-slate-100",
+            hasPlaceholder ? "text-slate-500" : null,
+            className
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          dangerouslySetInnerHTML={{ __html: highlightHtml || "" }}
+        />
+        <textarea
+          ref={mergedRef}
+          value={value}
+          onChange={onChange}
+          onScroll={handleScroll}
+          onClick={handleClick}
+          spellCheck={false}
+          className={[
+            "relative bg-transparent text-transparent caret-slate-100",
+            "rounded-md border border-slate-800 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none",
+            className
+          ]
+            .filter(Boolean)
+            .join(" ")}
+          style={{ caretColor: "#f8fafc", backgroundColor: "transparent", color: "transparent" }}
+          {...props}
+        />
+        <button
+          type="button"
+          onClick={runSpellcheck}
+          className="absolute right-2 top-2 rounded-md border border-slate-700 px-2 py-1 text-[10px] font-semibold text-slate-200 hover:border-slate-500 hover:bg-slate-800"
+          aria-label="Vérifier l'orthographe"
+        >
+          {isChecking ? "..." : "ABC✓"}
+        </button>
+        {activeError ? (
+          <div className="absolute right-2 top-10 z-10 w-64 rounded-md border border-slate-800 bg-slate-950 p-3 text-xs text-slate-200 shadow-lg">
+            <p className="font-semibold text-red-300">{activeError.word}</p>
+            <div className="mt-2 flex flex-wrap gap-2">
+              {activeError.suggestions.length > 0 ? (
+                activeError.suggestions.map((suggestion) => (
+                  <button
+                    key={suggestion}
+                    type="button"
+                    onClick={() => handleReplace(activeError, suggestion)}
+                    className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
+                  >
+                    Remplacer par “{suggestion}”
+                  </button>
+                ))
+              ) : (
+                <span className="text-[11px] text-slate-500">Aucune suggestion</span>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <button
+                type="button"
+                onClick={() => handleReplace(activeError, activeError.suggestions[0] ?? activeError.word, true)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
+              >
+                Remplacer partout
+              </button>
+              <button
+                type="button"
+                onClick={() => setActiveError(null)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
+              >
+                Ignorer
+              </button>
+              <button
+                type="button"
+                onClick={() => handleAddToDictionary(activeError.word)}
+                className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
+              >
+                Ajouter au dictionnaire
+              </button>
+            </div>
           </div>
-          <div className="mt-2 flex flex-wrap gap-2">
-            <button
-              type="button"
-              onClick={() => handleReplace(activeError, activeError.suggestions[0] ?? activeError.word, true)}
-              className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
-            >
-              Remplacer partout
-            </button>
-            <button
-              type="button"
-              onClick={() => setActiveError(null)}
-              className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
-            >
-              Ignorer
-            </button>
-            <button
-              type="button"
-              onClick={() => handleAddToDictionary(activeError.word)}
-              className="rounded-md border border-slate-700 px-2 py-1 text-[11px] text-slate-200 hover:border-slate-500 hover:bg-slate-800"
-            >
-              Ajouter au dictionnaire
-            </button>
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
+        ) : null}
+      </div>
+    );
+  }
+);
+
+AppTextArea.displayName = "AppTextArea";
