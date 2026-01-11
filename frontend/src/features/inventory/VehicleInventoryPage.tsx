@@ -662,6 +662,15 @@ export function VehicleInventoryPage() {
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
   const [isAddingSubView, setIsAddingSubView] = useState(false);
   const [newSubViewName, setNewSubViewName] = useState("");
+  const renderCountRef = useRef(0);
+  renderCountRef.current += 1;
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("[VehicleInventoryPage] render", {
+      count: renderCountRef.current,
+      selectedVehicleId,
+      selectedView
+    });
+  }
 
   const {
     data: vehicles = [],
@@ -739,11 +748,15 @@ export function VehicleInventoryPage() {
   useEffect(() => {
     setVehicleExtra((previous) => {
       const nextExtra = buildCustomFieldDefaults(activeVehicleCustomFields, previous);
-      console.debug("[VehicleInventoryPage] sync effect fired", {
-        activeVehicleCustomFieldsCount: activeVehicleCustomFields.length,
-        nextExtraKeys: Object.keys(nextExtra)
-      });
-      return areExtraValuesEqual(previous, nextExtra) ? previous : nextExtra;
+      const shouldUpdate = !areExtraValuesEqual(previous, nextExtra);
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[VehicleInventoryPage] extra sync effect", {
+          activeVehicleCustomFieldsCount: activeVehicleCustomFields.length,
+          shouldUpdate,
+          nextExtraKeys: Object.keys(nextExtra)
+        });
+      }
+      return shouldUpdate ? nextExtra : previous;
     });
   }, [activeVehicleCustomFields]);
 
@@ -1378,6 +1391,8 @@ export function VehicleInventoryPage() {
     }
   });
 
+  const exportLockRef = useRef(false);
+  const [isExportLocked, setIsExportLocked] = useState(false);
   const exportInventoryPdf = useMutation({
     mutationFn: async () => {
       const pointerTargets = collectPointerTargetsPayload(selectedVehicle?.id ?? null);
@@ -1427,8 +1442,30 @@ export function VehicleInventoryPage() {
         }
       }
       setFeedback({ type: "error", text: message });
+    },
+    onMutate: () => {
+      exportLockRef.current = true;
+      setIsExportLocked(true);
+    },
+    onSettled: () => {
+      exportLockRef.current = false;
+      setIsExportLocked(false);
     }
   });
+
+  const handleExportPdf = useCallback(() => {
+    if (exportLockRef.current || exportInventoryPdf.isPending) {
+      return;
+    }
+    exportLockRef.current = true;
+    setIsExportLocked(true);
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[VehicleInventoryPage] export requested");
+    }
+    requestAnimationFrame(() => {
+      exportInventoryPdf.mutate();
+    });
+  }, [exportInventoryPdf]);
 
   const selectedVehicleFallback = useMemo(() => {
     if (!selectedVehicle) {
@@ -2200,11 +2237,13 @@ export function VehicleInventoryPage() {
           <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
             <button
               type="button"
-              onClick={() => exportInventoryPdf.mutate()}
-              disabled={exportInventoryPdf.isPending}
+              onClick={handleExportPdf}
+              disabled={exportInventoryPdf.isPending || isExportLocked}
               className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
             >
-              {exportInventoryPdf.isPending ? "Export en cours…" : "Exporter en PDF"}
+              {exportInventoryPdf.isPending || isExportLocked
+                ? "Export en cours…"
+                : "Exporter en PDF"}
             </button>
             <button
               type="button"
@@ -4526,12 +4565,40 @@ function areExtraValuesEqual(
   current: Record<string, unknown> = {},
   next: Record<string, unknown> = {}
 ) {
+  const isPlainObject = (value: unknown): value is Record<string, unknown> =>
+    typeof value === "object" && value !== null && !Array.isArray(value);
+
+  const areArraysEqual = (left: unknown[], right: unknown[]) => {
+    if (left.length !== right.length) {
+      return false;
+    }
+    return left.every((value, index) => isExtraValueEqual(value, right[index]));
+  };
+
+  const isExtraValueEqual = (left: unknown, right: unknown): boolean => {
+    if (Object.is(left, right)) {
+      return true;
+    }
+    if (Array.isArray(left) && Array.isArray(right)) {
+      return areArraysEqual(left, right);
+    }
+    if (isPlainObject(left) && isPlainObject(right)) {
+      const leftKeys = Object.keys(left);
+      const rightKeys = Object.keys(right);
+      if (leftKeys.length !== rightKeys.length) {
+        return false;
+      }
+      return leftKeys.every((key) => Object.is(left[key], right[key]));
+    }
+    return false;
+  };
+
   const currentKeys = Object.keys(current);
   const nextKeys = Object.keys(next);
   if (currentKeys.length !== nextKeys.length) {
     return false;
   }
-  return currentKeys.every((key) => Object.is(current[key], next[key]));
+  return currentKeys.every((key) => isExtraValueEqual(current[key], next[key]));
 }
 
 function ItemCard({
@@ -4546,6 +4613,11 @@ function ItemCard({
 }: ItemCardProps) {
   const queryClient = useQueryClient();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const renderCountRef = useRef(0);
+  renderCountRef.current += 1;
+  if (process.env.NODE_ENV !== "production") {
+    console.debug("[ItemCard] render", { itemId: item.id, count: renderCountRef.current });
+  }
   const [isEditingPosition, setIsEditingPosition] = useState(false);
   const [draftPosition, setDraftPosition] = useState(() => ({
     x: Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100)),
@@ -4580,21 +4652,49 @@ function ItemCard({
       x: Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100)),
       y: Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100))
     };
-    setDraftPosition((previous) =>
-      previous.x === nextDraft.x && previous.y === nextDraft.y ? previous : nextDraft
-    );
+    setDraftPosition((previous) => {
+      const shouldUpdate = previous.x !== nextDraft.x || previous.y !== nextDraft.y;
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[ItemCard] position sync effect", {
+          itemId: item.id,
+          shouldUpdate,
+          nextDraft
+        });
+      }
+      return shouldUpdate ? nextDraft : previous;
+    });
   }, [item.position_x, item.position_y, isEditingPosition]);
 
   useEffect(() => {
     // Évite de relancer un rendu si la quantité n'a pas changé.
-    setDraftQuantity((previous) => (previous === item.quantity ? previous : item.quantity));
+    setDraftQuantity((previous) => {
+      const shouldUpdate = previous !== item.quantity;
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[ItemCard] quantity sync effect", {
+          itemId: item.id,
+          shouldUpdate,
+          nextQuantity: item.quantity
+        });
+      }
+      return shouldUpdate ? item.quantity : previous;
+    });
     setIsSavingQuantity((previous) => (previous ? false : previous));
   }, [item.quantity]);
 
   useEffect(() => {
     // Recalcule uniquement si les valeurs diffèrent pour éviter les boucles de rendu.
     const nextExtra = buildCustomFieldDefaults(customFieldDefinitions, item.extra ?? {});
-    setExtraDraft((previous) => (areExtraValuesEqual(previous, nextExtra) ? previous : nextExtra));
+    setExtraDraft((previous) => {
+      const shouldUpdate = !areExtraValuesEqual(previous, nextExtra);
+      if (process.env.NODE_ENV !== "production") {
+        console.debug("[ItemCard] extra sync effect", {
+          itemId: item.id,
+          shouldUpdate,
+          nextExtraKeys: Object.keys(nextExtra)
+        });
+      }
+      return shouldUpdate ? nextExtra : previous;
+    });
   }, [customFieldDefinitions, item.extra]);
 
   const uploadImage = useMutation({
