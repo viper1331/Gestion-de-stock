@@ -43,12 +43,15 @@ def render_vehicle_inventory_pdf(
     pointer_targets: dict[str, models.PointerTarget] | None,
     options: VehiclePdfOptions,
     media_root: Path | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> bytes:
     """Public entry point for vehicle inventory PDF rendering."""
 
     start_time = time.perf_counter()
     diagnostics = check_playwright_status()
     renderer_mode = resolve_renderer_mode(diagnostics)
+    if cancel_check:
+        cancel_check()
 
     if renderer_mode == RENDERER_HTML:
         if diagnostics.status != PLAYWRIGHT_OK:
@@ -56,6 +59,8 @@ def render_vehicle_inventory_pdf(
             message = build_playwright_error_message(diagnostics.status)
             raise PlaywrightPdfError(diagnostics.status, message)
         try:
+            if cancel_check:
+                cancel_check()
             return render_vehicle_inventory_pdf_html_sync(
                 categories=categories,
                 items=items,
@@ -85,6 +90,8 @@ def render_vehicle_inventory_pdf(
     canvas = buffer.build_canvas()
     style_engine = PdfStyleEngine(theme=options.theme, logo_path=None)
     plan_start = time.perf_counter()
+    if cancel_check:
+        cancel_check()
     plan = build_plan(
         categories=categories,
         items=items,
@@ -98,6 +105,8 @@ def render_vehicle_inventory_pdf(
     counter = PageCounter(len(plan.pages))
     render_start = time.perf_counter()
     for page in plan:
+        if cancel_check:
+            cancel_check()
         canvas.setPageSize(page_size_for_orientation(page.orientation))
         render_page(canvas, page, style_engine=style_engine)
         page_number, page_count = counter.advance()

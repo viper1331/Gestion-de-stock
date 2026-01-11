@@ -23,7 +23,14 @@ from backend.services.pdf.vehicle_inventory.playwright_support import (
     check_playwright_status,
     log_playwright_context,
 )
-from backend.services.pdf.vehicle_inventory.jobs import create_job, get_job, launch_job
+from backend.services.pdf.vehicle_inventory.jobs import (
+    create_job,
+    ensure_not_cancelled,
+    get_job,
+    launch_job,
+    request_cancel,
+    update_progress,
+)
 from backend.services.pdf.vehicle_inventory.renderer import PlaywrightPdfError
 from backend.services import qrcode_service
 from backend.services.debug_service import load_debug_config
@@ -100,14 +107,23 @@ class VehicleInventoryExportOptions(VehiclePdfOptions):
 
 def _build_pdf_worker(
     *,
+    job,
     pointer_targets: dict[str, models.PointerTarget] | None,
     options: VehiclePdfOptions,
 ) -> Callable[[], bytes]:
     def _worker() -> bytes:
+        ensure_not_cancelled(job)
         try:
             return services.generate_vehicle_inventory_pdf(
                 pointer_targets=pointer_targets,
                 options=options,
+                progress_callback=lambda step, current, total: update_progress(
+                    job,
+                    step=step,
+                    current=current,
+                    total=total,
+                ),
+                cancel_check=lambda: ensure_not_cancelled(job),
             )
         except FileNotFoundError:
             fallback_options = options.model_copy()
@@ -115,6 +131,13 @@ def _build_pdf_worker(
             return services.generate_vehicle_inventory_pdf(
                 pointer_targets=pointer_targets,
                 options=fallback_options,
+                progress_callback=lambda step, current, total: update_progress(
+                    job,
+                    step=step,
+                    current=current,
+                    total=total,
+                ),
+                cancel_check=lambda: ensure_not_cancelled(job),
             )
 
     return _worker
@@ -153,7 +176,7 @@ def _start_vehicle_inventory_job(
         raise HTTPException(status_code=503, detail=build_playwright_error_message(diagnostics.status))
     filename = _vehicle_inventory_filename()
     job = create_job(filename=filename)
-    launch_job(job, _build_pdf_worker(pointer_targets=pointer_targets, options=resolved_options))
+    launch_job(job, _build_pdf_worker(job=job, pointer_targets=pointer_targets, options=resolved_options))
     return {"job_id": job.job_id, "status": job.status, "filename": filename}
 
 
@@ -184,11 +207,38 @@ async def get_vehicle_inventory_pdf_job_status(
     if not job:
         raise HTTPException(status_code=404, detail="Export PDF introuvable.")
     response = {"job_id": job.job_id, "status": job.status, "filename": job.filename}
+    response["created_at"] = job.created_at.isoformat()
+    response["updated_at"] = job.updated_at.isoformat()
+    if job.started_at:
+        response["started_at"] = job.started_at.isoformat()
+    if job.finished_at:
+        response["finished_at"] = job.finished_at.isoformat()
+    response["progress"] = {
+        "step": job.progress_step,
+        "current": job.progress_current,
+        "total": job.progress_total,
+        "percent": job.progress_percent,
+    }
     if job.error:
         response["error"] = job.error
-    if job.status == "completed":
+    if job.status == "done":
         response["download_url"] = f"/vehicle-inventory/export/pdf/jobs/{job.job_id}/download"
     return response
+
+
+@router.post("/export/pdf/jobs/{job_id}/cancel")
+async def cancel_vehicle_inventory_pdf_job(
+    job_id: str,
+    user: models.User = Depends(get_current_user),
+):
+    _require_permission(user, action="view")
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export PDF introuvable.")
+    if job.status in {"done", "error", "cancelled"}:
+        return {"job_id": job.job_id, "status": job.status}
+    request_cancel(job)
+    return {"job_id": job.job_id, "status": job.status}
 
 
 @router.get("/export/pdf/jobs/{job_id}/download")
@@ -200,8 +250,11 @@ async def download_vehicle_inventory_pdf_job(
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Export PDF introuvable.")
-    if job.status != "completed" or not job.result_path or not job.result_path.exists():
-        raise HTTPException(status_code=409, detail="Export PDF en cours de génération.")
+    if job.status != "done" or not job.result_path or not job.result_path.exists():
+        detail = "Export PDF en cours de génération."
+        if job.status == "cancelled":
+            detail = "Export PDF annulé."
+        raise HTTPException(status_code=409, detail=detail)
     filename = job.filename or f"{job.job_id}.pdf"
     return StreamingResponse(
         io.BytesIO(job.result_path.read_bytes()),

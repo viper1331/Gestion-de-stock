@@ -1,4 +1,5 @@
 import asyncio
+import time
 from contextlib import closing
 import json
 import sqlite3
@@ -2364,8 +2365,26 @@ def test_vehicle_inventory_pdf_export() -> None:
 
     export_resp = client.get("/vehicle-inventory/export/pdf", headers=admin_headers)
     assert export_resp.status_code == 200, export_resp.text
-    assert export_resp.headers["content-type"] == "application/pdf"
-    payload = export_resp.content
+    export_payload = export_resp.json()
+    job_id = export_payload["job_id"]
+    assert job_id
+
+    payload = b""
+    for _ in range(50):
+        status_resp = client.get(f"/vehicle-inventory/export/pdf/jobs/{job_id}", headers=admin_headers)
+        assert status_resp.status_code == 200, status_resp.text
+        status_payload = status_resp.json()
+        if status_payload["status"] == "done":
+            download_resp = client.get(
+                f"/vehicle-inventory/export/pdf/jobs/{job_id}/download",
+                headers=admin_headers,
+            )
+            assert download_resp.status_code == 200, download_resp.text
+            payload = download_resp.content
+            break
+        if status_payload["status"] in {"error", "cancelled"}:
+            pytest.fail(status_payload.get("error", "Export PDF échoué."))
+        time.sleep(0.1)
     assert payload.startswith(b"%PDF")
     assert len(payload) > 200
 

@@ -53,6 +53,18 @@ class PdfContentConfig(BaseModel):
     show_totals: bool = False
 
 
+class PdfGroupingConfig(BaseModel):
+    enabled: bool = False
+    keys: list[str] = Field(default_factory=list)
+    header_style: Literal["bar", "inline", "none"] = "bar"
+    show_counts: bool = False
+    counts_scope: Literal["level", "leaf"] = "level"
+    show_subtotals: bool = False
+    subtotal_columns: list[str] = Field(default_factory=list)
+    subtotal_scope: Literal["level", "leaf"] = "level"
+    page_break_between_level1: bool = False
+
+
 class PdfFooterConfig(BaseModel):
     enabled: bool = True
     show_pagination: bool = True
@@ -124,6 +136,7 @@ class PdfConfig(BaseModel):
     branding: PdfBrandingConfig = Field(default_factory=PdfBrandingConfig)
     header: PdfHeaderConfig = Field(default_factory=PdfHeaderConfig)
     content: PdfContentConfig = Field(default_factory=PdfContentConfig)
+    grouping: PdfGroupingConfig = Field(default_factory=PdfGroupingConfig)
     footer: PdfFooterConfig = Field(default_factory=PdfFooterConfig)
     watermark: PdfWatermarkConfig = Field(default_factory=PdfWatermarkConfig)
     filename: PdfFilenameConfig = Field(default_factory=PdfFilenameConfig)
@@ -138,6 +151,7 @@ class PdfConfigOverrides(BaseModel):
     branding: PdfBrandingConfig | None = None
     header: PdfHeaderConfig | None = None
     content: PdfContentConfig | None = None
+    grouping: PdfGroupingConfig | None = None
     footer: PdfFooterConfig | None = None
     watermark: PdfWatermarkConfig | None = None
     filename: PdfFilenameConfig | None = None
@@ -158,7 +172,17 @@ class PdfPresetConfig(BaseModel):
 class PdfColumnMeta(BaseModel):
     key: str
     label: str
+    is_numeric: bool = False
     default_visible: bool = True
+
+
+class PdfGroupableColumnMeta(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    key: str
+    label: str
+    is_numeric: bool = Field(default=False, alias="isNumeric")
+    is_visible_by_default: bool = Field(default=True, alias="isVisibleByDefault")
 
 
 class PdfModuleMeta(BaseModel):
@@ -179,6 +203,12 @@ class PdfExportConfig(BaseModel):
 
 
 class PdfConfigMeta(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
     supported_fonts: list[str] = Field(default_factory=list)
     accepted_color_formats: list[str] = Field(default_factory=list)
     renderer_compatibility: dict[str, dict[str, object]] = Field(default_factory=dict)
+    groupable_columns: list[PdfGroupableColumnMeta] = Field(
+        default_factory=list,
+        alias="groupableColumns",
+    )

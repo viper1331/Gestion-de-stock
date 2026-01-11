@@ -13,6 +13,7 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
+from itertools import groupby
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
@@ -5956,15 +5957,84 @@ def _render_purchase_order_pdf(
         pdf.drawString(margin_left, y, "Aucune ligne de commande enregistrée.")
         y -= 12 * scale
     else:
-        columns = [col for col in pdf_config.content.columns if col.visible] or [
+        all_columns = pdf_config.content.columns or [
             PdfColumnConfig(key="article", label="Article", visible=True),
             PdfColumnConfig(key="ordered", label="Commandé", visible=True),
             PdfColumnConfig(key="received", label="Réceptionné", visible=True),
         ]
+        columns = [col for col in all_columns if col.visible] or all_columns[:1]
+        label_map = {col.key: col.label for col in all_columns}
         table_width = width - margin_left - margin_right
         column_widths = _resolve_purchase_order_column_widths(columns, table_width)
         row_index = 0
-        for name, ordered, received in items:
+        grouping = pdf_config.grouping
+        grouping_keys = [key for key in grouping.keys if key]
+        if grouping.enabled and not grouping_keys and pdf_config.content.group_by:
+            grouping_keys = [pdf_config.content.group_by]
+
+        def render_group_header(group: _GroupedRows, *, level: int) -> None:
+            nonlocal y
+            if grouping.header_style == "none":
+                return
+            count = len(group.rows) if grouping.counts_scope == "leaf" else (
+                len(group.children) if group.children else len(group.rows)
+            )
+            label = label_map.get(group.key, group.key)
+            value = group.value if group.value not in (None, "") else "—"
+            header_text = f"{label} : {value}"
+            if grouping.show_counts:
+                header_text = f"{header_text} ({count})"
+            header_height = 16
+            y = ensure_space(y, header_height + 6, on_new_page=table_new_page)
+            if grouping.header_style == "bar":
+                pdf.setFillColor(theme.table_header_bg)
+                pdf.rect(margin_left, y - header_height + 6, table_width, header_height, stroke=0, fill=1)
+                pdf.setFillColor(theme.table_header_text)
+            else:
+                pdf.setFillColor(theme.text_color)
+            pdf.setFont(theme.font_family, theme.base_font_size)
+            pdf.drawString(margin_left + 4, y, header_text)
+            pdf.setFillColor(theme.text_color)
+            y -= header_height - 2
+
+        def render_subtotal(group: _GroupedRows) -> None:
+            nonlocal y
+            if not grouping.show_subtotals:
+                return
+            if grouping.subtotal_scope == "leaf" and group.children:
+                return
+            subtotal_columns = set(grouping.subtotal_columns)
+            if not subtotal_columns:
+                return
+            subtotal_values = {
+                key: sum(
+                    row["raw"].get(key, 0) for row in group.rows if isinstance(row["raw"].get(key), (int, float))
+                )
+                for key in subtotal_columns
+            }
+            y = ensure_space(y, 24, on_new_page=table_new_page)
+            label = "Sous-total"
+            pdf.setFont(theme.font_family, theme.base_font_size)
+            _render_purchase_order_row(
+                pdf,
+                columns=columns,
+                column_widths=column_widths,
+                x_start=margin_left,
+                y=y,
+                line=label,
+                ordered=int(subtotal_values.get("ordered", 0)),
+                received=int(subtotal_values.get("received", 0)),
+                is_first_line=True,
+            )
+            pdf.setStrokeColor(theme.border_color)
+            pdf.line(margin_left, y - 2, margin_left + table_width, y - 2)
+            y -= 12
+
+        def render_row(row: dict[str, dict[str, object]]) -> None:
+            nonlocal y, row_index
+            name = str(row["raw"].get("article", "-") or "-")
+            ordered = int(row["raw"].get("ordered", 0) or 0)
+            received = int(row["raw"].get("received", 0) or 0)
             name_lines = wrap(name, 80) or ["-"]
             for index, line in enumerate(name_lines):
                 y = ensure_space(y, 24 * scale, on_new_page=table_new_page)
@@ -5995,6 +6065,48 @@ def _render_purchase_order_pdf(
                 row_index += 1
                 y -= 12 * scale
             y -= 4 * scale
+
+        row_payloads = [
+            {"raw": {"article": name, "ordered": ordered, "received": received}}
+            for name, ordered, received in items
+        ]
+
+        if grouping.enabled and grouping_keys:
+            group_tree = _build_group_tree(
+                row_payloads,
+                grouping_keys,
+                key_fn=lambda row, key: row["raw"].get(key),
+            )
+
+            def render_group(group: _GroupedRows, *, level: int, is_first_level: bool) -> None:
+                nonlocal y, page_number
+                if grouping.page_break_between_level1 and level == 0 and not is_first_level:
+                    _draw_purchase_order_footer(
+                        pdf,
+                        pdf_config=pdf_config,
+                        page_width=width,
+                        margin_right=margin_right,
+                        margin_bottom=margin_bottom,
+                        page_number=page_number,
+                    )
+                    pdf.showPage()
+                    page_number += 1
+                    y = start_page()
+                    y = draw_table_title(y)
+                render_group_header(group, level=level)
+                if group.children:
+                    for index, child in enumerate(group.children):
+                        render_group(child, level=level + 1, is_first_level=index == 0)
+                else:
+                    for row in group.rows:
+                        render_row(row)
+                render_subtotal(group)
+
+            for index, group in enumerate(group_tree):
+                render_group(group, level=0, is_first_level=index == 0)
+        else:
+            for row in row_payloads:
+                render_row(row)
 
     _draw_purchase_order_footer(
         pdf,
@@ -6080,6 +6192,63 @@ def _format_date_label(value: date | None) -> str:
     if value is None:
         return "—"
     return value.strftime("%d/%m/%Y")
+
+
+@dataclass
+class _GroupedRows:
+    key: str
+    value: object
+    rows: list[object]
+    children: list["_GroupedRows"]
+
+
+def _group_sort_value(value: object) -> tuple[int, object]:
+    if value is None:
+        return (1, "")
+    if isinstance(value, (int, float)):
+        return (0, value)
+    return (0, str(value).lower())
+
+
+def _stable_sort_rows(
+    rows: Iterable[T],
+    keys: list[str],
+    *,
+    key_fn: Callable[[T, str], object],
+) -> list[T]:
+    sorted_rows = list(rows)
+    for key in reversed(keys):
+        sorted_rows = sorted(sorted_rows, key=lambda row: _group_sort_value(key_fn(row, key)))
+    return sorted_rows
+
+
+def _build_group_tree(
+    rows: Iterable[T],
+    keys: list[str],
+    *,
+    key_fn: Callable[[T, str], object],
+) -> list[_GroupedRows]:
+    if not keys:
+        return []
+    sorted_rows = _stable_sort_rows(rows, keys, key_fn=key_fn)
+    return _build_group_tree_sorted(sorted_rows, keys, key_fn=key_fn)
+
+
+def _build_group_tree_sorted(
+    rows: list[T],
+    keys: list[str],
+    *,
+    key_fn: Callable[[T, str], object],
+) -> list[_GroupedRows]:
+    key = keys[0]
+    grouped: list[_GroupedRows] = []
+    for value, group_iter in groupby(rows, key=lambda row: key_fn(row, key)):
+        grouped_rows = list(group_iter)
+        children = (
+            _build_group_tree_sorted(grouped_rows, keys[1:], key_fn=key_fn) if len(keys) > 1 else []
+        )
+        grouped.append(_GroupedRows(key=key, value=value, rows=grouped_rows, children=children))
+    return grouped
 
 
 def _render_remise_inventory_pdf(
@@ -6229,30 +6398,103 @@ def _render_remise_inventory_pdf(
     y = draw_header(y)
     page_number = 1
 
-    for index, item in enumerate(items):
-        category_label = _format_cell(category_map.get(item.category_id or -1, None) if item.category_id else None)
-        lots_label = _format_cell(
-            ", ".join(item.lot_names) if item.lot_names else None
+    row_index = 0
+    grouping = pdf_config.grouping
+    grouping_keys = [key for key in grouping.keys if key]
+    if grouping.enabled and not grouping_keys and pdf_config.content.group_by:
+        grouping_keys = [pdf_config.content.group_by]
+
+    label_map = {key: label for key, label, _, _ in base_columns}
+
+    def ensure_row_space(required_height: float) -> None:
+        nonlocal y, page_number
+        if y <= margin_bottom + required_height:
+            pdf.showPage()
+            page_number += 1
+            y = start_page(page_number)
+            y = draw_header(y)
+
+    def render_group_header(group: _GroupedRows) -> None:
+        nonlocal y
+        if grouping.header_style == "none":
+            return
+        count = len(group.rows) if grouping.counts_scope == "leaf" else (
+            len(group.children) if group.children else len(group.rows)
         )
-        expiration_label = _format_date_label(item.expiration_date)
-        expiration_label = "-" if expiration_label == "—" else expiration_label
-        threshold_label = str(item.low_stock_threshold or 1) if item.track_low_stock else "1"
-        size_label = _format_cell(item.size)
-        name_label = _format_cell(item.name)
+        label = label_map.get(group.key, group.key)
+        value = group.value if group.value not in (None, "") else "—"
+        header_text = f"{label} : {value}"
+        if grouping.show_counts:
+            header_text = f"{header_text} ({count})"
+        header_height = 16
+        ensure_row_space(header_height + base_row_padding)
+        if grouping.header_style == "bar":
+            pdf.setFillColor(theme.table_header_bg)
+            pdf.rect(margin_left, y - header_height + 6, table_width, header_height, stroke=0, fill=1)
+            pdf.setFillColor(theme.table_header_text)
+        else:
+            pdf.setFillColor(theme.text_color)
+        pdf.setFont(theme.font_family, theme.base_font_size)
+        pdf.drawString(margin_left + 4, y - 4, header_text)
+        pdf.setFillColor(theme.text_color)
+        y -= header_height
 
-        column_map = {
-            "name": name_label,
-            "quantity": str(item.quantity or 0),
-            "size": size_label,
-            "category": category_label,
-            "lots": lots_label,
-            "expiration": expiration_label,
-            "threshold": threshold_label,
+    def render_subtotal(group: _GroupedRows) -> None:
+        nonlocal y
+        if not grouping.show_subtotals:
+            return
+        if grouping.subtotal_scope == "leaf" and group.children:
+            return
+        subtotal_columns = set(grouping.subtotal_columns)
+        if not subtotal_columns:
+            return
+        subtotal_values = {
+            key: sum(
+                row["raw"].get(key, 0) for row in group.rows if isinstance(row["raw"].get(key), (int, float))
+            )
+            for key in subtotal_columns
         }
-        values: list[tuple[str, float, str]] = [
-            (column_map[key], ratio, align) for key, _, ratio, align in columns
-        ]
+        first_key = columns[0][0] if columns else "name"
+        subtotal_display = {
+            key: (str(subtotal_values[key]) if key in subtotal_values else "")
+            for key, _, _, _ in base_columns
+        }
+        subtotal_display[first_key] = "Sous-total"
+        wrapped_values: list[tuple[list[str], float, str]] = []
+        for key, _, ratio, align in columns:
+            cell_width = ratio * table_width
+            value = subtotal_display.get(key, "")
+            lines = _wrap_to_width(
+                str(value),
+                cell_width - 8,
+                theme.font_family,
+                theme.base_font_size - 1,
+            )
+            wrapped_values.append((lines, cell_width, align))
+        row_height = line_height + base_row_padding
+        ensure_row_space(row_height)
+        pdf.setFillColor(theme.background_color)
+        pdf.rect(margin_left, y - row_height + 6, table_width, row_height, stroke=0, fill=1)
+        pdf.setStrokeColor(theme.border_color)
+        pdf.rect(margin_left, y - row_height + 6, table_width, row_height, stroke=1, fill=0)
+        pdf.setFillColor(theme.text_color)
+        x = margin_left
+        for lines, cell_width, align in wrapped_values:
+            text_y = y - 8
+            for line in lines:
+                if align == "center":
+                    pdf.drawCentredString(x + cell_width / 2, text_y, line)
+                else:
+                    pdf.drawString(x + 4, text_y, line)
+                text_y -= line_height
+            x += cell_width
+        y -= row_height
 
+    def render_row(row: dict[str, dict[str, object]]) -> None:
+        nonlocal y, row_index
+        values: list[tuple[str, float, str]] = [
+            (str(row["display"].get(key, "")), ratio, align) for key, _, ratio, align in columns
+        ]
         wrapped_values: list[tuple[list[str], float, str]] = []
         max_line_count = 1
         for value, ratio, align in values:
@@ -6267,15 +6509,10 @@ def _render_remise_inventory_pdf(
             wrapped_values.append((lines, cell_width, align))
 
         row_height = max_line_count * line_height + base_row_padding
+        ensure_row_space(row_height)
 
-        if y <= margin_bottom + row_height:
-            pdf.showPage()
-            page_number += 1
-            y = start_page(page_number)
-            y = draw_header(y)
-
-        pdf.setFillColor(theme.table_row_alt_bg if index % 2 else theme.background_color)
-        pdf.rect(margin_left, y - row_height + (6 * scale), table_width, row_height, stroke=0, fill=1)
+        pdf.setFillColor(theme.table_row_alt_bg if row_index % 2 else theme.background_color)
+        pdf.rect(margin_left, y - row_height + 6, table_width, row_height, stroke=0, fill=1)
         pdf.setStrokeColor(theme.border_color)
         pdf.rect(margin_left, y - row_height + (6 * scale), table_width, row_height, stroke=1, fill=0)
         pdf.setFillColor(theme.text_color)
@@ -6291,7 +6528,67 @@ def _render_remise_inventory_pdf(
                 text_y -= line_height
             x += cell_width
 
+        row_index += 1
         y -= row_height
+
+    row_payloads: list[dict[str, dict[str, object]]] = []
+    for item in items:
+        category_label = _format_cell(category_map.get(item.category_id or -1, None) if item.category_id else None)
+        lots_label = _format_cell(", ".join(item.lot_names) if item.lot_names else None)
+        expiration_label = _format_date_label(item.expiration_date)
+        expiration_label = "-" if expiration_label == "—" else expiration_label
+        threshold_label = str(item.low_stock_threshold or 1) if item.track_low_stock else "1"
+        size_label = _format_cell(item.size)
+        name_label = _format_cell(item.name)
+
+        display = {
+            "name": name_label,
+            "quantity": str(item.quantity or 0),
+            "size": size_label,
+            "category": category_label,
+            "lots": lots_label,
+            "expiration": expiration_label,
+            "threshold": threshold_label,
+        }
+        raw = {
+            "name": name_label,
+            "quantity": item.quantity or 0,
+            "size": size_label,
+            "category": category_label,
+            "lots": lots_label,
+            "expiration": item.expiration_date,
+            "threshold": item.low_stock_threshold or 1,
+        }
+        row_payloads.append({"display": display, "raw": raw})
+
+    if grouping.enabled and grouping_keys:
+        group_tree = _build_group_tree(
+            row_payloads,
+            grouping_keys,
+            key_fn=lambda row, key: row["raw"].get(key),
+        )
+
+        def render_group(group: _GroupedRows, *, level: int, is_first_level: bool) -> None:
+            nonlocal y, page_number
+            if grouping.page_break_between_level1 and level == 0 and not is_first_level:
+                pdf.showPage()
+                page_number += 1
+                y = start_page(page_number)
+                y = draw_header(y)
+            render_group_header(group)
+            if group.children:
+                for index, child in enumerate(group.children):
+                    render_group(child, level=level + 1, is_first_level=index == 0)
+            else:
+                for row in group.rows:
+                    render_row(row)
+            render_subtotal(group)
+
+        for index, group in enumerate(group_tree):
+            render_group(group, level=0, is_first_level=index == 0)
+    else:
+        for row in row_payloads:
+            render_row(row)
 
     pdf.save()
     return buffer.getvalue()
@@ -6388,12 +6685,20 @@ def generate_pharmacy_purchase_order_pdf(
 
 
 def generate_vehicle_inventory_pdf(
-    *, pointer_targets: dict[str, models.PointerTarget] | None = None, options: VehiclePdfOptions | None = None
+    *,
+    pointer_targets: dict[str, models.PointerTarget] | None = None,
+    options: VehiclePdfOptions | None = None,
+    progress_callback: Callable[[str, int | None, int | None], None] | None = None,
+    cancel_check: Callable[[], None] | None = None,
 ) -> bytes:
     """Export the complete vehicle inventory as a PDF document."""
 
     start_time = time.perf_counter()
+    if cancel_check:
+        cancel_check()
     ensure_database_ready()
+    if progress_callback:
+        progress_callback("fetch_data", 1, 3)
     categories = list_vehicle_categories()
     items = list_vehicle_items()
     fetch_time = time.perf_counter()
@@ -6405,7 +6710,13 @@ def generate_vehicle_inventory_pdf(
         categories = [category for category in categories if category.id in allowed_ids]
         items = [item for item in items if item.category_id in allowed_ids]
 
+    if cancel_check:
+        cancel_check()
+    if progress_callback:
+        progress_callback("image_preprocessing", 2, 3)
     render_start = time.perf_counter()
+    if progress_callback:
+        progress_callback("build_pdf", 3, 3)
     pdf_bytes = render_vehicle_inventory_pdf(
         categories=categories,
         items=items,
@@ -6413,6 +6724,7 @@ def generate_vehicle_inventory_pdf(
         pointer_targets=pointer_targets,
         options=pdf_options,
         media_root=MEDIA_ROOT,
+        cancel_check=cancel_check,
     )
     total_time = time.perf_counter()
     logger.info(

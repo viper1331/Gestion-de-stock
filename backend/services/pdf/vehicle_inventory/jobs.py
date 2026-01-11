@@ -10,6 +10,7 @@ import uuid
 from typing import Callable, Iterable
 
 import asyncio
+import threading
 
 logger = logging.getLogger(__name__)
 
@@ -22,9 +23,20 @@ class PdfExportJob:
     status: str
     created_at: datetime
     updated_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
     filename: str | None = None
     result_path: Path | None = None
     error: str | None = None
+    progress_step: str | None = None
+    progress_current: int | None = None
+    progress_total: int | None = None
+    progress_percent: float | None = None
+    cancel_requested: bool = False
+
+
+class PdfExportCancelled(Exception):
+    """Raised when a PDF export job is cancelled."""
 
 
 _jobs: dict[str, PdfExportJob] = {}
@@ -57,7 +69,7 @@ def create_job(filename: str | None = None) -> PdfExportJob:
     _cleanup_jobs()
     job_id = uuid.uuid4().hex
     now = _now()
-    job = PdfExportJob(job_id=job_id, status="pending", created_at=now, updated_at=now, filename=filename)
+    job = PdfExportJob(job_id=job_id, status="queued", created_at=now, updated_at=now, filename=filename)
     _jobs[job_id] = job
     return job
 
@@ -67,20 +79,64 @@ def get_job(job_id: str) -> PdfExportJob | None:
     return _jobs.get(job_id)
 
 
-def _update_job(job: PdfExportJob, *, status: str | None = None, error: str | None = None, result_path: Path | None = None) -> None:
+def _update_job(
+    job: PdfExportJob,
+    *,
+    status: str | None = None,
+    error: str | None = None,
+    result_path: Path | None = None,
+    progress_step: str | None = None,
+    progress_current: int | None = None,
+    progress_total: int | None = None,
+) -> None:
     job.status = status or job.status
     job.error = error
     job.result_path = result_path or job.result_path
+    if progress_step is not None:
+        job.progress_step = progress_step
+    if progress_current is not None:
+        job.progress_current = progress_current
+    if progress_total is not None:
+        job.progress_total = progress_total
+    if job.progress_total and job.progress_current is not None:
+        job.progress_percent = (job.progress_current / job.progress_total) * 100
     job.updated_at = _now()
 
 
+def request_cancel(job: PdfExportJob) -> None:
+    job.cancel_requested = True
+    if job.status == "queued":
+        _update_job(job, status="cancelled", error="Export annulé.")
+    else:
+        _update_job(job)
+
+
+def update_progress(job: PdfExportJob, *, step: str, current: int | None = None, total: int | None = None) -> None:
+    _update_job(job, progress_step=step, progress_current=current, progress_total=total)
+
+
+def ensure_not_cancelled(job: PdfExportJob) -> None:
+    if job.cancel_requested:
+        raise PdfExportCancelled("Export annulé.")
+
+
 async def run_job(job: PdfExportJob, worker: Callable[[], bytes]) -> None:
-    _update_job(job, status="running")
+    if job.cancel_requested:
+        _update_job(job, status="cancelled", error="Export annulé.")
+        return
+    job.started_at = _now()
+    _update_job(job, status="processing")
     try:
         pdf_bytes = await asyncio.to_thread(worker)
+        if job.cancel_requested:
+            _update_job(job, status="cancelled", error="Export annulé.")
+            return
+    except PdfExportCancelled:
+        _update_job(job, status="cancelled", error="Export annulé.")
+        return
     except Exception as exc:  # noqa: BLE001 - log and persist error
         logger.exception("[vehicle_inventory_pdf] export failed job_id=%s", job.job_id)
-        _update_job(job, status="failed", error=str(exc))
+        _update_job(job, status="error", error=str(exc))
         return
 
     result_path = _jobs_dir() / f"{job.job_id}.pdf"
@@ -88,11 +144,15 @@ async def run_job(job: PdfExportJob, worker: Callable[[], bytes]) -> None:
         result_path.write_bytes(pdf_bytes)
     except OSError as exc:
         logger.exception("[vehicle_inventory_pdf] export write failed job_id=%s", job.job_id)
-        _update_job(job, status="failed", error=str(exc))
+        _update_job(job, status="error", error=str(exc))
         return
-    _update_job(job, status="completed", result_path=result_path)
+    job.finished_at = _now()
+    _update_job(job, status="done", result_path=result_path)
     logger.info("[vehicle_inventory_pdf] export completed job_id=%s size_bytes=%s", job.job_id, result_path.stat().st_size)
 
 
 def launch_job(job: PdfExportJob, worker: Callable[[], bytes]) -> None:
-    asyncio.create_task(run_job(job, worker))
+    def _runner() -> None:
+        asyncio.run(run_job(job, worker))
+
+    threading.Thread(target=_runner, daemon=True).start()
