@@ -37,4 +37,8 @@ describe("VehicleInventoryPage helpers", () => {
 
     expect(getVehicleViews(vehicle)).toEqual(["CABINE", "ARRIVEE - ARRIERE"]);
   });
+
+  it("retourne la vue par défaut quand aucun véhicule n'est sélectionné", () => {
+    expect(getVehicleViews(null)).toEqual([DEFAULT_VIEW_LABEL]);
+  });
 });

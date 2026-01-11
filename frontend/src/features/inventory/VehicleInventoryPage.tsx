@@ -1497,6 +1497,11 @@ export function VehicleInventoryPage() {
     setIsExportLocked(Boolean(isActive));
   }, [exportJob]);
 
+  const normalizedVehicleViews = useMemo(
+    () => getVehicleViews(selectedVehicle),
+    [selectedVehicle]
+  );
+
   const triggerExportJob = useCallback(async () => {
     if (exportLockRef.current || isExportLocked) {
       return;
@@ -1657,11 +1662,6 @@ export function VehicleInventoryPage() {
     }
     return vehicleFallbackMap.get(selectedVehicle.id);
   }, [selectedVehicle, vehicleFallbackMap]);
-
-  const normalizedVehicleViews = useMemo(
-    () => getVehicleViews(selectedVehicle),
-    [selectedVehicle]
-  );
 
   useEffect(() => {
     if (selectedVehicleId === null) {
