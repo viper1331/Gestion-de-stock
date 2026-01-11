@@ -32,6 +32,7 @@ from backend.api import (
     pdf_config as pdf_config_api,
     logs,
     messages,
+    user_layouts,
 )
 from backend.core.logging_config import (
     LOG_BACKUP_COUNT,
@@ -106,6 +107,7 @@ app.include_router(pdf_config_api.router, prefix="/admin", tags=["pdf-config"])
 app.include_router(about.router, prefix="/about", tags=["about"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
 app.include_router(messages.router, prefix="/messages", tags=["messages"])
+app.include_router(user_layouts.router, prefix="/user-layouts", tags=["user-layouts"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 
