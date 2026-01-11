@@ -50,6 +50,18 @@ export interface PdfContentConfig {
   show_totals: boolean;
 }
 
+export interface PdfGroupingConfig {
+  enabled: boolean;
+  keys: string[];
+  header_style: "bar" | "inline" | "none";
+  show_counts: boolean;
+  counts_scope: "level" | "leaf";
+  show_subtotals: boolean;
+  subtotal_columns: string[];
+  subtotal_scope: "level" | "leaf";
+  page_break_between_level1: boolean;
+}
+
 export interface PdfFooterConfig {
   enabled: boolean;
   show_pagination: boolean;
@@ -101,6 +113,7 @@ export interface PdfConfig {
   branding: PdfBrandingConfig;
   header: PdfHeaderConfig;
   content: PdfContentConfig;
+  grouping: PdfGroupingConfig;
   footer: PdfFooterConfig;
   watermark: PdfWatermarkConfig;
   filename: PdfFilenameConfig;
@@ -121,7 +134,15 @@ export interface PdfPresetConfig {
 export interface PdfColumnMeta {
   key: string;
   label: string;
+  is_numeric: boolean;
   default_visible: boolean;
+}
+
+export interface PdfGroupableColumnMeta {
+  key: string;
+  label: string;
+  isNumeric: boolean;
+  isVisibleByDefault: boolean;
 }
 
 export interface PdfModuleMeta {
@@ -145,6 +166,7 @@ export interface PdfConfigMeta {
   supported_fonts: string[];
   accepted_color_formats: string[];
   renderer_compatibility: Record<string, Record<string, unknown>>;
+  groupableColumns: PdfGroupableColumnMeta[];
 }
 
 export const DEFAULT_PDF_FORMAT: PdfFormatConfig = {
@@ -177,6 +199,18 @@ export const DEFAULT_PDF_CONTENT: PdfContentConfig = {
   sort_by: null,
   group_by: null,
   show_totals: false
+};
+
+export const DEFAULT_PDF_GROUPING: PdfGroupingConfig = {
+  enabled: false,
+  keys: [],
+  header_style: "bar",
+  show_counts: false,
+  counts_scope: "level",
+  show_subtotals: false,
+  subtotal_columns: [],
+  subtotal_scope: "level",
+  page_break_between_level1: false
 };
 
 export const DEFAULT_PDF_FOOTER: PdfFooterConfig = {
@@ -230,6 +264,7 @@ export const DEFAULT_PDF_CONFIG: PdfConfig = {
   branding: DEFAULT_PDF_BRANDING,
   header: DEFAULT_PDF_HEADER,
   content: DEFAULT_PDF_CONTENT,
+  grouping: DEFAULT_PDF_GROUPING,
   footer: DEFAULT_PDF_FOOTER,
   watermark: DEFAULT_PDF_WATERMARK,
   filename: DEFAULT_PDF_FILENAME,

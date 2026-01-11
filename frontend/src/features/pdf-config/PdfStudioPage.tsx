@@ -175,6 +175,7 @@ const configSectionKeys: Array<keyof PdfConfig> = [
   "branding",
   "header",
   "content",
+  "grouping",
   "footer",
   "watermark",
   "filename",

@@ -1391,66 +1391,192 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const exportLockRef = useRef(false);
-  const [isExportLocked, setIsExportLocked] = useState(false);
-  const exportInventoryPdf = useMutation({
-    mutationFn: async () => {
-      const pointerTargets = collectPointerTargetsPayload(selectedVehicle?.id ?? null);
-      const pointerModeByView = collectPointerModePayload(
-        selectedVehicle?.id ?? null,
-        normalizedVehicleViews
-      );
-      const payload: Record<string, unknown> = {
-        pointer_targets: pointerTargets,
-        pointer_mode_by_view: pointerModeByView
-      };
+  type ExportJobStatus = "queued" | "processing" | "done" | "error" | "cancelled";
+  type ExportJobProgress = {
+    step?: string | null;
+    current?: number | null;
+    total?: number | null;
+    percent?: number | null;
+  };
+  type ExportJob = {
+    jobId: string;
+    status: ExportJobStatus;
+    filename?: string | null;
+    downloadUrl?: string | null;
+    error?: string | null;
+    progress?: ExportJobProgress | null;
+  };
 
-      if (selectedVehicle) {
-        payload.category_ids = [selectedVehicle.id];
+  const exportLockRef = useRef(false);
+  const exportPollingRef = useRef<number | null>(null);
+  const [exportJobId, setExportJobId] = useState<string | null>(() => {
+    try {
+      return window.localStorage.getItem("vehicleInventoryPdfExportJobId");
+    } catch {
+      return null;
+    }
+  });
+  const [exportJob, setExportJob] = useState<ExportJob | null>(null);
+  const [isExportLocked, setIsExportLocked] = useState(false);
+
+  const stopExportPolling = useCallback(() => {
+    if (exportPollingRef.current !== null) {
+      window.clearInterval(exportPollingRef.current);
+      exportPollingRef.current = null;
+    }
+  }, []);
+
+  const handleExportJobStatus = useCallback(
+    (payload: ExportJob) => {
+      setExportJob(payload);
+      if (payload.status === "done" || payload.status === "error" || payload.status === "cancelled") {
+        stopExportPolling();
       }
+    },
+    [stopExportPolling]
+  );
+
+  const fetchExportJobStatus = useCallback(
+    async (jobId: string) => {
+      try {
+        const statusResponse = await api.get(`/vehicle-inventory/export/pdf/jobs/${jobId}`);
+        const status = statusResponse.data?.status as ExportJobStatus | undefined;
+        if (!status) {
+          throw new Error("État export PDF indisponible.");
+        }
+        handleExportJobStatus({
+          jobId,
+          status,
+          filename: statusResponse.data?.filename ?? null,
+          downloadUrl: statusResponse.data?.download_url ?? null,
+          error: statusResponse.data?.error ?? null,
+          progress: statusResponse.data?.progress ?? null
+        });
+      } catch (error) {
+        if (isAxiosError(error) && error.response?.status === 404) {
+          setExportJob(null);
+          setExportJobId(null);
+          try {
+            window.localStorage.removeItem("vehicleInventoryPdfExportJobId");
+          } catch {
+            // ignore storage errors
+          }
+          stopExportPolling();
+          return;
+        }
+        if (process.env.NODE_ENV !== "production") {
+          console.warn("[VehicleInventoryPage] export status polling failed", error);
+        }
+      }
+    },
+    [handleExportJobStatus, stopExportPolling]
+  );
+
+  const startExportPolling = useCallback(
+    (jobId: string) => {
+      stopExportPolling();
+      fetchExportJobStatus(jobId);
+      exportPollingRef.current = window.setInterval(() => {
+        fetchExportJobStatus(jobId);
+      }, 1000);
+    },
+    [fetchExportJobStatus, stopExportPolling]
+  );
+
+  useEffect(() => {
+    if (exportJobId) {
+      startExportPolling(exportJobId);
+    }
+    return () => {
+      stopExportPolling();
+    };
+  }, [exportJobId, startExportPolling, stopExportPolling]);
+
+  useEffect(() => {
+    const isActive = exportJob?.status === "queued" || exportJob?.status === "processing";
+    setIsExportLocked(Boolean(isActive));
+  }, [exportJob]);
+
+  const triggerExportJob = useCallback(async () => {
+    if (exportLockRef.current || isExportLocked) {
+      return;
+    }
+    exportLockRef.current = true;
+    setIsExportLocked(true);
+    const pointerTargets = collectPointerTargetsPayload(selectedVehicle?.id ?? null);
+    const pointerModeByView = collectPointerModePayload(
+      selectedVehicle?.id ?? null,
+      normalizedVehicleViews
+    );
+    const payload: Record<string, unknown> = {
+      pointer_targets: pointerTargets,
+      pointer_mode_by_view: pointerModeByView
+    };
+
+    if (selectedVehicle) {
+      payload.category_ids = [selectedVehicle.id];
+    }
+
+    try {
       const jobResponse = await api.post("/vehicle-inventory/export/pdf", payload);
       const jobId = jobResponse.data?.job_id as string | undefined;
-      if (!jobId) {
+      const status = jobResponse.data?.status as ExportJobStatus | undefined;
+      if (!jobId || !status) {
         throw new Error("Échec démarrage export PDF.");
       }
-
-      const maxAttempts = 120;
-      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
-        const statusResponse = await api.get(`/vehicle-inventory/export/pdf/jobs/${jobId}`);
-        const status = statusResponse.data?.status as string | undefined;
-        if (status === "completed") {
-          const pdfResponse = await api.get(
-            `/vehicle-inventory/export/pdf/jobs/${jobId}/download`,
-            { responseType: "arraybuffer" }
-          );
-          return pdfResponse.data as ArrayBuffer;
-        }
-        if (status === "failed") {
-          const errorMessage = statusResponse.data?.error as string | undefined;
-          throw new Error(errorMessage || "Échec export PDF.");
-        }
-        await new Promise((resolve) => setTimeout(resolve, 1000));
+      setExportJobId(jobId);
+      setExportJob({
+        jobId,
+        status,
+        filename: jobResponse.data?.filename ?? null,
+        downloadUrl: null,
+        error: null,
+        progress: null
+      });
+      try {
+        window.localStorage.setItem("vehicleInventoryPdfExportJobId", jobId);
+      } catch {
+        // ignore storage errors
       }
-      throw new Error("Temps d'attente dépassé pour l'export PDF.");
-    },
-    onSuccess: (data) => {
-      const blob = new Blob([data], { type: "application/pdf" });
-      const url = window.URL.createObjectURL(blob);
-      const link = document.createElement("a");
-      const now = new Date();
-      const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(
-        now.getDate()
-      ).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
-      link.href = url;
-      link.download = `inventaire_vehicules_${timestamp}.pdf`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      window.URL.revokeObjectURL(url);
-      setFeedback({ type: "success", text: "L'inventaire des véhicules a été exporté." });
-    },
-    onError: (error) => {
-      let message = "Une erreur est survenue lors de l'export du PDF.";
+      startExportPolling(jobId);
+    } catch (error) {
+      let message = "Une erreur est survenue lors du lancement de l'export PDF.";
+      if (isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim().length > 0) {
+          message = detail;
+        }
+      }
+      setIsExportLocked(false);
+      setFeedback({ type: "error", text: message });
+    } finally {
+      exportLockRef.current = false;
+    }
+  }, [
+    isExportLocked,
+    normalizedVehicleViews,
+    selectedVehicle,
+    startExportPolling
+  ]);
+
+  const handleExportPdf = useCallback(() => {
+    if (process.env.NODE_ENV !== "production") {
+      console.debug("[VehicleInventoryPage] export requested");
+    }
+    requestAnimationFrame(() => {
+      void triggerExportJob();
+    });
+  }, [triggerExportJob]);
+
+  const handleCancelExport = useCallback(async () => {
+    if (!exportJobId) {
+      return;
+    }
+    try {
+      await api.post(`/vehicle-inventory/export/pdf/jobs/${exportJobId}/cancel`);
+      await fetchExportJobStatus(exportJobId);
+    } catch (error) {
+      let message = "Impossible d'annuler l'export PDF.";
       if (isAxiosError(error)) {
         const detail = error.response?.data?.detail;
         if (typeof detail === "string" && detail.trim().length > 0) {
@@ -1458,30 +1584,72 @@ export function VehicleInventoryPage() {
         }
       }
       setFeedback({ type: "error", text: message });
-    },
-    onMutate: () => {
-      exportLockRef.current = true;
-      setIsExportLocked(true);
-    },
-    onSettled: () => {
-      exportLockRef.current = false;
-      setIsExportLocked(false);
     }
-  });
+  }, [exportJobId, fetchExportJobStatus]);
 
-  const handleExportPdf = useCallback(() => {
-    if (exportLockRef.current || exportInventoryPdf.isPending) {
+  const handleDownloadExport = useCallback(async () => {
+    if (!exportJobId) {
       return;
     }
-    exportLockRef.current = true;
-    setIsExportLocked(true);
-    if (process.env.NODE_ENV !== "production") {
-      console.debug("[VehicleInventoryPage] export requested");
+    try {
+      const pdfResponse = await api.get(`/vehicle-inventory/export/pdf/jobs/${exportJobId}/download`, {
+        responseType: "arraybuffer"
+      });
+      const blob = new Blob([pdfResponse.data as ArrayBuffer], { type: "application/pdf" });
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      const now = new Date();
+      const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(
+        now.getDate()
+      ).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      link.href = url;
+      link.download = exportJob?.filename || `inventaire_vehicules_${timestamp}.pdf`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      window.URL.revokeObjectURL(url);
+      setFeedback({ type: "success", text: "L'inventaire des véhicules a été exporté." });
+    } catch (error) {
+      let message = "Impossible de télécharger le PDF.";
+      if (isAxiosError(error)) {
+        const detail = error.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim().length > 0) {
+          message = detail;
+        }
+      }
+      setFeedback({ type: "error", text: message });
     }
-    requestAnimationFrame(() => {
-      exportInventoryPdf.mutate();
-    });
-  }, [exportInventoryPdf]);
+  }, [exportJob, exportJobId]);
+
+  const exportStatusLabelMap: Record<ExportJobStatus, string> = {
+    queued: "En attente",
+    processing: "En cours",
+    done: "Terminé",
+    error: "Erreur",
+    cancelled: "Annulé"
+  };
+  const exportProgressLabel = useMemo(() => {
+    if (!exportJob?.progress) {
+      return null;
+    }
+    const percent =
+      typeof exportJob.progress.percent === "number"
+        ? `${Math.round(exportJob.progress.percent)}%`
+        : null;
+    const stepLabel = exportJob.progress.step
+      ? exportJob.progress.step.replace(/_/g, " ")
+      : null;
+    if (percent && stepLabel) {
+      return `${stepLabel} · ${percent}`;
+    }
+    if (percent) {
+      return percent;
+    }
+    if (stepLabel) {
+      return stepLabel;
+    }
+    return null;
+  }, [exportJob?.progress]);
 
   const selectedVehicleFallback = useMemo(() => {
     if (!selectedVehicle) {
@@ -2254,13 +2422,29 @@ export function VehicleInventoryPage() {
             <button
               type="button"
               onClick={handleExportPdf}
-              disabled={exportInventoryPdf.isPending || isExportLocked}
+              disabled={isExportLocked}
               className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
             >
-              {exportInventoryPdf.isPending || isExportLocked
-                ? "Export en cours…"
-                : "Exporter en PDF"}
+              {isExportLocked ? "Export en cours…" : "Lancer l’export"}
             </button>
+            {exportJob?.status === "done" ? (
+              <button
+                type="button"
+                onClick={handleDownloadExport}
+                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 px-4 py-2 text-sm font-medium text-emerald-700 transition hover:border-emerald-300 hover:text-emerald-800 dark:border-emerald-500/40 dark:text-emerald-200 dark:hover:border-emerald-400 dark:hover:text-white"
+              >
+                Télécharger le PDF
+              </button>
+            ) : null}
+            {(exportJob?.status === "queued" || exportJob?.status === "processing") && (
+              <button
+                type="button"
+                onClick={handleCancelExport}
+                className="inline-flex items-center gap-2 rounded-full border border-rose-200 px-4 py-2 text-sm font-medium text-rose-700 transition hover:border-rose-300 hover:text-rose-800 dark:border-rose-500/40 dark:text-rose-200 dark:hover:border-rose-400 dark:hover:text-white"
+              >
+                Annuler l’export
+              </button>
+            )}
             <button
               type="button"
               onClick={() =>
@@ -2289,6 +2473,24 @@ export function VehicleInventoryPage() {
               </button>
             )}
           </div>
+          {exportJob ? (
+            <div className="mt-3 w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+              <div className="flex flex-wrap items-center gap-2">
+                <span className="font-semibold">Export PDF :</span>
+                <span>{exportStatusLabelMap[exportJob.status]}</span>
+                {exportProgressLabel ? (
+                  <span className="text-xs text-slate-500 dark:text-slate-400">
+                    {exportProgressLabel}
+                  </span>
+                ) : null}
+                {exportJob.error ? (
+                  <span className="text-xs text-rose-600 dark:text-rose-300">
+                    {exportJob.error}
+                  </span>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
         </div>
         {feedback && (
           <p
