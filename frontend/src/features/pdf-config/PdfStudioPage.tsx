@@ -635,8 +635,9 @@ export function PdfStudioPage() {
                     }
                     className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
                   >
-                    <option value="A4">A4</option>
                     <option value="A5">A5</option>
+                    <option value="A4">A4</option>
+                    <option value="A3">A3</option>
                     <option value="Letter">Letter</option>
                   </select>
                 </label>
@@ -682,7 +683,10 @@ export function PdfStudioPage() {
                     <option value="custom">Personnalisé</option>
                   </select>
                 </label>
-                <label className="space-y-1 text-sm text-slate-200">
+                <label
+                  className="space-y-1 text-sm text-slate-200"
+                  title="La densité est ajustée automatiquement selon le format."
+                >
                   Densité
                   <select
                     value={editableConfig?.format.density ?? "standard"}
@@ -696,7 +700,7 @@ export function PdfStudioPage() {
                   >
                     <option value="comfort">Confort</option>
                     <option value="standard">Standard</option>
-                    <option value="compact">Compact</option>
+                    <option value="compact">Dense</option>
                   </select>
                 </label>
               </div>
