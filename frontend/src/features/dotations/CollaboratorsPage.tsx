@@ -1,6 +1,5 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import * as XLSX from "xlsx";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -53,6 +52,15 @@ type MappingState = {
   department: number | null;
   email: number | null;
   phone: number | null;
+};
+
+let xlsxModulePromise: Promise<typeof import("xlsx")> | null = null;
+
+const loadXlsxModule = async () => {
+  if (!xlsxModulePromise) {
+    xlsxModulePromise = import("xlsx");
+  }
+  return xlsxModulePromise;
 };
 
 export function CollaboratorsPage() {
@@ -1108,14 +1116,22 @@ function parseDelimitedText(text: string, delimiter?: string): string[][] {
 
 async function parseImportFile(file: File): Promise<string[][]> {
   if (file.name.toLowerCase().endsWith(".xlsx")) {
+    let xlsxModule: typeof import("xlsx");
+    try {
+      xlsxModule = await loadXlsxModule();
+    } catch (importError) {
+      throw new Error(
+        "Impossible de charger le module Excel. Réessayez ou utilisez un fichier CSV."
+      );
+    }
     const buffer = await file.arrayBuffer();
-    const workbook = XLSX.read(buffer, { type: "array" });
+    const workbook = xlsxModule.read(buffer, { type: "array" });
     const sheetName = workbook.SheetNames[0];
     const sheet = workbook.Sheets[sheetName];
     if (!sheet) {
       return [];
     }
-    const rows = XLSX.utils.sheet_to_json(sheet, { header: 1, raw: false }) as Array<Array<unknown>>;
+    const rows = xlsxModule.utils.sheet_to_json(sheet, { header: 1, raw: false }) as Array<Array<unknown>>;
     return rows.map((row) => row.map((cell) => (cell === null || cell === undefined ? "" : String(cell))));
   }
   const text = await file.text();
