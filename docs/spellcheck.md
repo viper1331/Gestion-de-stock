@@ -25,3 +25,11 @@ Les préférences sont stockées en localStorage (`gsp/spellcheck/settings`) :
 - `enabled` : active ou désactive le correcteur globalement.
 - `language` : langue sélectionnée (`fr` par défaut).
 - `live` : vérification pendant la saisie (désactivée par défaut).
+
+## Dépannage Vite (504 Outdated Optimize Dep)
+Si le correcteur ne fonctionne plus après une mise à jour et que Vite affiche une erreur `504 Outdated Optimize Dep`, supprimez le cache d'optimisation puis relancez le serveur :
+
+```sh
+rm -rf node_modules/.vite
+npm run dev
+```

@@ -8,6 +8,9 @@ const workspaceRoot = path.resolve(fileURLToPath(new URL("..", import.meta.url))
 
 export default defineConfig({
   plugins: [react()],
+  optimizeDeps: {
+    include: ["nspell"]
+  },
   resolve: {
     alias: {
       components: path.resolve(workspaceRoot, "frontend/src/components")
