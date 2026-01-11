@@ -22,6 +22,11 @@ import {
   type InventoryModuleConfig
 } from "./config";
 import { AppTextInput } from "components/AppTextInput";
+import {
+  EditablePageLayout,
+  type EditableLayoutSet,
+  type EditablePageBlock
+} from "../../components/EditablePageLayout";
 
 interface Category {
   id: number;
@@ -591,174 +596,127 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     }
   };
 
-  return (
-    <section className="space-y-6">
-      <header className="space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
-        <div className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
-          <p className="text-sm text-slate-400">{config.description}</p>
-        </div>
-        <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-          <AppTextInput
-            value={searchValue}
-            onChange={(event) => setSearchValue(event.target.value)}
-            placeholder={searchPlaceholder}
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none lg:w-72"
-            title={searchPlaceholder}
-          />
-          <div className="flex flex-wrap items-center gap-2">
-            <ColumnManager
-              options={columnOptions}
-              visibility={columnVisibility}
-              onToggle={(key) => toggleColumnVisibility(key as InventoryColumnKey)}
-              onReset={resetColumnVisibility}
-              description="Choisissez les colonnes à afficher dans la liste."
-            />
-            {config.exportPdfPath ? (
-              <button
-                type="button"
-                onClick={() => exportInventoryPdf.mutateAsync()}
-                disabled={exportInventoryPdf.isPending}
-                className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
-                title="Exporter l'inventaire au format PDF"
-              >
-                {exportInventoryPdf.isPending ? "Export en cours…" : "Exporter en PDF"}
-              </button>
-            ) : null}
-            <button
-              type="button"
-              onClick={() => {
-                if (isSidebarOpen) {
-                  closeSidebar();
-                } else {
-                  openSidebar();
-                }
-              }}
-              className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-              title={
-                isSidebarOpen
-                  ? "Masquer le panneau latéral des formulaires"
-                  : "Afficher le panneau latéral des formulaires"
-              }
-            >
-              {isSidebarOpen ? "Masquer les formulaires" : "Afficher les formulaires"}
-            </button>
-            <button
-              type="button"
-              onClick={() => {
-                setFormMode("create");
-                setSelectedItem(null);
-                openSidebar();
-              }}
-              className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-              title={`${itemNoun.newLabel} dans l'inventaire`}
-            >
-              {itemNoun.newLabel}
-            </button>
-          </div>
-        </div>
-      </header>
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [
+        { i: "inventory-main", x: 0, y: 0, w: 12, h: 18 },
+        ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 12, h: 12 }] : [])
+      ],
+      md: [
+        { i: "inventory-main", x: 0, y: 0, w: 6, h: 18 },
+        ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 6, h: 12 }] : [])
+      ],
+      sm: [
+        { i: "inventory-main", x: 0, y: 0, w: 1, h: 18 },
+        ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 1, h: 12 }] : [])
+      ]
+    }),
+    [config.showPurchaseOrders]
+  );
 
-      {message ? <Alert tone="success" message={message} /> : null}
-      {error ? <Alert tone="error" message={error} /> : null}
-
-      <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-        <div className="flex-1 space-y-4">
-          <div className="min-w-0 rounded-lg border border-slate-800">
-            <div className="max-h-[400px] min-w-0 overflow-x-hidden overflow-y-auto">
-              <table className="w-full table-fixed divide-y divide-slate-800">
-                <thead className="bg-slate-900/60">
-                  <tr>
-                    {supportsItemImages && columnVisibility.image !== false ? (
-                      <ResizableHeader
-                        label="Image"
-                        width={columnWidths.image}
-                        onResize={(value) => saveWidth("image", value)}
-                        className="hidden min-[768px]:table-cell"
-                      />
-                    ) : null}
-                    {columnVisibility.name !== false ? (
-                      <ResizableHeader
-                        label={itemNoun.singularCapitalized}
-                        width={columnWidths.name}
-                        onResize={(value) => saveWidth("name", value)}
-                      />
-                    ) : null}
-                    {columnVisibility.sku !== false ? (
-                      <ResizableHeader
-                        label="SKU"
-                        width={columnWidths.sku}
-                        onResize={(value) => saveWidth("sku", value)}
-                        className="hidden md:table-cell"
-                      />
-                    ) : null}
-                    {columnVisibility.quantity !== false ? (
-                      <ResizableHeader
-                        label="Quantité"
-                        width={columnWidths.quantity}
-                        onResize={(value) => saveWidth("quantity", value)}
-                        className="text-center"
-                      />
-                    ) : null}
-                    {columnVisibility.size !== false ? (
-                      <ResizableHeader
-                        label="Taille / Variante"
-                        width={columnWidths.size}
-                        onResize={(value) => saveWidth("size", value)}
-                        className="hidden min-[900px]:table-cell"
-                      />
-                    ) : null}
-                    {columnVisibility.category !== false ? (
-                      <ResizableHeader
-                        label="Catégorie"
-                        width={columnWidths.category}
-                        onResize={(value) => saveWidth("category", value)}
-                        className="hidden min-[900px]:table-cell"
-                      />
-                    ) : null}
-                    {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
-                      <ResizableHeader
-                        label="Lot(s)"
-                        width={columnWidths.lotMembership}
-                        onResize={(value) => saveWidth("lotMembership", value)}
-                        className="hidden lg:table-cell"
-                      />
-                    ) : null}
-                    {columnVisibility.supplier !== false ? (
-                      <ResizableHeader
-                        label="Fournisseur"
-                        width={columnWidths.supplier}
-                        onResize={(value) => saveWidth("supplier", value)}
-                        className="hidden xl:table-cell"
-                      />
-                    ) : null}
-                    {supportsExpirationDate && columnVisibility.expiration !== false ? (
-                      <ResizableHeader
-                        label="Péremption"
-                        width={columnWidths.expiration}
-                        onResize={(value) => saveWidth("expiration", value)}
-                        className="hidden min-[900px]:table-cell"
-                      />
-                    ) : null}
-                    {columnVisibility.threshold !== false ? (
-                      <ResizableHeader
-                        label="Seuil"
-                        width={columnWidths.threshold}
-                        onResize={(value) => saveWidth("threshold", value)}
-                        className="hidden lg:table-cell text-center"
-                      />
-                    ) : null}
-                    <th className="w-[160px] px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400 sm:w-[180px]">
-                      Actions
-                    </th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-900 bg-slate-950/60">
-                  {items.map((item, index) => {
-                    const { isOutOfStock, isLowStock } = getInventoryAlerts(
-                      item,
-                      supportsLowStockOptOut
-                    );
+  const blocks = useMemo<EditablePageBlock[]>(() => {
+    const mainBlock: EditablePageBlock = {
+      id: "inventory-main",
+      title: "Inventaire",
+      permission: { module: "clothing", action: "view" },
+      render: () => (
+        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+          <div className="flex-1 space-y-4">
+            <div className="min-w-0 rounded-lg border border-slate-800">
+              <div className="max-h-[400px] min-w-0 overflow-x-hidden overflow-y-auto">
+                <table className="w-full table-fixed divide-y divide-slate-800">
+                  <thead className="bg-slate-900/60">
+                    <tr>
+                      {supportsItemImages && columnVisibility.image !== false ? (
+                        <ResizableHeader
+                          label="Image"
+                          width={columnWidths.image}
+                          onResize={(value) => saveWidth("image", value)}
+                          className="hidden min-[768px]:table-cell"
+                        />
+                      ) : null}
+                      {columnVisibility.name !== false ? (
+                        <ResizableHeader
+                          label={itemNoun.singularCapitalized}
+                          width={columnWidths.name}
+                          onResize={(value) => saveWidth("name", value)}
+                        />
+                      ) : null}
+                      {columnVisibility.sku !== false ? (
+                        <ResizableHeader
+                          label="SKU"
+                          width={columnWidths.sku}
+                          onResize={(value) => saveWidth("sku", value)}
+                          className="hidden md:table-cell"
+                        />
+                      ) : null}
+                      {columnVisibility.quantity !== false ? (
+                        <ResizableHeader
+                          label="Quantité"
+                          width={columnWidths.quantity}
+                          onResize={(value) => saveWidth("quantity", value)}
+                          className="text-center"
+                        />
+                      ) : null}
+                      {columnVisibility.size !== false ? (
+                        <ResizableHeader
+                          label="Taille / Variante"
+                          width={columnWidths.size}
+                          onResize={(value) => saveWidth("size", value)}
+                          className="hidden min-[900px]:table-cell"
+                        />
+                      ) : null}
+                      {columnVisibility.category !== false ? (
+                        <ResizableHeader
+                          label="Catégorie"
+                          width={columnWidths.category}
+                          onResize={(value) => saveWidth("category", value)}
+                          className="hidden min-[900px]:table-cell"
+                        />
+                      ) : null}
+                      {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
+                        <ResizableHeader
+                          label="Lot(s)"
+                          width={columnWidths.lotMembership}
+                          onResize={(value) => saveWidth("lotMembership", value)}
+                          className="hidden lg:table-cell"
+                        />
+                      ) : null}
+                      {columnVisibility.supplier !== false ? (
+                        <ResizableHeader
+                          label="Fournisseur"
+                          width={columnWidths.supplier}
+                          onResize={(value) => saveWidth("supplier", value)}
+                          className="hidden xl:table-cell"
+                        />
+                      ) : null}
+                      {supportsExpirationDate && columnVisibility.expiration !== false ? (
+                        <ResizableHeader
+                          label="Péremption"
+                          width={columnWidths.expiration}
+                          onResize={(value) => saveWidth("expiration", value)}
+                          className="hidden min-[900px]:table-cell"
+                        />
+                      ) : null}
+                      {columnVisibility.threshold !== false ? (
+                        <ResizableHeader
+                          label="Seuil"
+                          width={columnWidths.threshold}
+                          onResize={(value) => saveWidth("threshold", value)}
+                          className="hidden lg:table-cell text-center"
+                        />
+                      ) : null}
+                      <th className="w-[160px] px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400 sm:w-[180px]">
+                        Actions
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-900 bg-slate-950/60">
+                    {items.map((item, index) => {
+                      const { isOutOfStock, isLowStock } = getInventoryAlerts(
+                        item,
+                        supportsLowStockOptOut
+                      );
                     const expirationStatus = supportsExpirationDate
                       ? getExpirationStatus(item.expiration_date)
                       : null;
@@ -1060,8 +1018,17 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
           </aside>
         ) : null}
       </div>
+    )
+  };
 
-      {config.showPurchaseOrders ? (
+  const layoutBlocks: EditablePageBlock[] = [mainBlock];
+
+  if (config.showPurchaseOrders) {
+    layoutBlocks.push({
+      id: "inventory-orders",
+      title: config.purchaseOrdersTitle ?? "Bons de commande",
+      permission: { module: "clothing", action: "view" },
+      render: () => (
         <PurchaseOrdersPanel
           suppliers={suppliers}
           purchaseOrdersPath={config.purchaseOrdersPath}
@@ -1073,8 +1040,128 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
           downloadPrefix={config.purchaseOrdersDownloadPrefix}
           itemIdField={config.purchaseOrdersItemIdField}
         />
-      ) : null}
-    </section>
+      )
+    });
+  }
+
+  return layoutBlocks;
+  }, [
+    activeCustomFields,
+    columnStyles.category,
+    columnStyles.expiration,
+    columnStyles.lotMembership,
+    columnStyles.name,
+    columnStyles.quantity,
+    columnStyles.size,
+    columnStyles.sku,
+    columnStyles.supplier,
+    columnStyles.threshold,
+    columnVisibility,
+    columnWidths,
+    categoryNames,
+    config,
+    createCategory.isPending,
+    createItem.isPending,
+    existingSkus,
+    formInitialValues,
+    formMode,
+    handleSubmitItem,
+    isFetchingItems,
+    isSidebarOpen,
+    itemNoun,
+    items,
+    removeCategory.isPending,
+    selectedItem,
+    supplierNames,
+    suppliers,
+    supportsExpirationDate,
+    supportsItemImages,
+    supportsLowStockOptOut,
+    updateCategoryEntry.isPending,
+    updateItem.isPending
+  ]);
+
+  return (
+    <EditablePageLayout
+      pageId="module:clothing:inventory"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "clothing", action: "view" }}
+      renderHeader={({ editButton, actionButtons, isEditing }) => (
+        <div className="space-y-4">
+          <header className="space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
+            <div className="space-y-1">
+              <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
+              <p className="text-sm text-slate-400">{config.description}</p>
+            </div>
+            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+              <AppTextInput
+                value={searchValue}
+                onChange={(event) => setSearchValue(event.target.value)}
+                placeholder={searchPlaceholder}
+                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none lg:w-72"
+                title={searchPlaceholder}
+              />
+              <div className="flex flex-wrap items-center gap-2">
+                <ColumnManager
+                  options={columnOptions}
+                  visibility={columnVisibility}
+                  onToggle={(key) => toggleColumnVisibility(key as InventoryColumnKey)}
+                  onReset={resetColumnVisibility}
+                  description="Choisissez les colonnes à afficher dans la liste."
+                />
+                {config.exportPdfPath ? (
+                  <button
+                    type="button"
+                    onClick={() => exportInventoryPdf.mutateAsync()}
+                    disabled={exportInventoryPdf.isPending}
+                    className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+                    title="Exporter l'inventaire au format PDF"
+                  >
+                    {exportInventoryPdf.isPending ? "Export en cours…" : "Exporter en PDF"}
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (isSidebarOpen) {
+                      closeSidebar();
+                    } else {
+                      openSidebar();
+                    }
+                  }}
+                  className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+                  title={
+                    isSidebarOpen
+                      ? "Masquer le panneau latéral des formulaires"
+                      : "Afficher le panneau latéral des formulaires"
+                  }
+                >
+                  {isSidebarOpen ? "Masquer les formulaires" : "Afficher les formulaires"}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setFormMode("create");
+                    setSelectedItem(null);
+                    openSidebar();
+                  }}
+                  className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+                  title={`${itemNoun.newLabel} dans l'inventaire`}
+                >
+                  {itemNoun.newLabel}
+                </button>
+                {editButton}
+                {isEditing ? actionButtons : null}
+              </div>
+            </div>
+          </header>
+
+          {message ? <Alert tone="success" message={message} /> : null}
+          {error ? <Alert tone="error" message={error} /> : null}
+        </div>
+      )}
+    />
   );
 }
 

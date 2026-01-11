@@ -457,6 +457,32 @@ class ConfigEntry(BaseModel):
     value: str
 
 
+class LayoutItem(BaseModel):
+    i: str
+    x: int
+    y: int
+    w: int
+    h: int
+    hidden: bool = False
+
+
+class UserLayout(BaseModel):
+    version: int = 1
+    page_id: str
+    layouts: dict[str, list[LayoutItem]] = Field(default_factory=dict)
+
+    @field_validator("layouts")
+    @classmethod
+    def _validate_layouts(cls, value: dict[str, list[LayoutItem]]) -> dict[str, list[LayoutItem]]:
+        if not isinstance(value, dict):
+            raise ValueError("Mise en page invalide")
+        for key, items in value.items():
+            if key not in {"lg", "md", "sm"}:
+                raise ValueError("Point de rupture invalide")
+            if not isinstance(items, list):
+                raise ValueError("Mise en page invalide")
+        return value
+
 class BackupSchedule(BaseModel):
     enabled: bool = False
     days: list[str] = Field(default_factory=list)

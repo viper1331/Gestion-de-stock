@@ -110,6 +110,14 @@ def init_databases() -> None:
                     value TEXT NOT NULL,
                     PRIMARY KEY (user_id, key)
                 );
+                CREATE TABLE IF NOT EXISTS user_layouts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    page_id TEXT NOT NULL,
+                    layout_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(username, page_id)
+                );
                 """
             )
         with get_stock_connection() as conn:

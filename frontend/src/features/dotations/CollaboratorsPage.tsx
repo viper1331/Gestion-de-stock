@@ -5,6 +5,11 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { AppTextInput } from "components/AppTextInput";
+import {
+  EditablePageLayout,
+  type EditableLayoutSet,
+  type EditablePageBlock
+} from "../../components/EditablePageLayout";
 
 interface Collaborator {
   id: number;
@@ -342,52 +347,31 @@ export function CollaboratorsPage() {
     downloadFile(csv, "modele-collaborateurs.csv");
   };
 
-  return (
-    <section className="space-y-6">
-      <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
-        <div>
-          <h2 className="text-2xl font-semibold text-white">Collaborateurs</h2>
-          <p className="text-sm text-slate-400">Liste des collaborateurs éligibles aux dotations.</p>
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {canEdit ? (
-            <button
-              type="button"
-              onClick={handleOpenImport}
-              className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-700"
-              title="Importer une liste de collaborateurs"
-            >
-              Importer
-            </button>
-          ) : null}
-          <button
-            type="button"
-            onClick={handleExportCsv}
-            className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-700"
-            title="Exporter les collaborateurs au format CSV"
-          >
-            Exporter CSV
-          </button>
-          {canEdit ? (
-            <button
-              type="button"
-              onClick={() => {
-                setSelected(null);
-                setFormMode("create");
-              }}
-              className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-              title="Ajouter un nouveau collaborateur"
-            >
-              Nouveau collaborateur
-            </button>
-          ) : null}
-        </div>
-      </header>
-      {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
-      {error ? <p className="text-sm text-red-400">{error}</p> : null}
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [
+        { i: "collaborators-table", x: 0, y: 0, w: 8, h: 14 },
+        { i: "collaborators-form", x: 8, y: 0, w: 4, h: 14 }
+      ],
+      md: [
+        { i: "collaborators-table", x: 0, y: 0, w: 6, h: 14 },
+        { i: "collaborators-form", x: 0, y: 14, w: 6, h: 12 }
+      ],
+      sm: [
+        { i: "collaborators-table", x: 0, y: 0, w: 1, h: 14 },
+        { i: "collaborators-form", x: 0, y: 14, w: 1, h: 12 }
+      ]
+    }),
+    []
+  );
 
-      <div className="grid gap-6 lg:grid-cols-3">
-        <div className="lg:col-span-2">
+  const blocks = useMemo<EditablePageBlock[]>(() => {
+    const tableBlock: EditablePageBlock = {
+      id: "collaborators-table",
+      title: "Liste des collaborateurs",
+      permission: { module: "dotations", action: "view" },
+      render: () => (
+        <div>
           <div className="overflow-hidden rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
@@ -450,8 +434,17 @@ export function CollaboratorsPage() {
           </div>
           {isFetching ? <p className="mt-2 text-xs text-slate-400">Actualisation...</p> : null}
         </div>
+      )
+    };
 
-        {canEdit ? (
+    const layoutBlocks: EditablePageBlock[] = [tableBlock];
+
+    if (canEdit) {
+      layoutBlocks.push({
+        id: "collaborators-form",
+        title: "Fiche collaborateur",
+        permission: { module: "dotations", action: "edit" },
+        render: () => (
           <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
             <h3 className="text-sm font-semibold text-white">
               {formMode === "edit" ? "Modifier le collaborateur" : "Ajouter un collaborateur"}
@@ -546,8 +539,79 @@ export function CollaboratorsPage() {
               </div>
             </form>
           </aside>
-        ) : null}
-      </div>
+        )
+      });
+    }
+
+    return layoutBlocks;
+  }, [
+    canEdit,
+    collaborators,
+    createCollaborator.isPending,
+    deleteCollaborator,
+    formMode,
+    formValues,
+    handleSubmit,
+    isFetching,
+    selected,
+    updateCollaborator.isPending
+  ]);
+
+  return (
+    <>
+      <EditablePageLayout
+        pageId="module:clothing:collaborators"
+        blocks={blocks}
+        defaultLayouts={defaultLayouts}
+        pagePermission={{ module: "dotations", action: "view" }}
+        renderHeader={({ editButton, actionButtons, isEditing }) => (
+          <div className="space-y-4">
+            <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
+              <div>
+                <h2 className="text-2xl font-semibold text-white">Collaborateurs</h2>
+                <p className="text-sm text-slate-400">Liste des collaborateurs éligibles aux dotations.</p>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {canEdit ? (
+                  <button
+                    type="button"
+                    onClick={handleOpenImport}
+                    className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-700"
+                    title="Importer une liste de collaborateurs"
+                  >
+                    Importer
+                  </button>
+                ) : null}
+                <button
+                  type="button"
+                  onClick={handleExportCsv}
+                  className="rounded-md bg-slate-800 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-slate-700"
+                  title="Exporter les collaborateurs au format CSV"
+                >
+                  Exporter CSV
+                </button>
+                {canEdit ? (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelected(null);
+                      setFormMode("create");
+                    }}
+                    className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+                    title="Ajouter un nouveau collaborateur"
+                  >
+                    Nouveau collaborateur
+                  </button>
+                ) : null}
+                {editButton}
+                {isEditing ? actionButtons : null}
+              </div>
+            </header>
+            {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
+            {error ? <p className="text-sm text-red-400">{error}</p> : null}
+          </div>
+        )}
+      />
 
       {isImportOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
@@ -872,7 +936,7 @@ export function CollaboratorsPage() {
           </div>
         </div>
       ) : null}
-    </section>
+    </>
   );
 }
 
