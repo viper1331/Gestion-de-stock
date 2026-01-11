@@ -1129,63 +1129,65 @@ export function PdfStudioPage() {
             </details>
             <details className="rounded-lg border border-slate-800 bg-slate-950 p-4">
               <summary className="cursor-pointer text-sm font-semibold text-slate-200">Avancé</summary>
-              <div className="mt-4 grid gap-4 sm:grid-cols-2">
-                <label className="space-y-1 text-sm text-slate-200">
-                  Police
-                  <AppTextInput
-                    type="text"
-                    value={editableConfig?.advanced.font_family ?? ""}
-                    onChange={(event) =>
-                      updateConfigState((config) => ({
-                        ...config,
-                        advanced: { ...config.advanced, font_family: event.target.value }
-                      }))
-                    }
-                    className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
-                  />
-                </label>
-                <label className="space-y-1 text-sm text-slate-200">
-                  Taille base
-                  <AppTextInput
-                    type="number"
-                    min={8}
-                    value={editableConfig?.advanced.base_font_size ?? 10}
-                    onChange={(event) =>
-                      updateConfigState((config) => ({
-                        ...config,
-                        advanced: { ...config.advanced, base_font_size: Number(event.target.value) }
-                      }))
-                    }
-                    className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
-                  />
-                </label>
-                <label className="space-y-1 text-sm text-slate-200">
-                  Couleur en-tête
-                  <AppTextInput
-                    type="color"
-                    value={editableConfig?.advanced.header_bg_color ?? "#111827"}
-                    onChange={(event) =>
-                      updateConfigState((config) => ({
-                        ...config,
-                        advanced: { ...config.advanced, header_bg_color: event.target.value }
-                      }))
-                    }
-                    className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
-                  />
-                </label>
-                <label className="space-y-1 text-sm text-slate-200">
-                  Couleur texte en-tête
-                  <AppTextInput
-                    type="color"
-                    value={editableConfig?.advanced.header_text_color ?? "#f8fafc"}
-                    onChange={(event) =>
-                      updateConfigState((config) => ({
-                        ...config,
-                        advanced: { ...config.advanced, header_text_color: event.target.value }
-                      }))
-                    }
-                    className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
-                  />
+              <div className="mt-4 space-y-4">
+                <div className="grid gap-4 sm:grid-cols-2">
+                  <label className="space-y-1 text-sm text-slate-200">
+                    Police
+                    <AppTextInput
+                      type="text"
+                      value={editableConfig?.advanced.font_family ?? ""}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          advanced: { ...config.advanced, font_family: event.target.value }
+                        }))
+                      }
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm text-slate-200">
+                    Taille base
+                    <AppTextInput
+                      type="number"
+                      min={8}
+                      value={editableConfig?.advanced.base_font_size ?? 10}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          advanced: { ...config.advanced, base_font_size: Number(event.target.value) }
+                        }))
+                      }
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm text-slate-200">
+                    Couleur en-tête
+                    <AppTextInput
+                      type="color"
+                      value={editableConfig?.advanced.header_bg_color ?? "#111827"}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          advanced: { ...config.advanced, header_bg_color: event.target.value }
+                        }))
+                      }
+                      className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm text-slate-200">
+                    Couleur texte en-tête
+                    <AppTextInput
+                      type="color"
+                      value={editableConfig?.advanced.header_text_color ?? "#f8fafc"}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          advanced: { ...config.advanced, header_text_color: event.target.value }
+                        }))
+                      }
+                      className="h-10 w-full rounded-md border border-slate-800 bg-slate-900 px-2"
+                    />
+                  </label>
                   <ColorField
                     label="Texte header tableau"
                     value={editableConfig?.theme.table_header_text ?? "#f8fafc"}
@@ -1206,7 +1208,7 @@ export function PdfStudioPage() {
                   />
                 </div>
                 <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Fond</p>
+                  <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">Fond</label>
                   <div className="flex flex-wrap gap-3 text-sm text-slate-200">
                     {(["none", "color", "image"] as const).map((mode) => (
                       <label key={mode} className="flex items-center gap-2">
@@ -1263,9 +1265,10 @@ export function PdfStudioPage() {
                       </label>
                     </div>
                   ) : null}
-                  <label className="space-y-1 text-sm text-slate-200">
-                    Opacité
+                  <div className="space-y-1 text-sm text-slate-200">
+                    <label htmlFor="theme-background-opacity">Opacité</label>
                     <input
+                      id="theme-background-opacity"
                       type="range"
                       min={0}
                       max={1}
@@ -1277,7 +1280,7 @@ export function PdfStudioPage() {
                     <span className="text-xs text-slate-400">
                       {editableConfig?.theme.background_opacity ?? 1}
                     </span>
-                  </label>
+                  </div>
                 </div>
                 {contrastWarning ? (
                   <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-200">
