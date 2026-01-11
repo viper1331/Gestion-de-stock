@@ -1,10 +1,12 @@
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface LowStockItem {
   item: {
@@ -89,7 +91,7 @@ export function ReportsPage() {
     }
   };
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">Rapports</h2>
@@ -143,5 +145,39 @@ export function ReportsPage() {
         </table>
       </div>
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "reports-main", x: 0, y: 0, w: 12, h: 18 }],
+      md: [{ i: "reports-main", x: 0, y: 0, w: 6, h: 18 }],
+      sm: [{ i: "reports-main", x: 0, y: 0, w: 1, h: 18 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "reports-main",
+      title: "Rapports",
+      required: true,
+      permission: { module: "clothing", action: "view" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="reports-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageId="module:reports:clothing"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "clothing", action: "view" }}
+      className="space-y-6"
+    />
   );
 }

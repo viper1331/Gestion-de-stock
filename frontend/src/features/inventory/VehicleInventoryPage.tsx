@@ -26,6 +26,8 @@ import { useModuleTitle } from "../../lib/moduleTitles";
 import { useAuth } from "../auth/useAuth";
 import { useThrottledHoverState } from "./useThrottledHoverState";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface VehicleViewConfig {
   name: string;
@@ -2286,25 +2288,55 @@ export function VehicleInventoryPage() {
 
   const vehicleViews = selectedVehicle?.sizes ?? [];
 
-  return (
-    <div className="space-y-6">
-      <header className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
-        <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
-          <div className="space-y-2">
-            <div>
-              <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
-                {moduleTitle}
-              </h1>
-              <p className="mt-1 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
-                Visualisez chaque véhicule sous forme de vue interactive et organisez son matériel
-                coffre par coffre grâce au glisser-déposer.
-              </p>
-            </div>
-            {isCreatingVehicle ? (
-              <form
-                onSubmit={handleCreateVehicle}
-                className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
-              >
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [
+        { i: "vehicle-header", x: 0, y: 0, w: 12, h: 12 },
+        { i: "vehicle-list", x: 0, y: 12, w: 12, h: 16 },
+        { i: "vehicle-detail", x: 0, y: 28, w: 12, h: 30 }
+      ],
+      md: [
+        { i: "vehicle-header", x: 0, y: 0, w: 6, h: 12 },
+        { i: "vehicle-list", x: 0, y: 12, w: 6, h: 16 },
+        { i: "vehicle-detail", x: 0, y: 28, w: 6, h: 30 }
+      ],
+      sm: [
+        { i: "vehicle-header", x: 0, y: 0, w: 1, h: 12 },
+        { i: "vehicle-list", x: 0, y: 12, w: 1, h: 16 },
+        { i: "vehicle-detail", x: 0, y: 28, w: 1, h: 30 }
+      ]
+    }),
+    []
+  );
+
+  const bareContainerClassName = "rounded-none border-0 bg-transparent p-0";
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "vehicle-header",
+      title: "Synthèse",
+      required: true,
+      permission: { module: "vehicle_inventory", action: "view" },
+      containerClassName: bareContainerClassName,
+      render: () => (
+        <EditableBlock id="vehicle-header">
+          <header className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
+            <div className="flex flex-col gap-4 md:flex-row md:items-start md:justify-between">
+              <div className="space-y-2">
+                <div>
+                  <h1 className="text-2xl font-semibold text-slate-900 dark:text-slate-100">
+                    {moduleTitle}
+                  </h1>
+                  <p className="mt-1 max-w-3xl text-sm text-slate-600 dark:text-slate-300">
+                    Visualisez chaque véhicule sous forme de vue interactive et organisez son matériel
+                    coffre par coffre grâce au glisser-déposer.
+                  </p>
+                </div>
+                {isCreatingVehicle ? (
+                  <form
+                    onSubmit={handleCreateVehicle}
+                    className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
+                  >
                 <div className="flex flex-col gap-2 sm:flex-row">
                   <label className="flex-1 space-y-1" htmlFor="vehicle-name">
                     <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
@@ -2415,149 +2447,166 @@ export function VehicleInventoryPage() {
                       : "Créer le véhicule"}
                   </button>
                 </div>
-              </form>
-            ) : null}
-          </div>
-          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-            <button
-              type="button"
-              onClick={handleExportPdf}
-              disabled={isExportLocked}
-              className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
-            >
-              {isExportLocked ? "Export en cours…" : "Lancer l’export"}
-            </button>
-            {exportJob?.status === "done" ? (
-              <button
-                type="button"
-                onClick={handleDownloadExport}
-                className="inline-flex items-center gap-2 rounded-full border border-emerald-200 px-4 py-2 text-sm font-medium text-emerald-700 transition hover:border-emerald-300 hover:text-emerald-800 dark:border-emerald-500/40 dark:text-emerald-200 dark:hover:border-emerald-400 dark:hover:text-white"
-              >
-                Télécharger le PDF
-              </button>
-            ) : null}
-            {(exportJob?.status === "queued" || exportJob?.status === "processing") && (
-              <button
-                type="button"
-                onClick={handleCancelExport}
-                className="inline-flex items-center gap-2 rounded-full border border-rose-200 px-4 py-2 text-sm font-medium text-rose-700 transition hover:border-rose-300 hover:text-rose-800 dark:border-rose-500/40 dark:text-rose-200 dark:hover:border-rose-400 dark:hover:text-white"
-              >
-                Annuler l’export
-              </button>
-            )}
-            <button
-              type="button"
-              onClick={() =>
-                setIsCreatingVehicle((previous) => {
-                  if (previous) {
-                    setVehicleName("");
-                    setVehicleViewsInput("");
-                    clearVehicleImageSelection();
-                  }
-                  return !previous;
-                })
-              }
-              className="inline-flex items-center gap-2 rounded-full border border-indigo-200 px-4 py-2 text-sm font-medium text-indigo-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-indigo-500/40 dark:text-indigo-200 dark:hover:border-indigo-400 dark:hover:text-white"
-            >
-              <span aria-hidden>＋</span>
-              {isCreatingVehicle ? "Fermer le formulaire" : "Nouveau véhicule"}
-            </button>
-            {selectedVehicle && (
-              <button
-                type="button"
-                onClick={() => setSelectedVehicleId(null)}
-                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
-              >
-                <span aria-hidden>←</span>
-                Retour aux véhicules
-              </button>
-            )}
-          </div>
-          {exportJob ? (
-            <div className="mt-3 w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
-              <div className="flex flex-wrap items-center gap-2">
-                <span className="font-semibold">Export PDF :</span>
-                <span>{exportStatusLabelMap[exportJob.status]}</span>
-                {exportProgressLabel ? (
-                  <span className="text-xs text-slate-500 dark:text-slate-400">
-                    {exportProgressLabel}
-                  </span>
-                ) : null}
-                {exportJob.error ? (
-                  <span className="text-xs text-rose-600 dark:text-rose-300">
-                    {exportJob.error}
-                  </span>
-                ) : null}
-              </div>
+                </form>
+              ) : null}
             </div>
-          ) : null}
-        </div>
-        {feedback && (
-          <p
-            className={clsx("mt-4 rounded-lg px-3 py-2 text-sm", {
-              "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200":
-                feedback.type === "success",
-              "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-200":
-                feedback.type === "error"
-            })}
-          >
-            {feedback.text}
-          </p>
-        )}
-        {(vehiclesError || itemsError) && (
-          <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-200">
-            Impossible de charger les données de l'inventaire véhicule.
-          </p>
-        )}
-        {isLoading && (
-          <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
-            Chargement des données...
-          </p>
-        )}
-      </header>
-
-      {!selectedVehicle && (
-        <section className="grid gap-6 lg:grid-cols-3">
-          {vehicles.map((vehicle) => (
-            <VehicleCard
-              key={vehicle.id}
-              vehicle={vehicle}
-              fallbackIllustration={
-                vehicleFallbackMap.get(vehicle.id) ?? VEHICLE_ILLUSTRATIONS[0]
-              }
-              itemCount={vehicleItemCountMap.get(vehicle.id) ?? 0}
-              onClick={() => setSelectedVehicleId(vehicle.id)}
-              vehicleTypeLabels={vehicleTypeLabels}
-            />
-          ))}
-          {vehicles.length === 0 && !isLoading && (
-            <p className="col-span-full rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-              Aucun véhicule n'a encore été configuré. Ajoutez des véhicules depuis les paramètres
-              de l'inventaire pour commencer l'organisation du matériel.
+            <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
+              <button
+                type="button"
+                onClick={handleExportPdf}
+                disabled={isExportLocked}
+                className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 disabled:cursor-not-allowed disabled:opacity-60 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+              >
+                {isExportLocked ? "Export en cours…" : "Lancer l’export"}
+              </button>
+              {exportJob?.status === "done" ? (
+                <button
+                  type="button"
+                  onClick={handleDownloadExport}
+                  className="inline-flex items-center gap-2 rounded-full border border-emerald-200 px-4 py-2 text-sm font-medium text-emerald-700 transition hover:border-emerald-300 hover:text-emerald-800 dark:border-emerald-500/40 dark:text-emerald-200 dark:hover:border-emerald-400 dark:hover:text-white"
+                >
+                  Télécharger le PDF
+                </button>
+              ) : null}
+              {(exportJob?.status === "queued" || exportJob?.status === "processing") && (
+                <button
+                  type="button"
+                  onClick={handleCancelExport}
+                  className="inline-flex items-center gap-2 rounded-full border border-rose-200 px-4 py-2 text-sm font-medium text-rose-700 transition hover:border-rose-300 hover:text-rose-800 dark:border-rose-500/40 dark:text-rose-200 dark:hover:border-rose-400 dark:hover:text-white"
+                >
+                  Annuler l’export
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() =>
+                  setIsCreatingVehicle((previous) => {
+                    if (previous) {
+                      setVehicleName("");
+                      setVehicleViewsInput("");
+                      clearVehicleImageSelection();
+                    }
+                    return !previous;
+                  })
+                }
+                className="inline-flex items-center gap-2 rounded-full border border-indigo-200 px-4 py-2 text-sm font-medium text-indigo-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-indigo-500/40 dark:text-indigo-200 dark:hover:border-indigo-400 dark:hover:text-white"
+              >
+                <span aria-hidden>＋</span>
+                {isCreatingVehicle ? "Fermer le formulaire" : "Nouveau véhicule"}
+              </button>
+              {selectedVehicle && (
+                <button
+                  type="button"
+                  onClick={() => setSelectedVehicleId(null)}
+                  className="inline-flex items-center gap-2 rounded-full border border-slate-200 px-4 py-2 text-sm font-medium text-slate-600 transition hover:border-slate-300 hover:text-slate-800 dark:border-slate-700 dark:text-slate-200 dark:hover:border-slate-500 dark:hover:text-white"
+                >
+                  <span aria-hidden>←</span>
+                  Retour aux véhicules
+                </button>
+              )}
+            </div>
+            {exportJob ? (
+              <div className="mt-3 w-full rounded-lg border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-200">
+                <div className="flex flex-wrap items-center gap-2">
+                  <span className="font-semibold">Export PDF :</span>
+                  <span>{exportStatusLabelMap[exportJob.status]}</span>
+                  {exportProgressLabel ? (
+                    <span className="text-xs text-slate-500 dark:text-slate-400">
+                      {exportProgressLabel}
+                    </span>
+                  ) : null}
+                  {exportJob.error ? (
+                    <span className="text-xs text-rose-600 dark:text-rose-300">
+                      {exportJob.error}
+                    </span>
+                  ) : null}
+                </div>
+              </div>
+            ) : null}
+          </div>
+          {feedback && (
+            <p
+              className={clsx("mt-4 rounded-lg px-3 py-2 text-sm", {
+                "bg-emerald-50 text-emerald-700 dark:bg-emerald-950 dark:text-emerald-200":
+                  feedback.type === "success",
+                "bg-rose-50 text-rose-700 dark:bg-rose-950 dark:text-rose-200":
+                  feedback.type === "error"
+              })}
+            >
+              {feedback.text}
             </p>
           )}
-        </section>
-      )}
+          {(vehiclesError || itemsError) && (
+            <p className="mt-4 rounded-lg bg-rose-50 px-3 py-2 text-sm text-rose-700 dark:bg-rose-950 dark:text-rose-200">
+              Impossible de charger les données de l'inventaire véhicule.
+            </p>
+          )}
+          {isLoading && (
+            <p className="mt-4 text-sm text-slate-500 dark:text-slate-400">
+              Chargement des données...
+            </p>
+          )}
+        </header>
+      </EditableBlock>
+      )
+    },
+    {
+      id: "vehicle-list",
+      title: "Véhicules",
+      permission: { module: "vehicle_inventory", action: "view" },
+      containerClassName: bareContainerClassName,
+      render: () =>
+        !selectedVehicle ? (
+          <EditableBlock id="vehicle-list">
+            <section className="grid gap-6 lg:grid-cols-3">
+              {vehicles.map((vehicle) => (
+                <VehicleCard
+                  key={vehicle.id}
+                  vehicle={vehicle}
+                  fallbackIllustration={
+                    vehicleFallbackMap.get(vehicle.id) ?? VEHICLE_ILLUSTRATIONS[0]
+                  }
+                  itemCount={vehicleItemCountMap.get(vehicle.id) ?? 0}
+                  onClick={() => setSelectedVehicleId(vehicle.id)}
+                  vehicleTypeLabels={vehicleTypeLabels}
+                />
+              ))}
+              {vehicles.length === 0 && !isLoading && (
+                <p className="col-span-full rounded-xl border border-dashed border-slate-300 bg-white p-8 text-center text-sm text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  Aucun véhicule n'a encore été configuré. Ajoutez des véhicules depuis les paramètres
+                  de l'inventaire pour commencer l'organisation du matériel.
+                </p>
+              )}
+            </section>
+          </EditableBlock>
+        ) : null
+    },
+    {
+      id: "vehicle-detail",
+      title: "Organisation véhicule",
+      permission: { module: "vehicle_inventory", action: "view" },
+      containerClassName: bareContainerClassName,
+      render: () =>
+        selectedVehicle && selectedView ? (
+          <EditableBlock id="vehicle-detail">
+            <section className="space-y-6">
+              <VehicleHeader
+                vehicle={selectedVehicle}
+                itemsCount={vehicleItems.length}
+                fallbackIllustration={selectedVehicleFallback}
+                onEdit={handleToggleVehicleEdition}
+                onDelete={handleDeleteVehicle}
+                isEditing={isEditingVehicle}
+                isUpdating={updateVehicle.isPending}
+                isDeleting={deleteVehicle.isPending}
+                vehicleTypeLabels={vehicleTypeLabels}
+              />
 
-      {selectedVehicle && selectedView && (
-        <section className="space-y-6">
-          <VehicleHeader
-            vehicle={selectedVehicle}
-            itemsCount={vehicleItems.length}
-            fallbackIllustration={selectedVehicleFallback}
-            onEdit={handleToggleVehicleEdition}
-            onDelete={handleDeleteVehicle}
-            isEditing={isEditingVehicle}
-            isUpdating={updateVehicle.isPending}
-            isDeleting={deleteVehicle.isPending}
-            vehicleTypeLabels={vehicleTypeLabels}
-          />
-
-          {isEditingVehicle ? (
-            <form
-              onSubmit={handleUpdateVehicle}
-              className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
-            >
+              {isEditingVehicle ? (
+                <form
+                  onSubmit={handleUpdateVehicle}
+                  className="space-y-3 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm shadow-sm dark:border-slate-700 dark:bg-slate-900/60 dark:text-slate-200"
+                >
               <div className="flex flex-col gap-2 sm:flex-row">
                 <label className="flex-1 space-y-1" htmlFor="edit-vehicle-name">
                   <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
@@ -2999,10 +3048,21 @@ export function VehicleInventoryPage() {
               />
             </aside>
           </div>
-          <VehiclePhotosPanel />
-        </section>
-      )}
-    </div>
+              <VehiclePhotosPanel />
+            </section>
+          </EditableBlock>
+        ) : null
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageId="module:vehicle:inventory"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "vehicle_inventory", action: "view" }}
+      className="space-y-6"
+    />
   );
 }
 

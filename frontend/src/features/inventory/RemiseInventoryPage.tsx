@@ -4,6 +4,8 @@ import { InventoryModuleDashboard } from "./InventoryModuleDashboard";
 import { RemiseLotsPanel } from "./RemiseLotsPanel";
 import { type InventoryModuleConfig } from "./config";
 import { useModuleTitle } from "../../lib/moduleTitles";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   title: "Inventaire remises",
@@ -45,10 +47,59 @@ export function RemiseInventoryPage() {
     [moduleTitle]
   );
 
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [
+        { i: "remise-inventory-dashboard", x: 0, y: 0, w: 12, h: 18 },
+        { i: "remise-lots", x: 0, y: 18, w: 12, h: 12 }
+      ],
+      md: [
+        { i: "remise-inventory-dashboard", x: 0, y: 0, w: 6, h: 18 },
+        { i: "remise-lots", x: 0, y: 18, w: 6, h: 12 }
+      ],
+      sm: [
+        { i: "remise-inventory-dashboard", x: 0, y: 0, w: 1, h: 18 },
+        { i: "remise-lots", x: 0, y: 18, w: 1, h: 12 }
+      ]
+    }),
+    []
+  );
+
+  const blocks = useMemo<EditablePageBlock[]>(
+    () => [
+      {
+        id: "remise-inventory-dashboard",
+        title: "Inventaire remises",
+        required: true,
+        permission: { module: "inventory_remise", action: "view" },
+        containerClassName: "rounded-none border-0 bg-transparent p-0",
+        render: () => (
+          <EditableBlock id="remise-inventory-dashboard">
+            <InventoryModuleDashboard config={config} />
+          </EditableBlock>
+        )
+      },
+      {
+        id: "remise-lots",
+        title: "Lots",
+        permission: { module: "inventory_remise", action: "view" },
+        containerClassName: "rounded-none border-0 bg-transparent p-0",
+        render: () => (
+          <EditableBlock id="remise-lots">
+            <RemiseLotsPanel />
+          </EditableBlock>
+        )
+      }
+    ],
+    [config]
+  );
+
   return (
-    <div className="space-y-6">
-      <InventoryModuleDashboard config={config} />
-      <RemiseLotsPanel />
-    </div>
+    <EditablePageLayout
+      pageId="module:remise:inventory"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "inventory_remise", action: "view" }}
+    />
   );
 }

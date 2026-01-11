@@ -8,6 +8,8 @@ import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface Collaborator {
   id: number;
@@ -323,7 +325,7 @@ export function DotationsPage() {
     });
   };
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
@@ -790,6 +792,40 @@ export function DotationsPage() {
       </div>
     </section>
   );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "dotations-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "dotations-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "dotations-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "dotations-main",
+      title: "Dotations",
+      required: true,
+      permission: { module: "dotations", action: "view" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="dotations-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageId="module:dotations"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "dotations", action: "view" }}
+      className="space-y-6"
+    />
+  );
 }
 
 function formatDate(value: string) {
@@ -807,4 +843,3 @@ function formatDateOnly(value: string) {
     return value;
   }
 }
-

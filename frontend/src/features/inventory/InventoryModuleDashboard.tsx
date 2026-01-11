@@ -22,6 +22,7 @@ import {
   type InventoryModuleConfig
 } from "./config";
 import { AppTextInput } from "components/AppTextInput";
+import { EditableBlock } from "../../components/EditableBlock";
 import {
   EditablePageLayout,
   type EditableLayoutSet,
@@ -619,12 +620,14 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       id: "inventory-main",
       title: "Inventaire",
       permission: { module: "clothing", action: "view" },
+      required: true,
       render: () => (
-        <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-          <div className="flex-1 space-y-4">
-            <div className="min-w-0 rounded-lg border border-slate-800">
-              <div className="max-h-[400px] min-w-0 overflow-x-hidden overflow-y-auto">
-                <table className="w-full table-fixed divide-y divide-slate-800">
+        <EditableBlock id="inventory-main">
+          <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
+            <div className="flex-1 space-y-4">
+              <div className="min-w-0 rounded-lg border border-slate-800">
+                <div className="max-h-[400px] min-w-0 overflow-x-hidden overflow-y-auto">
+                  <table className="w-full table-fixed divide-y divide-slate-800">
                   <thead className="bg-slate-900/60">
                     <tr>
                       {supportsItemImages && columnVisibility.image !== false ? (
@@ -1018,8 +1021,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
           </aside>
         ) : null}
       </div>
-    )
-  };
+    </EditableBlock>
+      )
+    };
 
   const layoutBlocks: EditablePageBlock[] = [mainBlock];
 
@@ -1029,17 +1033,19 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       title: config.purchaseOrdersTitle ?? "Bons de commande",
       permission: { module: "clothing", action: "view" },
       render: () => (
-        <PurchaseOrdersPanel
-          suppliers={suppliers}
-          purchaseOrdersPath={config.purchaseOrdersPath}
-          itemsPath={config.purchaseOrdersItemsPath}
-          ordersQueryKey={config.purchaseOrdersQueryKey}
-          itemsQueryKey={config.purchaseOrdersItemsQueryKey}
-          title={config.purchaseOrdersTitle}
-          description={config.purchaseOrdersDescription}
-          downloadPrefix={config.purchaseOrdersDownloadPrefix}
-          itemIdField={config.purchaseOrdersItemIdField}
-        />
+        <EditableBlock id="inventory-orders">
+          <PurchaseOrdersPanel
+            suppliers={suppliers}
+            purchaseOrdersPath={config.purchaseOrdersPath}
+            itemsPath={config.purchaseOrdersItemsPath}
+            ordersQueryKey={config.purchaseOrdersQueryKey}
+            itemsQueryKey={config.purchaseOrdersItemsQueryKey}
+            title={config.purchaseOrdersTitle}
+            description={config.purchaseOrdersDescription}
+            downloadPrefix={config.purchaseOrdersDownloadPrefix}
+            itemIdField={config.purchaseOrdersItemIdField}
+          />
+        </EditableBlock>
       )
     });
   }

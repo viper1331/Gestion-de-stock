@@ -7,6 +7,8 @@ import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_SUPPLIER_MODULE = "suppliers";
 
@@ -196,7 +198,7 @@ export function SuppliersPage() {
     event.currentTarget.reset();
   };
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
         <div>
@@ -430,5 +432,38 @@ export function SuppliersPage() {
       </div>
     </section>
   );
-}
 
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "suppliers-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "suppliers-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "suppliers-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "suppliers-main",
+      title: "Fournisseurs",
+      required: true,
+      permission: { module: "suppliers", action: "view" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="suppliers-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageId="module:suppliers"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "suppliers", action: "view" }}
+      className="space-y-6"
+    />
+  );
+}
