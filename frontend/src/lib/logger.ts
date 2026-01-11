@@ -11,6 +11,10 @@ interface FrontendLogPayload {
   timestamp?: string;
 }
 
+interface StoredLogEntry extends FrontendLogPayload {
+  timestamp: string;
+}
+
 const originalConsole: Record<LogLevel, (...args: unknown[]) => void> = {
   debug: console.debug.bind(console),
   info: console.info.bind(console),
@@ -18,6 +22,11 @@ const originalConsole: Record<LogLevel, (...args: unknown[]) => void> = {
   error: console.error.bind(console),
   log: console.log.bind(console)
 };
+
+const LOG_STORAGE_KEY = "frontend-logs";
+const LOG_SETTINGS_KEY = "frontend-log-settings";
+const LOG_MAX_BYTES = 3_072_000;
+const LOG_MAX_ENTRIES = 3000;
 
 let loggingInitialized = false;
 
@@ -27,6 +36,111 @@ function normalizeLevel(level: LogLevel): FrontendLogPayload["level"] {
   if (level === "debug") return "debug";
   if (level === "info") return "info";
   return "info";
+}
+
+function canAccessStorage() {
+  return typeof window !== "undefined" && typeof window.localStorage !== "undefined";
+}
+
+function readSettings(): { persist: boolean } {
+  if (!canAccessStorage()) {
+    return { persist: false };
+  }
+  const stored = window.localStorage.getItem(LOG_SETTINGS_KEY);
+  if (!stored) {
+    return { persist: false };
+  }
+  try {
+    const parsed = JSON.parse(stored) as { persist?: boolean };
+    return { persist: Boolean(parsed.persist) };
+  } catch {
+    return { persist: false };
+  }
+}
+
+export function isLogPersistenceEnabled() {
+  return readSettings().persist;
+}
+
+export function setLogPersistenceEnabled(enabled: boolean) {
+  if (!canAccessStorage()) {
+    return;
+  }
+  window.localStorage.setItem(LOG_SETTINGS_KEY, JSON.stringify({ persist: enabled }));
+}
+
+function readPersistedLogs(): StoredLogEntry[] {
+  if (!canAccessStorage()) {
+    return [];
+  }
+  const stored = window.localStorage.getItem(LOG_STORAGE_KEY);
+  if (!stored) {
+    return [];
+  }
+  try {
+    const parsed = JSON.parse(stored);
+    return Array.isArray(parsed) ? (parsed as StoredLogEntry[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+function writePersistedLogs(entries: StoredLogEntry[]) {
+  if (!canAccessStorage()) {
+    return;
+  }
+  window.localStorage.setItem(LOG_STORAGE_KEY, JSON.stringify(entries));
+}
+
+function trimPersistedLogs(entries: StoredLogEntry[]) {
+  let trimmed = [...entries];
+  while (trimmed.length > LOG_MAX_ENTRIES) {
+    trimmed.shift();
+  }
+  if (!canAccessStorage()) {
+    return trimmed;
+  }
+  const encoder = new TextEncoder();
+  let encoded = encoder.encode(JSON.stringify(trimmed));
+  while (encoded.byteLength > LOG_MAX_BYTES && trimmed.length > 0) {
+    trimmed.shift();
+    encoded = encoder.encode(JSON.stringify(trimmed));
+  }
+  return trimmed;
+}
+
+function persistLogEntry(payload: FrontendLogPayload) {
+  if (!isLogPersistenceEnabled()) {
+    return;
+  }
+  const entry: StoredLogEntry = {
+    ...payload,
+    timestamp: payload.timestamp ?? new Date().toISOString()
+  };
+  const entries = trimPersistedLogs([...readPersistedLogs(), entry]);
+  writePersistedLogs(entries);
+}
+
+export function enforcePersistedLogsLimit() {
+  const entries = readPersistedLogs();
+  if (entries.length === 0) {
+    return;
+  }
+  const trimmed = trimPersistedLogs(entries);
+  if (trimmed.length !== entries.length) {
+    writePersistedLogs(trimmed);
+  }
+}
+
+export function clearPersistedLogs() {
+  if (!canAccessStorage()) {
+    return;
+  }
+  window.localStorage.removeItem(LOG_STORAGE_KEY);
+}
+
+export function getPersistedLogs() {
+  return readPersistedLogs();
 }
 
 async function sendLog(payload: FrontendLogPayload) {
@@ -51,14 +165,17 @@ export function logEvent(level: LogLevel, message: string, context?: Record<stri
   const targetConsole = originalConsole[level] ?? originalConsole.log;
   targetConsole(message, context);
 
-  void sendLog({
+  const payload: FrontendLogPayload = {
     level: normalizeLevel(level),
     message,
     context,
     user_agent: typeof navigator !== "undefined" ? navigator.userAgent : undefined,
     url: typeof window !== "undefined" ? window.location.href : undefined,
     timestamp: new Date().toISOString()
-  });
+  };
+
+  persistLogEntry(payload);
+  void sendLog(payload);
 }
 
 function forwardConsole(level: LogLevel) {
@@ -80,6 +197,7 @@ function forwardConsole(level: LogLevel) {
 export function initializeLogging() {
   if (loggingInitialized) return;
   loggingInitialized = true;
+  enforcePersistedLogsLimit();
 
   forwardConsole("log");
   forwardConsole("info");
