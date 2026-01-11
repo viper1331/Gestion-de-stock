@@ -174,6 +174,7 @@ class PdfColumnMeta(BaseModel):
     label: str
     is_numeric: bool = False
     default_visible: bool = True
+    column_type: Literal["string", "number", "date"] = "string"
 
 
 class PdfGroupableColumnMeta(BaseModel):
@@ -183,6 +184,17 @@ class PdfGroupableColumnMeta(BaseModel):
     label: str
     is_numeric: bool = Field(default=False, alias="isNumeric")
     is_visible_by_default: bool = Field(default=True, alias="isVisibleByDefault")
+    column_type: Literal["string", "number", "date"] = Field(default="string", alias="type")
+
+
+class PdfModuleGroupingMeta(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+
+    grouping_supported: bool = Field(default=False, alias="groupingSupported")
+    groupable_columns: list[PdfGroupableColumnMeta] = Field(
+        default_factory=list,
+        alias="groupableColumns",
+    )
 
 
 class PdfModuleMeta(BaseModel):
@@ -211,4 +223,8 @@ class PdfConfigMeta(BaseModel):
     groupable_columns: list[PdfGroupableColumnMeta] = Field(
         default_factory=list,
         alias="groupableColumns",
+    )
+    module_grouping: dict[str, PdfModuleGroupingMeta] = Field(
+        default_factory=dict,
+        alias="moduleGrouping",
     )

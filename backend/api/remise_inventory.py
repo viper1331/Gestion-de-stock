@@ -33,7 +33,10 @@ async def list_remise_items(
 @router.get("/export/pdf")
 async def export_remise_inventory_pdf(user: models.User = Depends(get_current_user)):
     _require_permission(user, action="view")
-    resolved = resolve_pdf_config("remise_inventory")
+    try:
+        resolved = resolve_pdf_config("remise_inventory")
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     pdf_bytes = services.generate_remise_inventory_pdf()
     filename = render_filename(
         resolved.config.filename.pattern,
