@@ -66,6 +66,18 @@ function formatDate(value: string) {
   });
 }
 
+function areExtraValuesEqual(
+  current: Record<string, unknown> = {},
+  next: Record<string, unknown> = {}
+) {
+  const currentKeys = Object.keys(current);
+  const nextKeys = Object.keys(next);
+  if (currentKeys.length !== nextKeys.length) {
+    return false;
+  }
+  return currentKeys.every((key) => Object.is(current[key], next[key]));
+}
+
 export function RemiseLotsPanel() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -143,10 +155,17 @@ export function RemiseLotsPanel() {
   }, [lots, selectedLotId]);
 
   useEffect(() => {
-    setLotForm((prev) => ({
-      ...prev,
-      extra: buildCustomFieldDefaults(activeCustomFields, prev.extra ?? {})
-    }));
+    // Synchroniser les valeurs custom uniquement si le calcul apporte réellement des changements.
+    setLotForm((prev) => {
+      const nextExtra = buildCustomFieldDefaults(activeCustomFields, prev.extra ?? {});
+      if (areExtraValuesEqual(prev.extra ?? {}, nextExtra)) {
+        return prev;
+      }
+      return {
+        ...prev,
+        extra: nextExtra
+      };
+    });
   }, [activeCustomFields]);
 
   const selectedLot = useMemo(
