@@ -16,8 +16,6 @@
     "@zxing/browser": "^0.1.1",
     "axios": "^1.6.8",
     "clsx": "^2.1.0",
-    "dictionary-en": "^3.0.0",
-    "dictionary-fr": "^3.0.0",
     "nspell": "^2.1.5",
     "react": "^18.2.0",
     "react-dom": "^18.2.0",
