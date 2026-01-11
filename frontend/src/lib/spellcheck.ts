@@ -1,3 +1,5 @@
+import nspell from "nspell";
+
 export type SpellcheckLanguage = "fr" | "en";
 
 export interface SpellcheckError {
@@ -60,15 +62,12 @@ function loadDictionary(language: SpellcheckLanguage): Promise<DictionaryData> {
   return dictionaryCache.get(language) as Promise<DictionaryData>;
 }
 
-async function loadSpellchecker(language: SpellcheckLanguage): Promise<Spellchecker> {
+async function getSpellchecker(language: SpellcheckLanguage): Promise<Spellchecker> {
   if (!spellcheckerCache.has(language)) {
     spellcheckerCache.set(
       language,
       (async () => {
-        const [{ default: nspell }, dict] = await Promise.all([
-          import("nspell"),
-          loadDictionary(language)
-        ]);
+        const dict = await loadDictionary(language);
         return nspell(dict);
       })()
     );
@@ -137,7 +136,7 @@ export async function spellcheckText(
     return [];
   }
 
-  const spellchecker = await loadSpellchecker(language);
+  const spellchecker = await getSpellchecker(language);
   const userWords = new Set(userDictionary.map(normalizeWord));
   const errors: SpellcheckError[] = [];
 
