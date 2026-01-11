@@ -31,6 +31,8 @@ export type EditablePageBlock = {
   title?: string;
   permission?: LayoutPermissionRequirement;
   defaultHidden?: boolean;
+  required?: boolean;
+  containerClassName?: string;
   render: () => ReactNode;
 };
 
@@ -57,7 +59,6 @@ function normalizeLayouts(
   defaultLayouts: EditableLayoutSet,
   blocks: EditablePageBlock[]
 ): EditableLayoutSet {
-  const blockMap = new Map(blocks.map((block) => [block.id, block]));
   const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
   const normalized: EditableLayoutSet = { lg: [], md: [], sm: [] };
 
@@ -67,6 +68,7 @@ function normalizeLayouts(
     const layoutItems: EditableLayoutItem[] = [];
 
     for (const block of blocks) {
+      const isRequired = Boolean(block.required);
       const fallback = defaultMap.get(block.id) ?? {
         i: block.id,
         x: 0,
@@ -77,7 +79,7 @@ function normalizeLayouts(
       layoutItems.push({
         ...fallback,
         i: block.id,
-        hidden: block.defaultHidden ?? fallback.hidden ?? false
+        hidden: isRequired ? false : block.defaultHidden ?? fallback.hidden ?? false
       });
     }
     normalized[breakpoint] = layoutItems;
@@ -96,6 +98,7 @@ function mergeLayouts(
   }
 
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
+  const requiredBlocks = new Set(blocks.filter((block) => block.required).map((block) => block.id));
   const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
   const merged: EditableLayoutSet = { lg: [], md: [], sm: [] };
 
@@ -110,10 +113,11 @@ function mergeLayouts(
       if (!blockMap.has(id)) {
         continue;
       }
+      const isRequired = requiredBlocks.has(id);
       nextItems.push({
         ...savedItem,
         i: id,
-        hidden: savedItem.hidden ?? false
+        hidden: isRequired ? false : savedItem.hidden ?? false
       });
     }
 
@@ -121,6 +125,7 @@ function mergeLayouts(
       if (nextItems.some((item) => item.i === block.id)) {
         continue;
       }
+      const isRequired = Boolean(block.required);
       const defaultItem = defaultMap.get(block.id) ?? {
         i: block.id,
         x: 0,
@@ -131,7 +136,7 @@ function mergeLayouts(
       nextItems.push({
         ...defaultItem,
         i: block.id,
-        hidden: block.defaultHidden ?? true
+        hidden: isRequired ? false : block.defaultHidden ?? true
       });
     }
 
@@ -267,11 +272,11 @@ export function EditablePageLayout({
   );
 
   const layoutQuery = useQuery({
-    queryKey: ["user-layouts", pageId],
+    queryKey: ["ui-layouts", pageId],
     queryFn: async () => {
       try {
         const response = await api.get<{ layouts: EditableLayoutSet }>(
-          `/user-layouts/${encodeURIComponent(pageId)}`
+          `/ui/layouts/${encodeURIComponent(pageId)}`
         );
         return response.data;
       } catch (error) {
@@ -289,6 +294,19 @@ export function EditablePageLayout({
     [fallbackLayouts, layoutQuery.data?.layouts, allowedBlocks]
   );
 
+  const canEditLayout = useMemo(() => {
+    if (!user) {
+      return false;
+    }
+    if (isAdmin) {
+      return true;
+    }
+    if (!pagePermission || "role" in pagePermission) {
+      return Boolean(pagePermission === undefined);
+    }
+    return permissions.canAccess(pagePermission.module, "edit");
+  }, [isAdmin, pagePermission, permissions, user]);
+
   const [activeLayouts, setActiveLayouts] = useState<EditableLayoutSet>(mergedLayouts);
   const [savedLayouts, setSavedLayouts] = useState<EditableLayoutSet>(mergedLayouts);
   const [isEditing, setIsEditing] = useState(false);
@@ -300,6 +318,12 @@ export function EditablePageLayout({
     }
   }, [isEditing, mergedLayouts]);
 
+  useEffect(() => {
+    if (!canEditLayout && isEditing) {
+      setIsEditing(false);
+    }
+  }, [canEditLayout, isEditing]);
+
   const isDirty = useMemo(
     () => !areLayoutsEqual(activeLayouts, savedLayouts),
     [activeLayouts, savedLayouts]
@@ -307,7 +331,7 @@ export function EditablePageLayout({
 
   const saveMutation = useMutation({
     mutationFn: async (payload: EditableLayoutSet) => {
-      const response = await api.put(`/user-layouts/${encodeURIComponent(pageId)}`, {
+      const response = await api.put(`/ui/layouts/${encodeURIComponent(pageId)}`, {
         version: 1,
         page_id: pageId,
         layouts: payload
@@ -315,16 +339,16 @@ export function EditablePageLayout({
       return response.data;
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["user-layouts", pageId] });
+      await queryClient.invalidateQueries({ queryKey: ["ui-layouts", pageId] });
     }
   });
 
   const resetMutation = useMutation({
     mutationFn: async () => {
-      await api.delete(`/user-layouts/${encodeURIComponent(pageId)}`);
+      await api.delete(`/ui/layouts/${encodeURIComponent(pageId)}`);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["user-layouts", pageId] });
+      await queryClient.invalidateQueries({ queryKey: ["ui-layouts", pageId] });
     }
   });
 
@@ -335,8 +359,16 @@ export function EditablePageLayout({
     []
   );
 
+  const requiredBlocks = useMemo(
+    () => new Set(blocks.filter((block) => block.required).map((block) => block.id)),
+    [blocks]
+  );
+
   const toggleHidden = useCallback((blockId: string) => {
     setActiveLayouts((prev) => {
+      if (requiredBlocks.has(blockId)) {
+        return prev;
+      }
       const next: EditableLayoutSet = { lg: [], md: [], sm: [] };
       (Object.keys(prev) as EditableLayoutBreakpoint[]).forEach((breakpoint) => {
         next[breakpoint] = prev[breakpoint].map((item) =>
@@ -345,7 +377,7 @@ export function EditablePageLayout({
       });
       return next;
     });
-  }, []);
+  }, [requiredBlocks]);
 
   const restoreBlock = useCallback((blockId: string) => {
     setActiveLayouts((prev) => {
@@ -359,7 +391,7 @@ export function EditablePageLayout({
     });
   }, []);
 
-  const editButton = (
+  const editButton = canEditLayout ? (
     <button
       type="button"
       onClick={() => setIsEditing(true)}
@@ -369,7 +401,7 @@ export function EditablePageLayout({
     >
       Éditer la page
     </button>
-  );
+  ) : null;
 
   const actionButtons = isEditing ? (
     <div className="flex flex-wrap gap-2">
@@ -456,8 +488,19 @@ export function EditablePageLayout({
       >
         {allowedBlocks
           .filter((block) => !activeLayouts.lg.find((item) => item.i === block.id)?.hidden)
-          .map((block) => (
-            <div key={block.id} className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+          .map((block) => {
+            const baseClassName =
+              block.containerClassName ?? "rounded-lg border border-slate-800 bg-slate-900 p-4";
+            const editingClassName = isEditing ? "ring-1 ring-slate-700" : "";
+            const containerClassName = [
+              "min-w-0 max-w-full",
+              baseClassName,
+              editingClassName
+            ]
+              .filter(Boolean)
+              .join(" ");
+            return (
+            <div key={block.id} className={containerClassName}>
               {isEditing ? (
                 <div className="mb-3 flex items-start justify-between gap-3">
                   <div className="flex items-center gap-2">
@@ -474,6 +517,7 @@ export function EditablePageLayout({
                   <button
                     type="button"
                     onClick={() => toggleHidden(block.id)}
+                    disabled={block.required}
                     className="inline-flex items-center gap-2 text-xs font-semibold text-slate-200 hover:text-white"
                     title={
                       activeLayouts.lg.find((item) => item.i === block.id)?.hidden
@@ -490,7 +534,8 @@ export function EditablePageLayout({
               ) : null}
               {block.render()}
             </div>
-          ))}
+            );
+          })}
       </ResponsiveGridLayout>
       {isEditing && hiddenBlocks.length > 0 ? (
         <div className="rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-4">

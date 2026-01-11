@@ -6,6 +6,7 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { AppTextInput } from "components/AppTextInput";
+import { EditableBlock } from "../../components/EditableBlock";
 import {
   EditablePageLayout,
   type EditableLayoutSet,
@@ -382,70 +383,73 @@ export function CollaboratorsPage() {
       id: "collaborators-table",
       title: "Liste des collaborateurs",
       permission: { module: "dotations", action: "view" },
+      required: true,
       render: () => (
-        <div>
-          <div className="overflow-hidden rounded-lg border border-slate-800">
-            <table className="min-w-full divide-y divide-slate-800">
-              <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-4 py-3 text-left">Nom</th>
-                  <th className="px-4 py-3 text-left">Service</th>
-                  <th className="px-4 py-3 text-left">Email</th>
-                  <th className="px-4 py-3 text-left">Téléphone</th>
-                  {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900">
-                {collaborators.map((collaborator) => (
-                  <tr
-                    key={collaborator.id}
-                    className={`bg-slate-950 text-sm text-slate-100 ${
-                      selected?.id === collaborator.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
-                    }`}
-                  >
-                    <td className="px-4 py-3 font-medium">{collaborator.full_name}</td>
-                    <td className="px-4 py-3 text-slate-300">{collaborator.department ?? "-"}</td>
-                    <td className="px-4 py-3 text-slate-300">{collaborator.email ?? "-"}</td>
-                    <td className="px-4 py-3 text-slate-300">{collaborator.phone ?? "-"}</td>
-                    {canEdit ? (
-                      <td className="px-4 py-3 text-xs text-slate-200">
-                        <div className="flex gap-2">
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelected(collaborator);
-                              setFormMode("edit");
-                            }}
-                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                            title={`Modifier la fiche de ${collaborator.full_name}`}
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (!window.confirm("Supprimer ce collaborateur ?")) {
-                                return;
-                              }
-                              setMessage(null);
-                              setError(null);
-                              void deleteCollaborator.mutateAsync(collaborator.id);
-                            }}
-                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
-                            title={`Supprimer ${collaborator.full_name} de la liste`}
-                          >
-                            Supprimer
-                          </button>
-                        </div>
-                      </td>
-                    ) : null}
+        <EditableBlock id="collaborators-table">
+          <div>
+            <div className="overflow-hidden rounded-lg border border-slate-800">
+              <table className="min-w-full divide-y divide-slate-800">
+                <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+                  <tr>
+                    <th className="px-4 py-3 text-left">Nom</th>
+                    <th className="px-4 py-3 text-left">Service</th>
+                    <th className="px-4 py-3 text-left">Email</th>
+                    <th className="px-4 py-3 text-left">Téléphone</th>
+                    {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
                   </tr>
-                ))}
-              </tbody>
-            </table>
+                </thead>
+                <tbody className="divide-y divide-slate-900">
+                  {collaborators.map((collaborator) => (
+                    <tr
+                      key={collaborator.id}
+                      className={`bg-slate-950 text-sm text-slate-100 ${
+                        selected?.id === collaborator.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
+                      }`}
+                    >
+                      <td className="px-4 py-3 font-medium">{collaborator.full_name}</td>
+                      <td className="px-4 py-3 text-slate-300">{collaborator.department ?? "-"}</td>
+                      <td className="px-4 py-3 text-slate-300">{collaborator.email ?? "-"}</td>
+                      <td className="px-4 py-3 text-slate-300">{collaborator.phone ?? "-"}</td>
+                      {canEdit ? (
+                        <td className="px-4 py-3 text-xs text-slate-200">
+                          <div className="flex gap-2">
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelected(collaborator);
+                                setFormMode("edit");
+                              }}
+                              className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                              title={`Modifier la fiche de ${collaborator.full_name}`}
+                            >
+                              Modifier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (!window.confirm("Supprimer ce collaborateur ?")) {
+                                  return;
+                                }
+                                setMessage(null);
+                                setError(null);
+                                void deleteCollaborator.mutateAsync(collaborator.id);
+                              }}
+                              className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                              title={`Supprimer ${collaborator.full_name} de la liste`}
+                            >
+                              Supprimer
+                            </button>
+                          </div>
+                        </td>
+                      ) : null}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            {isFetching ? <p className="mt-2 text-xs text-slate-400">Actualisation...</p> : null}
           </div>
-          {isFetching ? <p className="mt-2 text-xs text-slate-400">Actualisation...</p> : null}
-        </div>
+        </EditableBlock>
       )
     };
 
@@ -457,15 +461,16 @@ export function CollaboratorsPage() {
         title: "Fiche collaborateur",
         permission: { module: "dotations", action: "edit" },
         render: () => (
-          <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <h3 className="text-sm font-semibold text-white">
-              {formMode === "edit" ? "Modifier le collaborateur" : "Ajouter un collaborateur"}
-            </h3>
-            <form
-              key={`${formMode}-${selected?.id ?? "new"}`}
-              className="mt-3 space-y-3"
-              onSubmit={handleSubmit}
-            >
+          <EditableBlock id="collaborators-form">
+            <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+              <h3 className="text-sm font-semibold text-white">
+                {formMode === "edit" ? "Modifier le collaborateur" : "Ajouter un collaborateur"}
+              </h3>
+              <form
+                key={`${formMode}-${selected?.id ?? "new"}`}
+                className="mt-3 space-y-3"
+                onSubmit={handleSubmit}
+              >
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-300" htmlFor="collab-full-name">
                   Nom complet
@@ -549,8 +554,9 @@ export function CollaboratorsPage() {
                   </button>
                 ) : null}
               </div>
-            </form>
-          </aside>
+              </form>
+            </aside>
+          </EditableBlock>
         )
       });
     }

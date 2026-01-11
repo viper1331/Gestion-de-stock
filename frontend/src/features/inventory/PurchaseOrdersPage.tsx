@@ -10,6 +10,7 @@ import {
   type EditableLayoutSet,
   type EditablePageBlock
 } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface Supplier {
   id: number;
@@ -72,7 +73,12 @@ export function PurchaseOrdersPage() {
         id: "purchase-orders-panel",
         title: "Bons de commande",
         permission: { module: "clothing", action: "view" },
-        render: () => <PurchaseOrdersPanel suppliers={suppliers} />
+        required: true,
+        render: () => (
+          <EditableBlock id="purchase-orders-panel">
+            <PurchaseOrdersPanel suppliers={suppliers} />
+          </EditableBlock>
+        )
       }
     ],
     [suppliers]

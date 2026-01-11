@@ -108,6 +108,7 @@ app.include_router(about.router, prefix="/about", tags=["about"])
 app.include_router(logs.router, prefix="/logs", tags=["logs"])
 app.include_router(messages.router, prefix="/messages", tags=["messages"])
 app.include_router(user_layouts.router, prefix="/user-layouts", tags=["user-layouts"])
+app.include_router(user_layouts.router, prefix="/ui/layouts", tags=["user-layouts"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 

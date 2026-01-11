@@ -13,6 +13,8 @@ import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
 import { PharmacyLotsPanel } from "./PharmacyLotsPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -154,7 +156,7 @@ const highlightMatch = (value: string, term: string) => {
     return value;
   }
   const endIndex = startIndex + lowerTerm.length;
-  return (
+  const mainContent = (
     <>
       {value.slice(0, startIndex)}
       <span className="rounded bg-indigo-500/20 px-1 text-indigo-100">{value.slice(startIndex, endIndex)}</span>
@@ -1011,9 +1013,77 @@ export function PharmacyPage() {
         ) : null}
       </div>
 
-      <PharmacyLotsPanel canEdit={canEdit} />
-      <PharmacyOrdersPanel canEdit={canEdit} />
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [
+        { i: "pharmacy-main", x: 0, y: 0, w: 12, h: 24 },
+        { i: "pharmacy-lots", x: 0, y: 24, w: 12, h: 12 },
+        { i: "pharmacy-orders", x: 0, y: 36, w: 12, h: 12 }
+      ],
+      md: [
+        { i: "pharmacy-main", x: 0, y: 0, w: 6, h: 24 },
+        { i: "pharmacy-lots", x: 0, y: 24, w: 6, h: 12 },
+        { i: "pharmacy-orders", x: 0, y: 36, w: 6, h: 12 }
+      ],
+      sm: [
+        { i: "pharmacy-main", x: 0, y: 0, w: 1, h: 24 },
+        { i: "pharmacy-lots", x: 0, y: 24, w: 1, h: 12 },
+        { i: "pharmacy-orders", x: 0, y: 36, w: 1, h: 12 }
+      ]
+    }),
+    []
+  );
+
+  const bareContainerClassName = "rounded-none border-0 bg-transparent p-0";
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "pharmacy-main",
+      title: "Inventaire pharmacie",
+      required: true,
+      permission: { module: "pharmacy", action: "view" },
+      containerClassName: bareContainerClassName,
+      render: () => (
+        <EditableBlock id="pharmacy-main">
+          {mainContent}
+        </EditableBlock>
+      )
+    },
+    {
+      id: "pharmacy-lots",
+      title: "Lots pharmacie",
+      permission: { module: "pharmacy", action: "view" },
+      containerClassName: bareContainerClassName,
+      render: () => (
+        <EditableBlock id="pharmacy-lots">
+          <PharmacyLotsPanel canEdit={canEdit} />
+        </EditableBlock>
+      )
+    },
+    {
+      id: "pharmacy-orders",
+      title: "Bons de commande",
+      permission: { module: "pharmacy", action: "view" },
+      containerClassName: bareContainerClassName,
+      render: () => (
+        <EditableBlock id="pharmacy-orders">
+          <PharmacyOrdersPanel canEdit={canEdit} />
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageId="module:pharmacy:inventory"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "pharmacy", action: "view" }}
+      className="space-y-6"
+    />
   );
 }
 
