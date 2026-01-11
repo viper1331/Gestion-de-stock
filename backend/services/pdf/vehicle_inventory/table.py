@@ -5,7 +5,7 @@ from typing import Sequence
 
 from reportlab.lib import colors
 from reportlab.lib.units import mm
-from reportlab.platypus import SimpleDocTemplate, Table, TableStyle
+from reportlab.platypus import Table, TableStyle
 
 from .models import VehicleViewEntry
 from .style_engine import PdfStyleEngine
@@ -20,6 +20,26 @@ def paginate_entries(entries: Sequence[VehicleViewEntry], available_height: floa
     return chunks
 
 
+def _table_style(style_engine: PdfStyleEngine) -> TableStyle:
+    cached = getattr(style_engine, "_table_style", None)
+    if cached is not None:
+        return cached
+    style = TableStyle(
+        [
+            ("BACKGROUND", (0, 0), (-1, 0), style_engine.color("surface")),
+            ("TEXTCOLOR", (0, 0), (-1, 0), style_engine.color("text")),
+            ("FONTNAME", (0, 0), (-1, -1), style_engine.font("body")[0]),
+            ("FONTSIZE", (0, 0), (-1, -1), style_engine.font("body")[1]),
+            ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
+            ("GRID", (0, 0), (-1, -1), 0.25, colors.gray),
+            ("BACKGROUND", (0, 1), (-1, -1), style_engine.color("background")),
+            ("TEXTCOLOR", (0, 1), (-1, -1), style_engine.color("muted")),
+        ]
+    )
+    setattr(style_engine, "_table_style", style)
+    return style
+
+
 def draw_table(canvas, *, entries: Sequence[VehicleViewEntry], bounds: tuple[float, float, float, float], style_engine: PdfStyleEngine, section_title: str) -> None:
     x, y, width, height = bounds
     data = [["Article", "Référence", "Quantité"]]
@@ -31,19 +51,6 @@ def draw_table(canvas, *, entries: Sequence[VehicleViewEntry], bounds: tuple[flo
         ])
 
     table = Table(data, colWidths=[width * 0.55, width * 0.30, width * 0.15])
-    table.setStyle(
-        TableStyle(
-            [
-                ("BACKGROUND", (0, 0), (-1, 0), style_engine.color("surface")),
-                ("TEXTCOLOR", (0, 0), (-1, 0), style_engine.color("text")),
-                ("FONTNAME", (0, 0), (-1, -1), style_engine.font("body")[0]),
-                ("FONTSIZE", (0, 0), (-1, -1), style_engine.font("body")[1]),
-                ("ALIGN", (1, 1), (-1, -1), "RIGHT"),
-                ("GRID", (0, 0), (-1, -1), 0.25, colors.gray),
-                ("BACKGROUND", (0, 1), (-1, -1), style_engine.color("background")),
-                ("TEXTCOLOR", (0, 1), (-1, -1), style_engine.color("muted")),
-            ]
-        )
-    )
+    table.setStyle(_table_style(style_engine))
     table.wrapOn(canvas, width, height)
     table.drawOn(canvas, x, y + height - table._height)

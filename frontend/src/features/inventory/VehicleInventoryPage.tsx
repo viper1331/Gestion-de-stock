@@ -1408,14 +1408,30 @@ export function VehicleInventoryPage() {
       if (selectedVehicle) {
         payload.category_ids = [selectedVehicle.id];
       }
-      const response = await api.post(
-        "/vehicle-inventory/export/pdf",
-        payload,
-        {
-          responseType: "arraybuffer"
+      const jobResponse = await api.post("/vehicle-inventory/export/pdf", payload);
+      const jobId = jobResponse.data?.job_id as string | undefined;
+      if (!jobId) {
+        throw new Error("Échec démarrage export PDF.");
+      }
+
+      const maxAttempts = 120;
+      for (let attempt = 0; attempt < maxAttempts; attempt += 1) {
+        const statusResponse = await api.get(`/vehicle-inventory/export/pdf/jobs/${jobId}`);
+        const status = statusResponse.data?.status as string | undefined;
+        if (status === "completed") {
+          const pdfResponse = await api.get(
+            `/vehicle-inventory/export/pdf/jobs/${jobId}/download`,
+            { responseType: "arraybuffer" }
+          );
+          return pdfResponse.data as ArrayBuffer;
         }
-      );
-      return response.data as ArrayBuffer;
+        if (status === "failed") {
+          const errorMessage = statusResponse.data?.error as string | undefined;
+          throw new Error(errorMessage || "Échec export PDF.");
+        }
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      }
+      throw new Error("Temps d'attente dépassé pour l'export PDF.");
     },
     onSuccess: (data) => {
       const blob = new Blob([data], { type: "application/pdf" });

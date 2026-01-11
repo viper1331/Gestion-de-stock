@@ -7,16 +7,25 @@ from pathlib import Path
 from PIL import Image, ImageOps
 from reportlab.lib.utils import ImageReader
 
+from .image_cache import DEFAULT_IMAGE_DPI, DEFAULT_IMAGE_QUALITY, preprocess_image, target_pixels_for_bounds
 from .style_engine import PdfStyleEngine
-from .utils import clamp
 
 
 class BackgroundInfo:
-    def __init__(self, reader: ImageReader, width: float, height: float, orientation: str):
+    def __init__(
+        self,
+        reader: ImageReader,
+        width: float,
+        height: float,
+        orientation: str,
+        *,
+        source_path: Path | None = None,
+    ):
         self.reader = reader
         self.width = width
         self.height = height
         self.orientation = orientation
+        self.source_path = source_path
 
 
 def _load_image(image_path: Path) -> tuple[Image.Image, str]:
@@ -37,7 +46,41 @@ def prepare_background(image_path: Path) -> BackgroundInfo:
     image.save(buffer, format=image_format)
     buffer.seek(0)
     reader = ImageReader(buffer)
-    return BackgroundInfo(reader=reader, width=image.width, height=image.height, orientation=orientation)
+    return BackgroundInfo(
+        reader=reader,
+        width=image.width,
+        height=image.height,
+        orientation=orientation,
+        source_path=image_path,
+    )
+
+
+def prepare_background_for_bounds(
+    image_path: Path,
+    *,
+    bounds: tuple[float, float, float, float],
+    dpi: int = DEFAULT_IMAGE_DPI,
+    quality: int = DEFAULT_IMAGE_QUALITY,
+) -> BackgroundInfo:
+    if not image_path.exists():
+        raise FileNotFoundError(f"Image introuvable: {image_path}")
+
+    image, orientation = _load_image(image_path)
+    target_width_px, target_height_px = target_pixels_for_bounds(bounds[2], bounds[3], dpi=dpi)
+    processed = preprocess_image(
+        image_path,
+        target_width_px=target_width_px,
+        target_height_px=target_height_px,
+        quality=quality,
+    )
+    reader = ImageReader(str(processed.path))
+    return BackgroundInfo(
+        reader=reader,
+        width=image.width,
+        height=image.height,
+        orientation=orientation,
+        source_path=image_path,
+    )
 
 
 def draw_background(
@@ -67,8 +110,19 @@ def draw_background(
     image_x = frame_x + (target_width - drawn_width) / 2
     image_y = frame_y + (target_height - drawn_height) / 2
 
+    reader = background.reader
+    if background.source_path:
+        target_width_px, target_height_px = target_pixels_for_bounds(drawn_width, drawn_height, dpi=DEFAULT_IMAGE_DPI)
+        processed = preprocess_image(
+            background.source_path,
+            target_width_px=target_width_px,
+            target_height_px=target_height_px,
+            quality=DEFAULT_IMAGE_QUALITY,
+        )
+        reader = ImageReader(str(processed.path))
+
     canvas.drawImage(
-        background.reader,
+        reader,
         image_x,
         image_y,
         width=drawn_width,

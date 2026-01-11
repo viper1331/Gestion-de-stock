@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+import time
 from typing import Iterable
 
 import logging
@@ -45,6 +46,7 @@ def render_vehicle_inventory_pdf(
 ) -> bytes:
     """Public entry point for vehicle inventory PDF rendering."""
 
+    start_time = time.perf_counter()
     diagnostics = check_playwright_status()
     renderer_mode = resolve_renderer_mode(diagnostics)
 
@@ -81,6 +83,8 @@ def render_vehicle_inventory_pdf(
 
     buffer = PdfBuffer()
     canvas = buffer.build_canvas()
+    style_engine = PdfStyleEngine(theme=options.theme, logo_path=None)
+    plan_start = time.perf_counter()
     plan = build_plan(
         categories=categories,
         items=items,
@@ -89,11 +93,12 @@ def render_vehicle_inventory_pdf(
         options=options,
         media_root=media_root,
     )
+    plan_end = time.perf_counter()
 
     counter = PageCounter(len(plan.pages))
+    render_start = time.perf_counter()
     for page in plan:
         canvas.setPageSize(page_size_for_orientation(page.orientation))
-        style_engine = PdfStyleEngine(theme=options.theme, logo_path=None)
         render_page(canvas, page, style_engine=style_engine)
         page_number, page_count = counter.advance()
         if options.include_footer:
@@ -107,5 +112,15 @@ def render_vehicle_inventory_pdf(
             canvas.restoreState()
         canvas.showPage()
 
+    render_end = time.perf_counter()
     canvas.save()
-    return buffer.getvalue()
+    pdf_bytes = buffer.getvalue()
+    total_time = time.perf_counter()
+    logger.info(
+        "[vehicle_inventory_pdf] plan_ms=%.2f render_ms=%.2f total_ms=%.2f size_bytes=%s",
+        (plan_end - plan_start) * 1000,
+        (render_end - render_start) * 1000,
+        (total_time - start_time) * 1000,
+        len(pdf_bytes),
+    )
+    return pdf_bytes

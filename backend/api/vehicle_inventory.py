@@ -6,8 +6,8 @@ import io
 import asyncio
 import logging
 import os
-import asyncio
 from datetime import datetime
+from typing import Callable
 
 from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile, Request
 from fastapi.responses import HTMLResponse, StreamingResponse
@@ -23,6 +23,7 @@ from backend.services.pdf.vehicle_inventory.playwright_support import (
     check_playwright_status,
     log_playwright_context,
 )
+from backend.services.pdf.vehicle_inventory.jobs import create_job, get_job, launch_job
 from backend.services.pdf.vehicle_inventory.renderer import PlaywrightPdfError
 from backend.services import qrcode_service
 from backend.services.debug_service import load_debug_config
@@ -97,9 +98,29 @@ class VehicleInventoryExportOptions(VehiclePdfOptions):
     pointer_targets: dict[str, models.PointerTarget] | None = None
 
 
-async def _vehicle_inventory_pdf_response(
-    *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
-):
+def _build_pdf_worker(
+    *,
+    pointer_targets: dict[str, models.PointerTarget] | None,
+    options: VehiclePdfOptions,
+) -> Callable[[], bytes]:
+    def _worker() -> bytes:
+        try:
+            return services.generate_vehicle_inventory_pdf(
+                pointer_targets=pointer_targets,
+                options=options,
+            )
+        except FileNotFoundError:
+            fallback_options = options.model_copy()
+            fallback_options.table_fallback = True
+            return services.generate_vehicle_inventory_pdf(
+                pointer_targets=pointer_targets,
+                options=fallback_options,
+            )
+
+    return _worker
+
+
+def _resolve_vehicle_inventory_options(options: VehiclePdfOptions, *, user: models.User) -> VehiclePdfOptions:
     _require_permission(user, action="view")
     resolved = resolve_pdf_config(FALLBACK_MODULE_KEY)
     options = options.model_copy(
@@ -108,39 +129,32 @@ async def _vehicle_inventory_pdf_response(
             "include_footer": resolved.config.footer.enabled,
         }
     )
-    diagnostics = check_playwright_status()
-    if settings.PDF_RENDERER == "html" and diagnostics.status != PLAYWRIGHT_OK:
-        log_playwright_context(diagnostics.status)
-        raise HTTPException(status_code=503, detail=build_playwright_error_message(diagnostics.status))
-    try:
-        pdf_bytes = await asyncio.to_thread(
-            services.generate_vehicle_inventory_pdf,
-            pointer_targets=pointer_targets,
-            options=options,
-        )
-    except PlaywrightPdfError as exc:
-        log_playwright_context(exc.status)
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except FileNotFoundError:
-        fallback_options = options.model_copy()
-        fallback_options.table_fallback = True
-        pdf_bytes = await asyncio.to_thread(
-            services.generate_vehicle_inventory_pdf,
-            pointer_targets=pointer_targets,
-            options=fallback_options,
-        )
+    return options
+
+
+def _vehicle_inventory_filename() -> str:
+    resolved = resolve_pdf_config(FALLBACK_MODULE_KEY)
     filename = render_filename(
         resolved.config.filename.pattern,
         module_key=FALLBACK_MODULE_KEY,
         module_title=resolved.module_label,
     )
-    return StreamingResponse(
-        io.BytesIO(pdf_bytes),
-        media_type="application/pdf",
-        headers={
-            "Content-Disposition": f"attachment; filename=\"{filename}\"",
-        },
-    )
+    return filename
+
+
+def _start_vehicle_inventory_job(
+    *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
+) -> dict[str, str]:
+    _require_permission(user, action="view")
+    resolved_options = _resolve_vehicle_inventory_options(options, user=user)
+    diagnostics = check_playwright_status()
+    if settings.PDF_RENDERER == "html" and diagnostics.status != PLAYWRIGHT_OK:
+        log_playwright_context(diagnostics.status)
+        raise HTTPException(status_code=503, detail=build_playwright_error_message(diagnostics.status))
+    filename = _vehicle_inventory_filename()
+    job = create_job(filename=filename)
+    launch_job(job, _build_pdf_worker(pointer_targets=pointer_targets, options=resolved_options))
+    return {"job_id": job.job_id, "status": job.status, "filename": filename}
 
 
 @router.post("/export/pdf")
@@ -150,17 +164,51 @@ async def export_vehicle_inventory_pdf(
 ):
     pointer_targets = payload.pointer_targets if payload else None
     options = payload or VehiclePdfOptions()
-    return await _vehicle_inventory_pdf_response(pointer_targets=pointer_targets, options=options, user=user)
+    return _start_vehicle_inventory_job(pointer_targets=pointer_targets, options=options, user=user)
 
 
 @router.get("/export/pdf")
 async def export_vehicle_inventory_pdf_legacy(
     user: models.User = Depends(get_current_user),
 ):
-    return await _vehicle_inventory_pdf_response(
-        pointer_targets=None,
-        options=VehiclePdfOptions(),
-        user=user,
+    return _start_vehicle_inventory_job(pointer_targets=None, options=VehiclePdfOptions(), user=user)
+
+
+@router.get("/export/pdf/jobs/{job_id}")
+async def get_vehicle_inventory_pdf_job_status(
+    job_id: str,
+    user: models.User = Depends(get_current_user),
+):
+    _require_permission(user, action="view")
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export PDF introuvable.")
+    response = {"job_id": job.job_id, "status": job.status, "filename": job.filename}
+    if job.error:
+        response["error"] = job.error
+    if job.status == "completed":
+        response["download_url"] = f"/vehicle-inventory/export/pdf/jobs/{job.job_id}/download"
+    return response
+
+
+@router.get("/export/pdf/jobs/{job_id}/download")
+async def download_vehicle_inventory_pdf_job(
+    job_id: str,
+    user: models.User = Depends(get_current_user),
+):
+    _require_permission(user, action="view")
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Export PDF introuvable.")
+    if job.status != "completed" or not job.result_path or not job.result_path.exists():
+        raise HTTPException(status_code=409, detail="Export PDF en cours de génération.")
+    filename = job.filename or f"{job.job_id}.pdf"
+    return StreamingResponse(
+        io.BytesIO(job.result_path.read_bytes()),
+        media_type="application/pdf",
+        headers={
+            "Content-Disposition": f"attachment; filename=\"{filename}\"",
+        },
     )
 
 

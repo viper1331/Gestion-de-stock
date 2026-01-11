@@ -6352,9 +6352,11 @@ def generate_vehicle_inventory_pdf(
 ) -> bytes:
     """Export the complete vehicle inventory as a PDF document."""
 
+    start_time = time.perf_counter()
     ensure_database_ready()
     categories = list_vehicle_categories()
     items = list_vehicle_items()
+    fetch_time = time.perf_counter()
     generated_at = datetime.now(timezone.utc)
     pdf_options = VehiclePdfOptions(**(options.model_dump() if options else {}))
 
@@ -6363,7 +6365,8 @@ def generate_vehicle_inventory_pdf(
         categories = [category for category in categories if category.id in allowed_ids]
         items = [item for item in items if item.category_id in allowed_ids]
 
-    return render_vehicle_inventory_pdf(
+    render_start = time.perf_counter()
+    pdf_bytes = render_vehicle_inventory_pdf(
         categories=categories,
         items=items,
         generated_at=generated_at,
@@ -6371,6 +6374,15 @@ def generate_vehicle_inventory_pdf(
         options=pdf_options,
         media_root=MEDIA_ROOT,
     )
+    total_time = time.perf_counter()
+    logger.info(
+        "[vehicle_inventory_pdf] fetch_ms=%.2f render_ms=%.2f total_ms=%.2f size_bytes=%s",
+        (fetch_time - start_time) * 1000,
+        (total_time - render_start) * 1000,
+        (total_time - start_time) * 1000,
+        len(pdf_bytes),
+    )
+    return pdf_bytes
 
 
 def generate_remise_inventory_pdf() -> bytes:
