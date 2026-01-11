@@ -1,5 +1,6 @@
 import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import clsx from "clsx";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -184,10 +185,21 @@ export function CollaboratorsPage() {
   );
   const autoMapping = useMemo(() => buildAutoMapping(importHeaders), [importHeaders]);
 
+  const [previewFilter, setPreviewFilter] = useState("");
   const importSummary = useMemo(
     () => summarizeImportRows(importDataRows, mapping, hasHeaders),
     [importDataRows, mapping, hasHeaders]
   );
+  const filteredImportRows = useMemo(() => {
+    const query = previewFilter.trim().toLowerCase();
+    if (!query) {
+      return importDataRows;
+    }
+
+    return importDataRows.filter((row) =>
+      row.some((cell) => (cell ?? "").toString().toLowerCase().includes(query))
+    );
+  }, [importDataRows, previewFilter]);
 
   useEffect(() => {
     if (!importHeaders.length) {
@@ -550,9 +562,9 @@ export function CollaboratorsPage() {
       </div>
 
       {isImportOpen ? (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 p-4">
-          <div className="w-full max-w-5xl rounded-lg border border-slate-800 bg-slate-900 p-6 text-slate-100 shadow-xl">
-            <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-3 py-4 sm:px-4 md:px-6">
+          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-[1100px] flex-col rounded-lg border border-slate-800 bg-slate-900 text-slate-100 shadow-xl">
+            <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-4 sm:px-6">
               <div>
                 <h3 className="text-lg font-semibold text-white">Importer des collaborateurs</h3>
                 <p className="text-xs text-slate-400">
@@ -568,307 +580,389 @@ export function CollaboratorsPage() {
               </button>
             </div>
 
-            {importError ? <p className="mt-4 text-sm text-red-300">{importError}</p> : null}
+            <div className="flex-1 space-y-4 overflow-y-auto px-4 py-4 sm:px-6">
+              {importError ? <p className="text-sm text-red-300">{importError}</p> : null}
 
-            {importStep === "source" ? (
-              <div className="mt-6 space-y-6">
-                <div
-                  className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-6 text-sm text-slate-300"
-                  onDragOver={(event) => event.preventDefault()}
-                  onDrop={(event) => {
-                    event.preventDefault();
-                    const file = event.dataTransfer.files?.[0];
-                    if (file) {
-                      setSelectedFile(file);
-                    }
-                  }}
-                >
-                  <p className="font-semibold text-slate-100">Glissez-déposez un fichier CSV ou XLSX ici</p>
-                  <p className="text-xs text-slate-400">Délimiteurs détectés automatiquement : ; , ou tabulations.</p>
-                  {selectedFile ? (
-                    <p className="text-xs text-emerald-300">Fichier sélectionné : {selectedFile.name}</p>
-                  ) : null}
-                </div>
-
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => fileInputRef.current?.click()}
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+              {importStep === "source" ? (
+                <div className="space-y-6">
+                  <div
+                    className="flex flex-col items-center justify-center gap-2 rounded-lg border border-dashed border-slate-700 bg-slate-950/40 p-6 text-sm text-slate-300"
+                    onDragOver={(event) => event.preventDefault()}
+                    onDrop={(event) => {
+                      event.preventDefault();
+                      const file = event.dataTransfer.files?.[0];
+                      if (file) {
+                        setSelectedFile(file);
+                      }
+                    }}
                   >
-                    Choisir un fichier
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => pasteRef.current?.focus()}
-                    className="rounded-md bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-700"
-                  >
-                    Coller depuis Google Sheets / Excel
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleDownloadTemplate}
-                    className="rounded-md bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-700"
-                  >
-                    Télécharger un modèle CSV
-                  </button>
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-sm text-slate-200">
-                    Depuis Google Sheets / Excel : sélectionnez les cellules → Ctrl+C → collez ici
-                  </p>
-                  <textarea
-                    ref={pasteRef}
-                    value={pasteContent}
-                    onChange={(event) => setPasteContent(event.target.value)}
-                    className="min-h-[140px] w-full rounded-md border border-slate-800 bg-slate-950 p-3 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
-                    placeholder="Collez votre tableau ici (tabulations ou CSV)."
-                  />
-                  <p className="text-xs text-slate-400">
-                    Ce fichier peut être ouvert dans Excel ou importé dans Google Sheets.
-                  </p>
-                </div>
-
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".csv,.xlsx"
-                  className="hidden"
-                  onChange={(event) => {
-                    const file = event.target.files?.[0];
-                    if (file) {
-                      setSelectedFile(file);
-                    }
-                  }}
-                />
-
-                <div className="flex justify-end">
-                  <button
-                    type="button"
-                    onClick={handleParseSource}
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
-                  >
-                    Continuer
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {importStep === "preview" ? (
-              <div className="mt-6 space-y-4">
-                <div className="flex flex-wrap items-center justify-between gap-3 text-sm">
-                  <div>
-                    <p className="text-slate-200">
-                      Source : <span className="font-semibold text-white">{importSourceName ?? "Import"}</span>
-                    </p>
-                    <p className="text-xs text-slate-400">
-                      {importDataRows.length} ligne(s) détectée(s), {importHeaders.length} colonne(s).
-                    </p>
-                  </div>
-                  <label className="flex items-center gap-2 text-xs text-slate-200">
-                    <input
-                      type="checkbox"
-                      checked={hasHeaders}
-                      onChange={(event) => setHasHeaders(event.target.checked)}
-                      className="h-4 w-4 accent-indigo-500"
-                    />
-                    La première ligne contient les en-têtes
-                  </label>
-                </div>
-
-                <div className="overflow-hidden rounded-lg border border-slate-800">
-                  <table className="min-w-full divide-y divide-slate-800 text-xs">
-                    <thead className="bg-slate-950/60 text-slate-300">
-                      <tr>
-                        {importHeaders.map((header, index) => (
-                          <th key={index} className="px-3 py-2 text-left font-semibold">
-                            {header}
-                          </th>
-                        ))}
-                      </tr>
-                    </thead>
-                    <tbody className="divide-y divide-slate-900">
-                      {importDataRows.slice(0, 50).map((row, rowIndex) => (
-                        <tr key={rowIndex} className="text-slate-100">
-                          {importHeaders.map((_, colIndex) => (
-                            <td key={colIndex} className="px-3 py-2 text-slate-200">
-                              {row[colIndex] ?? ""}
-                            </td>
-                          ))}
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-
-                {isTemplateMatch ? (
-                  <p className="text-xs text-emerald-300">
-                    Les en-têtes correspondent au modèle : le mapping sera ignoré.
-                  </p>
-                ) : null}
-
-                <div className="flex justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setImportStep("source")}
-                    className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-                  >
-                    Retour
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleContinueFromPreview}
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
-                  >
-                    Continuer
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {importStep === "mapping" ? (
-              <div className="mt-6 space-y-4">
-                <p className="text-sm text-slate-300">
-                  Associez les colonnes détectées aux champs collaborateurs.
-                </p>
-                <div className="grid gap-4 md:grid-cols-2">
-                  <MappingSelect
-                    label="Nom complet (obligatoire)"
-                    value={mapping.full_name}
-                    onChange={(value) => setMapping((prev) => ({ ...prev, full_name: value }))}
-                    options={importHeaders}
-                    required
-                  />
-                  <MappingSelect
-                    label="Service"
-                    value={mapping.department}
-                    onChange={(value) => setMapping((prev) => ({ ...prev, department: value }))}
-                    options={importHeaders}
-                  />
-                  <MappingSelect
-                    label="Email"
-                    value={mapping.email}
-                    onChange={(value) => setMapping((prev) => ({ ...prev, email: value }))}
-                    options={importHeaders}
-                  />
-                  <MappingSelect
-                    label="Téléphone"
-                    value={mapping.phone}
-                    onChange={(value) => setMapping((prev) => ({ ...prev, phone: value }))}
-                    options={importHeaders}
-                  />
-                </div>
-                <div className="flex justify-between">
-                  <button
-                    type="button"
-                    onClick={() => setImportStep("preview")}
-                    className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-                  >
-                    Retour
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleContinueFromMapping}
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
-                  >
-                    Continuer
-                  </button>
-                </div>
-              </div>
-            ) : null}
-
-            {importStep === "validate" ? (
-              <div className="mt-6 space-y-5">
-                <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 text-sm">
-                  <p className="text-slate-200">
-                    {importSummary.totalRows} ligne(s) analysée(s) ·{" "}
-                    <span className="font-semibold text-white">{importSummary.validRows.length}</span> valide(s)
-                  </p>
-                  <p className="text-xs text-slate-400">
-                    Doublons internes : {importSummary.duplicateCount} · Erreurs : {importSummary.errorCount}
-                  </p>
-                </div>
-
-                <div className="space-y-2">
-                  <p className="text-sm font-semibold text-white">Mode d'import</p>
-                  <label className="flex items-center gap-2 text-xs text-slate-200">
-                    <input
-                      type="radio"
-                      checked={importMode === "skip_duplicates"}
-                      onChange={() => setImportMode("skip_duplicates")}
-                      className="h-4 w-4 accent-indigo-500"
-                    />
-                    Ignorer les doublons
-                  </label>
-                  <label className="flex items-center gap-2 text-xs text-slate-200">
-                    <input
-                      type="radio"
-                      checked={importMode === "upsert"}
-                      onChange={() => setImportMode("upsert")}
-                      className="h-4 w-4 accent-indigo-500"
-                    />
-                    Mettre à jour si email déjà existant (upsert)
-                  </label>
-                </div>
-
-                {importSummary.errors.length ? (
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-200">
-                    <p className="text-sm font-semibold text-white">Erreurs détectées</p>
-                    <ul className="mt-2 space-y-1">
-                      {importSummary.errors.slice(0, 5).map((err) => (
-                        <li key={`${err.rowIndex}-${err.message}`}>
-                          Ligne {err.rowIndex} : {err.message}
-                        </li>
-                      ))}
-                    </ul>
-                    {importSummary.errors.length > 5 ? (
-                      <p className="mt-2 text-xs text-slate-400">
-                        + {importSummary.errors.length - 5} autre(s) erreur(s)
-                      </p>
+                    <p className="font-semibold text-slate-100">Glissez-déposez un fichier CSV ou XLSX ici</p>
+                    <p className="text-xs text-slate-400">Délimiteurs détectés automatiquement : ; , ou tabulations.</p>
+                    {selectedFile ? (
+                      <p className="text-xs text-emerald-300">Fichier sélectionné : {selectedFile.name}</p>
                     ) : null}
                   </div>
-                ) : null}
 
-                {importResult ? (
-                  <div className="rounded-lg border border-emerald-500/40 bg-emerald-900/10 p-4 text-xs text-emerald-100">
-                    <p className="font-semibold text-emerald-200">Résultat de l'import</p>
-                    <p>
-                      {importResult.created} créé(s), {importResult.updated} mis à jour, {importResult.skipped} ignoré(s)
+                  <div className="flex flex-wrap gap-2">
+                    <button
+                      type="button"
+                      onClick={() => fileInputRef.current?.click()}
+                      className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+                    >
+                      Choisir un fichier
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => pasteRef.current?.focus()}
+                      className="rounded-md bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-700"
+                    >
+                      Coller depuis Google Sheets / Excel
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleDownloadTemplate}
+                      className="rounded-md bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-700"
+                    >
+                      Télécharger un modèle CSV
+                    </button>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm text-slate-200">
+                      Depuis Google Sheets / Excel : sélectionnez les cellules → Ctrl+C → collez ici
                     </p>
-                    {importResult.errors.length ? (
-                      <ul className="mt-2 list-disc pl-4">
-                        {importResult.errors.slice(0, 5).map((err) => (
+                    <textarea
+                      ref={pasteRef}
+                      value={pasteContent}
+                      onChange={(event) => setPasteContent(event.target.value)}
+                      className="min-h-[140px] w-full rounded-md border border-slate-800 bg-slate-950 p-3 text-sm text-slate-100 focus:border-indigo-400 focus:outline-none"
+                      placeholder="Collez votre tableau ici (tabulations ou CSV)."
+                    />
+                    <p className="text-xs text-slate-400">
+                      Ce fichier peut être ouvert dans Excel ou importé dans Google Sheets.
+                    </p>
+                  </div>
+
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    accept=".csv,.xlsx"
+                    className="hidden"
+                    onChange={(event) => {
+                      const file = event.target.files?.[0];
+                      if (file) {
+                        setSelectedFile(file);
+                      }
+                    }}
+                  />
+
+                  <div className="flex justify-end border-t border-slate-800 pt-4">
+                    <button
+                      type="button"
+                      onClick={handleParseSource}
+                      className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white hover:bg-indigo-400"
+                    >
+                      Continuer
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {importStep === "preview" ? (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap items-start justify-between gap-3 text-sm">
+                    <div>
+                      <p className="text-slate-200">
+                        Source : <span className="font-semibold text-white">{importSourceName ?? "Import"}</span>
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        {importDataRows.length} ligne(s) détectée(s), {importHeaders.length} colonne(s).
+                      </p>
+                    </div>
+                    <label className="flex items-center gap-2 text-xs text-slate-200">
+                      <input
+                        type="checkbox"
+                        checked={hasHeaders}
+                        onChange={(event) => setHasHeaders(event.target.checked)}
+                        className="h-4 w-4 accent-indigo-500"
+                      />
+                      La première ligne contient les en-têtes
+                    </label>
+                  </div>
+
+                  <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-300">
+                    <p>
+                      Affichage :{" "}
+                      <span className="font-semibold text-white">
+                        {Math.min(50, filteredImportRows.length)}
+                      </span>{" "}
+                      / {filteredImportRows.length} lignes · total {importDataRows.length}
+                    </p>
+                    <input
+                      value={previewFilter}
+                      onChange={(event) => setPreviewFilter(event.target.value)}
+                      placeholder="Rechercher dans l'aperçu"
+                      className="w-full max-w-xs rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-indigo-400 focus:outline-none"
+                    />
+                  </div>
+
+                  <div className="min-w-0 overflow-hidden rounded-lg border border-slate-800">
+                    <div className="max-h-[calc(100vh-24rem)] overflow-auto">
+                      <table className="w-full table-fixed divide-y divide-slate-800 text-sm">
+                        <thead className="bg-slate-950/80 text-slate-300">
+                          <tr>
+                            {importHeaders.map((header, index) => (
+                              <th key={index} className="sticky top-0 px-3 py-2 text-left font-semibold">
+                                {header}
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-900">
+                          {filteredImportRows.slice(0, 50).map((row, rowIndex) => (
+                            <tr key={rowIndex} className="text-slate-100">
+                              {importHeaders.map((header, colIndex) => (
+                                <td
+                                  key={colIndex}
+                                  className={clsx(
+                                    "px-3 py-2 text-slate-200",
+                                    isPhoneColumn(header) ? "whitespace-nowrap" : "break-words"
+                                  )}
+                                  title={row[colIndex] ?? ""}
+                                >
+                                  {row[colIndex] ?? ""}
+                                </td>
+                              ))}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+
+                  {isTemplateMatch ? (
+                    <p className="text-xs text-emerald-300">
+                      Les en-têtes correspondent au modèle : le mapping sera ignoré.
+                    </p>
+                  ) : null}
+
+                  <div className="flex justify-between border-t border-slate-800 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => setImportStep("source")}
+                      className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                    >
+                      Retour
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleContinueFromPreview}
+                      className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+                    >
+                      Continuer
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {importStep === "mapping" ? (
+                <div className="space-y-4">
+                  <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(320px,1fr)]">
+                    <div className="order-2 min-w-0 space-y-3 lg:order-1">
+                      <div className="flex flex-wrap items-center justify-between gap-3 text-xs text-slate-300">
+                        <p>
+                          Aperçu :{" "}
+                          <span className="font-semibold text-white">
+                            {Math.min(50, filteredImportRows.length)}
+                          </span>{" "}
+                          / {filteredImportRows.length} lignes
+                        </p>
+                        <input
+                          value={previewFilter}
+                          onChange={(event) => setPreviewFilter(event.target.value)}
+                          placeholder="Rechercher dans l'aperçu"
+                          className="w-full max-w-xs rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100 focus:border-indigo-400 focus:outline-none"
+                        />
+                      </div>
+                      <div className="min-w-0 overflow-hidden rounded-lg border border-slate-800">
+                        <div className="max-h-[calc(100vh-24rem)] overflow-auto">
+                          <table className="w-full table-fixed divide-y divide-slate-800 text-sm">
+                            <thead className="bg-slate-950/80 text-slate-300">
+                              <tr>
+                                {importHeaders.map((header, index) => (
+                                  <th key={index} className="sticky top-0 px-3 py-2 text-left font-semibold">
+                                    {header}
+                                  </th>
+                                ))}
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-slate-900">
+                              {filteredImportRows.slice(0, 50).map((row, rowIndex) => (
+                                <tr key={rowIndex} className="text-slate-100">
+                                  {importHeaders.map((header, colIndex) => (
+                                    <td
+                                      key={colIndex}
+                                      className={clsx(
+                                        "px-3 py-2 text-slate-200",
+                                        isPhoneColumn(header) ? "whitespace-nowrap" : "break-words"
+                                      )}
+                                      title={row[colIndex] ?? ""}
+                                    >
+                                      {row[colIndex] ?? ""}
+                                    </td>
+                                  ))}
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="order-1 space-y-4 rounded-lg border border-slate-800 bg-slate-950/40 p-4 lg:order-2">
+                      <p className="text-sm text-slate-200">
+                        Associez les colonnes détectées aux champs collaborateurs.
+                      </p>
+                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-1">
+                        <MappingSelect
+                          label="Nom complet (obligatoire)"
+                          value={mapping.full_name}
+                          onChange={(value) => setMapping((prev) => ({ ...prev, full_name: value }))}
+                          options={importHeaders}
+                          required
+                        />
+                        <MappingSelect
+                          label="Service"
+                          value={mapping.department}
+                          onChange={(value) => setMapping((prev) => ({ ...prev, department: value }))}
+                          options={importHeaders}
+                        />
+                        <MappingSelect
+                          label="Email"
+                          value={mapping.email}
+                          onChange={(value) => setMapping((prev) => ({ ...prev, email: value }))}
+                          options={importHeaders}
+                        />
+                        <MappingSelect
+                          label="Téléphone"
+                          value={mapping.phone}
+                          onChange={(value) => setMapping((prev) => ({ ...prev, phone: value }))}
+                          options={importHeaders}
+                        />
+                      </div>
+                    </div>
+                  </div>
+                  <div className="flex justify-between border-t border-slate-800 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => setImportStep("preview")}
+                      className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                    >
+                      Retour
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleContinueFromMapping}
+                      className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+                    >
+                      Continuer
+                    </button>
+                  </div>
+                </div>
+              ) : null}
+
+              {importStep === "validate" ? (
+                <div className="space-y-5">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 text-sm">
+                    <p className="text-slate-200">
+                      {importSummary.totalRows} ligne(s) analysée(s) ·{" "}
+                      <span className="font-semibold text-white">{importSummary.validRows.length}</span> valide(s)
+                    </p>
+                    <p className="text-xs text-slate-400">
+                      Doublons internes : {importSummary.duplicateCount} · Erreurs : {importSummary.errorCount}
+                    </p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <p className="text-sm font-semibold text-white">Mode d'import</p>
+                    <label className="flex items-center gap-2 text-xs text-slate-200">
+                      <input
+                        type="radio"
+                        checked={importMode === "skip_duplicates"}
+                        onChange={() => setImportMode("skip_duplicates")}
+                        className="h-4 w-4 accent-indigo-500"
+                      />
+                      Ignorer les doublons
+                    </label>
+                    <label className="flex items-center gap-2 text-xs text-slate-200">
+                      <input
+                        type="radio"
+                        checked={importMode === "upsert"}
+                        onChange={() => setImportMode("upsert")}
+                        className="h-4 w-4 accent-indigo-500"
+                      />
+                      Mettre à jour si email déjà existant (upsert)
+                    </label>
+                  </div>
+
+                  {importSummary.errors.length ? (
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/40 p-4 text-xs text-slate-200">
+                      <p className="text-sm font-semibold text-white">Erreurs détectées</p>
+                      <ul className="mt-2 space-y-1">
+                        {importSummary.errors.slice(0, 5).map((err) => (
                           <li key={`${err.rowIndex}-${err.message}`}>
                             Ligne {err.rowIndex} : {err.message}
                           </li>
                         ))}
                       </ul>
-                    ) : null}
-                  </div>
-                ) : null}
+                      {importSummary.errors.length > 5 ? (
+                        <p className="mt-2 text-xs text-slate-400">
+                          + {importSummary.errors.length - 5} autre(s) erreur(s)
+                        </p>
+                      ) : null}
+                    </div>
+                  ) : null}
 
-                <div className="flex flex-wrap justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => setImportStep(isTemplateMatch ? "preview" : "mapping")}
-                    className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-                  >
-                    Retour
-                  </button>
-                  <button
-                    type="button"
-                    onClick={handleImport}
-                    disabled={bulkImportCollaborators.isPending}
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {bulkImportCollaborators.isPending
-                      ? "Import en cours..."
-                      : `Importer ${importSummary.validRows.length} collaborateurs`}
-                  </button>
+                  {importResult ? (
+                    <div className="rounded-lg border border-emerald-500/40 bg-emerald-900/10 p-4 text-xs text-emerald-100">
+                      <p className="font-semibold text-emerald-200">Résultat de l'import</p>
+                      <p>
+                        {importResult.created} créé(s), {importResult.updated} mis à jour,{" "}
+                        {importResult.skipped} ignoré(s)
+                      </p>
+                      {importResult.errors.length ? (
+                        <ul className="mt-2 list-disc pl-4">
+                          {importResult.errors.slice(0, 5).map((err) => (
+                            <li key={`${err.rowIndex}-${err.message}`}>
+                              Ligne {err.rowIndex} : {err.message}
+                            </li>
+                          ))}
+                        </ul>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  <div className="flex flex-wrap justify-between gap-2 border-t border-slate-800 pt-4">
+                    <button
+                      type="button"
+                      onClick={() => setImportStep(isTemplateMatch ? "preview" : "mapping")}
+                      className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                    >
+                      Retour
+                    </button>
+                    <button
+                      type="button"
+                      onClick={handleImport}
+                      disabled={bulkImportCollaborators.isPending}
+                      className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {bulkImportCollaborators.isPending
+                        ? "Import en cours..."
+                        : `Importer ${importSummary.validRows.length} collaborateurs`}
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : null}
+              ) : null}
+            </div>
           </div>
         </div>
       ) : null}
@@ -894,6 +988,8 @@ const HEADER_HEURISTICS: Record<keyof MappingState, string[]> = {
 };
 
 const EMAIL_REGEX = /^[^@\s]+@[^@\s]+\.[^@\s]+$/i;
+
+const isPhoneColumn = (header: string) => header.toLowerCase().includes("tel");
 
 function MappingSelect({
   label,
