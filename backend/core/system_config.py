@@ -127,6 +127,12 @@ def save_config(config: SystemConfig) -> SystemConfig:
     """Persiste la configuration sur disque et la met en cache."""
 
     global _SYSTEM_CONFIG
+    if isinstance(config.pdf_exports, dict):
+        from backend.services import pdf_config
+
+        defaults = pdf_config._build_default_export_config()
+        normalized = pdf_config._normalize_export_config_data(config.pdf_exports, defaults)
+        config.pdf_exports = PdfExportConfig.model_validate(normalized)
     CONFIG_PATH.write_text(config.model_dump_json(indent=2, exclude_none=True), encoding="utf-8")
     _SYSTEM_CONFIG = config
     return _SYSTEM_CONFIG
