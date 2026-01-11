@@ -12,12 +12,13 @@ import shutil
 import threading
 import time
 from collections import defaultdict
+from contextlib import contextmanager
 import sqlite3
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import wrap
-from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional
+from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional, TypeVar
 from uuid import uuid4
 
 from reportlab.lib import colors
@@ -50,6 +51,13 @@ from backend.services.pdf import VehiclePdfOptions, render_vehicle_inventory_pdf
 
 # Initialisation des bases de données au chargement du module
 _db_initialized = False
+_db_init_lock = threading.Lock()
+_MIGRATION_LOCK_PATH = db.DATA_DIR / "schema_migration.lock"
+_MIGRATION_LOCK_SLEEP_SECONDS = 0.1
+_MIGRATION_RETRY_ATTEMPTS = 8
+_MIGRATION_RETRY_BASE_DELAY_SECONDS = 0.1
+
+T = TypeVar("T")
 
 logger = logging.getLogger(__name__)
 
@@ -914,13 +922,70 @@ def delete_custom_field_definition(custom_field_id: int) -> None:
 
 def ensure_database_ready() -> None:
     global _db_initialized
-    db.init_databases()
-    _apply_schema_migrations()
+    if _db_initialized:
+        return
 
-    if not _db_initialized:
+    with _db_init_lock:
+        if _db_initialized:
+            return
+        with _migration_lock():
+            db.init_databases()
+            _apply_schema_migrations()
+
         _restore_inventory_snapshots()
         seed_default_admin()
         _db_initialized = True
+
+
+@contextmanager
+def _migration_lock() -> Iterator[None]:
+    while True:
+        try:
+            fd = os.open(_MIGRATION_LOCK_PATH, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+            with os.fdopen(fd, "w") as lock_file:
+                lock_file.write(str(os.getpid()))
+            break
+        except FileExistsError:
+            time.sleep(_MIGRATION_LOCK_SLEEP_SECONDS)
+    try:
+        yield
+    finally:
+        try:
+            _MIGRATION_LOCK_PATH.unlink()
+        except FileNotFoundError:
+            pass
+
+
+def _run_migration_with_retry(operation: Callable[[], T]) -> T:
+    delay = _MIGRATION_RETRY_BASE_DELAY_SECONDS
+    for attempt in range(_MIGRATION_RETRY_ATTEMPTS):
+        try:
+            return operation()
+        except sqlite3.OperationalError as exc:
+            message = str(exc).lower()
+            if "database is locked" not in message and "database schema is locked" not in message:
+                raise
+            if attempt >= _MIGRATION_RETRY_ATTEMPTS - 1:
+                raise
+            time.sleep(delay)
+            delay *= 2
+    raise RuntimeError("Migration retry loop exhausted unexpectedly.")
+
+
+def _execute_with_retry(
+    conn: sqlite3.Connection, statement: str, params: tuple[Any, ...] = ()
+) -> sqlite3.Cursor:
+    return _run_migration_with_retry(lambda: conn.execute(statement, params))
+
+
+def _executemany_with_retry(
+    conn: sqlite3.Connection, statement: str, params: Iterable[tuple[Any, ...]]
+) -> sqlite3.Cursor:
+    return _run_migration_with_retry(lambda: conn.executemany(statement, params))
+
+
+def _executescript_with_retry(conn: sqlite3.Connection, script: str) -> sqlite3.Cursor:
+    return _run_migration_with_retry(lambda: conn.executescript(script))
 
 
 def _parse_extra_json(raw: str | None) -> dict[str, Any]:
@@ -939,50 +1004,59 @@ def _dump_extra_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
 
 
-def _ensure_vehicle_item_columns(conn: sqlite3.Connection) -> None:
-    vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
+def _ensure_vehicle_item_columns(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    vehicle_item_info = execute("PRAGMA table_info(vehicle_items)").fetchall()
     vehicle_item_columns = {row["name"] for row in vehicle_item_info}
 
     if "image_path" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
+        execute("ALTER TABLE vehicle_items ADD COLUMN image_path TEXT")
     if "position_x" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_x REAL")
+        execute("ALTER TABLE vehicle_items ADD COLUMN position_x REAL")
     if "position_y" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN position_y REAL")
+        execute("ALTER TABLE vehicle_items ADD COLUMN position_y REAL")
     if "remise_item_id" not in vehicle_item_columns:
-        conn.execute(
+        execute(
             "ALTER TABLE vehicle_items ADD COLUMN remise_item_id INTEGER REFERENCES remise_items(id) ON DELETE SET NULL"
         )
     if "documentation_url" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN documentation_url TEXT")
+        execute("ALTER TABLE vehicle_items ADD COLUMN documentation_url TEXT")
     if "tutorial_url" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
+        execute("ALTER TABLE vehicle_items ADD COLUMN tutorial_url TEXT")
     if "shared_file_url" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN shared_file_url TEXT")
+        execute("ALTER TABLE vehicle_items ADD COLUMN shared_file_url TEXT")
     if "lot_id" not in vehicle_item_columns:
-        conn.execute(
+        execute(
             "ALTER TABLE vehicle_items ADD COLUMN lot_id INTEGER REFERENCES remise_lots(id) ON DELETE SET NULL"
         )
     if "show_in_qr" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN show_in_qr INTEGER NOT NULL DEFAULT 1")
+        execute("ALTER TABLE vehicle_items ADD COLUMN show_in_qr INTEGER NOT NULL DEFAULT 1")
 
     if "vehicle_type" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN vehicle_type TEXT")
+        execute("ALTER TABLE vehicle_items ADD COLUMN vehicle_type TEXT")
 
     if "pharmacy_item_id" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN pharmacy_item_id INTEGER REFERENCES pharmacy_items(id)")
+        execute("ALTER TABLE vehicle_items ADD COLUMN pharmacy_item_id INTEGER REFERENCES pharmacy_items(id)")
     if "extra_json" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+        execute("ALTER TABLE vehicle_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
     if "applied_lot_source" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN applied_lot_source TEXT")
+        execute("ALTER TABLE vehicle_items ADD COLUMN applied_lot_source TEXT")
     if "applied_lot_assignment_id" not in vehicle_item_columns:
-        conn.execute(
+        execute(
             "ALTER TABLE vehicle_items ADD COLUMN applied_lot_assignment_id INTEGER REFERENCES vehicle_applied_lots(id) ON DELETE SET NULL"
         )
 
 
-def _ensure_vehicle_applied_lot_table(conn: sqlite3.Connection) -> None:
-    conn.executescript(
+def _ensure_vehicle_applied_lot_table(
+    conn: sqlite3.Connection, executescript: Callable[[str], sqlite3.Cursor] | None = None
+) -> None:
+    if executescript is None:
+        executescript = conn.executescript
+    executescript(
         """
         CREATE TABLE IF NOT EXISTS vehicle_applied_lots (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1004,73 +1078,106 @@ def _ensure_vehicle_applied_lot_table(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_vehicle_category_columns(conn: sqlite3.Connection) -> None:
-    category_info = conn.execute("PRAGMA table_info(vehicle_categories)").fetchall()
+def _ensure_vehicle_category_columns(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    category_info = execute("PRAGMA table_info(vehicle_categories)").fetchall()
     category_columns = {row["name"] for row in category_info}
 
     if "vehicle_type" not in category_columns:
-        conn.execute("ALTER TABLE vehicle_categories ADD COLUMN vehicle_type TEXT")
+        execute("ALTER TABLE vehicle_categories ADD COLUMN vehicle_type TEXT")
     if "extra_json" not in category_columns:
-        conn.execute("ALTER TABLE vehicle_categories ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+        execute("ALTER TABLE vehicle_categories ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
-def _ensure_vehicle_view_settings_columns(conn: sqlite3.Connection) -> None:
-    view_settings_info = conn.execute("PRAGMA table_info(vehicle_view_settings)").fetchall()
+def _ensure_vehicle_view_settings_columns(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    view_settings_info = execute("PRAGMA table_info(vehicle_view_settings)").fetchall()
     view_settings_columns = {row["name"] for row in view_settings_info}
 
     if "pointer_mode_enabled" not in view_settings_columns:
-        conn.execute(
+        execute(
             "ALTER TABLE vehicle_view_settings ADD COLUMN pointer_mode_enabled INTEGER NOT NULL DEFAULT 0"
         )
 
     if "hide_edit_buttons" not in view_settings_columns:
-        conn.execute(
+        execute(
             "ALTER TABLE vehicle_view_settings ADD COLUMN hide_edit_buttons INTEGER NOT NULL DEFAULT 0"
         )
 
 
-def _ensure_remise_item_columns(conn: sqlite3.Connection) -> None:
-    remise_item_info = conn.execute("PRAGMA table_info(remise_items)").fetchall()
+def _ensure_remise_item_columns(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    remise_item_info = execute("PRAGMA table_info(remise_items)").fetchall()
     remise_item_columns = {row["name"] for row in remise_item_info}
 
     if "track_low_stock" not in remise_item_columns:
-        conn.execute(
+        execute(
             "ALTER TABLE remise_items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 1"
         )
     if "expiration_date" not in remise_item_columns:
-        conn.execute("ALTER TABLE remise_items ADD COLUMN expiration_date TEXT")
+        execute("ALTER TABLE remise_items ADD COLUMN expiration_date TEXT")
     if "extra_json" not in remise_item_columns:
-        conn.execute("ALTER TABLE remise_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+        execute("ALTER TABLE remise_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
-def _ensure_remise_lot_columns(conn: sqlite3.Connection) -> None:
-    lot_info = conn.execute("PRAGMA table_info(remise_lots)").fetchall()
+def _ensure_remise_lot_columns(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    lot_info = execute("PRAGMA table_info(remise_lots)").fetchall()
     lot_columns = {row["name"] for row in lot_info}
 
     if "image_path" not in lot_columns:
-        conn.execute("ALTER TABLE remise_lots ADD COLUMN image_path TEXT")
+        execute("ALTER TABLE remise_lots ADD COLUMN image_path TEXT")
     if "extra_json" not in lot_columns:
-        conn.execute("ALTER TABLE remise_lots ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+        execute("ALTER TABLE remise_lots ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
-def _ensure_pharmacy_lot_columns(conn: sqlite3.Connection) -> None:
-    lot_info = conn.execute("PRAGMA table_info(pharmacy_lots)").fetchall()
+def _ensure_pharmacy_lot_columns(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    lot_info = execute("PRAGMA table_info(pharmacy_lots)").fetchall()
     lot_columns = {row["name"] for row in lot_info}
 
     if "image_path" not in lot_columns:
-        conn.execute("ALTER TABLE pharmacy_lots ADD COLUMN image_path TEXT")
+        execute("ALTER TABLE pharmacy_lots ADD COLUMN image_path TEXT")
     if "extra_json" not in lot_columns:
-        conn.execute("ALTER TABLE pharmacy_lots ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+        execute("ALTER TABLE pharmacy_lots ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
 
 
-def _ensure_pharmacy_lot_item_columns(conn: sqlite3.Connection) -> None:
-    lot_item_info = conn.execute("PRAGMA table_info(pharmacy_lot_items)").fetchall()
+def _ensure_pharmacy_lot_item_columns(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+    executescript: Callable[[str], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    if executescript is None:
+        executescript = conn.executescript
+    lot_item_info = execute("PRAGMA table_info(pharmacy_lot_items)").fetchall()
     if not lot_item_info:
         return
     lot_item_columns = {row["name"] for row in lot_item_info}
     if "compartment_name" in lot_item_columns:
         return
-    conn.executescript(
+    executescript(
         """
         CREATE TABLE IF NOT EXISTS pharmacy_lot_items_new (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1091,26 +1198,31 @@ def _ensure_pharmacy_lot_item_columns(conn: sqlite3.Connection) -> None:
     )
 
 
-def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
-    vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
+def _ensure_vehicle_item_qr_tokens(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    vehicle_item_info = execute("PRAGMA table_info(vehicle_items)").fetchall()
     vehicle_item_columns = {row["name"] for row in vehicle_item_info}
     updated_schema = False
 
     if "qr_token" not in vehicle_item_columns:
-        conn.execute("ALTER TABLE vehicle_items ADD COLUMN qr_token TEXT")
+        execute("ALTER TABLE vehicle_items ADD COLUMN qr_token TEXT")
         updated_schema = True
 
-    missing_tokens = conn.execute(
+    missing_tokens = execute(
         "SELECT id FROM vehicle_items WHERE qr_token IS NULL OR qr_token = ''"
     ).fetchall()
     for row in missing_tokens:
-        conn.execute(
+        execute(
             "UPDATE vehicle_items SET qr_token = ? WHERE id = ?",
             (uuid4().hex, row["id"]),
         )
         updated_schema = True
 
-    conn.execute(
+    execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_vehicle_items_qr_token ON vehicle_items(qr_token)"
     )
 
@@ -1120,14 +1232,23 @@ def _ensure_vehicle_item_qr_tokens(conn: sqlite3.Connection) -> None:
 
 def _apply_schema_migrations() -> None:
     with db.get_stock_connection() as conn:
-        cur = conn.execute("PRAGMA table_info(items)")
+        def execute(statement: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
+            return _execute_with_retry(conn, statement, params)
+
+        def executemany(statement: str, params: Iterable[tuple[Any, ...]]) -> sqlite3.Cursor:
+            return _executemany_with_retry(conn, statement, params)
+
+        def executescript(script: str) -> sqlite3.Cursor:
+            return _executescript_with_retry(conn, script)
+
+        cur = execute("PRAGMA table_info(items)")
         columns = {row["name"] for row in cur.fetchall()}
         if "supplier_id" not in columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE items ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL"
             )
 
-        conn.executescript(
+        executescript(
             """
             CREATE TABLE IF NOT EXISTS purchase_orders (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1149,53 +1270,53 @@ def _apply_schema_migrations() -> None:
         """
         )
 
-        po_info = conn.execute("PRAGMA table_info(purchase_orders)").fetchall()
+        po_info = execute("PRAGMA table_info(purchase_orders)").fetchall()
         po_columns = {row["name"] for row in po_info}
         if "auto_created" not in po_columns:
-            conn.execute("ALTER TABLE purchase_orders ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0")
+            execute("ALTER TABLE purchase_orders ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0")
         if "note" not in po_columns:
-            conn.execute("ALTER TABLE purchase_orders ADD COLUMN note TEXT")
+            execute("ALTER TABLE purchase_orders ADD COLUMN note TEXT")
         if "created_at" not in po_columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE purchase_orders ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
             )
         if "status" not in po_columns:
-            conn.execute("ALTER TABLE purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")
+            execute("ALTER TABLE purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")
         if "supplier_id" not in po_columns:
-            conn.execute("ALTER TABLE purchase_orders ADD COLUMN supplier_id INTEGER")
+            execute("ALTER TABLE purchase_orders ADD COLUMN supplier_id INTEGER")
 
-        poi_info = conn.execute("PRAGMA table_info(purchase_order_items)").fetchall()
+        poi_info = execute("PRAGMA table_info(purchase_order_items)").fetchall()
         poi_columns = {row["name"] for row in poi_info}
         if "quantity_received" not in poi_columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE purchase_order_items ADD COLUMN quantity_received INTEGER NOT NULL DEFAULT 0"
             )
 
-        dotation_info = conn.execute("PRAGMA table_info(dotations)").fetchall()
+        dotation_info = execute("PRAGMA table_info(dotations)").fetchall()
         dotation_columns = {row["name"] for row in dotation_info}
         if "perceived_at" not in dotation_columns:
-            conn.execute("ALTER TABLE dotations ADD COLUMN perceived_at DATE DEFAULT CURRENT_DATE")
+            execute("ALTER TABLE dotations ADD COLUMN perceived_at DATE DEFAULT CURRENT_DATE")
         if "is_lost" not in dotation_columns:
-            conn.execute("ALTER TABLE dotations ADD COLUMN is_lost INTEGER NOT NULL DEFAULT 0")
+            execute("ALTER TABLE dotations ADD COLUMN is_lost INTEGER NOT NULL DEFAULT 0")
         if "is_degraded" not in dotation_columns:
-            conn.execute("ALTER TABLE dotations ADD COLUMN is_degraded INTEGER NOT NULL DEFAULT 0")
-        conn.execute(
+            execute("ALTER TABLE dotations ADD COLUMN is_degraded INTEGER NOT NULL DEFAULT 0")
+        execute(
             "UPDATE dotations SET perceived_at = DATE(allocated_at) WHERE perceived_at IS NULL OR perceived_at = ''"
         )
 
-        pharmacy_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
+        pharmacy_info = execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_columns = {row["name"] for row in pharmacy_info}
         if "packaging" not in pharmacy_columns:
-            conn.execute("ALTER TABLE pharmacy_items ADD COLUMN packaging TEXT")
+            execute("ALTER TABLE pharmacy_items ADD COLUMN packaging TEXT")
         if "barcode" not in pharmacy_columns:
-            conn.execute("ALTER TABLE pharmacy_items ADD COLUMN barcode TEXT")
+            execute("ALTER TABLE pharmacy_items ADD COLUMN barcode TEXT")
         if "low_stock_threshold" not in pharmacy_columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE pharmacy_items ADD COLUMN low_stock_threshold INTEGER NOT NULL DEFAULT 5"
             )
         if "extra_json" not in pharmacy_columns:
-            conn.execute("ALTER TABLE pharmacy_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
-        conn.execute(
+            execute("ALTER TABLE pharmacy_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+        execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_pharmacy_items_barcode
             ON pharmacy_items(barcode)
@@ -1203,38 +1324,38 @@ def _apply_schema_migrations() -> None:
             """
         )
 
-        pharmacy_po_info = conn.execute("PRAGMA table_info(pharmacy_purchase_orders)").fetchall()
+        pharmacy_po_info = execute("PRAGMA table_info(pharmacy_purchase_orders)").fetchall()
         pharmacy_po_columns = {row["name"] for row in pharmacy_po_info}
         if "supplier_id" not in pharmacy_po_columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE pharmacy_purchase_orders ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL"
             )
         if "status" not in pharmacy_po_columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE pharmacy_purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'"
             )
         if "created_at" not in pharmacy_po_columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE pharmacy_purchase_orders ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
             )
         if "note" not in pharmacy_po_columns:
-            conn.execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN note TEXT")
+            execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN note TEXT")
 
-        pharmacy_poi_info = conn.execute("PRAGMA table_info(pharmacy_purchase_order_items)").fetchall()
+        pharmacy_poi_info = execute("PRAGMA table_info(pharmacy_purchase_order_items)").fetchall()
         pharmacy_poi_columns = {row["name"] for row in pharmacy_poi_info}
         if "quantity_received" not in pharmacy_poi_columns:
-            conn.execute(
+            execute(
                 "ALTER TABLE pharmacy_purchase_order_items ADD COLUMN quantity_received INTEGER NOT NULL DEFAULT 0"
             )
 
-        conn.execute(
+        execute(
             "CREATE INDEX IF NOT EXISTS idx_pharmacy_purchase_orders_status ON pharmacy_purchase_orders(status)"
         )
-        conn.execute(
+        execute(
             "CREATE INDEX IF NOT EXISTS idx_pharmacy_purchase_order_items_item ON pharmacy_purchase_order_items(pharmacy_item_id)"
         )
 
-        conn.executescript(
+        executescript(
             """
             CREATE TABLE IF NOT EXISTS supplier_modules (
                 supplier_id INTEGER NOT NULL REFERENCES suppliers(id) ON DELETE CASCADE,
@@ -1441,7 +1562,7 @@ def _apply_schema_migrations() -> None:
             );
             """
         )
-        conn.executemany(
+        executemany(
             """
             INSERT OR IGNORE INTO vehicle_types (code, label, is_active)
             VALUES (?, ?, 1)
@@ -1451,19 +1572,19 @@ def _apply_schema_migrations() -> None:
                 ("secours_a_personne", "Secours à personne"),
             ],
         )
-        _ensure_remise_item_columns(conn)
-        _ensure_remise_lot_columns(conn)
-        _ensure_pharmacy_lot_columns(conn)
-        _ensure_pharmacy_lot_item_columns(conn)
-        _ensure_vehicle_category_columns(conn)
-        _ensure_vehicle_view_settings_columns(conn)
-        _ensure_vehicle_applied_lot_table(conn)
-        _ensure_vehicle_item_columns(conn)
-        _ensure_vehicle_item_qr_tokens(conn)
-        conn.execute(
+        _ensure_remise_item_columns(conn, execute=execute)
+        _ensure_remise_lot_columns(conn, execute=execute)
+        _ensure_pharmacy_lot_columns(conn, execute=execute)
+        _ensure_pharmacy_lot_item_columns(conn, execute=execute, executescript=executescript)
+        _ensure_vehicle_category_columns(conn, execute=execute)
+        _ensure_vehicle_view_settings_columns(conn, execute=execute)
+        _ensure_vehicle_applied_lot_table(conn, executescript=executescript)
+        _ensure_vehicle_item_columns(conn, execute=execute)
+        _ensure_vehicle_item_qr_tokens(conn, execute=execute)
+        execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)"
         )
-        conn.executescript(
+        executescript(
             """
             CREATE TABLE IF NOT EXISTS vehicle_pharmacy_lot_assignments (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1479,10 +1600,10 @@ def _apply_schema_migrations() -> None:
 
         _sync_vehicle_inventory_with_remise(conn)
 
-        pharmacy_category_info = conn.execute("PRAGMA table_info(pharmacy_items)").fetchall()
+        pharmacy_category_info = execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_category_columns = {row["name"] for row in pharmacy_category_info}
         if "category_id" not in pharmacy_category_columns:
-            conn.execute(
+            execute(
                 """
                 ALTER TABLE pharmacy_items
                 ADD COLUMN category_id INTEGER REFERENCES pharmacy_categories(id) ON DELETE SET NULL

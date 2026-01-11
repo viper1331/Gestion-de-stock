@@ -34,7 +34,7 @@ from backend.api import (
     messages,
 )
 from backend.core.logging_config import configure_logging
-from backend.core.services import _ensure_vehicle_pharmacy_templates
+from backend.core.services import _ensure_vehicle_pharmacy_templates, ensure_database_ready
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
 from backend.services.pdf.vehicle_inventory.playwright_support import (
@@ -51,6 +51,7 @@ logger = logging.getLogger(__name__)
 @asynccontextmanager
 async def _lifespan(_: FastAPI):
     try:
+        ensure_database_ready()
         _ensure_vehicle_pharmacy_templates()
     except sqlite3.IntegrityError:
         if logger:
