@@ -1,5 +1,6 @@
+import * as React from "react";
 import type { ChangeEvent, TextareaHTMLAttributes } from "react";
-import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useSpellcheckSettings } from "../app/spellcheckSettings";
 import {
@@ -66,11 +67,11 @@ function buildHighlightHtml(text: string, errors: SpellcheckError[]) {
   return result;
 }
 
-export const AppTextArea = forwardRef<HTMLTextAreaElement, AppTextAreaProps>(
+export const AppTextArea = React.forwardRef<HTMLTextAreaElement, AppTextAreaProps>(
   ({ className, noSpellcheck, onChange, value, ...props }, ref) => {
     const { settings } = useSpellcheckSettings();
-    const textareaRef = useRef<HTMLTextAreaElement>(null);
-    const mirrorRef = useRef<HTMLDivElement>(null);
+    const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+    const mirrorRef = useRef<HTMLDivElement | null>(null);
     const [errors, setErrors] = useState<SpellcheckError[]>([]);
     const [isChecking, setIsChecking] = useState(false);
     const [activeError, setActiveError] = useState<SpellcheckError | null>(null);
@@ -87,7 +88,7 @@ export const AppTextArea = forwardRef<HTMLTextAreaElement, AppTextAreaProps>(
       if (typeof ref === "function") {
         ref(node);
       } else if (ref) {
-        ref.current = node;
+        (ref as React.MutableRefObject<HTMLTextAreaElement | null>).current = node;
       }
     };
 

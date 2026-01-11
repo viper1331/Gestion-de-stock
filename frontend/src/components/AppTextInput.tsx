@@ -1,5 +1,6 @@
+import * as React from "react";
 import type { ChangeEvent, InputHTMLAttributes } from "react";
-import { forwardRef, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { useSpellcheckSettings } from "../app/spellcheckSettings";
 import {
@@ -49,10 +50,10 @@ function extractLayoutClasses(className?: string) {
     .join(" ");
 }
 
-export const AppTextInput = forwardRef<HTMLInputElement, AppTextInputProps>(
+export const AppTextInput = React.forwardRef<HTMLInputElement, AppTextInputProps>(
   ({ className, noSpellcheck, type, onChange, value, ...props }, ref) => {
     const { settings } = useSpellcheckSettings();
-    const localRef = useRef<HTMLInputElement>(null);
+    const localRef = useRef<HTMLInputElement | null>(null);
     const [errors, setErrors] = useState<SpellcheckError[]>([]);
     const [isChecking, setIsChecking] = useState(false);
     const [activeError, setActiveError] = useState<SpellcheckError | null>(null);
@@ -66,7 +67,7 @@ export const AppTextInput = forwardRef<HTMLInputElement, AppTextInputProps>(
       if (typeof ref === "function") {
         ref(node);
       } else if (ref) {
-        ref.current = node;
+        (ref as React.MutableRefObject<HTMLInputElement | null>).current = node;
       }
     };
 
