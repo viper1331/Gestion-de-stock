@@ -27,7 +27,7 @@ function loadDictionary(language: SpellcheckLanguage): Promise<DictionaryData> {
   if (!dictionaryCache.has(language)) {
     const loadPromise = new Promise<DictionaryData>((resolve, reject) => {
       if (language === "fr") {
-        import("dictionary-fr-fr")
+        import("dictionary-fr")
           .then((mod) => {
             mod.default((error: Error | null, dict: DictionaryData) => {
               if (error) {
@@ -41,7 +41,7 @@ function loadDictionary(language: SpellcheckLanguage): Promise<DictionaryData> {
         return;
       }
 
-      import("dictionary-en-us")
+      import("dictionary-en")
         .then((mod) => {
           mod.default((error: Error | null, dict: DictionaryData) => {
             if (error) {
