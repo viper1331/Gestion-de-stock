@@ -22,39 +22,37 @@ interface Spellchecker {
 const USER_DICTIONARY_KEY = "gsp/spellcheck/user-dictionary";
 const dictionaryCache = new Map<SpellcheckLanguage, Promise<DictionaryData>>();
 const spellcheckerCache = new Map<SpellcheckLanguage, Promise<Spellchecker>>();
+const DICTIONARY_PATHS: Record<SpellcheckLanguage, DictionaryData> = {
+  fr: {
+    aff: "/dictionaries/fr_FR.aff",
+    dic: "/dictionaries/fr_FR.dic",
+  },
+  en: {
+    aff: "/dictionaries/en_US.aff",
+    dic: "/dictionaries/en_US.dic",
+  },
+};
 
 const WORD_REGEX = /[A-Za-zÀ-ÖØ-öø-ÿ]+(?:['’\-][A-Za-zÀ-ÖØ-öø-ÿ]+)*/g;
 
 function loadDictionary(language: SpellcheckLanguage): Promise<DictionaryData> {
   if (!dictionaryCache.has(language)) {
-    const loadPromise = new Promise<DictionaryData>((resolve, reject) => {
-      if (language === "fr") {
-        import("dictionary-fr")
-          .then((mod) => {
-            mod.default((error: Error | null, dict: DictionaryData) => {
-              if (error) {
-                reject(error);
-                return;
-              }
-              resolve(dict);
-            });
-          })
-          .catch(reject);
-        return;
+    const loadPromise = (async () => {
+      const { aff, dic } = DICTIONARY_PATHS[language];
+      const [affResponse, dicResponse] = await Promise.all([fetch(aff), fetch(dic)]);
+
+      if (!affResponse.ok) {
+        throw new Error(`Impossible de charger le dictionnaire: ${aff}`);
       }
 
-      import("dictionary-en")
-        .then((mod) => {
-          mod.default((error: Error | null, dict: DictionaryData) => {
-            if (error) {
-              reject(error);
-              return;
-            }
-            resolve(dict);
-          });
-        })
-        .catch(reject);
-    });
+      if (!dicResponse.ok) {
+        throw new Error(`Impossible de charger le dictionnaire: ${dic}`);
+      }
+
+      const [affText, dicText] = await Promise.all([affResponse.text(), dicResponse.text()]);
+
+      return { aff: affText, dic: dicText };
+    })();
 
     dictionaryCache.set(language, loadPromise);
   }
@@ -68,7 +66,7 @@ async function getSpellchecker(language: SpellcheckLanguage): Promise<Spellcheck
       language,
       (async () => {
         const dict = await loadDictionary(language);
-        return nspell(dict);
+        return nspell(dict.aff, dict.dic);
       })()
     );
   }
