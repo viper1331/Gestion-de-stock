@@ -441,16 +441,16 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
   };
 
   const columnStyles = {
-    image: { width: columnWidths.image, minWidth: columnWidths.image },
-    name: { width: columnWidths.name, minWidth: columnWidths.name },
-    sku: { width: columnWidths.sku, minWidth: columnWidths.sku },
-    quantity: { width: columnWidths.quantity, minWidth: columnWidths.quantity },
-    size: { width: columnWidths.size, minWidth: columnWidths.size },
-    category: { width: columnWidths.category, minWidth: columnWidths.category },
-    lotMembership: { width: columnWidths.lotMembership, minWidth: columnWidths.lotMembership },
-    supplier: { width: columnWidths.supplier, minWidth: columnWidths.supplier },
-    expiration: { width: columnWidths.expiration, minWidth: columnWidths.expiration },
-    threshold: { width: columnWidths.threshold, minWidth: columnWidths.threshold }
+    image: { width: columnWidths.image, minWidth: 0, maxWidth: columnWidths.image },
+    name: { width: columnWidths.name, minWidth: 0, maxWidth: columnWidths.name },
+    sku: { width: columnWidths.sku, minWidth: 0, maxWidth: columnWidths.sku },
+    quantity: { width: columnWidths.quantity, minWidth: 0, maxWidth: columnWidths.quantity },
+    size: { width: columnWidths.size, minWidth: 0, maxWidth: columnWidths.size },
+    category: { width: columnWidths.category, minWidth: 0, maxWidth: columnWidths.category },
+    lotMembership: { width: columnWidths.lotMembership, minWidth: 0, maxWidth: columnWidths.lotMembership },
+    supplier: { width: columnWidths.supplier, minWidth: 0, maxWidth: columnWidths.supplier },
+    expiration: { width: columnWidths.expiration, minWidth: 0, maxWidth: columnWidths.expiration },
+    threshold: { width: columnWidths.threshold, minWidth: 0, maxWidth: columnWidths.threshold }
   } as const;
 
   const saveWidth = (key: string, width: number) => {
@@ -664,9 +664,9 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
       <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
         <div className="flex-1 space-y-4">
-          <div className="rounded-lg border border-slate-800">
-            <div className="max-h-[400px] overflow-y-auto">
-              <table className="min-w-full divide-y divide-slate-800">
+          <div className="min-w-0 rounded-lg border border-slate-800">
+            <div className="max-h-[400px] min-w-0 overflow-x-hidden overflow-y-auto">
+              <table className="w-full table-fixed divide-y divide-slate-800">
                 <thead className="bg-slate-900/60">
                   <tr>
                     {supportsItemImages && columnVisibility.image !== false ? (
@@ -674,6 +674,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Image"
                         width={columnWidths.image}
                         onResize={(value) => saveWidth("image", value)}
+                        className="hidden min-[768px]:table-cell"
                       />
                     ) : null}
                     {columnVisibility.name !== false ? (
@@ -688,6 +689,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="SKU"
                         width={columnWidths.sku}
                         onResize={(value) => saveWidth("sku", value)}
+                        className="hidden md:table-cell"
                       />
                     ) : null}
                     {columnVisibility.quantity !== false ? (
@@ -695,6 +697,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Quantité"
                         width={columnWidths.quantity}
                         onResize={(value) => saveWidth("quantity", value)}
+                        className="text-center"
                       />
                     ) : null}
                     {columnVisibility.size !== false ? (
@@ -702,6 +705,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Taille / Variante"
                         width={columnWidths.size}
                         onResize={(value) => saveWidth("size", value)}
+                        className="hidden min-[900px]:table-cell"
                       />
                     ) : null}
                     {columnVisibility.category !== false ? (
@@ -709,6 +713,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Catégorie"
                         width={columnWidths.category}
                         onResize={(value) => saveWidth("category", value)}
+                        className="hidden min-[900px]:table-cell"
                       />
                     ) : null}
                     {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
@@ -716,6 +721,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Lot(s)"
                         width={columnWidths.lotMembership}
                         onResize={(value) => saveWidth("lotMembership", value)}
+                        className="hidden lg:table-cell"
                       />
                     ) : null}
                     {columnVisibility.supplier !== false ? (
@@ -723,6 +729,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Fournisseur"
                         width={columnWidths.supplier}
                         onResize={(value) => saveWidth("supplier", value)}
+                        className="hidden xl:table-cell"
                       />
                     ) : null}
                     {supportsExpirationDate && columnVisibility.expiration !== false ? (
@@ -730,6 +737,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Péremption"
                         width={columnWidths.expiration}
                         onResize={(value) => saveWidth("expiration", value)}
+                        className="hidden min-[900px]:table-cell"
                       />
                     ) : null}
                     {columnVisibility.threshold !== false ? (
@@ -737,9 +745,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         label="Seuil"
                         width={columnWidths.threshold}
                         onResize={(value) => saveWidth("threshold", value)}
+                        className="hidden lg:table-cell text-center"
                       />
                     ) : null}
-                    <th className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    <th className="w-[160px] px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400 sm:w-[180px]">
                       Actions
                     </th>
                   </tr>
@@ -771,7 +780,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                     return (
                       <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
                         {supportsItemImages && columnVisibility.image !== false ? (
-                          <td style={columnStyles.image} className="px-4 py-3 text-sm text-slate-300">
+                          <td
+                            style={columnStyles.image}
+                            className="hidden px-4 py-3 text-sm text-slate-300 min-[768px]:table-cell"
+                          >
                             {hasImage ? (
                               <img
                                 src={imageUrl ?? undefined}
@@ -784,19 +796,26 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {columnVisibility.name !== false ? (
-                          <td style={columnStyles.name} className="px-4 py-3 text-sm text-slate-100">
-                            {item.name}
+                          <td style={columnStyles.name} className="min-w-0 px-4 py-3 text-sm text-slate-100">
+                            <span className="block truncate" title={item.name}>
+                              {item.name}
+                            </span>
                           </td>
                         ) : null}
                         {columnVisibility.sku !== false ? (
-                          <td style={columnStyles.sku} className="px-4 py-3 text-sm text-slate-300">
-                            {item.sku}
+                          <td
+                            style={columnStyles.sku}
+                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 md:table-cell"
+                          >
+                            <span className="block truncate" title={item.sku ?? ""}>
+                              {item.sku}
+                            </span>
                           </td>
                         ) : null}
                         {columnVisibility.quantity !== false ? (
                           <td
                             style={columnStyles.quantity}
-                            className={`px-4 py-3 text-sm font-semibold ${
+                            className={`px-4 py-3 text-center text-sm font-semibold ${
                               isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
                             }`}
                             title={
@@ -821,18 +840,29 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {columnVisibility.size !== false ? (
-                          <td style={columnStyles.size} className="px-4 py-3 text-sm text-slate-300">
-                            {item.size?.trim() || "-"}
+                          <td
+                            style={columnStyles.size}
+                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
+                          >
+                            <span className="block truncate" title={item.size?.trim() || "-"}>
+                              {item.size?.trim() || "-"}
+                            </span>
                           </td>
                         ) : null}
                         {columnVisibility.category !== false ? (
-                          <td style={columnStyles.category} className="px-4 py-3 text-sm text-slate-300">
-                            <div className="space-y-1">
-                              <div>
+                          <td
+                            style={columnStyles.category}
+                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
+                          >
+                            <div className="min-w-0 space-y-1">
+                              <div
+                                className="truncate"
+                                title={item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                              >
                                 {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
                               </div>
                               {item.assigned_vehicle_names?.length ? (
-                                <p className="text-xs text-slate-400">
+                                <p className="truncate text-xs text-slate-400" title={item.assigned_vehicle_names.join(", ")}>
                                   Affecté à : {item.assigned_vehicle_names.join(", ")}
                                 </p>
                               ) : null}
@@ -840,9 +870,14 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
-                          <td style={columnStyles.lotMembership} className="px-4 py-3 text-sm text-slate-300">
-                            <div className="flex flex-wrap items-center gap-2">
-                              <span>{lotLabel}</span>
+                          <td
+                            style={columnStyles.lotMembership}
+                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 lg:table-cell"
+                          >
+                            <div className="flex min-w-0 flex-wrap items-center gap-2">
+                              <span className="truncate" title={lotLabel}>
+                                {lotLabel}
+                              </span>
                               <span
                                 className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isInLot ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200" : "border-slate-600 bg-slate-800 text-slate-300"}`}
                               >
@@ -852,14 +887,22 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           </td>
                         ) : null}
                         {columnVisibility.supplier !== false ? (
-                          <td style={columnStyles.supplier} className="px-4 py-3 text-sm text-slate-300">
-                            {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                          <td
+                            style={columnStyles.supplier}
+                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 xl:table-cell"
+                          >
+                            <span
+                              className="block truncate"
+                              title={item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                            >
+                              {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                            </span>
                           </td>
                         ) : null}
                         {supportsExpirationDate && columnVisibility.expiration !== false ? (
                           <td
                             style={columnStyles.expiration}
-                            className={`px-4 py-3 text-sm ${
+                            className={`hidden px-4 py-3 text-sm min-[900px]:table-cell ${
                               expirationStatus === "expired"
                                 ? "text-red-300"
                                 : expirationStatus === "expiring-soon"
@@ -883,51 +926,51 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                         {columnVisibility.threshold !== false ? (
                           <td
                             style={columnStyles.threshold}
-                            className={`px-4 py-3 text-sm ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}
+                            className={`hidden px-4 py-3 text-center text-sm lg:table-cell ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}
                           >
                             {item.low_stock_threshold}
                           </td>
                         ) : null}
                         <td className="px-4 py-3 text-xs text-slate-200">
-                          <div className="flex flex-wrap gap-2">
+                          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                             <button
-                        type="button"
-                        onClick={() => {
-                              setSelectedItem(item);
-                              setFormMode("edit");
-                              openSidebar();
-                            }}
-                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                            title={`Modifier les informations de ${item.name}`}
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setSelectedItem(item);
-                              openSidebar();
-                            }}
-                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                            title={`Saisir un mouvement de stock pour ${item.name}`}
-                          >
-                            Mouvement
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleDeleteItem(item.id)}
-                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
-                            title={`Supprimer définitivement ${item.name}`}
-                          >
-                            Supprimer
-                          </button>
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-              </tbody>
-            </table>
+                              type="button"
+                              onClick={() => {
+                                setSelectedItem(item);
+                                setFormMode("edit");
+                                openSidebar();
+                              }}
+                              className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                              title={`Modifier les informations de ${item.name}`}
+                            >
+                              Modifier
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setSelectedItem(item);
+                                openSidebar();
+                              }}
+                              className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                              title={`Saisir un mouvement de stock pour ${item.name}`}
+                            >
+                              Mouvement
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteItem(item.id)}
+                              className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                              title={`Supprimer définitivement ${item.name}`}
+                            >
+                              Supprimer
+                            </button>
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
             </div>
           </div>
           {isFetchingItems ? (
@@ -1038,16 +1081,18 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 function ResizableHeader({
   label,
   width,
-  onResize
+  onResize,
+  className
 }: {
   label: string;
   width: number;
   onResize: (value: number) => void;
+  className?: string;
 }) {
   return (
     <th
-      style={{ width, minWidth: width }}
-      className="px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400"
+      style={{ width, maxWidth: width }}
+      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 ${className ?? ""}`}
     >
       <div className="flex items-center justify-between">
         <span>{label}</span>
