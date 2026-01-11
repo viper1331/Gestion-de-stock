@@ -8,6 +8,7 @@ import {
   PdfExportConfig,
   PdfModuleConfig,
   PdfModuleMeta,
+  PdfGroupableColumnMeta,
   PdfThemeConfig,
   DEFAULT_PDF_THEME,
   deepMerge,
@@ -159,6 +160,46 @@ const buildColumnDefaults = (meta?: PdfModuleMeta): PdfColumnConfig[] => {
   }));
 };
 
+const sanitizeGroupingKeys = (
+  keys: string[],
+  allowedKeys: Set<string>
+): { valid: string[]; invalid: string[] } => {
+  const invalid = keys.filter((key) => key && !allowedKeys.has(key));
+  const deduped: string[] = [];
+  keys.forEach((key) => {
+    if (!key) return;
+    if (!allowedKeys.has(key)) return;
+    if (!deduped.includes(key)) {
+      deduped.push(key);
+    }
+  });
+  return { valid: deduped, invalid };
+};
+
+const filterGroupingConfig = (
+  config: PdfConfig,
+  groupableColumns: PdfGroupableColumnMeta[]
+): PdfConfig => {
+  const allowedKeys = new Set(groupableColumns.map((column) => column.key));
+  const { valid: groupingKeys } = sanitizeGroupingKeys(config.grouping.keys, allowedKeys);
+  const subtotalColumns = config.grouping.subtotal_columns.filter(
+    (key, index, items) => allowedKeys.has(key) && items.indexOf(key) === index
+  );
+  const groupBy =
+    config.content.group_by && allowedKeys.has(config.content.group_by)
+      ? config.content.group_by
+      : null;
+  return {
+    ...config,
+    content: { ...config.content, group_by: groupBy },
+    grouping: {
+      ...config.grouping,
+      keys: groupingKeys,
+      subtotal_columns: subtotalColumns
+    }
+  };
+};
+
 const ensureColumns = (config: PdfConfig, meta?: PdfModuleMeta): PdfConfig => {
   if (config.content.columns.length > 0) return config;
   return {
@@ -242,6 +283,58 @@ export function PdfStudioPage() {
   const presetOptions = useMemo(() => Object.keys(draft?.presets ?? {}), [draft]);
   const supportedFonts = configMeta?.supported_fonts ?? ["Helvetica"];
   const acceptedColorFormats = configMeta?.accepted_color_formats ?? [];
+  const groupingMetaByModule = configMeta?.moduleGrouping ?? {};
+  const commonGroupableColumns = useMemo(() => {
+    const modules = Object.values(groupingMetaByModule).filter((meta) => meta.groupingSupported);
+    if (modules.length === 0) return [];
+    const [first, ...rest] = modules;
+    const commonKeys = new Set(first.groupableColumns.map((column) => column.key));
+    rest.forEach((meta) => {
+      const moduleKeys = new Set(meta.groupableColumns.map((column) => column.key));
+      Array.from(commonKeys).forEach((key) => {
+        if (!moduleKeys.has(key)) {
+          commonKeys.delete(key);
+        }
+      });
+    });
+    return first.groupableColumns.filter((column) => commonKeys.has(column.key));
+  }, [groupingMetaByModule]);
+  const currentGroupingMeta = useMemo(() => {
+    if (selectedModule === "global") {
+      return {
+        groupingSupported: commonGroupableColumns.length > 0,
+        groupableColumns: commonGroupableColumns
+      };
+    }
+    return (
+      groupingMetaByModule[selectedModule] ?? {
+        groupingSupported: false,
+        groupableColumns: []
+      }
+    );
+  }, [selectedModule, commonGroupableColumns, groupingMetaByModule]);
+  const groupingMetaForModule = useCallback(
+    (moduleKey: string) => {
+      if (moduleKey === "global") {
+        return {
+          groupingSupported: commonGroupableColumns.length > 0,
+          groupableColumns: commonGroupableColumns
+        };
+      }
+      return (
+        groupingMetaByModule[moduleKey] ?? {
+          groupingSupported: false,
+          groupableColumns: []
+        }
+      );
+    },
+    [commonGroupableColumns, groupingMetaByModule]
+  );
+  const groupableColumnsByKey = useMemo(() => {
+    return new Map(
+      currentGroupingMeta.groupableColumns.map((column) => [column.key, column])
+    );
+  }, [currentGroupingMeta.groupableColumns]);
   const reportlabNotes = useMemo(() => {
     const notes = configMeta?.renderer_compatibility?.reportlab?.notes;
     return Array.isArray(notes) ? notes : [];
@@ -251,6 +344,16 @@ export function PdfStudioPage() {
   const moduleConfig = draft?.modules[selectedModule];
   const isOverride = selectedModule !== "global" && moduleConfig?.override_global;
   const canResetTheme = selectedModule !== "global" && !!isOverride;
+  const groupingAllowedKeys = useMemo(
+    () => new Set(currentGroupingMeta.groupableColumns.map((column) => column.key)),
+    [currentGroupingMeta.groupableColumns]
+  );
+  const numericGroupableColumns = useMemo(
+    () => currentGroupingMeta.groupableColumns.filter((column) => column.isNumeric),
+    [currentGroupingMeta.groupableColumns]
+  );
+  const groupingDisabled =
+    !currentGroupingMeta.groupingSupported || currentGroupingMeta.groupableColumns.length === 0;
 
   const resolvedTheme = useMemo(() => {
     if (!draft) return DEFAULT_THEME;
@@ -326,6 +429,26 @@ export function PdfStudioPage() {
     return ensureColumns({ ...config, theme: mergeThemes(config.theme) }, currentModuleMeta);
   }, [draft, moduleConfig, selectedModule, currentModuleMeta]);
 
+  const groupingWarning = useMemo(() => {
+    if (!resolvedConfig) return null;
+    const allowedKeys = new Set(currentGroupingMeta.groupableColumns.map((column) => column.key));
+    if (allowedKeys.size === 0) return null;
+    const { invalid } = sanitizeGroupingKeys(resolvedConfig.grouping.keys, allowedKeys);
+    const invalidSubtotals = resolvedConfig.grouping.subtotal_columns.filter(
+      (key) => !allowedKeys.has(key)
+    );
+    const invalidGroupBy =
+      resolvedConfig.content.group_by && !allowedKeys.has(resolvedConfig.content.group_by)
+        ? [resolvedConfig.content.group_by]
+        : [];
+    const missing = Array.from(new Set([...invalid, ...invalidSubtotals, ...invalidGroupBy]));
+    if (missing.length === 0) return null;
+    const labels = missing.map((key) => groupableColumnsByKey.get(key)?.label ?? key);
+    return `Certaines clés de regroupement ne sont pas disponibles pour ce module et seront ignorées : ${labels.join(
+      ", "
+    )}.`;
+  }, [resolvedConfig, currentGroupingMeta.groupableColumns, groupableColumnsByKey]);
+
   const updateConfigState = useCallback(
     (updater: (config: PdfConfig) => PdfConfig) => {
       if (!draft || !editableConfig) return;
@@ -392,12 +515,26 @@ export function PdfStudioPage() {
       selectedModule === "global"
         ? moduleOptions[0]?.key ?? "barcode"
         : selectedModule;
+    const previewGroupingMeta = groupingMetaForModule(previewModule);
+    const previewConfig =
+      previewModule === "global"
+        ? draft
+        : (() => {
+            const sanitizedDraft = structuredClone(draft);
+            const resolved = resolveModuleConfig(draft, previewModule, selectedPreset);
+            const filtered = filterGroupingConfig(resolved, previewGroupingMeta.groupableColumns);
+            sanitizedDraft.modules[previewModule] = {
+              override_global: true,
+              config: filtered
+            };
+            return sanitizedDraft;
+          })();
     setPreviewStatus("Génération de l'aperçu...");
     try {
       const blob = await previewPdfConfig({
         module: previewModule,
         preset: selectedPreset,
-        config: draft
+        config: previewConfig
       });
       if (previewUrl) {
         URL.revokeObjectURL(previewUrl);
@@ -408,7 +545,7 @@ export function PdfStudioPage() {
     } catch {
       setPreviewStatus("Impossible de générer l'aperçu.");
     }
-  }, [draft, moduleOptions, previewUrl, selectedModule, selectedPreset]);
+  }, [draft, moduleOptions, previewUrl, selectedModule, selectedPreset, groupingMetaForModule]);
 
   useEffect(() => {
     if (!autoPreview) return;
@@ -913,9 +1050,9 @@ export function PdfStudioPage() {
                       className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
                     >
                       <option value="">Aucun</option>
-                      {(currentModuleMeta?.group_options ?? []).map((option) => (
-                        <option key={option} value={option}>
-                          {option}
+                      {currentGroupingMeta.groupableColumns.map((column) => (
+                        <option key={column.key} value={column.key}>
+                          {column.label}
                         </option>
                       ))}
                     </select>
@@ -992,6 +1129,277 @@ export function PdfStudioPage() {
                       Réinitialiser les colonnes
                     </button>
                   </div>
+                </div>
+              </div>
+            </details>
+            <details className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+              <summary className="cursor-pointer text-sm font-semibold text-slate-200">
+                Regroupement
+              </summary>
+              <div className="mt-4 space-y-4 text-sm text-slate-200">
+                {groupingDisabled ? (
+                  <p className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-400">
+                    Ce module ne supporte pas le regroupement.
+                  </p>
+                ) : null}
+                {groupingWarning ? (
+                  <p className="rounded-md border border-amber-400/40 bg-amber-400/10 px-3 py-2 text-xs text-amber-200">
+                    {groupingWarning}
+                  </p>
+                ) : null}
+                <label className="flex items-center gap-2">
+                  <AppTextInput
+                    type="checkbox"
+                    checked={editableConfig?.grouping.enabled ?? false}
+                    onChange={(event) =>
+                      updateConfigState((config) => ({
+                        ...config,
+                        grouping: { ...config.grouping, enabled: event.target.checked }
+                      }))
+                    }
+                    disabled={groupingDisabled}
+                    className="h-4 w-4"
+                  />
+                  Activer le regroupement multi-niveaux
+                </label>
+                <div className="space-y-2">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Niveaux
+                  </p>
+                  <div className="space-y-2">
+                    {(editableConfig?.grouping.keys ?? []).length === 0 ? (
+                      <p className="text-xs text-slate-400">
+                        Aucun niveau défini.
+                      </p>
+                    ) : null}
+                    {(editableConfig?.grouping.keys ?? []).map((key, index) => {
+                      const availableKeys = currentGroupingMeta.groupableColumns.filter(
+                        (column) =>
+                          column.key === key ||
+                          !(editableConfig?.grouping.keys ?? []).includes(column.key)
+                      );
+                      return (
+                        <div
+                          key={`${key}-${index}`}
+                          className="flex flex-wrap items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                        >
+                          <select
+                            value={key}
+                            onChange={(event) =>
+                              updateConfigState((config) => {
+                                const nextKeys = [...config.grouping.keys];
+                                nextKeys[index] = event.target.value;
+                                const { valid } = sanitizeGroupingKeys(nextKeys, groupingAllowedKeys);
+                                return { ...config, grouping: { ...config.grouping, keys: valid } };
+                              })
+                            }
+                            disabled={groupingDisabled}
+                            className="rounded-md border border-slate-800 bg-slate-950 px-2 py-1 text-sm"
+                          >
+                            <option value="">Choisir une colonne</option>
+                            {availableKeys.map((column) => (
+                              <option key={column.key} value={column.key}>
+                                {column.label}
+                              </option>
+                            ))}
+                          </select>
+                          <button
+                            type="button"
+                            onClick={() =>
+                              updateConfigState((config) => ({
+                                ...config,
+                                grouping: {
+                                  ...config.grouping,
+                                  keys: config.grouping.keys.filter((_, i) => i !== index)
+                                }
+                              }))
+                            }
+                            disabled={groupingDisabled}
+                            className="text-xs text-rose-300 hover:text-rose-200"
+                          >
+                            Retirer
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <button
+                      type="button"
+                      onClick={() => {
+                        if (groupingDisabled) return;
+                        const available = currentGroupingMeta.groupableColumns.filter(
+                          (column) => !(editableConfig?.grouping.keys ?? []).includes(column.key)
+                        );
+                        const nextKey = available[0]?.key;
+                        if (!nextKey) return;
+                        updateConfigState((config) => ({
+                          ...config,
+                          grouping: {
+                            ...config.grouping,
+                            keys: [...config.grouping.keys, nextKey]
+                          }
+                        }));
+                      }}
+                      disabled={
+                        groupingDisabled ||
+                        currentGroupingMeta.groupableColumns.every((column) =>
+                          (editableConfig?.grouping.keys ?? []).includes(column.key)
+                        )
+                      }
+                      className="text-xs text-indigo-300 hover:text-indigo-200"
+                    >
+                      Ajouter un niveau
+                    </button>
+                  </div>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1">
+                    Style d'en-tête
+                    <select
+                      value={editableConfig?.grouping.header_style ?? "bar"}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          grouping: { ...config.grouping, header_style: event.target.value as "bar" | "inline" | "none" }
+                        }))
+                      }
+                      disabled={groupingDisabled}
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                    >
+                      <option value="bar">Barre</option>
+                      <option value="inline">Inline</option>
+                      <option value="none">Aucun</option>
+                    </select>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <AppTextInput
+                      type="checkbox"
+                      checked={editableConfig?.grouping.page_break_between_level1 ?? false}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          grouping: {
+                            ...config.grouping,
+                            page_break_between_level1: event.target.checked
+                          }
+                        }))
+                      }
+                      disabled={groupingDisabled}
+                      className="h-4 w-4"
+                    />
+                    Saut de page entre les groupes de niveau 1
+                  </label>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="flex items-center gap-2">
+                    <AppTextInput
+                      type="checkbox"
+                      checked={editableConfig?.grouping.show_counts ?? false}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          grouping: { ...config.grouping, show_counts: event.target.checked }
+                        }))
+                      }
+                      disabled={groupingDisabled}
+                      className="h-4 w-4"
+                    />
+                    Afficher le nombre d'éléments
+                  </label>
+                  <label className="space-y-1">
+                    Compter sur
+                    <select
+                      value={editableConfig?.grouping.counts_scope ?? "level"}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          grouping: {
+                            ...config.grouping,
+                            counts_scope: event.target.value as "level" | "leaf"
+                          }
+                        }))
+                      }
+                      disabled={groupingDisabled || !(editableConfig?.grouping.show_counts ?? false)}
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                    >
+                      <option value="level">Niveau courant</option>
+                      <option value="leaf">Éléments finaux</option>
+                    </select>
+                  </label>
+                </div>
+                <div className="space-y-3">
+                  <label className="flex items-center gap-2">
+                    <AppTextInput
+                      type="checkbox"
+                      checked={editableConfig?.grouping.show_subtotals ?? false}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          grouping: { ...config.grouping, show_subtotals: event.target.checked }
+                        }))
+                      }
+                      disabled={groupingDisabled}
+                      className="h-4 w-4"
+                    />
+                    Afficher les sous-totaux
+                  </label>
+                  <div className="space-y-2">
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Colonnes de sous-total
+                    </p>
+                    {numericGroupableColumns.length === 0 ? (
+                      <p className="text-xs text-slate-400">
+                        Aucun champ numérique disponible pour les sous-totaux.
+                      </p>
+                    ) : (
+                      <div className="flex flex-wrap gap-3">
+                        {numericGroupableColumns.map((column) => (
+                          <label key={column.key} className="flex items-center gap-2 text-xs text-slate-300">
+                            <AppTextInput
+                              type="checkbox"
+                              checked={editableConfig?.grouping.subtotal_columns?.includes(column.key) ?? false}
+                              onChange={(event) =>
+                                updateConfigState((config) => {
+                                  const current = config.grouping.subtotal_columns ?? [];
+                                  const next = event.target.checked
+                                    ? [...current, column.key]
+                                    : current.filter((key) => key !== column.key);
+                                  return {
+                                    ...config,
+                                    grouping: { ...config.grouping, subtotal_columns: next }
+                                  };
+                                })
+                              }
+                              disabled={
+                                groupingDisabled || !(editableConfig?.grouping.show_subtotals ?? false)
+                              }
+                              className="h-4 w-4"
+                            />
+                            {column.label}
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                  <label className="space-y-1">
+                    Portée des sous-totaux
+                    <select
+                      value={editableConfig?.grouping.subtotal_scope ?? "level"}
+                      onChange={(event) =>
+                        updateConfigState((config) => ({
+                          ...config,
+                          grouping: {
+                            ...config.grouping,
+                            subtotal_scope: event.target.value as "level" | "leaf"
+                          }
+                        }))
+                      }
+                      disabled={groupingDisabled || !(editableConfig?.grouping.show_subtotals ?? false)}
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2"
+                    >
+                      <option value="level">Niveau courant</option>
+                      <option value="leaf">Éléments finaux</option>
+                    </select>
+                  </label>
                 </div>
               </div>
             </details>

@@ -82,7 +82,10 @@ async def get_barcode_asset(
 async def export_barcode_pdf(user: models.User = Depends(get_current_user)) -> StreamingResponse:
     _require_permission(user, action="view")
     assets = services.list_accessible_barcode_assets(user)
-    resolved = resolve_pdf_config(MODULE_KEY)
+    try:
+        resolved = resolve_pdf_config(MODULE_KEY)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     pdf_buffer = barcode_service.generate_barcode_pdf(assets=assets, config=resolved.config)
     if not pdf_buffer:
         raise HTTPException(status_code=404, detail="Aucun code-barres disponible pour l'export")

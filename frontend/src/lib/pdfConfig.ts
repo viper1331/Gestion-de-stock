@@ -136,6 +136,7 @@ export interface PdfColumnMeta {
   label: string;
   is_numeric: boolean;
   default_visible: boolean;
+  column_type: "string" | "number" | "date";
 }
 
 export interface PdfGroupableColumnMeta {
@@ -143,6 +144,12 @@ export interface PdfGroupableColumnMeta {
   label: string;
   isNumeric: boolean;
   isVisibleByDefault: boolean;
+  type: "string" | "number" | "date";
+}
+
+export interface PdfModuleGroupingMeta {
+  groupingSupported: boolean;
+  groupableColumns: PdfGroupableColumnMeta[];
 }
 
 export interface PdfModuleMeta {
@@ -167,6 +174,7 @@ export interface PdfConfigMeta {
   accepted_color_formats: string[];
   renderer_compatibility: Record<string, Record<string, unknown>>;
   groupableColumns: PdfGroupableColumnMeta[];
+  moduleGrouping: Record<string, PdfModuleGroupingMeta>;
 }
 
 export const DEFAULT_PDF_FORMAT: PdfFormatConfig = {

@@ -145,7 +145,10 @@ def _build_pdf_worker(
 
 def _resolve_vehicle_inventory_options(options: VehiclePdfOptions, *, user: models.User) -> VehiclePdfOptions:
     _require_permission(user, action="view")
-    resolved = resolve_pdf_config(FALLBACK_MODULE_KEY)
+    try:
+        resolved = resolve_pdf_config(FALLBACK_MODULE_KEY)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     options = options.model_copy(
         update={
             "include_header": resolved.config.header.enabled,
@@ -156,7 +159,10 @@ def _resolve_vehicle_inventory_options(options: VehiclePdfOptions, *, user: mode
 
 
 def _vehicle_inventory_filename() -> str:
-    resolved = resolve_pdf_config(FALLBACK_MODULE_KEY)
+    try:
+        resolved = resolve_pdf_config(FALLBACK_MODULE_KEY)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     filename = render_filename(
         resolved.config.filename.pattern,
         module_key=FALLBACK_MODULE_KEY,

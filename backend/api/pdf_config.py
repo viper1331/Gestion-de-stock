@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import io
 
-from fastapi import APIRouter, Depends, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
 from starlette.responses import StreamingResponse
 
@@ -32,7 +32,10 @@ def fetch_pdf_config(_: object = Depends(require_admin)) -> PdfExportConfig:
 
 @router.post("/pdf-config", response_model=PdfExportConfig)
 def update_pdf_config(payload: PdfExportConfig, _: object = Depends(require_admin)) -> PdfExportConfig:
-    return save_pdf_export_config(payload)
+    try:
+        return save_pdf_export_config(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/pdf-config/preview")
@@ -41,14 +44,20 @@ def preview_pdf_config(
     preset: str | None = Query(None),
     _: object = Depends(require_admin),
 ):
-    resolved = resolve_pdf_config(module, preset)
+    try:
+        resolved = resolve_pdf_config(module, preset)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     pdf_bytes = render_preview_pdf(resolved)
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf")
 
 
 @router.post("/pdf-config/preview")
 def preview_pdf_config_draft(payload: PdfPreviewRequest, _: object = Depends(require_admin)):
-    resolved = resolve_pdf_config(payload.module, payload.preset, config=payload.config)
+    try:
+        resolved = resolve_pdf_config(payload.module, payload.preset, config=payload.config)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     pdf_bytes = render_preview_pdf(resolved)
     return StreamingResponse(io.BytesIO(pdf_bytes), media_type="application/pdf")
 

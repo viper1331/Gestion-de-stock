@@ -17,6 +17,7 @@ from backend.core.pdf_config_models import (
     PdfColumnConfig,
     PdfColumnMeta,
     PdfGroupableColumnMeta,
+    PdfModuleGroupingMeta,
     PdfConfig,
     PdfConfigOverrides,
     PdfContentConfig,
@@ -266,13 +267,25 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             label="Inventaire véhicules",
             variables=["module", "module_title", "date", "generated_at", "vehicle"],
             columns=[
-                PdfColumnMeta(key="name", label="Matériel", default_visible=True),
-                PdfColumnMeta(key="quantity", label="Quantité", default_visible=True, is_numeric=True),
-                PdfColumnMeta(key="size", label="Taille / Variante", default_visible=True),
-                PdfColumnMeta(key="category", label="Catégorie", default_visible=True),
-                PdfColumnMeta(key="lots", label="Lot(s)", default_visible=True),
-                PdfColumnMeta(key="expiration", label="Péremption", default_visible=True),
-                PdfColumnMeta(key="threshold", label="Seuil", default_visible=True, is_numeric=True),
+                PdfColumnMeta(key="name", label="Matériel", default_visible=True, column_type="string"),
+                PdfColumnMeta(
+                    key="quantity",
+                    label="Quantité",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
+                PdfColumnMeta(key="size", label="Taille / Variante", default_visible=True, column_type="string"),
+                PdfColumnMeta(key="category", label="Catégorie", default_visible=True, column_type="string"),
+                PdfColumnMeta(key="lots", label="Lot(s)", default_visible=True, column_type="string"),
+                PdfColumnMeta(key="expiration", label="Péremption", default_visible=True, column_type="date"),
+                PdfColumnMeta(
+                    key="threshold",
+                    label="Seuil",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
             ],
             sort_options=["nom", "catégorie", "emplacement"],
             group_options=["catégorie", "emplacement"],
@@ -283,13 +296,25 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             label="Inventaire remises",
             variables=["module", "module_title", "date", "generated_at"],
             columns=[
-                PdfColumnMeta(key="name", label="Matériel", default_visible=True),
-                PdfColumnMeta(key="quantity", label="Quantité", default_visible=True, is_numeric=True),
-                PdfColumnMeta(key="size", label="Taille / Variante", default_visible=True),
-                PdfColumnMeta(key="category", label="Catégorie", default_visible=True),
-                PdfColumnMeta(key="lots", label="Lot(s)", default_visible=True),
-                PdfColumnMeta(key="expiration", label="Péremption", default_visible=True),
-                PdfColumnMeta(key="threshold", label="Seuil", default_visible=True, is_numeric=True),
+                PdfColumnMeta(key="name", label="Matériel", default_visible=True, column_type="string"),
+                PdfColumnMeta(
+                    key="quantity",
+                    label="Quantité",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
+                PdfColumnMeta(key="size", label="Taille / Variante", default_visible=True, column_type="string"),
+                PdfColumnMeta(key="category", label="Catégorie", default_visible=True, column_type="string"),
+                PdfColumnMeta(key="lots", label="Lot(s)", default_visible=True, column_type="string"),
+                PdfColumnMeta(key="expiration", label="Péremption", default_visible=True, column_type="date"),
+                PdfColumnMeta(
+                    key="threshold",
+                    label="Seuil",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
             ],
             sort_options=["nom", "catégorie", "emplacement"],
             group_options=["catégorie"],
@@ -300,9 +325,21 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             label="Bons de commande",
             variables=["module", "module_title", "date", "generated_at", "order_id"],
             columns=[
-                PdfColumnMeta(key="article", label="Article", default_visible=True),
-                PdfColumnMeta(key="ordered", label="Commandé", default_visible=True, is_numeric=True),
-                PdfColumnMeta(key="received", label="Réceptionné", default_visible=True, is_numeric=True),
+                PdfColumnMeta(key="article", label="Article", default_visible=True, column_type="string"),
+                PdfColumnMeta(
+                    key="ordered",
+                    label="Commandé",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
+                PdfColumnMeta(
+                    key="received",
+                    label="Réceptionné",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
             ],
             sort_options=["nom"],
             group_options=[],
@@ -313,9 +350,21 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             label="Bons de commande remises",
             variables=["module", "module_title", "date", "generated_at", "order_id"],
             columns=[
-                PdfColumnMeta(key="article", label="Article", default_visible=True),
-                PdfColumnMeta(key="ordered", label="Commandé", default_visible=True, is_numeric=True),
-                PdfColumnMeta(key="received", label="Réceptionné", default_visible=True, is_numeric=True),
+                PdfColumnMeta(key="article", label="Article", default_visible=True, column_type="string"),
+                PdfColumnMeta(
+                    key="ordered",
+                    label="Commandé",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
+                PdfColumnMeta(
+                    key="received",
+                    label="Réceptionné",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
             ],
             sort_options=["nom"],
             group_options=[],
@@ -326,9 +375,21 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             label="Bons de commande pharmacie",
             variables=["module", "module_title", "date", "generated_at", "order_id"],
             columns=[
-                PdfColumnMeta(key="article", label="Article", default_visible=True),
-                PdfColumnMeta(key="ordered", label="Commandé", default_visible=True, is_numeric=True),
-                PdfColumnMeta(key="received", label="Réceptionné", default_visible=True, is_numeric=True),
+                PdfColumnMeta(key="article", label="Article", default_visible=True, column_type="string"),
+                PdfColumnMeta(
+                    key="ordered",
+                    label="Commandé",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
+                PdfColumnMeta(
+                    key="received",
+                    label="Réceptionné",
+                    default_visible=True,
+                    is_numeric=True,
+                    column_type="number",
+                ),
             ],
             sort_options=["nom"],
             group_options=[],
@@ -339,7 +400,7 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             label="Codes-barres",
             variables=["module", "module_title", "date", "generated_at"],
             columns=[
-                PdfColumnMeta(key="barcode", label="Code-barres", default_visible=True),
+                PdfColumnMeta(key="barcode", label="Code-barres", default_visible=True, column_type="string"),
             ],
             sort_options=[],
             group_options=[],
@@ -408,11 +469,30 @@ def get_module_meta() -> dict[str, PdfModuleMeta]:
     return _build_module_meta()
 
 
+def _build_groupable_columns(columns: list[PdfColumnMeta]) -> list[PdfGroupableColumnMeta]:
+    return [
+        PdfGroupableColumnMeta(
+            key=column.key,
+            label=column.label,
+            is_numeric=column.is_numeric,
+            is_visible_by_default=column.default_visible,
+            column_type=column.column_type,
+        )
+        for column in columns
+    ]
+
+
 def get_pdf_config_meta() -> dict[str, object]:
     meta = theme_meta()
     groupable_columns: list[PdfGroupableColumnMeta] = []
     seen_keys: set[str] = set()
+    module_grouping: dict[str, PdfModuleGroupingMeta] = {}
     for module in get_module_meta().values():
+        module_groupable = _build_groupable_columns(module.columns)
+        module_grouping[module.key] = PdfModuleGroupingMeta(
+            grouping_supported=bool(module.columns),
+            groupable_columns=module_groupable,
+        )
         for column in module.columns:
             if column.key in seen_keys:
                 continue
@@ -423,10 +503,39 @@ def get_pdf_config_meta() -> dict[str, object]:
                     label=column.label,
                     is_numeric=column.is_numeric,
                     is_visible_by_default=column.default_visible,
+                    column_type=column.column_type,
                 )
             )
     meta["groupableColumns"] = groupable_columns
+    meta["moduleGrouping"] = module_grouping
     return meta
+
+
+def _validate_grouping_config(module_key: str, config: PdfConfig, module_meta: PdfModuleMeta | None) -> None:
+    if not module_meta:
+        return
+    column_keys = {column.key for column in module_meta.columns}
+    grouping = config.grouping
+    invalid_keys: list[str] = []
+
+    grouping_keys = [key for key in grouping.keys if key]
+    if len(grouping_keys) != len(set(grouping_keys)):
+        raise ValueError(f"Clés de regroupement du module '{module_key}' en double.")
+
+    invalid_keys.extend([key for key in grouping_keys if key not in column_keys])
+    if config.content.group_by and config.content.group_by not in column_keys:
+        invalid_keys.append(config.content.group_by)
+
+    invalid_subtotals = [key for key in grouping.subtotal_columns if key not in column_keys]
+
+    if not column_keys and (grouping_keys or grouping.subtotal_columns or config.content.group_by):
+        raise ValueError(f"Le module '{module_key}' ne supporte pas le regroupement.")
+
+    if invalid_keys or invalid_subtotals:
+        missing = ", ".join(sorted(set(invalid_keys + invalid_subtotals)))
+        raise ValueError(
+            f"Clé(s) de regroupement invalide(s) pour le module '{module_key}' : {missing}."
+        )
 
 
 def _ensure_module_columns(module_key: str, config: PdfConfig) -> PdfConfig:
@@ -478,6 +587,7 @@ def save_pdf_export_config(payload: PdfExportConfig) -> PdfExportConfig:
     defaults = _build_default_export_config()
     global_config = payload.global_config or defaults.global_config
     module_overrides: dict[str, PdfModuleConfig] = {}
+    module_meta = get_module_meta()
 
     for key, module_cfg in payload.modules.items():
         if not module_cfg.override_global:
@@ -489,6 +599,7 @@ def save_pdf_export_config(payload: PdfExportConfig) -> PdfExportConfig:
             full_config = module_cfg.config
         else:
             full_config = _apply_overrides(global_config, module_cfg.config)
+        _validate_grouping_config(key, full_config, module_meta.get(key))
         overrides = _diff_config(global_config, full_config)
         if overrides.model_dump(exclude_none=True):
             module_overrides[key] = PdfModuleConfig(override_global=True, config=overrides)
@@ -527,6 +638,7 @@ def resolve_pdf_config(module_name: str, preset_name: str | None = None, config:
             resolved = _apply_overrides(resolved, overrides)
 
     resolved = _ensure_module_columns(module_name, resolved)
+    _validate_grouping_config(module_name, resolved, meta)
     return PdfResolvedConfig(
         module_key=module_name,
         module_label=meta.label,
