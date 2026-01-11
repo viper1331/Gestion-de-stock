@@ -43,11 +43,12 @@ from backend.core.storage import (
 from backend.services import barcode as barcode_service
 from backend.services.pdf_config import (
     draw_watermark,
+    effective_density_scale,
     margins_for_format,
     page_size_for_format,
     resolve_pdf_config,
 )
-from backend.services.pdf.theme import apply_theme_reportlab, resolve_reportlab_theme
+from backend.services.pdf.theme import apply_theme_reportlab, resolve_reportlab_theme, scale_reportlab_theme
 from backend.services.pdf import VehiclePdfOptions, render_vehicle_inventory_pdf
 
 # Initialisation des bases de données au chargement du module
@@ -5836,27 +5837,28 @@ def _render_purchase_order_pdf(
     pdf = canvas.Canvas(buffer, pagesize=page_size)
     width, height = page_size
     margin_top, margin_right, margin_bottom, margin_left = margins_for_format(pdf_config.format)
-    theme = resolve_reportlab_theme(pdf_config.theme)
+    scale = effective_density_scale(pdf_config.format)
+    theme = scale_reportlab_theme(resolve_reportlab_theme(pdf_config.theme), scale)
 
     def start_page(suffix: str = "") -> float:
-        apply_theme_reportlab(pdf, page_size, pdf_config.theme)
-        draw_watermark(pdf, pdf_config, page_size)
+        apply_theme_reportlab(pdf, page_size, pdf_config.theme, scale=scale)
+        draw_watermark(pdf, pdf_config, page_size, scale=scale)
         if not pdf_config.header.enabled:
             return height - margin_top
         pdf.setFillColor(theme.text_color)
-        pdf.setFont(theme.font_family, theme.heading_font_size + 2)
+        pdf.setFont(theme.font_family, theme.heading_font_size + (2 * scale))
         pdf.drawString(margin_left, height - margin_top, f"{title}{suffix}")
         pdf.setFillColor(theme.muted_text_color)
         pdf.setFont(theme.font_family, theme.base_font_size)
-        y_position = height - margin_top - 18
+        y_position = height - margin_top - (18 * scale)
         for meta in meta_lines:
             pdf.drawString(margin_left, y_position, meta)
-            y_position -= 12
+            y_position -= 12 * scale
         pdf.setFillColor(theme.text_color)
-        return y_position - 6
+        return y_position - (6 * scale)
 
     def draw_table_header(y_position: float) -> float:
-        header_height = 18
+        header_height = 18 * scale
         columns = [col for col in pdf_config.content.columns if col.visible] or [
             PdfColumnConfig(key="article", label="Article", visible=True),
             PdfColumnConfig(key="ordered", label="Commandé", visible=True),
@@ -5865,7 +5867,14 @@ def _render_purchase_order_pdf(
         table_width = width - margin_left - margin_right
         column_widths = _resolve_purchase_order_column_widths(columns, table_width)
         pdf.setFillColor(theme.table_header_bg)
-        pdf.rect(margin_left, y_position - header_height + 6, table_width, header_height, stroke=0, fill=1)
+        pdf.rect(
+            margin_left,
+            y_position - header_height + (6 * scale),
+            table_width,
+            header_height,
+            stroke=0,
+            fill=1,
+        )
         pdf.setFillColor(theme.table_header_text)
         pdf.setFont(theme.font_family, theme.base_font_size)
         x = margin_left
@@ -5877,14 +5886,21 @@ def _render_purchase_order_pdf(
                 pdf.drawString(x, y_position, label)
             x += column_widths[column.key]
         pdf.setStrokeColor(theme.border_color)
-        pdf.rect(margin_left, y_position - header_height + 6, table_width, header_height, stroke=1, fill=0)
+        pdf.rect(
+            margin_left,
+            y_position - header_height + (6 * scale),
+            table_width,
+            header_height,
+            stroke=1,
+            fill=0,
+        )
         pdf.setFillColor(theme.text_color)
-        return y_position - 12
+        return y_position - (12 * scale)
 
     def draw_table_title(y_position: float, *, suffix: str = "") -> float:
-        pdf.setFont(theme.font_family, theme.base_font_size + 2)
+        pdf.setFont(theme.font_family, theme.base_font_size + (2 * scale))
         pdf.drawString(margin_left, y_position, f"Lignes de commande{suffix}")
-        y_position -= 16
+        y_position -= 16 * scale
         return draw_table_header(y_position)
 
     page_number = 1
@@ -5917,29 +5933,29 @@ def _render_purchase_order_pdf(
     y = start_page()
 
     def draw_note_heading(y_position: float) -> float:
-        pdf.setFont(theme.font_family, theme.base_font_size + 1)
+        pdf.setFont(theme.font_family, theme.base_font_size + (1 * scale))
         pdf.drawString(margin_left, y_position, "Note")
-        y_position -= 12
+        y_position -= 12 * scale
         pdf.setFont(theme.font_family, theme.base_font_size)
         return y_position
 
     if note_lines:
-        y = ensure_space(y, 24)
+        y = ensure_space(y, 24 * scale)
         y = draw_note_heading(y)
         for line in note_lines:
-            y = ensure_space(y, 18, on_new_page=draw_note_heading)
+            y = ensure_space(y, 18 * scale, on_new_page=draw_note_heading)
             pdf.drawString(margin_left, y, line)
-            y -= 12
-        y -= 6
+            y -= 12 * scale
+        y -= 6 * scale
 
     table_new_page = lambda pos: draw_table_title(pos, suffix=" (suite)")
 
-    y = ensure_space(y, 60)
+    y = ensure_space(y, 60 * scale)
     y = draw_table_title(y)
     if not items:
-        y = ensure_space(y, 24, on_new_page=table_new_page)
+        y = ensure_space(y, 24 * scale, on_new_page=table_new_page)
         pdf.drawString(margin_left, y, "Aucune ligne de commande enregistrée.")
-        y -= 12
+        y -= 12 * scale
     else:
         all_columns = pdf_config.content.columns or [
             PdfColumnConfig(key="article", label="Article", visible=True),
@@ -6021,10 +6037,17 @@ def _render_purchase_order_pdf(
             received = int(row["raw"].get("received", 0) or 0)
             name_lines = wrap(name, 80) or ["-"]
             for index, line in enumerate(name_lines):
-                y = ensure_space(y, 24, on_new_page=table_new_page)
+                y = ensure_space(y, 24 * scale, on_new_page=table_new_page)
                 if row_index % 2 == 1:
                     pdf.setFillColor(theme.table_row_alt_bg)
-                    pdf.rect(margin_left, y - 10, table_width, 14, stroke=0, fill=1)
+                    pdf.rect(
+                        margin_left,
+                        y - (10 * scale),
+                        table_width,
+                        14 * scale,
+                        stroke=0,
+                        fill=1,
+                    )
                     pdf.setFillColor(theme.text_color)
                 _render_purchase_order_row(
                     pdf,
@@ -6038,10 +6061,10 @@ def _render_purchase_order_pdf(
                     is_first_line=index == 0,
                 )
                 pdf.setStrokeColor(theme.border_color)
-                pdf.line(margin_left, y - 2, margin_left + table_width, y - 2)
+                pdf.line(margin_left, y - (2 * scale), margin_left + table_width, y - (2 * scale))
                 row_index += 1
-                y -= 12
-            y -= 4
+                y -= 12 * scale
+            y -= 4 * scale
 
         row_payloads = [
             {"raw": {"article": name, "ordered": ordered, "received": received}}
@@ -6158,9 +6181,11 @@ def _draw_purchase_order_footer(
         footer_bits.append(f"Page {page_number}")
     footer_text = " — ".join(footer_bits)
     theme = resolve_reportlab_theme(pdf_config.theme)
+    scale = effective_density_scale(pdf_config.format)
+    theme = scale_reportlab_theme(theme, scale)
     pdf.setFillColor(theme.muted_text_color)
-    pdf.setFont(theme.font_family, theme.base_font_size - 1)
-    pdf.drawRightString(page_width - margin_right, margin_bottom - 4, footer_text)
+    pdf.setFont(theme.font_family, theme.base_font_size - (1 * scale))
+    pdf.drawRightString(page_width - margin_right, margin_bottom - (4 * scale), footer_text)
 
 
 def _format_date_label(value: date | None) -> str:
@@ -6236,10 +6261,11 @@ def _render_remise_inventory_pdf(
     pdf = canvas.Canvas(buffer, pagesize=page_size)
     width, height = page_size
     margin_top, margin_right, margin_bottom, margin_left = margins_for_format(pdf_config.format)
-    base_row_padding = 10
-    line_height = 12
-    header_height = 24
-    theme = resolve_reportlab_theme(pdf_config.theme)
+    scale = effective_density_scale(pdf_config.format)
+    base_row_padding = 10 * scale
+    line_height = 12 * scale
+    header_height = 24 * scale
+    theme = scale_reportlab_theme(resolve_reportlab_theme(pdf_config.theme), scale)
 
     base_columns: list[tuple[str, float, str, str]] = [
         ("name", "MATÉRIEL", 0.28, "left"),
@@ -6312,45 +6338,59 @@ def _render_remise_inventory_pdf(
         return value
 
     def draw_page_background() -> None:
-        apply_theme_reportlab(pdf, page_size, pdf_config.theme)
+        apply_theme_reportlab(pdf, page_size, pdf_config.theme, scale=scale)
         pdf.setFillColor(theme.text_color)
 
     def start_page(page_number: int) -> float:
         draw_page_background()
-        draw_watermark(pdf, pdf_config, page_size)
+        draw_watermark(pdf, pdf_config, page_size, scale=scale)
         y_offset = height - margin_top
         if pdf_config.header.enabled:
             pdf.setFont(theme.font_family, theme.heading_font_size)
-            pdf.drawString(margin_left, y_offset + 4, module_title)
+            pdf.drawString(margin_left, y_offset + (4 * scale), module_title)
             pdf.setFont(theme.font_family, theme.base_font_size)
             pdf.setFillColor(theme.muted_text_color)
             pdf.drawString(
                 margin_left,
-                y_offset - 10,
+                y_offset - (10 * scale),
                 f"Généré le {_format_date_label(generated_at.date())} à {generated_at.strftime('%H:%M')}",
             )
             pdf.setFillColor(theme.text_color)
             y_offset -= header_height
         if pdf_config.footer.enabled and pdf_config.footer.show_pagination:
-            pdf.drawRightString(width - margin_right, margin_bottom - 6, f"Page {page_number}")
+            pdf.drawRightString(width - margin_right, margin_bottom - (6 * scale), f"Page {page_number}")
         return y_offset
 
     def draw_header(y_position: float) -> float:
         pdf.setFillColor(theme.table_header_bg)
-        pdf.rect(margin_left, y_position - header_height + 4, table_width, header_height, stroke=0, fill=1)
+        pdf.rect(
+            margin_left,
+            y_position - header_height + (4 * scale),
+            table_width,
+            header_height,
+            stroke=0,
+            fill=1,
+        )
         pdf.setFillColor(theme.table_header_text)
-        pdf.setFont(theme.font_family, theme.base_font_size - 1)
+        pdf.setFont(theme.font_family, theme.base_font_size - (1 * scale))
         x = margin_left
         for _, label, ratio, align in columns:
             cell_width = ratio * table_width
             if align == "center":
-                pdf.drawCentredString(x + cell_width / 2, y_position - 6, label)
+                pdf.drawCentredString(x + cell_width / 2, y_position - (6 * scale), label)
             else:
-                pdf.drawString(x + 4, y_position - 6, label)
+                pdf.drawString(x + (4 * scale), y_position - (6 * scale), label)
             x += cell_width
         pdf.setStrokeColor(theme.border_color)
-        pdf.rect(margin_left, y_position - header_height + 4, table_width, header_height, stroke=1, fill=0)
-        pdf.setFont(theme.font_family, theme.base_font_size - 1)
+        pdf.rect(
+            margin_left,
+            y_position - header_height + (4 * scale),
+            table_width,
+            header_height,
+            stroke=1,
+            fill=0,
+        )
+        pdf.setFont(theme.font_family, theme.base_font_size - (1 * scale))
         pdf.setFillColor(theme.text_color)
         return y_position - header_height
 
@@ -6461,9 +6501,9 @@ def _render_remise_inventory_pdf(
             cell_width = ratio * table_width
             lines = _wrap_to_width(
                 str(value),
-                cell_width - 8,
+                cell_width - (8 * scale),
                 theme.font_family,
-                theme.base_font_size - 1,
+                theme.base_font_size - (1 * scale),
             )
             max_line_count = max(max_line_count, len(lines))
             wrapped_values.append((lines, cell_width, align))
@@ -6474,17 +6514,17 @@ def _render_remise_inventory_pdf(
         pdf.setFillColor(theme.table_row_alt_bg if row_index % 2 else theme.background_color)
         pdf.rect(margin_left, y - row_height + 6, table_width, row_height, stroke=0, fill=1)
         pdf.setStrokeColor(theme.border_color)
-        pdf.rect(margin_left, y - row_height + 6, table_width, row_height, stroke=1, fill=0)
+        pdf.rect(margin_left, y - row_height + (6 * scale), table_width, row_height, stroke=1, fill=0)
         pdf.setFillColor(theme.text_color)
 
         x = margin_left
         for lines, cell_width, align in wrapped_values:
-            text_y = y - 8
+            text_y = y - (8 * scale)
             for line in lines:
                 if align == "center":
                     pdf.drawCentredString(x + cell_width / 2, text_y, line)
                 else:
-                    pdf.drawString(x + 4, text_y, line)
+                    pdf.drawString(x + (4 * scale), text_y, line)
                 text_y -= line_height
             x += cell_width
 

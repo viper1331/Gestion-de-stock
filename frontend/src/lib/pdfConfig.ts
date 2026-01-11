@@ -1,7 +1,7 @@
 import { api } from "./api";
 
 export type PdfOrientation = "portrait" | "landscape";
-export type PdfPageSize = "A4" | "A5" | "Letter";
+export type PdfPageSize = "A3" | "A4" | "A5" | "Letter";
 export type PdfMarginPreset = "normal" | "narrow" | "wide" | "custom";
 export type PdfDensity = "comfort" | "standard" | "compact";
 

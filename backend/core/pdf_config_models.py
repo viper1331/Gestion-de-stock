@@ -16,7 +16,7 @@ class PdfMargins(BaseModel):
 
 
 class PdfFormatConfig(BaseModel):
-    size: Literal["A4", "A5", "Letter"] = "A4"
+    size: Literal["A3", "A4", "A5", "Letter"] = "A4"
     orientation: Literal["portrait", "landscape"] = "portrait"
     margin_preset: Literal["normal", "narrow", "wide", "custom"] = "normal"
     margins: PdfMargins = Field(default_factory=PdfMargins)

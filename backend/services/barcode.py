@@ -312,6 +312,7 @@ def generate_barcode_pdf(
     return buffer
 def _resolve_page_size_cm(config: PdfConfig) -> tuple[float, float]:
     size_map = {
+        "A3": (29.7, 42.0),
         "A4": (21.0, 29.7),
         "A5": (14.8, 21.0),
         "Letter": (21.59, 27.94),

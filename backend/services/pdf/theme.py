@@ -76,6 +76,25 @@ def resolve_reportlab_theme(theme: PdfThemeConfig) -> ResolvedReportlabTheme:
     return _resolve_reportlab_theme_cached(theme_key)
 
 
+def scale_reportlab_theme(theme: ResolvedReportlabTheme, scale: float) -> ResolvedReportlabTheme:
+    if scale == 1.0:
+        return theme
+    return ResolvedReportlabTheme(
+        font_family=theme.font_family,
+        base_font_size=theme.base_font_size * scale,
+        heading_font_size=theme.heading_font_size * scale,
+        text_color=theme.text_color,
+        muted_text_color=theme.muted_text_color,
+        accent_color=theme.accent_color,
+        table_header_bg=theme.table_header_bg,
+        table_header_text=theme.table_header_text,
+        table_row_alt_bg=theme.table_row_alt_bg,
+        border_color=theme.border_color,
+        background_color=theme.background_color,
+        background_alpha=theme.background_alpha,
+    )
+
+
 @lru_cache(maxsize=32)
 def _resolve_reportlab_theme_cached(theme_key: tuple[tuple[str, object], ...]) -> ResolvedReportlabTheme:
     theme = PdfThemeConfig(**dict(theme_key))
@@ -176,10 +195,13 @@ def _draw_background_image(
     pdf_canvas.restoreState()
 
 
-def apply_theme_reportlab(pdf_canvas: Any, doc: Any, theme: PdfThemeConfig) -> ResolvedReportlabTheme:
+def apply_theme_reportlab(
+    pdf_canvas: Any, doc: Any, theme: PdfThemeConfig, *, scale: float = 1.0
+) -> ResolvedReportlabTheme:
     page_size = doc.pagesize if hasattr(doc, "pagesize") else doc
     width, height = page_size
     resolved = resolve_reportlab_theme(theme)
+    resolved = scale_reportlab_theme(resolved, scale)
 
     if theme.background_mode == "color":
         pdf_canvas.saveState()
