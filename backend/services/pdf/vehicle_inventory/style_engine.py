@@ -1,9 +1,9 @@
 """Centralized styling for vehicle inventory PDF rendering."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Tuple
+from typing import ClassVar, Tuple
 
 from reportlab.lib import colors
 from reportlab.pdfbase import pdfmetrics
@@ -15,6 +15,9 @@ class PdfStyleEngine:
     theme: str = "default"
     logo_path: Path | None = None
     _use_custom_font: bool = False
+    _table_style: object | None = field(default=None, init=False, repr=False)
+
+    _fonts_registered: ClassVar[bool] = False
 
     def __post_init__(self) -> None:
         self._register_fonts()
@@ -77,7 +80,7 @@ class PdfStyleEngine:
         return base, 9
 
     def _register_fonts(self) -> None:
-        if "Inter" in pdfmetrics.getRegisteredFontNames():
+        if self.__class__._fonts_registered and "Inter" in pdfmetrics.getRegisteredFontNames():
             self._use_custom_font = True
             return
         try:
@@ -86,3 +89,4 @@ class PdfStyleEngine:
             self._use_custom_font = True
         except Exception:
             self._use_custom_font = False
+        self.__class__._fonts_registered = True

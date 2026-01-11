@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from functools import lru_cache
 from pathlib import Path
 from typing import Any, Iterable, Tuple
 
@@ -63,6 +64,7 @@ def _register_font_assets() -> list[str]:
     return registered
 
 
+@lru_cache(maxsize=1)
 def supported_fonts() -> list[str]:
     _register_font_assets()
     fonts = set(pdfmetrics.getRegisteredFontNames()) | _BUILTIN_FONTS
@@ -70,6 +72,13 @@ def supported_fonts() -> list[str]:
 
 
 def resolve_reportlab_theme(theme: PdfThemeConfig) -> ResolvedReportlabTheme:
+    theme_key = tuple(sorted(theme.model_dump().items()))
+    return _resolve_reportlab_theme_cached(theme_key)
+
+
+@lru_cache(maxsize=32)
+def _resolve_reportlab_theme_cached(theme_key: tuple[tuple[str, object], ...]) -> ResolvedReportlabTheme:
+    theme = PdfThemeConfig(**dict(theme_key))
     default_theme = PdfThemeConfig()
 
     def _safe_color(value: str, fallback: str) -> Tuple[colors.Color, float]:

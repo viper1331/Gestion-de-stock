@@ -5,13 +5,22 @@ import base64
 import html
 import mimetypes
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 from typing import Iterable
 
+from reportlab.lib.pagesizes import A4, landscape
+from reportlab.lib.units import mm
+
 from backend.core import models
+from .image_cache import DEFAULT_IMAGE_DPI, DEFAULT_IMAGE_QUALITY, preprocess_image, target_pixels_for_bounds
 from .models import VehiclePdfOptions, VehicleView, VehicleViewEntry
 from .utils import build_vehicle_entries, clamp, format_date
+
+import logging
+
+logger = logging.getLogger(__name__)
 
 VEHICLE_TYPE_LABELS = {
     "incendie": "Incendie",
@@ -28,6 +37,7 @@ def render_vehicle_inventory_pdf_html_sync(
     options: VehiclePdfOptions,
     media_root: Path | None = None,
 ) -> bytes:
+    start_time = time.perf_counter()
     views = build_vehicle_entries(
         categories=categories,
         items=items,
@@ -37,13 +47,24 @@ def render_vehicle_inventory_pdf_html_sync(
     if not views:
         raise ValueError("Aucune page générée pour l'inventaire véhicule")
 
+    build_start = time.perf_counter()
     html_content = _build_html(
         views=views,
         pointer_targets=pointer_targets or {},
         generated_at=generated_at,
         options=options,
     )
-    return _render_html_to_pdf(html_content)
+    build_end = time.perf_counter()
+    pdf_bytes = _render_html_to_pdf(html_content)
+    total_time = time.perf_counter()
+    logger.info(
+        "[vehicle_inventory_pdf] html_build_ms=%.2f html_render_ms=%.2f total_ms=%.2f size_bytes=%s",
+        (build_end - build_start) * 1000,
+        (total_time - build_end) * 1000,
+        (total_time - start_time) * 1000,
+        len(pdf_bytes),
+    )
+    return pdf_bytes
 
 
 def render_vehicle_inventory_pdf_html(
@@ -384,7 +405,7 @@ def _render_marker(
 
 
 def _background_style(background_path: Path | None) -> str:
-    image_url = _encode_data_url(background_path) if background_path else None
+    image_url = _encode_data_url(background_path, target_px=_background_target_px()) if background_path else None
     if image_url:
         return (
             f"background-image: url('{image_url}');"
@@ -405,12 +426,29 @@ def _background_style(background_path: Path | None) -> str:
     )
 
 
-def _encode_data_url(path: Path | None) -> str | None:
+def _background_target_px() -> tuple[int, int]:
+    page_width, page_height = landscape(A4)
+    content_width = page_width - 2 * (12 * mm)
+    content_height = page_height - 2 * (12 * mm)
+    return target_pixels_for_bounds(content_width, content_height, dpi=DEFAULT_IMAGE_DPI)
+
+
+def _encode_data_url(path: Path | None, *, target_px: tuple[int, int] | None = None) -> str | None:
     if not path or not path.exists():
         return None
     mime_type, _ = mimetypes.guess_type(path.name)
     mime_type = mime_type or "application/octet-stream"
-    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    source_path = path
+    if target_px is not None:
+        processed = preprocess_image(
+            path,
+            target_width_px=target_px[0],
+            target_height_px=target_px[1],
+            quality=DEFAULT_IMAGE_QUALITY,
+        )
+        source_path = processed.path
+        mime_type = "image/jpeg"
+    encoded = base64.b64encode(source_path.read_bytes()).decode("ascii")
     return f"data:{mime_type};base64,{encoded}"
 
 
