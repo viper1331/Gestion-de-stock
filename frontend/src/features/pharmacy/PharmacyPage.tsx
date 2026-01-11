@@ -141,12 +141,36 @@ const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
   { key: "category", label: "Catégorie" }
 ];
 
+const normalizeSearchTerm = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
+
+const highlightMatch = (value: string, term: string) => {
+  if (!term) {
+    return value;
+  }
+  const lowerValue = value.toLowerCase();
+  const lowerTerm = term.toLowerCase();
+  const startIndex = lowerValue.indexOf(lowerTerm);
+  if (startIndex === -1) {
+    return value;
+  }
+  const endIndex = startIndex + lowerTerm.length;
+  return (
+    <>
+      {value.slice(0, startIndex)}
+      <span className="rounded bg-indigo-500/20 px-1 text-indigo-100">{value.slice(startIndex, endIndex)}</span>
+      {value.slice(endIndex)}
+    </>
+  );
+};
+
 export function PharmacyPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
   const [selected, setSelected] = useState<PharmacyItem | null>(null);
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [isFormVisible, setIsFormVisible] = useState(false);
+  const [searchValue, setSearchValue] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
@@ -226,6 +250,13 @@ export function PharmacyPage() {
   );
 
   useEffect(() => {
+    const timeout = window.setTimeout(() => {
+      setDebouncedSearch(searchValue);
+    }, 250);
+    return () => window.clearTimeout(timeout);
+  }, [searchValue]);
+
+  useEffect(() => {
     if (movementItemId === null) {
       return;
     }
@@ -239,6 +270,18 @@ export function PharmacyPage() {
     () => (movementItemId === null ? null : items.find((item) => item.id === movementItemId) ?? null),
     [items, movementItemId]
   );
+
+  const normalizedSearch = useMemo(() => normalizeSearchTerm(debouncedSearch), [debouncedSearch]);
+  const filteredItems = useMemo(() => {
+    if (!normalizedSearch) {
+      return items;
+    }
+    return items.filter((item) => {
+      const nameMatch = normalizeSearchTerm(item.name).includes(normalizedSearch);
+      const barcodeMatch = normalizeSearchTerm(item.barcode ?? "").includes(normalizedSearch);
+      return nameMatch || barcodeMatch;
+    });
+  }, [items, normalizedSearch]);
 
   const createItem = useMutation({
     mutationFn: async (payload: PharmacyPayload) => {
@@ -518,6 +561,20 @@ export function PharmacyPage() {
 
       <div className={`grid gap-6 ${isFormVisible && canEdit ? "lg:grid-cols-3" : ""}`}>
         <div className={isFormVisible && canEdit ? "lg:col-span-2" : ""}>
+          <div className="flex flex-col gap-2 pb-3 sm:flex-row sm:items-center sm:justify-between">
+            <AppTextInput
+              value={searchValue}
+              onChange={(event) => setSearchValue(event.target.value)}
+              placeholder="Rechercher par nom ou SKU"
+              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none sm:max-w-xs"
+              title="Rechercher par nom ou SKU"
+            />
+            {normalizedSearch ? (
+              <p className="text-xs text-slate-400">
+                {filteredItems.length} résultat{filteredItems.length > 1 ? "s" : ""}
+              </p>
+            ) : null}
+          </div>
           <div
             className="max-h-[520px] overflow-y-auto rounded-lg border border-slate-800"
             style={{ maxHeight: "calc(8 * 56px + 48px)" }}
@@ -540,7 +597,7 @@ export function PharmacyPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900">
-                {items.map((item) => {
+                {filteredItems.map((item) => {
                   const { isOutOfStock, isLowStock, expirationStatus } = getPharmacyAlerts(item);
                   const barcodeDownloadUrl = item.barcode
                     ? `${apiBaseUrl}/barcode/generate/${encodeURIComponent(item.barcode)}`
@@ -553,13 +610,15 @@ export function PharmacyPage() {
                       }`}
                     >
                       {columnVisibility.name !== false ? (
-                        <td className="px-4 py-3 font-medium">{item.name}</td>
+                        <td className="px-4 py-3 font-medium">{highlightMatch(item.name, normalizedSearch)}</td>
                       ) : null}
                       {columnVisibility.barcode !== false ? (
                         <td className="px-4 py-3 text-slate-300">
                           {item.barcode ? (
                             <div className="flex items-center gap-2">
-                              <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100">{item.barcode}</code>
+                              <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100">
+                                {highlightMatch(item.barcode, normalizedSearch)}
+                              </code>
                               {barcodeDownloadUrl ? (
                                 <a
                                   href={barcodeDownloadUrl}
