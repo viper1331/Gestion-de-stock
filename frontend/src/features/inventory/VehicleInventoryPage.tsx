@@ -4515,6 +4515,18 @@ interface ItemCardProps {
   onUpdateExtra?: (extra: Record<string, unknown>) => void;
 }
 
+function areExtraValuesEqual(
+  current: Record<string, unknown> = {},
+  next: Record<string, unknown> = {}
+) {
+  const currentKeys = Object.keys(current);
+  const nextKeys = Object.keys(next);
+  if (currentKeys.length !== nextKeys.length) {
+    return false;
+  }
+  return currentKeys.every((key) => Object.is(current[key], next[key]));
+}
+
 function ItemCard({
   item,
   onRemove,
@@ -4556,19 +4568,26 @@ function ItemCard({
     if (isEditingPosition) {
       return;
     }
-    setDraftPosition({
+    // Garder le brouillon aligné aux props sans réécriture inutile.
+    const nextDraft = {
       x: Math.round(clamp((item.position_x ?? 0.5) * 100, 0, 100)),
       y: Math.round(clamp((item.position_y ?? 0.5) * 100, 0, 100))
-    });
+    };
+    setDraftPosition((previous) =>
+      previous.x === nextDraft.x && previous.y === nextDraft.y ? previous : nextDraft
+    );
   }, [item.position_x, item.position_y, isEditingPosition]);
 
   useEffect(() => {
-    setDraftQuantity(item.quantity);
-    setIsSavingQuantity(false);
+    // Évite de relancer un rendu si la quantité n'a pas changé.
+    setDraftQuantity((previous) => (previous === item.quantity ? previous : item.quantity));
+    setIsSavingQuantity((previous) => (previous ? false : previous));
   }, [item.quantity]);
 
   useEffect(() => {
-    setExtraDraft(buildCustomFieldDefaults(customFieldDefinitions, item.extra ?? {}));
+    // Recalcule uniquement si les valeurs diffèrent pour éviter les boucles de rendu.
+    const nextExtra = buildCustomFieldDefaults(customFieldDefinitions, item.extra ?? {});
+    setExtraDraft((previous) => (areExtraValuesEqual(previous, nextExtra) ? previous : nextExtra));
   }, [customFieldDefinitions, item.extra]);
 
   const uploadImage = useMutation({
