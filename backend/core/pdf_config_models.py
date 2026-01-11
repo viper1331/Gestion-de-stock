@@ -205,6 +205,7 @@ class PdfModuleMeta(BaseModel):
     sort_options: list[str] = Field(default_factory=list)
     group_options: list[str] = Field(default_factory=list)
     renderers: list[Literal["html", "reportlab"]] = Field(default_factory=list)
+    grouping_supported: bool = True
 
 
 class PdfExportConfig(BaseModel):

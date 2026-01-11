@@ -13,9 +13,8 @@ import threading
 import time
 from collections import defaultdict
 from contextlib import contextmanager
-from itertools import groupby
-import sqlite3
 from dataclasses import dataclass
+import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import wrap
@@ -50,6 +49,7 @@ from backend.services.pdf_config import (
 )
 from backend.services.pdf.theme import apply_theme_reportlab, resolve_reportlab_theme, scale_reportlab_theme
 from backend.services.pdf import VehiclePdfOptions, render_vehicle_inventory_pdf
+from backend.services.pdf.grouping import GroupNode, build_group_tree, compute_group_stats
 
 # Initialisation des bases de données au chargement du module
 _db_initialized = False
@@ -5972,12 +5972,13 @@ def _render_purchase_order_pdf(
         if grouping.enabled and not grouping_keys and pdf_config.content.group_by:
             grouping_keys = [pdf_config.content.group_by]
 
-        def render_group_header(group: _GroupedRows, *, level: int) -> None:
+        def render_group_header(group: GroupNode, *, level: int) -> None:
             nonlocal y
             if grouping.header_style == "none":
                 return
-            count = len(group.rows) if grouping.counts_scope == "leaf" else (
-                len(group.children) if group.children else len(group.rows)
+            stats = compute_group_stats(group, value_fn=lambda row, key: row["raw"].get(key))
+            count = stats.row_count if grouping.counts_scope == "leaf" else (
+                stats.child_count if group.children else stats.row_count
             )
             label = label_map.get(group.key, group.key)
             value = group.value if group.value not in (None, "") else "—"
@@ -5997,7 +5998,7 @@ def _render_purchase_order_pdf(
             pdf.setFillColor(theme.text_color)
             y -= header_height - 2
 
-        def render_subtotal(group: _GroupedRows) -> None:
+        def render_subtotal(group: GroupNode) -> None:
             nonlocal y
             if not grouping.show_subtotals:
                 return
@@ -6006,12 +6007,11 @@ def _render_purchase_order_pdf(
             subtotal_columns = set(grouping.subtotal_columns)
             if not subtotal_columns:
                 return
-            subtotal_values = {
-                key: sum(
-                    row["raw"].get(key, 0) for row in group.rows if isinstance(row["raw"].get(key), (int, float))
-                )
-                for key in subtotal_columns
-            }
+            stats = compute_group_stats(
+                group,
+                subtotal_columns=subtotal_columns,
+                value_fn=lambda row, key: row["raw"].get(key),
+            )
             y = ensure_space(y, 24, on_new_page=table_new_page)
             label = "Sous-total"
             pdf.setFont(theme.font_family, theme.base_font_size)
@@ -6022,8 +6022,8 @@ def _render_purchase_order_pdf(
                 x_start=margin_left,
                 y=y,
                 line=label,
-                ordered=int(subtotal_values.get("ordered", 0)),
-                received=int(subtotal_values.get("received", 0)),
+                ordered=int(stats.subtotals.get("ordered", 0)),
+                received=int(stats.subtotals.get("received", 0)),
                 is_first_line=True,
             )
             pdf.setStrokeColor(theme.border_color)
@@ -6072,13 +6072,13 @@ def _render_purchase_order_pdf(
         ]
 
         if grouping.enabled and grouping_keys:
-            group_tree = _build_group_tree(
+            group_tree = build_group_tree(
                 row_payloads,
                 grouping_keys,
                 key_fn=lambda row, key: row["raw"].get(key),
             )
 
-            def render_group(group: _GroupedRows, *, level: int, is_first_level: bool) -> None:
+            def render_group(group: GroupNode, *, level: int, is_first_level: bool) -> None:
                 nonlocal y, page_number
                 if grouping.page_break_between_level1 and level == 0 and not is_first_level:
                     _draw_purchase_order_footer(
@@ -6192,63 +6192,6 @@ def _format_date_label(value: date | None) -> str:
     if value is None:
         return "—"
     return value.strftime("%d/%m/%Y")
-
-
-@dataclass
-class _GroupedRows:
-    key: str
-    value: object
-    rows: list[object]
-    children: list["_GroupedRows"]
-
-
-def _group_sort_value(value: object) -> tuple[int, object]:
-    if value is None:
-        return (1, "")
-    if isinstance(value, (int, float)):
-        return (0, value)
-    return (0, str(value).lower())
-
-
-def _stable_sort_rows(
-    rows: Iterable[T],
-    keys: list[str],
-    *,
-    key_fn: Callable[[T, str], object],
-) -> list[T]:
-    sorted_rows = list(rows)
-    for key in reversed(keys):
-        sorted_rows = sorted(sorted_rows, key=lambda row: _group_sort_value(key_fn(row, key)))
-    return sorted_rows
-
-
-def _build_group_tree(
-    rows: Iterable[T],
-    keys: list[str],
-    *,
-    key_fn: Callable[[T, str], object],
-) -> list[_GroupedRows]:
-    if not keys:
-        return []
-    sorted_rows = _stable_sort_rows(rows, keys, key_fn=key_fn)
-    return _build_group_tree_sorted(sorted_rows, keys, key_fn=key_fn)
-
-
-def _build_group_tree_sorted(
-    rows: list[T],
-    keys: list[str],
-    *,
-    key_fn: Callable[[T, str], object],
-) -> list[_GroupedRows]:
-    key = keys[0]
-    grouped: list[_GroupedRows] = []
-    for value, group_iter in groupby(rows, key=lambda row: key_fn(row, key)):
-        grouped_rows = list(group_iter)
-        children = (
-            _build_group_tree_sorted(grouped_rows, keys[1:], key_fn=key_fn) if len(keys) > 1 else []
-        )
-        grouped.append(_GroupedRows(key=key, value=value, rows=grouped_rows, children=children))
-    return grouped
 
 
 def _render_remise_inventory_pdf(
@@ -6414,12 +6357,13 @@ def _render_remise_inventory_pdf(
             y = start_page(page_number)
             y = draw_header(y)
 
-    def render_group_header(group: _GroupedRows) -> None:
+    def render_group_header(group: GroupNode) -> None:
         nonlocal y
         if grouping.header_style == "none":
             return
-        count = len(group.rows) if grouping.counts_scope == "leaf" else (
-            len(group.children) if group.children else len(group.rows)
+        stats = compute_group_stats(group, value_fn=lambda row, key: row["raw"].get(key))
+        count = stats.row_count if grouping.counts_scope == "leaf" else (
+            stats.child_count if group.children else stats.row_count
         )
         label = label_map.get(group.key, group.key)
         value = group.value if group.value not in (None, "") else "—"
@@ -6439,7 +6383,7 @@ def _render_remise_inventory_pdf(
         pdf.setFillColor(theme.text_color)
         y -= header_height
 
-    def render_subtotal(group: _GroupedRows) -> None:
+    def render_subtotal(group: GroupNode) -> None:
         nonlocal y
         if not grouping.show_subtotals:
             return
@@ -6448,15 +6392,14 @@ def _render_remise_inventory_pdf(
         subtotal_columns = set(grouping.subtotal_columns)
         if not subtotal_columns:
             return
-        subtotal_values = {
-            key: sum(
-                row["raw"].get(key, 0) for row in group.rows if isinstance(row["raw"].get(key), (int, float))
-            )
-            for key in subtotal_columns
-        }
+        stats = compute_group_stats(
+            group,
+            subtotal_columns=subtotal_columns,
+            value_fn=lambda row, key: row["raw"].get(key),
+        )
         first_key = columns[0][0] if columns else "name"
         subtotal_display = {
-            key: (str(subtotal_values[key]) if key in subtotal_values else "")
+            key: (str(stats.subtotals[key]) if key in stats.subtotals else "")
             for key, _, _, _ in base_columns
         }
         subtotal_display[first_key] = "Sous-total"
@@ -6562,13 +6505,13 @@ def _render_remise_inventory_pdf(
         row_payloads.append({"display": display, "raw": raw})
 
     if grouping.enabled and grouping_keys:
-        group_tree = _build_group_tree(
+        group_tree = build_group_tree(
             row_payloads,
             grouping_keys,
             key_fn=lambda row, key: row["raw"].get(key),
         )
 
-        def render_group(group: _GroupedRows, *, level: int, is_first_level: bool) -> None:
+        def render_group(group: GroupNode, *, level: int, is_first_level: bool) -> None:
             nonlocal y, page_number
             if grouping.page_break_between_level1 and level == 0 and not is_first_level:
                 pdf.showPage()
