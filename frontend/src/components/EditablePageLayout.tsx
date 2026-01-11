@@ -7,9 +7,6 @@ import { api } from "../lib/api";
 import { useAuth } from "../features/auth/useAuth";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 
-import "react-grid-layout/css/styles.css";
-import "react-resizable/css/styles.css";
-
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
 export type EditableLayoutBreakpoint = "lg" | "md" | "sm";
