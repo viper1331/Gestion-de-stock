@@ -8,6 +8,7 @@ import logging
 import math
 import os
 import random
+import re
 import shutil
 import threading
 import time
@@ -7072,6 +7073,134 @@ def delete_collaborator(collaborator_id: int) -> None:
         if cur.rowcount == 0:
             raise ValueError("Collaborateur introuvable")
         conn.commit()
+
+
+def _normalize_collaborator_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    normalized = " ".join(value.strip().split())
+    return normalized or None
+
+
+def _normalize_collaborator_email(value: str | None) -> str | None:
+    normalized = _normalize_collaborator_text(value)
+    if not normalized:
+        return None
+    lowered = normalized.lower()
+    if not re.match(r"^[^@\s]+@[^@\s]+\.[^@\s]+$", lowered):
+        raise ValueError("Adresse email invalide")
+    return lowered
+
+
+def _normalize_collaborator_phone(value: str | None) -> str | None:
+    normalized = _normalize_collaborator_text(value)
+    if not normalized:
+        return None
+    keep_plus = normalized.startswith("+")
+    digits = re.sub(r"\D", "", normalized)
+    if not digits:
+        return None
+    return f"+{digits}" if keep_plus else digits
+
+
+def bulk_import_collaborators(
+    payload: models.CollaboratorBulkImportPayload,
+) -> models.CollaboratorBulkImportResult:
+    ensure_database_ready()
+    created = 0
+    updated = 0
+    skipped = 0
+    errors: list[models.CollaboratorBulkImportError] = []
+    seen_keys: set[str] = set()
+    with db.get_stock_connection() as conn:
+        try:
+            conn.execute("BEGIN")
+            for index, row in enumerate(payload.rows, start=1):
+                full_name = _normalize_collaborator_text(row.full_name)
+                department = _normalize_collaborator_text(row.department)
+                phone = _normalize_collaborator_phone(row.phone)
+                try:
+                    email = _normalize_collaborator_email(row.email)
+                except ValueError as exc:
+                    errors.append(
+                        models.CollaboratorBulkImportError(rowIndex=index, message=str(exc))
+                    )
+                    skipped += 1
+                    continue
+                if not full_name:
+                    errors.append(
+                        models.CollaboratorBulkImportError(
+                            rowIndex=index,
+                            message="Nom complet manquant",
+                        )
+                    )
+                    skipped += 1
+                    continue
+                dedupe_key = email or f"{full_name.lower()}::{phone or ''}"
+                if dedupe_key in seen_keys:
+                    errors.append(
+                        models.CollaboratorBulkImportError(
+                            rowIndex=index,
+                            message="Doublon dans le fichier",
+                        )
+                    )
+                    skipped += 1
+                    continue
+                seen_keys.add(dedupe_key)
+                existing_id: int | None = None
+                if email:
+                    existing_row = conn.execute(
+                        "SELECT id FROM collaborators WHERE lower(email) = ?",
+                        (email,),
+                    ).fetchone()
+                    if existing_row is not None:
+                        existing_id = int(existing_row["id"])
+                savepoint_active = False
+                try:
+                    conn.execute("SAVEPOINT collaborator_import")
+                    savepoint_active = True
+                    if existing_id is not None and payload.mode == "upsert":
+                        conn.execute(
+                            """
+                            UPDATE collaborators
+                            SET full_name = ?, department = ?, email = ?, phone = ?
+                            WHERE id = ?
+                            """,
+                            (full_name, department, email, phone, existing_id),
+                        )
+                        updated += 1
+                    elif existing_id is not None and payload.mode == "skip_duplicates":
+                        skipped += 1
+                    else:
+                        conn.execute(
+                            """
+                            INSERT INTO collaborators (full_name, department, email, phone)
+                            VALUES (?, ?, ?, ?)
+                            """,
+                            (full_name, department, email, phone),
+                        )
+                        created += 1
+                    conn.execute("RELEASE SAVEPOINT collaborator_import")
+                except Exception as exc:
+                    if savepoint_active:
+                        conn.execute("ROLLBACK TO SAVEPOINT collaborator_import")
+                        conn.execute("RELEASE SAVEPOINT collaborator_import")
+                    errors.append(
+                        models.CollaboratorBulkImportError(
+                            rowIndex=index,
+                            message=f"Erreur import : {exc}",
+                        )
+                    )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return models.CollaboratorBulkImportResult(
+        created=created,
+        updated=updated,
+        skipped=skipped,
+        errors=errors,
+    )
 
 
 def list_dotations(

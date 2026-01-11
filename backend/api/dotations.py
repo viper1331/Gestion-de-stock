@@ -58,6 +58,19 @@ async def delete_collaborator(
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
+@router.post(
+    "/collaborators/bulk-import",
+    response_model=models.CollaboratorBulkImportResult,
+    status_code=200,
+)
+async def bulk_import_collaborators(
+    payload: models.CollaboratorBulkImportPayload,
+    user: models.User = Depends(get_current_user),
+) -> models.CollaboratorBulkImportResult:
+    _require_permission(user, action="edit")
+    return services.bulk_import_collaborators(payload)
+
+
 @router.get("/dotations", response_model=list[models.Dotation])
 async def list_dotations(
     collaborator_id: int | None = Query(default=None),
