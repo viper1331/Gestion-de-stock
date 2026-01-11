@@ -2,6 +2,8 @@ import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
+import { shallow } from "zustand/shallow";
+
 import { useAuth } from "../features/auth/useAuth";
 import { ThemeToggle } from "./ThemeToggle";
 import { MicToggle } from "../features/voice/MicToggle";
@@ -15,7 +17,13 @@ export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
-  const { sidebarOpen, toggleSidebar } = useUiStore();
+  const { sidebarOpen, toggleSidebar } = useUiStore(
+    (state) => ({
+      sidebarOpen: state.sidebarOpen,
+      toggleSidebar: state.toggleSidebar
+    }),
+    shallow
+  );
 
   const { data: configEntries = [] } = useQuery({
     queryKey: ["config", "global"],

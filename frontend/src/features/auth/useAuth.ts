@@ -1,5 +1,5 @@
 import { useCallback, useMemo } from "react";
-import { create } from "zustand";
+import { createWithEqualityFn } from "zustand/traditional";
 import { shallow } from "zustand/shallow";
 import { useNavigate } from "react-router-dom";
 
@@ -34,22 +34,25 @@ interface AuthState {
   clear: () => void;
 }
 
-export const useAuthStore = create<AuthState>((set) => ({
-  user: null,
-  token: null,
-  refreshToken: null,
-  isLoading: false,
-  isCheckingSession: false,
-  isReady: false,
-  error: null,
-  setAuth: ({ user, token, refreshToken }) =>
-    set({ user, token, refreshToken, error: null }),
-  setLoading: (value) => set({ isLoading: value }),
-  setChecking: (value) => set({ isCheckingSession: value }),
-  setReady: (value) => set({ isReady: value }),
-  setError: (value) => set({ error: value }),
-  clear: () => set({ user: null, token: null, refreshToken: null, error: null })
-}));
+export const useAuthStore = createWithEqualityFn<AuthState>()(
+  (set) => ({
+    user: null,
+    token: null,
+    refreshToken: null,
+    isLoading: false,
+    isCheckingSession: false,
+    isReady: false,
+    error: null,
+    setAuth: ({ user, token, refreshToken }) =>
+      set({ user, token, refreshToken, error: null }),
+    setLoading: (value) => set({ isLoading: value }),
+    setChecking: (value) => set({ isCheckingSession: value }),
+    setReady: (value) => set({ isReady: value }),
+    setError: (value) => set({ error: value }),
+    clear: () => set({ user: null, token: null, refreshToken: null, error: null })
+  }),
+  shallow
+);
 
 const useAuthState = () =>
   useAuthStore(

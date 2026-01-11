@@ -1,11 +1,15 @@
-import { create } from "zustand";
+import { createWithEqualityFn } from "zustand/traditional";
+import { shallow } from "zustand/shallow";
 
 interface UiState {
   sidebarOpen: boolean;
   toggleSidebar: () => void;
 }
 
-export const useUiStore = create<UiState>((set) => ({
-  sidebarOpen: true,
-  toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen }))
-}));
+export const useUiStore = createWithEqualityFn<UiState>()(
+  (set) => ({
+    sidebarOpen: true,
+    toggleSidebar: () => set((state) => ({ sidebarOpen: !state.sidebarOpen }))
+  }),
+  shallow
+);
