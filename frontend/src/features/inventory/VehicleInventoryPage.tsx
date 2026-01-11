@@ -737,7 +737,14 @@ export function VehicleInventoryPage() {
   }, [vehicleType, vehicleTypeOptions]);
 
   useEffect(() => {
-    setVehicleExtra((previous) => buildCustomFieldDefaults(activeVehicleCustomFields, previous));
+    setVehicleExtra((previous) => {
+      const nextExtra = buildCustomFieldDefaults(activeVehicleCustomFields, previous);
+      console.debug("[VehicleInventoryPage] sync effect fired", {
+        activeVehicleCustomFieldsCount: activeVehicleCustomFields.length,
+        nextExtraKeys: Object.keys(nextExtra)
+      });
+      return areExtraValuesEqual(previous, nextExtra) ? previous : nextExtra;
+    });
   }, [activeVehicleCustomFields]);
 
   const selectedVehicle = useMemo(
