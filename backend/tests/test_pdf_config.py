@@ -5,8 +5,14 @@ from fastapi.testclient import TestClient
 from backend.app import app
 from backend.core import db, security, services
 from backend.core.system_config import get_config, save_config
-from backend.services.pdf_config import get_pdf_export_config, resolve_pdf_config
-from backend.core.pdf_config_models import PdfConfig, PdfConfigOverrides, PdfHeaderConfig, PdfModuleConfig
+from backend.services.pdf_config import get_pdf_config_meta, get_pdf_export_config, resolve_pdf_config
+from backend.core.pdf_config_models import (
+    PdfConfig,
+    PdfConfigMeta,
+    PdfConfigOverrides,
+    PdfHeaderConfig,
+    PdfModuleConfig,
+)
 
 
 client = TestClient(app)
@@ -129,3 +135,12 @@ def test_pdf_config_module_override_null_does_not_override() -> None:
     )
     resolved = resolve_pdf_config("barcode", config=export_config)
     assert resolved.config.branding.logo_enabled is True
+
+
+def test_pdf_config_meta_grouping_completeness() -> None:
+    export_config = get_pdf_export_config()
+    meta = PdfConfigMeta.model_validate(get_pdf_config_meta())
+    for key, module in export_config.module_meta.items():
+        grouping_meta = meta.module_grouping.get(key)
+        assert grouping_meta is not None
+        assert module.columns or not grouping_meta.grouping_supported

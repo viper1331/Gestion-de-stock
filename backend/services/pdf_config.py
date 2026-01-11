@@ -40,6 +40,7 @@ from backend.services.pdf.theme import (
     scale_reportlab_theme,
     theme_meta,
 )
+from backend.services.pdf.grouping import build_group_tree, compute_group_stats
 
 
 @dataclass(frozen=True)
@@ -266,6 +267,7 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             key="vehicle_inventory",
             label="Inventaire véhicules",
             variables=["module", "module_title", "date", "generated_at", "vehicle"],
+            grouping_supported=False,
             columns=[
                 PdfColumnMeta(key="name", label="Matériel", default_visible=True, column_type="string"),
                 PdfColumnMeta(
@@ -295,6 +297,7 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             key="remise_inventory",
             label="Inventaire remises",
             variables=["module", "module_title", "date", "generated_at"],
+            grouping_supported=True,
             columns=[
                 PdfColumnMeta(key="name", label="Matériel", default_visible=True, column_type="string"),
                 PdfColumnMeta(
@@ -324,6 +327,7 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             key="purchase_orders",
             label="Bons de commande",
             variables=["module", "module_title", "date", "generated_at", "order_id"],
+            grouping_supported=True,
             columns=[
                 PdfColumnMeta(key="article", label="Article", default_visible=True, column_type="string"),
                 PdfColumnMeta(
@@ -349,6 +353,7 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             key="remise_orders",
             label="Bons de commande remises",
             variables=["module", "module_title", "date", "generated_at", "order_id"],
+            grouping_supported=True,
             columns=[
                 PdfColumnMeta(key="article", label="Article", default_visible=True, column_type="string"),
                 PdfColumnMeta(
@@ -374,6 +379,7 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             key="pharmacy_orders",
             label="Bons de commande pharmacie",
             variables=["module", "module_title", "date", "generated_at", "order_id"],
+            grouping_supported=True,
             columns=[
                 PdfColumnMeta(key="article", label="Article", default_visible=True, column_type="string"),
                 PdfColumnMeta(
@@ -399,6 +405,7 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             key="barcode",
             label="Codes-barres",
             variables=["module", "module_title", "date", "generated_at"],
+            grouping_supported=False,
             columns=[
                 PdfColumnMeta(key="barcode", label="Code-barres", default_visible=True, column_type="string"),
             ],
@@ -490,7 +497,7 @@ def get_pdf_config_meta() -> dict[str, object]:
     for module in get_module_meta().values():
         module_groupable = _build_groupable_columns(module.columns)
         module_grouping[module.key] = PdfModuleGroupingMeta(
-            grouping_supported=bool(module.columns),
+            grouping_supported=bool(module.columns) and module.grouping_supported,
             groupable_columns=module_groupable,
         )
         for column in module.columns:
@@ -528,7 +535,10 @@ def _validate_grouping_config(module_key: str, config: PdfConfig, module_meta: P
 
     invalid_subtotals = [key for key in grouping.subtotal_columns if key not in column_keys]
 
-    if not column_keys and (grouping_keys or grouping.subtotal_columns or config.content.group_by):
+    if (
+        (not module_meta.grouping_supported or not column_keys)
+        and (grouping_keys or grouping.subtotal_columns or config.content.group_by)
+    ):
         raise ValueError(f"Le module '{module_key}' ne supporte pas le regroupement.")
 
     if invalid_keys or invalid_subtotals:
@@ -798,15 +808,110 @@ def render_preview_pdf(resolved: PdfResolvedConfig) -> bytes:
         x = margin_left + index * column_width
         pdf.drawString(x + (4 * scale), y, column.label)
     y -= 18 * scale
+    grouping = resolved.config.grouping
+    grouping_keys = [key for key in grouping.keys if key]
+    if grouping.enabled and not grouping_keys and resolved.config.content.group_by:
+        grouping_keys = [resolved.config.content.group_by]
+
+    label_map = {column.key: column.label for column in visible_columns}
+    table_rows: list[dict[str, dict[str, object]]] = []
     for row in range(6):
-        if row % 2 == 1:
+        display: dict[str, object] = {}
+        raw: dict[str, object] = {}
+        for column in visible_columns:
+            if column.key in grouping_keys:
+                group_value = f"{column.label} {row // 3 + 1}"
+                display[column.key] = group_value
+                raw[column.key] = group_value
+            elif column.key in grouping.subtotal_columns:
+                value = (row + 1) * 2
+                display[column.key] = str(value)
+                raw[column.key] = value
+            else:
+                value = f"{column.label} {row + 1}"
+                display[column.key] = value
+                raw[column.key] = value
+        table_rows.append({"display": display, "raw": raw})
+
+    def draw_row(row_data: dict[str, dict[str, object]], row_index: int) -> None:
+        nonlocal y
+        if row_index % 2 == 1:
             pdf.setFillColor(theme.table_row_alt_bg)
             pdf.rect(margin_left, y - (10 * scale), table_width, 14 * scale, stroke=0, fill=1)
             pdf.setFillColor(theme.text_color)
         for index, column in enumerate(visible_columns):
             x = margin_left + index * column_width
-            pdf.drawString(x + (4 * scale), y, f"{column.label} {row + 1}")
+            value = row_data["display"].get(column.key, "")
+            pdf.drawString(x + (4 * scale), y, str(value))
         y -= 12 * scale
+
+    def draw_group_header(group_key: str, group_value: object, count: int) -> None:
+        nonlocal y
+        if grouping.header_style == "none":
+            return
+        label = label_map.get(group_key, group_key)
+        value = group_value if group_value not in (None, "") else "—"
+        header_text = f"{label} : {value}"
+        if grouping.show_counts:
+            header_text = f"{header_text} ({count})"
+        header_height = 14 * scale
+        if grouping.header_style == "bar":
+            pdf.setFillColor(theme.table_header_bg)
+            pdf.rect(margin_left, y - header_height + (10 * scale), table_width, header_height, stroke=0, fill=1)
+            pdf.setFillColor(theme.table_header_text)
+        else:
+            pdf.setFillColor(theme.text_color)
+        pdf.setFont(theme.font_family, theme.base_font_size)
+        pdf.drawString(margin_left + (4 * scale), y, header_text)
+        pdf.setFillColor(theme.text_color)
+        y -= 12 * scale
+
+    def draw_subtotal(subtotals: dict[str, float], row_index: int) -> int:
+        nonlocal y
+        if not grouping.show_subtotals or not grouping.subtotal_columns:
+            return row_index
+        display = {column.key: "" for column in visible_columns}
+        if visible_columns:
+            display[visible_columns[0].key] = "Sous-total"
+        for key, value in subtotals.items():
+            display[key] = str(int(value) if value.is_integer() else value)
+        draw_row({"display": display, "raw": {}}, row_index)
+        return row_index + 1
+
+    if grouping.enabled and grouping_keys:
+        group_tree = build_group_tree(
+            table_rows,
+            grouping_keys,
+            key_fn=lambda row, key: row["raw"].get(key),
+        )
+
+        def render_group(group, *, level: int, row_index: int) -> int:
+            stats = compute_group_stats(
+                group,
+                subtotal_columns=grouping.subtotal_columns,
+                value_fn=lambda row, key: row["raw"].get(key),
+            )
+            count = stats.row_count if grouping.counts_scope == "leaf" else (
+                stats.child_count if group.children else stats.row_count
+            )
+            draw_group_header(group.key, group.value, count)
+            if group.children:
+                for child in group.children:
+                    row_index = render_group(child, level=level + 1, row_index=row_index)
+            else:
+                for row in group.rows:
+                    draw_row(row, row_index)
+                    row_index += 1
+            if not (grouping.subtotal_scope == "leaf" and group.children):
+                row_index = draw_subtotal(stats.subtotals, row_index)
+            return row_index
+
+        row_index = 0
+        for group in group_tree:
+            row_index = render_group(group, level=0, row_index=row_index)
+    else:
+        for row_index, row in enumerate(table_rows):
+            draw_row(row, row_index)
 
     draw_footer(1)
     pdf.showPage()
