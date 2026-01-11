@@ -18,36 +18,46 @@ interface Spellchecker {
 }
 
 const USER_DICTIONARY_KEY = "gsp/spellcheck/user-dictionary";
+const dictionaryCache = new Map<SpellcheckLanguage, Promise<DictionaryData>>();
 const spellcheckerCache = new Map<SpellcheckLanguage, Promise<Spellchecker>>();
 
 const WORD_REGEX = /[A-Za-zÀ-ÖØ-öø-ÿ]+(?:['’\-][A-Za-zÀ-ÖØ-öø-ÿ]+)*/g;
 
 function loadDictionary(language: SpellcheckLanguage): Promise<DictionaryData> {
-  if (language === "fr") {
-    return new Promise((resolve, reject) => {
-      import("dictionary-fr").then(({ default: dictionary }) => {
-        dictionary((error: Error | null, dict: DictionaryData) => {
-          if (error) {
-            reject(error);
-            return;
-          }
-          resolve(dict);
-        });
-      });
+  if (!dictionaryCache.has(language)) {
+    const loadPromise = new Promise<DictionaryData>((resolve, reject) => {
+      if (language === "fr") {
+        import("dictionary-fr-fr")
+          .then((mod) => {
+            mod.default((error: Error | null, dict: DictionaryData) => {
+              if (error) {
+                reject(error);
+                return;
+              }
+              resolve(dict);
+            });
+          })
+          .catch(reject);
+        return;
+      }
+
+      import("dictionary-en-us")
+        .then((mod) => {
+          mod.default((error: Error | null, dict: DictionaryData) => {
+            if (error) {
+              reject(error);
+              return;
+            }
+            resolve(dict);
+          });
+        })
+        .catch(reject);
     });
+
+    dictionaryCache.set(language, loadPromise);
   }
 
-  return new Promise((resolve, reject) => {
-    import("dictionary-en").then(({ default: dictionary }) => {
-      dictionary((error: Error | null, dict: DictionaryData) => {
-        if (error) {
-          reject(error);
-          return;
-        }
-        resolve(dict);
-      });
-    });
-  });
+  return dictionaryCache.get(language) as Promise<DictionaryData>;
 }
 
 async function loadSpellchecker(language: SpellcheckLanguage): Promise<Spellchecker> {
