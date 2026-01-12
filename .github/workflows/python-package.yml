@@ -38,3 +38,26 @@ jobs:
     - name: Test with pytest
       run: |
         pytest
+
+    - name: Enforce responsive layout rules
+      run: |
+        set -e
+        targets=(frontend/src/features)
+        if [ -d frontend/src/pages ]; then
+          targets+=(frontend/src/pages)
+        fi
+
+        if rg --pcre2 -n "(min-)?w-\\[\\d+px\\]" "${targets[@]}"; then
+          echo "Fixed widths are forbidden in business pages. Use w-full, max-w-full, min-w-0, and responsive layout utilities." >&2
+          exit 1
+        fi
+
+        if rg --pcre2 -n "minWidth\\s*:\\s*(?!0\\b)(\\d+|\"\\d+px\"|'\\d+px')" "${targets[@]}"; then
+          echo "Fixed minWidth values are forbidden in business pages. Use responsive layout rules instead." >&2
+          exit 1
+        fi
+
+        if rg --pcre2 -n "width\\s*:\\s*(?!0\\b)(\\d+|\"\\d+px\"|'\\d+px')" "${targets[@]}"; then
+          echo "Fixed width values are forbidden in business pages. Use responsive layout rules instead." >&2
+          exit 1
+        fi
