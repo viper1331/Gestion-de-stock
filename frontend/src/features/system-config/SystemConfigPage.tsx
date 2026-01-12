@@ -11,6 +11,8 @@ import {
 import { ResolvedApiConfig, resolveApiBaseUrl, resolveApiBaseUrlFromConfig } from "../../lib/apiConfig";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface ConnectivityResult {
   status: "idle" | "success" | "error";
@@ -147,7 +149,7 @@ export function SystemConfigPage() {
     );
   }
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">Configuration système</h2>
@@ -333,5 +335,40 @@ export function SystemConfigPage() {
         </div>
       </form>
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "system-config-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "system-config-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "system-config-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "system-config-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "system-config-main",
+      title: "Configuration système",
+      required: true,
+      permission: { role: "admin" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="system-config-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:system-config"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ role: "admin" }}
+      className="space-y-6"
+    />
   );
 }

@@ -7,6 +7,8 @@ import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { resolveMediaUrl } from "../../lib/media";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 type VehicleType = string;
 
@@ -458,8 +460,8 @@ export function VehicleQrManagerPage() {
     );
   };
 
-  return (
-    <div className="space-y-6 p-6">
+  const content = (
+    <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">{moduleTitle}</h1>
@@ -543,5 +545,40 @@ export function VehicleQrManagerPage() {
         </div>
       )}
     </div>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "vehicle-qrcodes-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "vehicle-qrcodes-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "vehicle-qrcodes-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "vehicle-qrcodes-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "vehicle-qrcodes-main",
+      title: "QR Codes véhicules",
+      required: true,
+      permission: { module: "vehicle_qrcodes", action: "view" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="vehicle-qrcodes-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:vehicle:qrcodes"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "vehicle_qrcodes", action: "view" }}
+      className="space-y-6"
+    />
   );
 }

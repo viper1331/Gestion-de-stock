@@ -151,7 +151,8 @@ export function ReportsPage() {
     () => ({
       lg: [{ i: "reports-main", x: 0, y: 0, w: 12, h: 18 }],
       md: [{ i: "reports-main", x: 0, y: 0, w: 6, h: 18 }],
-      sm: [{ i: "reports-main", x: 0, y: 0, w: 1, h: 18 }]
+      sm: [{ i: "reports-main", x: 0, y: 0, w: 1, h: 18 }],
+      xs: [{ i: "reports-main", x: 0, y: 0, w: 1, h: 18 }]
     }),
     []
   );
@@ -173,7 +174,7 @@ export function ReportsPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:reports:clothing"
+      pageKey="module:reports:clothing"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "clothing", action: "view" }}

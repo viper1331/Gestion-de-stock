@@ -797,7 +797,8 @@ export function DotationsPage() {
     () => ({
       lg: [{ i: "dotations-main", x: 0, y: 0, w: 12, h: 24 }],
       md: [{ i: "dotations-main", x: 0, y: 0, w: 6, h: 24 }],
-      sm: [{ i: "dotations-main", x: 0, y: 0, w: 1, h: 24 }]
+      sm: [{ i: "dotations-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "dotations-main", x: 0, y: 0, w: 1, h: 24 }]
     }),
     []
   );
@@ -819,7 +820,7 @@ export function DotationsPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:dotations"
+      pageKey="module:dotations"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "dotations", action: "view" }}

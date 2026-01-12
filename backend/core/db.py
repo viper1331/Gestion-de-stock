@@ -1,6 +1,7 @@
 """Gestion basique des connexions SQLite."""
 from __future__ import annotations
 
+import json
 import logging
 import os
 import sqlite3
@@ -118,8 +119,18 @@ def init_databases() -> None:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(username, page_id)
                 );
+                CREATE TABLE IF NOT EXISTS user_page_layouts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    page_key TEXT NOT NULL,
+                    layout_json TEXT NOT NULL,
+                    hidden_blocks_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(username, page_key)
+                );
                 """
             )
+            _migrate_user_page_layouts(conn)
         with get_stock_connection() as conn:
             conn.executescript(
                 """
@@ -242,3 +253,76 @@ def init_databases() -> None:
                 );
                 """
             )
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT name FROM sqlite_master WHERE type='table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def _migrate_user_page_layouts(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "user_layouts") or not _table_exists(conn, "user_page_layouts"):
+        return
+
+    existing = conn.execute(
+        "SELECT 1 FROM user_page_layouts LIMIT 1"
+    ).fetchone()
+    if existing is not None:
+        return
+
+    rows = conn.execute(
+        "SELECT username, page_id, layout_json, updated_at FROM user_layouts"
+    ).fetchall()
+    if not rows:
+        return
+
+    for row in rows:
+        page_key = row["page_id"]
+        hidden_blocks: set[str] = set()
+        layouts_payload: dict[str, list[dict[str, object]]] = {}
+        try:
+            payload = json.loads(row["layout_json"])
+        except json.JSONDecodeError:
+            payload = {}
+        if isinstance(payload, dict):
+            raw_layouts = payload.get("layouts", {})
+            if isinstance(raw_layouts, dict):
+                for breakpoint, items in raw_layouts.items():
+                    if not isinstance(items, list):
+                        continue
+                    cleaned_items: list[dict[str, object]] = []
+                    for item in items:
+                        if not isinstance(item, dict):
+                            continue
+                        item_id = item.get("i")
+                        if item.get("hidden") is True and isinstance(item_id, str):
+                            hidden_blocks.add(item_id)
+                        cleaned = {key: value for key, value in item.items() if key != "hidden"}
+                        cleaned_items.append(cleaned)
+                    layouts_payload[breakpoint] = cleaned_items
+            if isinstance(payload.get("page_id"), str):
+                page_key = payload["page_id"]
+
+        layout_json = json.dumps(
+            {
+                "version": payload.get("version", 1) if isinstance(payload, dict) else 1,
+                "page_key": page_key,
+                "layouts": layouts_payload,
+            },
+            ensure_ascii=False,
+        )
+        hidden_json = json.dumps(sorted(hidden_blocks), ensure_ascii=False)
+        conn.execute(
+            """
+            INSERT INTO user_page_layouts (username, page_key, layout_json, hidden_blocks_json, updated_at)
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(username, page_key) DO UPDATE SET
+              layout_json = excluded.layout_json,
+              hidden_blocks_json = excluded.hidden_blocks_json,
+              updated_at = excluded.updated_at
+            """,
+            (row["username"], page_key, layout_json, hidden_json, row["updated_at"]),
+        )

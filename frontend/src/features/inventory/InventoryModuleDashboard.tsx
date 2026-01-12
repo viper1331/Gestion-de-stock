@@ -610,6 +610,10 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       sm: [
         { i: "inventory-main", x: 0, y: 0, w: 1, h: 18 },
         ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 1, h: 12 }] : [])
+      ],
+      xs: [
+        { i: "inventory-main", x: 0, y: 0, w: 1, h: 18 },
+        ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 1, h: 12 }] : [])
       ]
     }),
     [config.showPurchaseOrders]
@@ -1089,7 +1093,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
   return (
     <EditablePageLayout
-      pageId="module:clothing:inventory"
+      pageKey="module:clothing:inventory"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "clothing", action: "view" }}

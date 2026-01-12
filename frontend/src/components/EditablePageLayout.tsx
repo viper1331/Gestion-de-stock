@@ -10,7 +10,7 @@ import { SafeBlock } from "./SafeBlock";
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
-export type EditableLayoutBreakpoint = "lg" | "md" | "sm";
+export type EditableLayoutBreakpoint = "lg" | "md" | "sm" | "xs";
 
 export type EditableLayoutItem = {
   i: string;
@@ -18,7 +18,11 @@ export type EditableLayoutItem = {
   y: number;
   w: number;
   h: number;
-  hidden?: boolean;
+  minW?: number;
+  maxW?: number;
+  minH?: number;
+  maxH?: number;
+  isResizable?: boolean;
 };
 
 export type EditableLayoutSet = Record<EditableLayoutBreakpoint, EditableLayoutItem[]>;
@@ -34,6 +38,12 @@ export type EditablePageBlock = {
   defaultHidden?: boolean;
   required?: boolean;
   containerClassName?: string;
+  minW?: number;
+  maxW?: number;
+  minH?: number;
+  maxH?: number;
+  isResizable?: boolean;
+  defaultLayout?: Partial<Record<EditableLayoutBreakpoint, EditableLayoutItem>>;
   render: () => ReactNode;
 };
 
@@ -45,19 +55,105 @@ type EditablePageLayoutControls = {
 };
 
 type EditablePageLayoutProps = {
-  pageId: string;
+  pageKey: string;
   blocks: EditablePageBlock[];
   defaultLayouts: EditableLayoutSet;
   pagePermission?: LayoutPermissionRequirement;
   renderHeader?: (controls: EditablePageLayoutControls) => ReactNode;
   className?: string;
+  fullWidthBlocks?: string[];
+  sidePanelBlocks?: string[];
 };
 
-const DEFAULT_BREAKPOINTS = { lg: 1200, md: 768, sm: 0 } as const;
-const DEFAULT_COLUMNS = { lg: 12, md: 6, sm: 1 } as const;
+const DEFAULT_BREAKPOINTS = { lg: 1280, md: 960, sm: 640, xs: 0 } as const;
+const DEFAULT_COLUMNS = { lg: 12, md: 6, sm: 1, xs: 1 } as const;
 const DEFAULT_ROW_HEIGHT = 32;
 const MIN_LAYOUT_WIDTH = 1;
 const MIN_LAYOUT_HEIGHT = 4;
+const AUTO_SAVE_DELAY = 1500;
+
+type LayoutCachePayload = {
+  layouts: EditableLayoutSet;
+  hiddenBlocks: string[];
+};
+
+function getLayoutCacheKey(pageKey: string) {
+  return `gsp/layouts/${pageKey}`;
+}
+
+function readLayoutCache(pageKey: string): LayoutCachePayload | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  try {
+    const raw = window.localStorage.getItem(getLayoutCacheKey(pageKey));
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as LayoutCachePayload;
+    if (!parsed || typeof parsed !== "object") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeLayoutCache(pageKey: string, payload: LayoutCachePayload) {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(getLayoutCacheKey(pageKey), JSON.stringify(payload));
+  } catch {
+    // Ignore cache write failures.
+  }
+}
+
+function getDefaultHiddenBlocks(blocks: EditablePageBlock[]) {
+  return blocks
+    .filter((block) => !block.required && block.defaultHidden)
+    .map((block) => block.id);
+}
+
+function mergeHiddenBlocks(
+  blocks: EditablePageBlock[],
+  savedHidden: string[] | null
+): string[] {
+  const required = new Set(blocks.filter((block) => block.required).map((block) => block.id));
+  const hidden = new Set(savedHidden ?? getDefaultHiddenBlocks(blocks));
+  required.forEach((id) => hidden.delete(id));
+  return Array.from(hidden);
+}
+
+function applyBlockConstraints(
+  layouts: EditableLayoutSet,
+  blocks: EditablePageBlock[]
+): EditableLayoutSet {
+  const blockMap = new Map(blocks.map((block) => [block.id, block]));
+  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm", "xs"];
+  const constrained: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
+
+  for (const breakpoint of breakpoints) {
+    constrained[breakpoint] = (layouts[breakpoint] ?? []).map((item) => {
+      const block = blockMap.get(item.i);
+      if (!block) {
+        return item;
+      }
+      return {
+        ...item,
+        minW: block.minW,
+        maxW: block.maxW,
+        minH: block.minH,
+        maxH: block.maxH,
+        isResizable: block.isResizable
+      };
+    });
+  }
+
+  return constrained;
+}
 
 function sanitizeLayoutItems(
   items: EditableLayoutItem[],
@@ -125,8 +221,8 @@ function sanitizeLayouts(
   layouts: EditableLayoutSet,
   fallbackLayouts: EditableLayoutSet
 ): EditableLayoutSet {
-  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
-  const sanitized: EditableLayoutSet = { lg: [], md: [], sm: [] };
+  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm", "xs"];
+  const sanitized: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
 
   for (const breakpoint of breakpoints) {
     const cols = DEFAULT_COLUMNS[breakpoint];
@@ -146,10 +242,12 @@ function sanitizeLayouts(
 
 function normalizeLayouts(
   defaultLayouts: EditableLayoutSet,
-  blocks: EditablePageBlock[]
+  blocks: EditablePageBlock[],
+  fullWidthBlocks: string[],
+  sidePanelBlocks: string[]
 ): EditableLayoutSet {
-  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
-  const normalized: EditableLayoutSet = { lg: [], md: [], sm: [] };
+  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm", "xs"];
+  const normalized: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
 
   for (const breakpoint of breakpoints) {
     const defaults = defaultLayouts[breakpoint] ?? [];
@@ -157,18 +255,28 @@ function normalizeLayouts(
     const layoutItems: EditableLayoutItem[] = [];
 
     for (const block of blocks) {
-      const isRequired = Boolean(block.required);
-      const fallback = defaultMap.get(block.id) ?? {
+      const fallback =
+        block.defaultLayout?.[breakpoint] ??
+        defaultMap.get(block.id) ?? {
         i: block.id,
         x: 0,
         y: layoutItems.length * 2,
         w: DEFAULT_COLUMNS[breakpoint],
         h: 8
       };
+      const cols = DEFAULT_COLUMNS[breakpoint];
+      const resolved = { ...fallback };
+      if (fullWidthBlocks.includes(block.id)) {
+        resolved.w = cols;
+        resolved.x = 0;
+      } else if (sidePanelBlocks.includes(block.id)) {
+        const sideWidth = Math.min(4, cols);
+        resolved.w = sideWidth;
+        resolved.x = Math.max(0, cols - sideWidth);
+      }
       layoutItems.push({
-        ...fallback,
-        i: block.id,
-        hidden: isRequired ? false : block.defaultHidden ?? fallback.hidden ?? false
+        ...resolved,
+        i: block.id
       });
     }
     normalized[breakpoint] = layoutItems;
@@ -183,13 +291,12 @@ function mergeLayouts(
   blocks: EditablePageBlock[]
 ): EditableLayoutSet {
   if (!saved) {
-    return normalizeLayouts(defaults, blocks);
+    return defaults;
   }
 
   const blockMap = new Map(blocks.map((block) => [block.id, block]));
-  const requiredBlocks = new Set(blocks.filter((block) => block.required).map((block) => block.id));
-  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
-  const merged: EditableLayoutSet = { lg: [], md: [], sm: [] };
+  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm", "xs"];
+  const merged: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
 
   for (const breakpoint of breakpoints) {
     const defaultItems = defaults[breakpoint] ?? [];
@@ -202,11 +309,9 @@ function mergeLayouts(
       if (!blockMap.has(id)) {
         continue;
       }
-      const isRequired = requiredBlocks.has(id);
       nextItems.push({
         ...savedItem,
-        i: id,
-        hidden: isRequired ? false : savedItem.hidden ?? false
+        i: id
       });
     }
 
@@ -214,7 +319,6 @@ function mergeLayouts(
       if (nextItems.some((item) => item.i === block.id)) {
         continue;
       }
-      const isRequired = Boolean(block.required);
       const defaultItem = defaultMap.get(block.id) ?? {
         i: block.id,
         x: 0,
@@ -224,8 +328,7 @@ function mergeLayouts(
       };
       nextItems.push({
         ...defaultItem,
-        i: block.id,
-        hidden: isRequired ? false : block.defaultHidden ?? true
+        i: block.id
       });
     }
 
@@ -236,7 +339,7 @@ function mergeLayouts(
 }
 
 function areLayoutsEqual(a: EditableLayoutSet, b: EditableLayoutSet): boolean {
-  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
+  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm", "xs"];
   for (const breakpoint of breakpoints) {
     const sortItems = (items: EditableLayoutItem[]) =>
       [...items]
@@ -245,8 +348,7 @@ function areLayoutsEqual(a: EditableLayoutSet, b: EditableLayoutSet): boolean {
           x: item.x,
           y: item.y,
           w: item.w,
-          h: item.h,
-          hidden: Boolean(item.hidden)
+          h: item.h
         }))
         .sort((first, second) => first.i.localeCompare(second.i));
     const normalizedA = sortItems(a[breakpoint] ?? []);
@@ -262,8 +364,7 @@ function areLayoutsEqual(a: EditableLayoutSet, b: EditableLayoutSet): boolean {
         itemA.x !== itemB.x ||
         itemA.y !== itemB.y ||
         itemA.w !== itemB.w ||
-        itemA.h !== itemB.h ||
-        itemA.hidden !== itemB.hidden
+        itemA.h !== itemB.h
       ) {
         return false;
       }
@@ -272,27 +373,32 @@ function areLayoutsEqual(a: EditableLayoutSet, b: EditableLayoutSet): boolean {
   return true;
 }
 
+function areHiddenBlocksEqual(a: string[], b: string[]): boolean {
+  if (a.length !== b.length) {
+    return false;
+  }
+  const sortedA = [...a].sort();
+  const sortedB = [...b].sort();
+  return sortedA.every((value, index) => value === sortedB[index]);
+}
+
 function mergeVisibleLayouts(
   previous: EditableLayoutSet,
   next: Partial<Record<EditableLayoutBreakpoint, EditableLayoutItem[]>>
 ): EditableLayoutSet {
-  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
-  const merged: EditableLayoutSet = { lg: [], md: [], sm: [] };
+  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm", "xs"];
+  const merged: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
 
   for (const breakpoint of breakpoints) {
     const previousItems = previous[breakpoint] ?? [];
-    const previousMap = new Map(previousItems.map((item) => [item.i, item]));
-    const visibleItems = next[breakpoint] ?? previousItems.filter((item) => !item.hidden);
-    const nextItems = visibleItems.map((item) => ({
-      ...item,
-      hidden: previousMap.get(item.i)?.hidden ?? false
-    }));
+    const visibleItems = next[breakpoint] ?? previousItems;
+    const nextItems = visibleItems.map((item) => ({ ...item }));
 
-    const hiddenItems = previousItems.filter(
-      (item) => item.hidden && !nextItems.some((visible) => visible.i === item.i)
+    const missingItems = previousItems.filter(
+      (item) => !nextItems.some((visible) => visible.i === item.i)
     );
 
-    merged[breakpoint] = [...nextItems, ...hiddenItems];
+    merged[breakpoint] = [...nextItems, ...missingItems];
   }
 
   return merged;
@@ -335,12 +441,14 @@ function EyeIcon({ hidden }: { hidden: boolean }) {
 }
 
 export function EditablePageLayout({
-  pageId,
+  pageKey,
   blocks,
   defaultLayouts,
   pagePermission,
   renderHeader,
-  className
+  className,
+  fullWidthBlocks = [],
+  sidePanelBlocks = []
 }: EditablePageLayoutProps) {
   const { user } = useAuth();
   const permissions = useModulePermissions({ enabled: Boolean(user) });
@@ -356,18 +464,24 @@ export function EditablePageLayout({
   );
 
   const fallbackLayouts = useMemo(
-    () => normalizeLayouts(defaultLayouts, allowedBlocks),
-    [defaultLayouts, allowedBlocks]
+    () =>
+      normalizeLayouts(defaultLayouts, allowedBlocks, fullWidthBlocks, sidePanelBlocks),
+    [defaultLayouts, allowedBlocks, fullWidthBlocks, sidePanelBlocks]
   );
 
+  const cachedLayout = useMemo(() => readLayoutCache(pageKey), [pageKey]);
+
   const layoutQuery = useQuery({
-    queryKey: ["ui-layouts", pageId],
+    queryKey: ["ui-layouts", pageKey],
     queryFn: async () => {
       try {
-        const response = await api.get<{ layouts: EditableLayoutSet }>(
-          `/ui/layouts/${encodeURIComponent(pageId)}`
+        const response = await api.get<{ layouts: EditableLayoutSet; hidden_blocks: string[] }>(
+          `/user-layouts/${encodeURIComponent(pageKey)}`
         );
-        return response.data;
+        return {
+          layouts: response.data.layouts,
+          hiddenBlocks: response.data.hidden_blocks ?? []
+        };
       } catch (error) {
         if (isAxiosError(error) && error.response?.status === 404) {
           return null;
@@ -379,9 +493,32 @@ export function EditablePageLayout({
   });
 
   const mergedLayouts = useMemo(
-    () => mergeLayouts(fallbackLayouts, layoutQuery.data?.layouts ?? null, allowedBlocks),
-    [fallbackLayouts, layoutQuery.data?.layouts, allowedBlocks]
+    () =>
+      mergeLayouts(
+        fallbackLayouts,
+        layoutQuery.data?.layouts ?? cachedLayout?.layouts ?? null,
+        allowedBlocks
+      ),
+    [fallbackLayouts, layoutQuery.data?.layouts, cachedLayout?.layouts, allowedBlocks]
   );
+  const mergedHiddenBlocks = useMemo(
+    () =>
+      mergeHiddenBlocks(
+        allowedBlocks,
+        layoutQuery.data?.hiddenBlocks ?? cachedLayout?.hiddenBlocks ?? null
+      ),
+    [allowedBlocks, layoutQuery.data?.hiddenBlocks, cachedLayout?.hiddenBlocks]
+  );
+
+  useEffect(() => {
+    if (!layoutQuery.data) {
+      return;
+    }
+    writeLayoutCache(pageKey, {
+      layouts: layoutQuery.data.layouts,
+      hiddenBlocks: layoutQuery.data.hiddenBlocks
+    });
+  }, [layoutQuery.data, pageKey]);
 
   const canEditLayout = useMemo(() => {
     if (!user) {
@@ -398,14 +535,18 @@ export function EditablePageLayout({
 
   const [activeLayouts, setActiveLayouts] = useState<EditableLayoutSet>(mergedLayouts);
   const [savedLayouts, setSavedLayouts] = useState<EditableLayoutSet>(mergedLayouts);
+  const [activeHiddenBlocks, setActiveHiddenBlocks] = useState<string[]>(mergedHiddenBlocks);
+  const [savedHiddenBlocks, setSavedHiddenBlocks] = useState<string[]>(mergedHiddenBlocks);
   const [isEditing, setIsEditing] = useState(false);
 
   useEffect(() => {
     if (!isEditing) {
       setActiveLayouts(mergedLayouts);
       setSavedLayouts(mergedLayouts);
+      setActiveHiddenBlocks(mergedHiddenBlocks);
+      setSavedHiddenBlocks(mergedHiddenBlocks);
     }
-  }, [isEditing, mergedLayouts]);
+  }, [isEditing, mergedLayouts, mergedHiddenBlocks]);
 
   useEffect(() => {
     if (!canEditLayout && isEditing) {
@@ -414,32 +555,60 @@ export function EditablePageLayout({
   }, [canEditLayout, isEditing]);
 
   const isDirty = useMemo(
-    () => !areLayoutsEqual(activeLayouts, savedLayouts),
-    [activeLayouts, savedLayouts]
+    () =>
+      !areLayoutsEqual(activeLayouts, savedLayouts) ||
+      !areHiddenBlocksEqual(activeHiddenBlocks, savedHiddenBlocks),
+    [activeLayouts, savedLayouts, activeHiddenBlocks, savedHiddenBlocks]
   );
 
+  useEffect(() => {
+    if (!isEditing) {
+      return;
+    }
+    writeLayoutCache(pageKey, {
+      layouts: activeLayouts,
+      hiddenBlocks: activeHiddenBlocks
+    });
+  }, [activeLayouts, activeHiddenBlocks, isEditing, pageKey]);
+
   const saveMutation = useMutation({
-    mutationFn: async (payload: EditableLayoutSet) => {
-      const response = await api.put(`/ui/layouts/${encodeURIComponent(pageId)}`, {
+    mutationFn: async (payload: { layouts: EditableLayoutSet; hiddenBlocks: string[] }) => {
+      const response = await api.put(`/user-layouts/${encodeURIComponent(pageKey)}`, {
         version: 1,
-        page_id: pageId,
-        layouts: payload
+        page_key: pageKey,
+        layouts: payload.layouts,
+        hidden_blocks: payload.hiddenBlocks
       });
       return response.data;
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["ui-layouts", pageId] });
+      await queryClient.invalidateQueries({ queryKey: ["ui-layouts", pageKey] });
     }
   });
 
   const resetMutation = useMutation({
     mutationFn: async () => {
-      await api.delete(`/ui/layouts/${encodeURIComponent(pageId)}`);
+      await api.delete(`/user-layouts/${encodeURIComponent(pageKey)}`);
     },
     onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["ui-layouts", pageId] });
+      await queryClient.invalidateQueries({ queryKey: ["ui-layouts", pageKey] });
     }
   });
+
+  useEffect(() => {
+    if (!isEditing || !isDirty) {
+      return undefined;
+    }
+    const timeoutId = window.setTimeout(() => {
+      saveMutation.mutate({
+        layouts: activeLayouts,
+        hiddenBlocks: activeHiddenBlocks
+      });
+      setSavedLayouts(activeLayouts);
+      setSavedHiddenBlocks(activeHiddenBlocks);
+    }, AUTO_SAVE_DELAY);
+    return () => window.clearTimeout(timeoutId);
+  }, [activeLayouts, activeHiddenBlocks, isDirty, isEditing, saveMutation]);
 
   const handleLayoutChange = useCallback(
     (_: EditableLayoutItem[], layouts: Partial<Record<EditableLayoutBreakpoint, EditableLayoutItem[]>>) => {
@@ -454,33 +623,24 @@ export function EditablePageLayout({
   );
 
   const toggleHidden = useCallback((blockId: string) => {
-    setActiveLayouts((prev) => {
+    setActiveHiddenBlocks((prev) => {
       if (requiredBlocks.has(blockId)) {
         return prev;
       }
-      const next: EditableLayoutSet = { lg: [], md: [], sm: [] };
-      (Object.keys(prev) as EditableLayoutBreakpoint[]).forEach((breakpoint) => {
-        next[breakpoint] = prev[breakpoint].map((item) =>
-          item.i === blockId ? { ...item, hidden: !item.hidden } : item
-        );
-      });
-      return next;
+      if (prev.includes(blockId)) {
+        return prev.filter((id) => id !== blockId);
+      }
+      return [...prev, blockId];
     });
   }, [requiredBlocks]);
 
   const restoreBlock = useCallback((blockId: string) => {
-    setActiveLayouts((prev) => {
-      const next: EditableLayoutSet = { lg: [], md: [], sm: [] };
-      (Object.keys(prev) as EditableLayoutBreakpoint[]).forEach((breakpoint) => {
-        next[breakpoint] = prev[breakpoint].map((item) =>
-          item.i === blockId ? { ...item, hidden: false } : item
-        );
-      });
-      return next;
-    });
+    setActiveHiddenBlocks((prev) => prev.filter((id) => id !== blockId));
   }, []);
 
-  const editButton = canEditLayout ? (
+  const showEditButton = canEditLayout && (allowedBlocks.length > 1 || isAdmin);
+
+  const editButton = showEditButton ? (
     <button
       type="button"
       onClick={() => setIsEditing(true)}
@@ -497,11 +657,21 @@ export function EditablePageLayout({
       <button
         type="button"
         onClick={async () => {
-          await saveMutation.mutateAsync(activeLayouts);
-          setSavedLayouts(activeLayouts);
+          if (isDirty) {
+            await saveMutation.mutateAsync({
+              layouts: activeLayouts,
+              hiddenBlocks: activeHiddenBlocks
+            });
+            setSavedLayouts(activeLayouts);
+            setSavedHiddenBlocks(activeHiddenBlocks);
+          }
+          writeLayoutCache(pageKey, {
+            layouts: activeLayouts,
+            hiddenBlocks: activeHiddenBlocks
+          });
           setIsEditing(false);
         }}
-        disabled={!isDirty || saveMutation.isPending}
+        disabled={saveMutation.isPending}
         className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
       >
         {saveMutation.isPending ? "Enregistrement..." : "Enregistrer"}
@@ -510,6 +680,7 @@ export function EditablePageLayout({
         type="button"
         onClick={() => {
           setActiveLayouts(savedLayouts);
+          setActiveHiddenBlocks(savedHiddenBlocks);
           setIsEditing(false);
         }}
         className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
@@ -526,6 +697,13 @@ export function EditablePageLayout({
           await resetMutation.mutateAsync();
           setActiveLayouts(fallbackLayouts);
           setSavedLayouts(fallbackLayouts);
+          const defaultsHidden = mergeHiddenBlocks(allowedBlocks, null);
+          setActiveHiddenBlocks(defaultsHidden);
+          setSavedHiddenBlocks(defaultsHidden);
+          writeLayoutCache(pageKey, {
+            layouts: fallbackLayouts,
+            hiddenBlocks: defaultsHidden
+          });
         }}
         disabled={resetMutation.isPending}
         className="rounded-md border border-red-500/60 px-4 py-2 text-sm font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-70"
@@ -536,39 +714,33 @@ export function EditablePageLayout({
   ) : null;
 
   const visibleLayouts = useMemo(() => {
-    const filtered: EditableLayoutSet = { lg: [], md: [], sm: [] };
+    const filtered: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
+    const hiddenSet = new Set(activeHiddenBlocks);
     (Object.keys(activeLayouts) as EditableLayoutBreakpoint[]).forEach((breakpoint) => {
-      filtered[breakpoint] = activeLayouts[breakpoint].filter((item) => !item.hidden);
+      filtered[breakpoint] = activeLayouts[breakpoint].filter((item) => !hiddenSet.has(item.i));
     });
     return filtered;
-  }, [activeLayouts]);
+  }, [activeLayouts, activeHiddenBlocks]);
 
   const hiddenBlocks = useMemo(() => {
-    const hiddenIds = new Set(
-      (activeLayouts.lg ?? []).filter((item) => item.hidden).map((item) => item.i)
-    );
+    const hiddenIds = new Set(activeHiddenBlocks);
     return allowedBlocks.filter((block) => hiddenIds.has(block.id));
-  }, [activeLayouts.lg, allowedBlocks]);
+  }, [activeHiddenBlocks, allowedBlocks]);
 
   const sectionClassName = ["editable-page", "space-y-6", className]
     .filter(Boolean)
     .join(" ");
-
-  if (layoutQuery.isLoading && !layoutQuery.data) {
-    return (
-      <section className={sectionClassName}>
-        {renderHeader ? renderHeader({ isEditing, isDirty, editButton, actionButtons }) : null}
-        <p className="text-sm text-slate-400">Chargement de la mise en page...</p>
-      </section>
-    );
-  }
+  const constrainedLayouts = useMemo(
+    () => applyBlockConstraints(visibleLayouts, allowedBlocks),
+    [visibleLayouts, allowedBlocks]
+  );
 
   return (
     <section className={sectionClassName}>
       {renderHeader ? renderHeader({ isEditing, isDirty, editButton, actionButtons }) : null}
       <ResponsiveGridLayout
         className="layout"
-        layouts={visibleLayouts}
+        layouts={constrainedLayouts}
         breakpoints={DEFAULT_BREAKPOINTS}
         cols={DEFAULT_COLUMNS}
         rowHeight={DEFAULT_ROW_HEIGHT}
@@ -585,13 +757,13 @@ export function EditablePageLayout({
         compactType="vertical"
       >
         {allowedBlocks
-          .filter((block) => !activeLayouts.lg.find((item) => item.i === block.id)?.hidden)
+          .filter((block) => !activeHiddenBlocks.includes(block.id))
           .map((block) => {
             const baseClassName =
               block.containerClassName ?? "rounded-lg border border-slate-800 bg-slate-900 p-4";
             const editingClassName = isEditing ? "ring-1 ring-slate-700" : "";
             const containerClassName = [
-              "min-w-0 max-w-full h-full",
+              "min-w-0 max-w-full min-h-0 h-full",
               baseClassName,
               editingClassName
             ]
@@ -618,15 +790,15 @@ export function EditablePageLayout({
                       disabled={block.required}
                       className="inline-flex items-center gap-2 text-xs font-semibold text-slate-200 hover:text-white"
                       title={
-                        activeLayouts.lg.find((item) => item.i === block.id)?.hidden
+                        activeHiddenBlocks.includes(block.id)
                           ? "Afficher ce bloc"
                           : "Masquer ce bloc"
                       }
                     >
                       <EyeIcon
-                        hidden={Boolean(activeLayouts.lg.find((item) => item.i === block.id)?.hidden)}
+                        hidden={activeHiddenBlocks.includes(block.id)}
                       />
-                      {activeLayouts.lg.find((item) => item.i === block.id)?.hidden ? "Afficher" : "Masquer"}
+                      {activeHiddenBlocks.includes(block.id) ? "Afficher" : "Masquer"}
                     </button>
                   </div>
                 ) : null}

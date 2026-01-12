@@ -15,6 +15,8 @@ import {
 } from "../../lib/logger";
 import { useAuth } from "../auth/useAuth";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface VehicleTypeEntry {
   id: number;
@@ -273,7 +275,7 @@ export function AdminSettingsPage() {
     );
   }
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-2">
         <h2 className="text-2xl font-semibold text-white">Paramètres avancés</h2>
@@ -662,6 +664,41 @@ export function AdminSettingsPage() {
         </div>
       )}
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "admin-settings-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "admin-settings-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "admin-settings-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "admin-settings-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "admin-settings-main",
+      title: "Paramètres avancés",
+      required: true,
+      permission: { role: "admin" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="admin-settings-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:admin:settings"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ role: "admin" }}
+      className="space-y-6"
+    />
   );
 }
 

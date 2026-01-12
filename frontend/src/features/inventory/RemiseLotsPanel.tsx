@@ -477,7 +477,7 @@ export function RemiseLotsPanel() {
   );
 
   return (
-    <section className="space-y-4 rounded-lg border border-slate-800 bg-slate-900/60 p-6 shadow">
+    <section className="min-h-0 space-y-4 rounded-lg border border-slate-800 bg-slate-900/60 p-6 shadow">
       <div className="flex flex-col gap-2 md:flex-row md:items-center md:justify-between">
         <div>
           <h3 className="text-xl font-semibold text-white">Lots de remise</h3>

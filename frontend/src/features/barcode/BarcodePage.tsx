@@ -1,11 +1,13 @@
 import axios from "axios";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
 
@@ -297,7 +299,7 @@ export function BarcodePage() {
     );
   }
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
@@ -442,6 +444,41 @@ export function BarcodePage() {
         ) : null}
       </section>
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "barcode-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "barcode-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "barcode-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "barcode-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "barcode-main",
+      title: "Codes-barres",
+      required: true,
+      permission: { module: "barcode", action: "view" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="barcode-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:barcode"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ module: "barcode", action: "view" }}
+      className="space-y-6"
+    />
   );
 }
 

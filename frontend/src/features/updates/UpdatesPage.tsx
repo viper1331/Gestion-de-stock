@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "../auth/useAuth";
 import { applyLatestUpdate, fetchUpdateStatus, revertToPreviousUpdate } from "./api";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 function formatDate(value: string | null) {
   if (!value) {
@@ -168,7 +170,7 @@ export function UpdatesPage() {
     }
   };
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">Mises à jour GitHub</h2>
@@ -333,5 +335,40 @@ export function UpdatesPage() {
         )}
       </section>
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "updates-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "updates-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "updates-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "updates-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "updates-main",
+      title: "Mises à jour",
+      required: true,
+      permission: { role: "admin" },
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="updates-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:updates"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      pagePermission={{ role: "admin" }}
+      className="space-y-6"
+    />
   );
 }

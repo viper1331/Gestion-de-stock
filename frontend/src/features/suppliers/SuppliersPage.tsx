@@ -437,7 +437,8 @@ export function SuppliersPage() {
     () => ({
       lg: [{ i: "suppliers-main", x: 0, y: 0, w: 12, h: 24 }],
       md: [{ i: "suppliers-main", x: 0, y: 0, w: 6, h: 24 }],
-      sm: [{ i: "suppliers-main", x: 0, y: 0, w: 1, h: 24 }]
+      sm: [{ i: "suppliers-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "suppliers-main", x: 0, y: 0, w: 1, h: 24 }]
     }),
     []
   );
@@ -459,7 +460,7 @@ export function SuppliersPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:suppliers"
+      pageKey="module:suppliers"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "suppliers", action: "view" }}

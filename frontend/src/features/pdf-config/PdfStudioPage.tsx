@@ -1739,7 +1739,7 @@ export function PdfStudioPage() {
           </div>
           <div className="min-h-[520px] overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
             {previewUrl ? (
-              <iframe title="Aperçu PDF" src={previewUrl} className="h-[720px] w-full" />
+              <iframe title="Aperçu PDF" src={previewUrl} className="allow-fixed-height h-[720px] w-full" />
             ) : (
               <div className="flex h-full items-center justify-center p-6 text-sm text-slate-500">
                 {DEFAULT_PREVIEW_MESSAGE}
@@ -1765,7 +1765,8 @@ export function PdfStudioPage() {
     () => ({
       lg: [{ i: "pdf-studio-main", x: 0, y: 0, w: 12, h: 24 }],
       md: [{ i: "pdf-studio-main", x: 0, y: 0, w: 6, h: 24 }],
-      sm: [{ i: "pdf-studio-main", x: 0, y: 0, w: 1, h: 24 }]
+      sm: [{ i: "pdf-studio-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "pdf-studio-main", x: 0, y: 0, w: 1, h: 24 }]
     }),
     []
   );
@@ -1787,7 +1788,7 @@ export function PdfStudioPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:pdf:studio"
+      pageKey="module:pdf:studio"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ role: "admin" }}

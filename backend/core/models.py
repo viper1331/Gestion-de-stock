@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, Field, field_validator, model_validator, ConfigDict
 
 BACKUP_WEEKDAY_INDEX: dict[str, int] = {
     "monday": 0,
@@ -458,18 +458,20 @@ class ConfigEntry(BaseModel):
 
 
 class LayoutItem(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     i: str
     x: int
     y: int
     w: int
     h: int
-    hidden: bool = False
 
 
-class UserLayout(BaseModel):
+class UserPageLayout(BaseModel):
     version: int = 1
-    page_id: str
+    page_key: str
     layouts: dict[str, list[LayoutItem]] = Field(default_factory=dict)
+    hidden_blocks: list[str] = Field(default_factory=list)
 
     @field_validator("layouts")
     @classmethod
@@ -477,11 +479,26 @@ class UserLayout(BaseModel):
         if not isinstance(value, dict):
             raise ValueError("Mise en page invalide")
         for key, items in value.items():
-            if key not in {"lg", "md", "sm"}:
+            if key not in {"lg", "md", "sm", "xs"}:
                 raise ValueError("Point de rupture invalide")
             if not isinstance(items, list):
                 raise ValueError("Mise en page invalide")
         return value
+
+    @field_validator("hidden_blocks")
+    @classmethod
+    def _validate_hidden_blocks(cls, value: list[str]) -> list[str]:
+        if not isinstance(value, list):
+            raise ValueError("Liste de blocs masqués invalide")
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for entry in value:
+            if not isinstance(entry, str):
+                raise ValueError("Liste de blocs masqués invalide")
+            if entry not in seen:
+                normalized.append(entry)
+                seen.add(entry)
+        return normalized
 
 class BackupSchedule(BaseModel):
     enabled: bool = False

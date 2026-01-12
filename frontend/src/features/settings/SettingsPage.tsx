@@ -20,6 +20,8 @@ import { DebugFlags } from "../../lib/debug";
 import { useSpellcheckSettings } from "../../app/spellcheckSettings";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
 
@@ -579,7 +581,7 @@ export function SettingsPage() {
   const homepageSectionKey = "homepage";
   const backupsSectionKey = "backups";
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">Paramètres</h2>
@@ -1033,5 +1035,38 @@ export function SettingsPage() {
         </div>
       </div>
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "settings-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "settings-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "settings-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "settings-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "settings-main",
+      title: "Paramètres",
+      required: true,
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="settings-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:settings"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      className="space-y-6"
+    />
   );
 }

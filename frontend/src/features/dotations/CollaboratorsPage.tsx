@@ -373,6 +373,10 @@ export function CollaboratorsPage() {
       sm: [
         { i: "collaborators-table", x: 0, y: 0, w: 1, h: 14 },
         { i: "collaborators-form", x: 0, y: 14, w: 1, h: 12 }
+      ],
+      xs: [
+        { i: "collaborators-table", x: 0, y: 0, w: 1, h: 14 },
+        { i: "collaborators-form", x: 0, y: 14, w: 1, h: 12 }
       ]
     }),
     []
@@ -578,7 +582,7 @@ export function CollaboratorsPage() {
   return (
     <>
       <EditablePageLayout
-        pageId="module:clothing:collaborators"
+        pageKey="module:clothing:collaborators"
         blocks={blocks}
         defaultLayouts={defaultLayouts}
         pagePermission={{ module: "dotations", action: "view" }}

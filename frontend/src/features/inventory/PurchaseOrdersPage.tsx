@@ -62,7 +62,8 @@ export function PurchaseOrdersPage() {
     () => ({
       lg: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 12, h: 12 }],
       md: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 6, h: 12 }],
-      sm: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 1, h: 12 }]
+      sm: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 1, h: 12 }],
+      xs: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 1, h: 12 }]
     }),
     []
   );
@@ -86,7 +87,7 @@ export function PurchaseOrdersPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:clothing:purchase-orders"
+      pageKey="module:clothing:purchase-orders"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "clothing", action: "view" }}

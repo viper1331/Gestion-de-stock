@@ -1,50 +1,31 @@
-# Layout rules: responsive blocks only
+# Layout Rules
 
-EditablePageLayout relies on responsive sizing rules. Fixed widths break the grid,
-create horizontal scrollbars, and cause blocks to overlap. Business pages must
-follow these guidelines.
+These rules prevent non-responsive regressions in business pages.
 
-## ✅ Allowed
+## Responsive Defaults
 
-- `w-full`, `max-w-full`, `min-w-0`
-- Responsive utilities (`sm:`, `md:`, `lg:`)
-- Flex/grid sizing (`flex-1`, `basis-*`, `grid-cols-*`)
-- Truncation/wrapping to handle long content (`truncate`, `break-words`)
+- Prefer `grid` and `flex` layouts with `min-w-0`.
+- Avoid fixed widths; rely on responsive utilities and column layouts.
+- Keep scrolling inside tables or panels, not on the whole page.
 
-## ❌ Forbidden (business pages)
+## Forbidden Patterns
 
-- Tailwind fixed widths:
-  - `w-[Npx]`
-  - `min-w-[Npx]`
-  - `max-w-[Npx]`
-- Inline styles with fixed widths:
-  - `style={{ width: 320 }}`
-  - `style={{ minWidth: "320px" }}`
+The CI guard rejects the following in `frontend/src/features/**`:
 
-## Why this matters
+### Fixed Widths
 
-Fixed widths force child content to escape its grid cell and generate horizontal
-overflow. EditablePageLayout depends on blocks shrinking and growing inside the
-react-grid-layout columns.
+- Tailwind: `w-[Npx]`, `min-w-[Npx]`, `max-w-[Npx]`
+- Inline styles: `width`, `minWidth`, `maxWidth` with pixel values
 
-## Examples
+### Fixed Heights on Dynamic Content
 
-### ✅ Good
+- Tailwind: `h-[Npx]` on layout containers
 
-```tsx
-<div className="min-w-0 w-full">
-  <table className="w-full table-fixed">
-    ...
-  </table>
-</div>
-```
+**Allowed exception:** media placeholders (images/iframes). Mark these with the
+`allow-fixed-height` class to bypass the guard.
 
-### ❌ Bad
+## Practical Tips
 
-```tsx
-<div className="w-[320px]">
-  ...
-</div>
-```
-
-If you must use a fixed width, document it explicitly and keep the exception rare.
+- Use `w-full`, `max-w-full`, and `min-w-0` for containers.
+- Use `overflow-auto` on table wrappers instead of fixed heights.
+- Wrap each business page with `EditablePageLayout` and declare blocks.

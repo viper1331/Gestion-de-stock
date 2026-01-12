@@ -12,6 +12,8 @@ import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { buildHomeConfig } from "./homepageConfig";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { fetchUpdateAvailability, fetchUpdateStatus } from "../updates/api";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -458,7 +460,7 @@ export function HomePage() {
 
   const trackedBranch = isAdmin ? updateStatus?.branch ?? null : updateAvailability?.branch ?? null;
 
-  return (
+  const content = (
     <section className="space-y-6">
       <div className="rounded-xl border border-slate-800 bg-gradient-to-r from-indigo-500/10 via-slate-950 to-slate-950 p-6 shadow-lg">
         <p className="text-sm text-indigo-300">Bonjour {user?.username ?? ""} !</p>
@@ -811,6 +813,39 @@ export function HomePage() {
         </section>
       ) : null}
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "home-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "home-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "home-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "home-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "home-main",
+      title: "Accueil",
+      required: true,
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="home-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:home"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      className="space-y-6"
+    />
   );
 }
 

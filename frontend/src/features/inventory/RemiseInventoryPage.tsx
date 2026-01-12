@@ -60,6 +60,10 @@ export function RemiseInventoryPage() {
       sm: [
         { i: "remise-inventory-dashboard", x: 0, y: 0, w: 1, h: 18 },
         { i: "remise-lots", x: 0, y: 18, w: 1, h: 12 }
+      ],
+      xs: [
+        { i: "remise-inventory-dashboard", x: 0, y: 0, w: 1, h: 18 },
+        { i: "remise-lots", x: 0, y: 18, w: 1, h: 12 }
       ]
     }),
     []
@@ -83,6 +87,7 @@ export function RemiseInventoryPage() {
         id: "remise-lots",
         title: "Lots",
         permission: { module: "inventory_remise", action: "view" },
+        minH: 12,
         containerClassName: "rounded-none border-0 bg-transparent p-0",
         render: () => (
           <EditableBlock id="remise-lots">
@@ -96,7 +101,7 @@ export function RemiseInventoryPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:remise:inventory"
+      pageKey="module:remise:inventory"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "inventory_remise", action: "view" }}

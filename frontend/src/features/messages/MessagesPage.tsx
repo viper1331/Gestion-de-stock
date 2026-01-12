@@ -7,6 +7,8 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const CATEGORY_OPTIONS = ["Info", "Alerte", "Maintenance", "Divers"] as const;
 
@@ -221,7 +223,7 @@ export function MessagesPage() {
   const inboxIsEmpty = inboxMessages.length === 0 && !isFetchingInbox;
   const sentIsEmpty = sentMessages.length === 0 && !isFetchingSent;
 
-  return (
+  const pageContent = (
     <section className="space-y-6">
       <header className="space-y-2">
         <h2 className="text-2xl font-semibold text-white">Messagerie interne</h2>
@@ -476,6 +478,39 @@ export function MessagesPage() {
         </section>
       </div>
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "messages-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "messages-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "messages-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "messages-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "messages-main",
+      title: "Messagerie",
+      required: true,
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="messages-main">
+          {pageContent}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:messages"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      className="space-y-6"
+    />
   );
 }
 

@@ -644,7 +644,7 @@ export function AppLayout() {
           </button>
         </div>
       </aside>
-      <main className="flex-1 overflow-y-auto bg-slate-950 p-6">
+      <main className="flex min-w-0 flex-1 flex-col overflow-y-auto bg-slate-950 p-6">
         <Outlet />
       </main>
     </div>

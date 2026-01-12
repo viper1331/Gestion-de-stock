@@ -577,10 +577,7 @@ export function PharmacyPage() {
               </p>
             ) : null}
           </div>
-          <div
-            className="max-h-[520px] overflow-y-auto rounded-lg border border-slate-800"
-            style={{ maxHeight: "calc(8 * 56px + 48px)" }}
-          >
+          <div className="min-h-0 overflow-auto rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
@@ -1032,6 +1029,11 @@ export function PharmacyPage() {
         { i: "pharmacy-main", x: 0, y: 0, w: 1, h: 24 },
         { i: "pharmacy-lots", x: 0, y: 24, w: 1, h: 12 },
         { i: "pharmacy-orders", x: 0, y: 36, w: 1, h: 12 }
+      ],
+      xs: [
+        { i: "pharmacy-main", x: 0, y: 0, w: 1, h: 24 },
+        { i: "pharmacy-lots", x: 0, y: 24, w: 1, h: 12 },
+        { i: "pharmacy-orders", x: 0, y: 36, w: 1, h: 12 }
       ]
     }),
     []
@@ -1078,7 +1080,7 @@ export function PharmacyPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:pharmacy:inventory"
+      pageKey="module:pharmacy:inventory"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "pharmacy", action: "view" }}

@@ -2304,6 +2304,11 @@ export function VehicleInventoryPage() {
         { i: "vehicle-header", x: 0, y: 0, w: 1, h: 12 },
         { i: "vehicle-list", x: 0, y: 12, w: 1, h: 16 },
         { i: "vehicle-detail", x: 0, y: 28, w: 1, h: 30 }
+      ],
+      xs: [
+        { i: "vehicle-header", x: 0, y: 0, w: 1, h: 12 },
+        { i: "vehicle-list", x: 0, y: 12, w: 1, h: 16 },
+        { i: "vehicle-detail", x: 0, y: 28, w: 1, h: 30 }
       ]
     }),
     []
@@ -2558,7 +2563,7 @@ export function VehicleInventoryPage() {
       render: () =>
         !selectedVehicle ? (
           <EditableBlock id="vehicle-list">
-            <section className="grid gap-6 lg:grid-cols-3">
+            <section className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
               {vehicles.map((vehicle) => (
                 <VehicleCard
                   key={vehicle.id}
@@ -3057,7 +3062,7 @@ export function VehicleInventoryPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:vehicle:inventory"
+      pageKey="module:vehicle:inventory"
       blocks={blocks}
       defaultLayouts={defaultLayouts}
       pagePermission={{ module: "vehicle_inventory", action: "view" }}
@@ -4251,8 +4256,8 @@ function VehicleItemMarker({
               />
             </svg>
             <span
-              className="pointer-events-none absolute block -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow-lg"
-              style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%`, width: "10px", height: "10px" }}
+              className="pointer-events-none absolute block h-2.5 w-2.5 -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow-lg"
+              style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%` }}
             />
           </>
         ) : null}

@@ -3,6 +3,8 @@ import { useQuery } from "@tanstack/react-query";
 
 import voiceCommandConfig from "../../../../shared/voice_commands.json";
 import { fetchAboutInfo } from "./api";
+import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 type VoiceCommandEntry = {
   label: string;
@@ -41,7 +43,7 @@ export function AboutPage() {
 
   const lastUpdate = useMemo(() => formatDate(data?.version.last_update ?? null), [data?.version.last_update]);
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">À propos</h2>
@@ -153,5 +155,38 @@ export function AboutPage() {
         )}
       </section>
     </section>
+  );
+
+  const defaultLayouts = useMemo<EditableLayoutSet>(
+    () => ({
+      lg: [{ i: "about-main", x: 0, y: 0, w: 12, h: 24 }],
+      md: [{ i: "about-main", x: 0, y: 0, w: 6, h: 24 }],
+      sm: [{ i: "about-main", x: 0, y: 0, w: 1, h: 24 }],
+      xs: [{ i: "about-main", x: 0, y: 0, w: 1, h: 24 }]
+    }),
+    []
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "about-main",
+      title: "À propos",
+      required: true,
+      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      render: () => (
+        <EditableBlock id="about-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="module:about"
+      blocks={blocks}
+      defaultLayouts={defaultLayouts}
+      className="space-y-6"
+    />
   );
 }
