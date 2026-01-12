@@ -15,11 +15,13 @@ export type EditableLayoutBreakpoint = "lg" | "md" | "sm" | "xs";
 
 export type EditableLayoutSet = Record<EditableLayoutBreakpoint, Layout[]>;
 
+export type EditableLayoutItem = Omit<Layout, "i">;
+
 export type EditablePageBlock = {
   id: string;
   title?: string;
   render: () => ReactNode;
-  defaultLayout: Partial<Record<EditableLayoutBreakpoint, Layout>>;
+  defaultLayout: Partial<Record<EditableLayoutBreakpoint, EditableLayoutItem>>;
   minH?: number;
   maxH?: number;
   isResizable?: boolean;
@@ -132,8 +134,7 @@ function buildDefaultLayouts(blocks: EditablePageBlock[]): EditableLayoutSet {
     let nextY = 0;
 
     for (const block of blocks) {
-      const fallback: Layout = {
-        i: block.id,
+      const fallback: EditableLayoutItem = {
         x: 0,
         y: nextY,
         w: cols,

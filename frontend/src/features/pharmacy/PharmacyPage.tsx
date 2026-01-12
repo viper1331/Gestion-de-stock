@@ -163,6 +163,7 @@ const highlightMatch = (value: string, term: string) => {
       {value.slice(endIndex)}
     </>
   );
+  return mainContent;
 };
 
 export function PharmacyPage() {
@@ -527,7 +528,7 @@ export function PharmacyPage() {
     }
   };
 
-  return (
+  const mainContent = (
     <section className="space-y-6">
       <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>

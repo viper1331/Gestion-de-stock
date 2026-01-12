@@ -43,12 +43,12 @@ interface CreateOrderPayload {
   supplier_id: number | null;
   status: string;
   note: string | null;
-  items: Array<{ quantity_ordered: number } & Record<ItemIdKey, number>>;
+  items: Array<{ quantity_ordered: number } & Partial<Record<ItemIdKey, number>>>;
 }
 
 interface ReceiveOrderPayload {
   orderId: number;
-  items: Array<{ quantity: number } & Record<ItemIdKey, number>>;
+  items: Array<{ quantity: number } & Partial<Record<ItemIdKey, number>>>;
 }
 
 interface UpdateOrderPayload {
@@ -111,7 +111,7 @@ export function PurchaseOrdersPanel({
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
 
   const resolveItemId = (item: PurchaseOrderItem) => {
-    const candidate = (item as Record<string, unknown>)[itemIdField];
+    const candidate = item[itemIdField];
     if (typeof candidate === "number") {
       return candidate;
     }
@@ -125,7 +125,7 @@ export function PurchaseOrdersPanel({
       return response.data.map((order) => ({
         ...order,
         items: order.items.map((item) => {
-          const candidate = (item as Record<string, unknown>)[itemIdField];
+          const candidate = item[itemIdField];
           const normalizedId = typeof candidate === "number" ? candidate : item.item_id;
           return {
             ...item,
@@ -211,10 +211,13 @@ export function PurchaseOrdersPanel({
     setError(null);
     const normalizedLines = draftLines
       .filter((line) => line.itemId !== "" && line.quantity > 0)
-      .map((line) => ({
-        [itemIdField]: Number(line.itemId),
-        quantity_ordered: line.quantity
-      }));
+      .map((line) => {
+        const itemId = Number(line.itemId);
+        return {
+          [itemIdField]: itemId,
+          quantity_ordered: line.quantity
+        } satisfies { quantity_ordered: number } & Partial<Record<ItemIdKey, number>>;
+      });
     if (normalizedLines.length === 0) {
       setError("Ajoutez au moins une ligne de commande valide.");
       return;
@@ -326,10 +329,13 @@ export function PurchaseOrdersPanel({
                       return {
                         [itemIdField]: itemId,
                         quantity: line.quantity_ordered - line.quantity_received
-                      };
+                      } satisfies { quantity: number } & Partial<Record<ItemIdKey, number>>;
                     })
-                    .filter((line): line is { [key in ItemIdKey]?: number } & { quantity: number } =>
-                      line !== null && line.quantity > 0
+                    .filter(
+                      (
+                        line
+                      ): line is { quantity: number } & Partial<Record<ItemIdKey, number>> =>
+                        line !== null && line.quantity > 0
                     );
                   const canReceive = outstanding.length > 0;
                   return (

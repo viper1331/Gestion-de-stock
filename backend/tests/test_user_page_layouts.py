@@ -18,6 +18,17 @@ def _create_user(username: str, password: str, role: str = "user") -> None:
             "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
             (username, security.hash_password(password), role),
         )
+        user_id = conn.execute(
+            "SELECT id FROM users WHERE username = ?", (username,)
+        ).fetchone()["id"]
+        conn.execute(
+            "DELETE FROM module_permissions WHERE user_id = ? AND module = ?",
+            (user_id, "clothing"),
+        )
+        conn.execute(
+            "INSERT INTO module_permissions (user_id, module, can_view, can_edit) VALUES (?, ?, 1, 1)",
+            (user_id, "clothing"),
+        )
         conn.commit()
 
 
