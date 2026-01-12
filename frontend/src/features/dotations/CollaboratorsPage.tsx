@@ -7,11 +7,7 @@ import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { AppTextInput } from "components/AppTextInput";
 import { EditableBlock } from "../../components/EditableBlock";
-import {
-  EditablePageLayout,
-  type EditableLayoutSet,
-  type EditablePageBlock
-} from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 
 interface Collaborator {
   id: number;
@@ -360,30 +356,19 @@ export function CollaboratorsPage() {
     downloadFile(csv, "modele-collaborateurs.csv");
   };
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [
-        { i: "collaborators-table", x: 0, y: 0, w: 8, h: 14 },
-        { i: "collaborators-form", x: 8, y: 0, w: 4, h: 14 }
-      ],
-      md: [
-        { i: "collaborators-table", x: 0, y: 0, w: 6, h: 14 },
-        { i: "collaborators-form", x: 0, y: 14, w: 6, h: 12 }
-      ],
-      sm: [
-        { i: "collaborators-table", x: 0, y: 0, w: 1, h: 14 },
-        { i: "collaborators-form", x: 0, y: 14, w: 1, h: 12 }
-      ]
-    }),
-    []
-  );
-
   const blocks = useMemo<EditablePageBlock[]>(() => {
     const tableBlock: EditablePageBlock = {
       id: "collaborators-table",
       title: "Liste des collaborateurs",
-      permission: { module: "dotations", action: "view" },
+      permissions: ["dotations"],
       required: true,
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 8, h: 14 },
+        md: { x: 0, y: 0, w: 10, h: 14 },
+        sm: { x: 0, y: 0, w: 6, h: 14 },
+        xs: { x: 0, y: 0, w: 4, h: 14 }
+      },
       render: () => (
         <EditableBlock id="collaborators-table">
           <div>
@@ -459,7 +444,14 @@ export function CollaboratorsPage() {
       layoutBlocks.push({
         id: "collaborators-form",
         title: "Fiche collaborateur",
-        permission: { module: "dotations", action: "edit" },
+        permissions: ["dotations"],
+        variant: "plain",
+        defaultLayout: {
+          lg: { x: 8, y: 0, w: 4, h: 14 },
+          md: { x: 0, y: 14, w: 10, h: 12 },
+          sm: { x: 0, y: 14, w: 6, h: 12 },
+          xs: { x: 0, y: 14, w: 4, h: 12 }
+        },
         render: () => (
           <EditableBlock id="collaborators-form">
             <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
@@ -578,10 +570,8 @@ export function CollaboratorsPage() {
   return (
     <>
       <EditablePageLayout
-        pageId="module:clothing:collaborators"
+        pageKey="module:clothing:collaborators"
         blocks={blocks}
-        defaultLayouts={defaultLayouts}
-        pagePermission={{ module: "dotations", action: "view" }}
         renderHeader={({ editButton, actionButtons, isEditing }) => (
           <div className="space-y-4">
             <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">

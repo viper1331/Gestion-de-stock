@@ -5,11 +5,7 @@ import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
-import {
-  EditablePageLayout,
-  type EditableLayoutSet,
-  type EditablePageBlock
-} from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
 interface Supplier {
@@ -34,62 +30,62 @@ export function PurchaseOrdersPage() {
     enabled: canView && canViewSuppliers
   });
 
-  if (modulePermissions.isLoading && user?.role !== "admin") {
-    return (
-      <section className="space-y-4">
-        <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Bons de commande</h2>
-          <p className="text-sm text-slate-400">Centralisez la création, le suivi et la réception.</p>
-        </header>
-        <p className="text-sm text-slate-400">Vérification des permissions...</p>
-      </section>
-    );
-  }
+  const gateContent = (() => {
+    if (modulePermissions.isLoading && user?.role !== "admin") {
+      return (
+        <section className="space-y-4">
+          <header className="space-y-1">
+            <h2 className="text-2xl font-semibold text-white">Bons de commande</h2>
+            <p className="text-sm text-slate-400">Centralisez la création, le suivi et la réception.</p>
+          </header>
+          <p className="text-sm text-slate-400">Vérification des permissions...</p>
+        </section>
+      );
+    }
 
-  if (!canView) {
-    return (
-      <section className="space-y-4">
-        <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">Bons de commande</h2>
-          <p className="text-sm text-slate-400">Centralisez la création, le suivi et la réception.</p>
-        </header>
-        <p className="text-sm text-red-400">Accès refusé.</p>
-      </section>
-    );
-  }
+    if (!canView) {
+      return (
+        <section className="space-y-4">
+          <header className="space-y-1">
+            <h2 className="text-2xl font-semibold text-white">Bons de commande</h2>
+            <p className="text-sm text-slate-400">Centralisez la création, le suivi et la réception.</p>
+          </header>
+          <p className="text-sm text-red-400">Accès refusé.</p>
+        </section>
+      );
+    }
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 12, h: 12 }],
-      md: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 6, h: 12 }],
-      sm: [{ i: "purchase-orders-panel", x: 0, y: 0, w: 1, h: 12 }]
-    }),
-    []
-  );
+    return null;
+  })();
 
   const blocks = useMemo<EditablePageBlock[]>(
     () => [
       {
         id: "purchase-orders-panel",
         title: "Bons de commande",
-        permission: { module: "clothing", action: "view" },
+        permissions: ["clothing"],
         required: true,
+        variant: "plain",
+        defaultLayout: {
+          lg: { x: 0, y: 0, w: 12, h: 14 },
+          md: { x: 0, y: 0, w: 10, h: 14 },
+          sm: { x: 0, y: 0, w: 6, h: 14 },
+          xs: { x: 0, y: 0, w: 4, h: 14 }
+        },
         render: () => (
           <EditableBlock id="purchase-orders-panel">
-            <PurchaseOrdersPanel suppliers={suppliers} />
+            {gateContent ? gateContent : <PurchaseOrdersPanel suppliers={suppliers} />}
           </EditableBlock>
         )
       }
     ],
-    [suppliers]
+    [gateContent, suppliers]
   );
 
   return (
     <EditablePageLayout
-      pageId="module:clothing:purchase-orders"
+      pageKey="module:clothing:purchase-orders"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ module: "clothing", action: "view" }}
       renderHeader={({ editButton, actionButtons, isEditing }) => (
         <header className="space-y-1">
           <h2 className="text-2xl font-semibold text-white">Bons de commande</h2>

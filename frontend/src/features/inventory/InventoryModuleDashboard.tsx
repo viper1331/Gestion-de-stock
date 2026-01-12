@@ -23,11 +23,7 @@ import {
 } from "./config";
 import { AppTextInput } from "components/AppTextInput";
 import { EditableBlock } from "../../components/EditableBlock";
-import {
-  EditablePageLayout,
-  type EditableLayoutSet,
-  type EditablePageBlock
-} from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 
 interface Category {
   id: number;
@@ -446,17 +442,23 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     ...readPersistedValue<Record<string, number>>(columnStorageKey, baseColumnWidths)
   };
 
+  const toRem = (value: number) => `${value / 16}rem`;
+
   const columnStyles = {
-    image: { width: columnWidths.image, minWidth: 0, maxWidth: columnWidths.image },
-    name: { width: columnWidths.name, minWidth: 0, maxWidth: columnWidths.name },
-    sku: { width: columnWidths.sku, minWidth: 0, maxWidth: columnWidths.sku },
-    quantity: { width: columnWidths.quantity, minWidth: 0, maxWidth: columnWidths.quantity },
-    size: { width: columnWidths.size, minWidth: 0, maxWidth: columnWidths.size },
-    category: { width: columnWidths.category, minWidth: 0, maxWidth: columnWidths.category },
-    lotMembership: { width: columnWidths.lotMembership, minWidth: 0, maxWidth: columnWidths.lotMembership },
-    supplier: { width: columnWidths.supplier, minWidth: 0, maxWidth: columnWidths.supplier },
-    expiration: { width: columnWidths.expiration, minWidth: 0, maxWidth: columnWidths.expiration },
-    threshold: { width: columnWidths.threshold, minWidth: 0, maxWidth: columnWidths.threshold }
+    image: { width: toRem(columnWidths.image), minWidth: 0, maxWidth: toRem(columnWidths.image) },
+    name: { width: toRem(columnWidths.name), minWidth: 0, maxWidth: toRem(columnWidths.name) },
+    sku: { width: toRem(columnWidths.sku), minWidth: 0, maxWidth: toRem(columnWidths.sku) },
+    quantity: { width: toRem(columnWidths.quantity), minWidth: 0, maxWidth: toRem(columnWidths.quantity) },
+    size: { width: toRem(columnWidths.size), minWidth: 0, maxWidth: toRem(columnWidths.size) },
+    category: { width: toRem(columnWidths.category), minWidth: 0, maxWidth: toRem(columnWidths.category) },
+    lotMembership: {
+      width: toRem(columnWidths.lotMembership),
+      minWidth: 0,
+      maxWidth: toRem(columnWidths.lotMembership)
+    },
+    supplier: { width: toRem(columnWidths.supplier), minWidth: 0, maxWidth: toRem(columnWidths.supplier) },
+    expiration: { width: toRem(columnWidths.expiration), minWidth: 0, maxWidth: toRem(columnWidths.expiration) },
+    threshold: { width: toRem(columnWidths.threshold), minWidth: 0, maxWidth: toRem(columnWidths.threshold) }
   } as const;
 
   const saveWidth = (key: string, width: number) => {
@@ -597,30 +599,19 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     }
   };
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [
-        { i: "inventory-main", x: 0, y: 0, w: 12, h: 18 },
-        ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 12, h: 12 }] : [])
-      ],
-      md: [
-        { i: "inventory-main", x: 0, y: 0, w: 6, h: 18 },
-        ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 6, h: 12 }] : [])
-      ],
-      sm: [
-        { i: "inventory-main", x: 0, y: 0, w: 1, h: 18 },
-        ...(config.showPurchaseOrders ? [{ i: "inventory-orders", x: 0, y: 18, w: 1, h: 12 }] : [])
-      ]
-    }),
-    [config.showPurchaseOrders]
-  );
-
   const blocks = useMemo<EditablePageBlock[]>(() => {
     const mainBlock: EditablePageBlock = {
       id: "inventory-main",
       title: "Inventaire",
-      permission: { module: "clothing", action: "view" },
+      permissions: ["clothing"],
       required: true,
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 18 },
+        md: { x: 0, y: 0, w: 10, h: 18 },
+        sm: { x: 0, y: 0, w: 6, h: 18 },
+        xs: { x: 0, y: 0, w: 4, h: 18 }
+      },
       render: () => (
         <EditableBlock id="inventory-main">
           <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
@@ -1027,14 +1018,21 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
   const layoutBlocks: EditablePageBlock[] = [mainBlock];
 
-  if (config.showPurchaseOrders) {
-    layoutBlocks.push({
-      id: "inventory-orders",
-      title: config.purchaseOrdersTitle ?? "Bons de commande",
-      permission: { module: "clothing", action: "view" },
-      render: () => (
-        <EditableBlock id="inventory-orders">
-          <PurchaseOrdersPanel
+    if (config.showPurchaseOrders) {
+      layoutBlocks.push({
+        id: "inventory-orders",
+        title: config.purchaseOrdersTitle ?? "Bons de commande",
+        permissions: ["clothing"],
+        variant: "plain",
+        defaultLayout: {
+          lg: { x: 0, y: 18, w: 12, h: 12 },
+          md: { x: 0, y: 18, w: 10, h: 12 },
+          sm: { x: 0, y: 18, w: 6, h: 12 },
+          xs: { x: 0, y: 18, w: 4, h: 12 }
+        },
+        render: () => (
+          <EditableBlock id="inventory-orders">
+            <PurchaseOrdersPanel
             suppliers={suppliers}
             purchaseOrdersPath={config.purchaseOrdersPath}
             itemsPath={config.purchaseOrdersItemsPath}
@@ -1089,10 +1087,8 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
 
   return (
     <EditablePageLayout
-      pageId="module:clothing:inventory"
+      pageKey="module:clothing:inventory"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ module: "clothing", action: "view" }}
       renderHeader={({ editButton, actionButtons, isEditing }) => (
         <div className="space-y-4">
           <header className="space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
@@ -1182,9 +1178,10 @@ function ResizableHeader({
   onResize: (value: number) => void;
   className?: string;
 }) {
+  const widthRem = `${width / 16}rem`;
   return (
     <th
-      style={{ width, maxWidth: width }}
+      style={{ width: widthRem, maxWidth: widthRem }}
       className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 ${className ?? ""}`}
     >
       <div className="flex items-center justify-between">

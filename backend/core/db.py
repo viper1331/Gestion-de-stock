@@ -118,6 +118,15 @@ def init_databases() -> None:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(username, page_id)
                 );
+                CREATE TABLE IF NOT EXISTS user_page_layouts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    page_key TEXT NOT NULL,
+                    layout_json TEXT NOT NULL,
+                    hidden_blocks_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(username, page_key)
+                );
                 """
             )
         with get_stock_connection() as conn:

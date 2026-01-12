@@ -7,6 +7,8 @@ import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { resolveMediaUrl } from "../../lib/media";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 type VehicleType = string;
 
@@ -458,8 +460,8 @@ export function VehicleQrManagerPage() {
     );
   };
 
-  return (
-    <div className="space-y-6 p-6">
+  const content = (
+    <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
         <div>
           <h1 className="text-2xl font-semibold text-slate-900 dark:text-white">{moduleTitle}</h1>
@@ -543,5 +545,30 @@ export function VehicleQrManagerPage() {
         </div>
       )}
     </div>
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "vehicle-qr-main",
+      title: moduleTitle,
+      permissions: ["vehicle_inventory"],
+      required: true,
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
+      variant: "plain",
+      render: () => (
+        <EditableBlock id="vehicle-qr-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout pageKey="module:vehicle:qr" blocks={blocks} className="space-y-6" />
   );
 }

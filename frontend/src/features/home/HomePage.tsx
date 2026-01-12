@@ -12,6 +12,8 @@ import { getCachedApiBaseUrl } from "../../lib/apiConfig";
 import { buildHomeConfig } from "./homepageConfig";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { fetchUpdateAvailability, fetchUpdateStatus } from "../updates/api";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -458,7 +460,7 @@ export function HomePage() {
 
   const trackedBranch = isAdmin ? updateStatus?.branch ?? null : updateAvailability?.branch ?? null;
 
-  return (
+  const content = (
     <section className="space-y-6">
       <div className="rounded-xl border border-slate-800 bg-gradient-to-r from-indigo-500/10 via-slate-950 to-slate-950 p-6 shadow-lg">
         <p className="text-sm text-indigo-300">Bonjour {user?.username ?? ""} !</p>
@@ -811,6 +813,34 @@ export function HomePage() {
         </section>
       ) : null}
     </section>
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "home-dashboard",
+      title: "Accueil",
+      required: true,
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
+      variant: "plain",
+      render: () => (
+        <EditableBlock id="home-dashboard">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout
+      pageKey="home"
+      blocks={blocks}
+      className="space-y-6"
+    />
   );
 }
 

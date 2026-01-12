@@ -15,6 +15,8 @@ import {
 } from "../../lib/logger";
 import { useAuth } from "../auth/useAuth";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface VehicleTypeEntry {
   id: number;
@@ -273,7 +275,7 @@ export function AdminSettingsPage() {
     );
   }
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-2">
         <h2 className="text-2xl font-semibold text-white">Paramètres avancés</h2>
@@ -662,6 +664,31 @@ export function AdminSettingsPage() {
         </div>
       )}
     </section>
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "admin-settings-main",
+      title: "Paramètres administrateur",
+      required: true,
+      permissions: ["admin"],
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
+      variant: "plain",
+      render: () => (
+        <EditableBlock id="admin-settings-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout pageKey="admin:settings" blocks={blocks} className="space-y-6" />
   );
 }
 

@@ -19,7 +19,7 @@ import {
   updatePdfConfig
 } from "../../lib/pdfConfig";
 import { AppTextInput } from "components/AppTextInput";
-import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_PREVIEW_MESSAGE = "Utilisez le bouton Aperçu pour générer un PDF.";
@@ -1761,22 +1761,19 @@ export function PdfStudioPage() {
     </section>
   );
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [{ i: "pdf-studio-main", x: 0, y: 0, w: 12, h: 24 }],
-      md: [{ i: "pdf-studio-main", x: 0, y: 0, w: 6, h: 24 }],
-      sm: [{ i: "pdf-studio-main", x: 0, y: 0, w: 1, h: 24 }]
-    }),
-    []
-  );
-
   const blocks: EditablePageBlock[] = [
     {
       id: "pdf-studio-main",
       title: "PDF Studio",
       required: true,
-      permission: { role: "admin" },
-      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      permissions: ["admin"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
       render: () => (
         <EditableBlock id="pdf-studio-main">
           {content}
@@ -1787,10 +1784,8 @@ export function PdfStudioPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:pdf:studio"
+      pageKey="module:pdf:studio"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ role: "admin" }}
       className="space-y-6"
     />
   );

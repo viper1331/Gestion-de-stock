@@ -9,7 +9,8 @@
     "dev:internet": "cross-env VITE_API_BASE_URL=http://86.250.29.230:8000 vite --host 0.0.0.0",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test": "vitest"
+    "test": "vitest",
+    "lint:layout": "node scripts/check-layout-constraints.mjs"
   },
   "dependencies": {
     "@tanstack/react-query": "^5.35.0",

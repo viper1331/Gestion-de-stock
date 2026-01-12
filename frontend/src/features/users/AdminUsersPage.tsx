@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 type UserRole = "admin" | "user";
 
@@ -218,7 +220,7 @@ export function AdminUsersPage() {
 
   const isProcessing = createUser.isPending || updateUser.isPending || deleteUser.isPending;
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">Gestion des utilisateurs</h2>
@@ -376,5 +378,30 @@ export function AdminUsersPage() {
         </table>
       </div>
     </section>
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "admin-users-main",
+      title: "Utilisateurs",
+      required: true,
+      permissions: ["admin"],
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
+      variant: "plain",
+      render: () => (
+        <EditableBlock id="admin-users-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout pageKey="admin:users" blocks={blocks} className="space-y-6" />
   );
 }

@@ -13,7 +13,7 @@ import { PharmacyOrdersPanel } from "./PharmacyOrdersPanel";
 import { PharmacyLotsPanel } from "./PharmacyLotsPanel";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
-import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
@@ -577,10 +577,7 @@ export function PharmacyPage() {
               </p>
             ) : null}
           </div>
-          <div
-            className="max-h-[520px] overflow-y-auto rounded-lg border border-slate-800"
-            style={{ maxHeight: "calc(8 * 56px + 48px)" }}
-          >
+          <div className="overflow-y-auto rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
@@ -1016,36 +1013,19 @@ export function PharmacyPage() {
     </section>
   );
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [
-        { i: "pharmacy-main", x: 0, y: 0, w: 12, h: 24 },
-        { i: "pharmacy-lots", x: 0, y: 24, w: 12, h: 12 },
-        { i: "pharmacy-orders", x: 0, y: 36, w: 12, h: 12 }
-      ],
-      md: [
-        { i: "pharmacy-main", x: 0, y: 0, w: 6, h: 24 },
-        { i: "pharmacy-lots", x: 0, y: 24, w: 6, h: 12 },
-        { i: "pharmacy-orders", x: 0, y: 36, w: 6, h: 12 }
-      ],
-      sm: [
-        { i: "pharmacy-main", x: 0, y: 0, w: 1, h: 24 },
-        { i: "pharmacy-lots", x: 0, y: 24, w: 1, h: 12 },
-        { i: "pharmacy-orders", x: 0, y: 36, w: 1, h: 12 }
-      ]
-    }),
-    []
-  );
-
-  const bareContainerClassName = "rounded-none border-0 bg-transparent p-0";
-
   const blocks: EditablePageBlock[] = [
     {
       id: "pharmacy-main",
       title: "Inventaire pharmacie",
       required: true,
-      permission: { module: "pharmacy", action: "view" },
-      containerClassName: bareContainerClassName,
+      permissions: ["pharmacy"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
       render: () => (
         <EditableBlock id="pharmacy-main">
           {mainContent}
@@ -1055,8 +1035,14 @@ export function PharmacyPage() {
     {
       id: "pharmacy-lots",
       title: "Lots pharmacie",
-      permission: { module: "pharmacy", action: "view" },
-      containerClassName: bareContainerClassName,
+      permissions: ["pharmacy"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 24, w: 12, h: 14 },
+        md: { x: 0, y: 24, w: 10, h: 14 },
+        sm: { x: 0, y: 24, w: 6, h: 14 },
+        xs: { x: 0, y: 24, w: 4, h: 14 }
+      },
       render: () => (
         <EditableBlock id="pharmacy-lots">
           <PharmacyLotsPanel canEdit={canEdit} />
@@ -1066,8 +1052,14 @@ export function PharmacyPage() {
     {
       id: "pharmacy-orders",
       title: "Bons de commande",
-      permission: { module: "pharmacy", action: "view" },
-      containerClassName: bareContainerClassName,
+      permissions: ["pharmacy"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 38, w: 12, h: 14 },
+        md: { x: 0, y: 38, w: 10, h: 14 },
+        sm: { x: 0, y: 38, w: 6, h: 14 },
+        xs: { x: 0, y: 38, w: 4, h: 14 }
+      },
       render: () => (
         <EditableBlock id="pharmacy-orders">
           <PharmacyOrdersPanel canEdit={canEdit} />
@@ -1078,10 +1070,8 @@ export function PharmacyPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:pharmacy:inventory"
+      pageKey="module:pharmacy:inventory"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ module: "pharmacy", action: "view" }}
       className="space-y-6"
     />
   );

@@ -6,6 +6,8 @@ import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
 
@@ -273,31 +275,35 @@ export function BarcodePage() {
     }
   };
 
-  if (modulePermissions.isLoading && user?.role !== "admin") {
-    return (
-      <section className="space-y-4">
-        <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
-          <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
-        </header>
-        <p className="text-sm text-slate-400">Vérification des permissions...</p>
-      </section>
-    );
-  }
+  const gateContent = (() => {
+    if (modulePermissions.isLoading && user?.role !== "admin") {
+      return (
+        <section className="space-y-4">
+          <header className="space-y-1">
+            <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
+            <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
+          </header>
+          <p className="text-sm text-slate-400">Vérification des permissions...</p>
+        </section>
+      );
+    }
 
-  if (!canView) {
-    return (
-      <section className="space-y-4">
-        <header className="space-y-1">
-          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
-          <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
-        </header>
-        <p className="text-sm text-red-400">Accès refusé.</p>
-      </section>
-    );
-  }
+    if (!canView) {
+      return (
+        <section className="space-y-4">
+          <header className="space-y-1">
+            <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
+            <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
+          </header>
+          <p className="text-sm text-red-400">Accès refusé.</p>
+        </section>
+      );
+    }
 
-  return (
+    return null;
+  })();
+
+  const pageContent = gateContent ?? (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
@@ -442,6 +448,31 @@ export function BarcodePage() {
         ) : null}
       </section>
     </section>
+  );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "barcode-main",
+      title: moduleTitle,
+      permissions: ["barcode"],
+      required: true,
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 20 },
+        md: { x: 0, y: 0, w: 10, h: 20 },
+        sm: { x: 0, y: 0, w: 6, h: 20 },
+        xs: { x: 0, y: 0, w: 4, h: 20 }
+      },
+      render: () => (
+        <EditableBlock id="barcode-main">
+          {pageContent}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout pageKey="module:barcode" blocks={blocks} className="space-y-6" />
   );
 }
 

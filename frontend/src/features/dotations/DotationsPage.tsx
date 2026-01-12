@@ -8,7 +8,7 @@ import { useModulePermissions } from "../permissions/useModulePermissions";
 import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
-import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
 interface Collaborator {
@@ -793,22 +793,19 @@ export function DotationsPage() {
     </section>
   );
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [{ i: "dotations-main", x: 0, y: 0, w: 12, h: 24 }],
-      md: [{ i: "dotations-main", x: 0, y: 0, w: 6, h: 24 }],
-      sm: [{ i: "dotations-main", x: 0, y: 0, w: 1, h: 24 }]
-    }),
-    []
-  );
-
   const blocks: EditablePageBlock[] = [
     {
       id: "dotations-main",
       title: "Dotations",
       required: true,
-      permission: { module: "dotations", action: "view" },
-      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      permissions: ["dotations"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
       render: () => (
         <EditableBlock id="dotations-main">
           {content}
@@ -819,10 +816,8 @@ export function DotationsPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:dotations"
+      pageKey="module:dotations"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ module: "dotations", action: "view" }}
       className="space-y-6"
     />
   );
