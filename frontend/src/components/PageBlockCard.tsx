@@ -21,7 +21,7 @@ export function PageBlockCard({
   bodyClassName
 }: PageBlockCardProps) {
   const containerClassName = clsx(
-    "min-w-0 overflow-hidden flex flex-col",
+    "flex min-w-0 max-w-full flex-col overflow-hidden",
     variant === "card" && "rounded-lg border border-slate-800 bg-slate-900",
     className
   );
@@ -39,7 +39,13 @@ export function PageBlockCard({
   return (
     <section className={containerClassName}>
       {headerContent}
-      <div className={clsx("flex min-h-0 flex-1 flex-col", variant === "card" && "p-4", bodyClassName)}>
+      <div
+        className={clsx(
+          "flex min-h-0 min-w-0 flex-1 flex-col",
+          variant === "card" && "p-4",
+          bodyClassName
+        )}
+      >
         {children}
       </div>
     </section>

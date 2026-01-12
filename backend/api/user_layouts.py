@@ -74,6 +74,11 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
             "vehicle-qr-main": ("vehicle_inventory", "view"),
         }
     },
+    "module:vehicle:guide": {
+        "blocks": {
+            "vehicle-guide-main": ("vehicle_inventory", "view"),
+        }
+    },
     "module:remise:inventory": {
         "blocks": {
             "remise-inventory-dashboard": ("inventory_remise", "view"),

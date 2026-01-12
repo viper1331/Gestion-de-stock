@@ -118,3 +118,26 @@ def test_layout_normalization_clamps_values() -> None:
     assert item["y"] == 0
     assert item["w"] == 12
     assert item["h"] == 1
+
+
+def test_layout_strips_blocks_without_permissions() -> None:
+    _create_user("layout-user-4", "layout-pass")
+    headers = _login_headers("layout-user-4", "layout-pass")
+
+    payload = {
+        "layout": {
+            "lg": [
+                {"i": "inventory-main", "x": 0, "y": 0, "w": 12, "h": 8},
+                {"i": "inventory-orders", "x": 0, "y": 8, "w": 12, "h": 6},
+            ]
+        },
+        "hiddenBlocks": ["inventory-main"],
+    }
+
+    response = client.put(
+        "/user-layouts/module:clothing:inventory", json=payload, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["layout"]["lg"] == []
+    assert data["hiddenBlocks"] == []

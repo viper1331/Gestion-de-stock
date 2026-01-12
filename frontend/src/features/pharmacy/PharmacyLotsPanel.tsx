@@ -317,7 +317,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
   const formatCompartment = (value: string | null) => (value && value.trim() ? value : "Général");
 
   return (
-    <section className="mt-6 space-y-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
+    <section className="mt-6 min-w-0 space-y-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-white">Lots pharmacie</h3>
@@ -342,8 +342,8 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
       {message ? <p className="text-xs font-semibold text-emerald-400">{message}</p> : null}
       {error ? <p className="text-xs font-semibold text-red-400">{error}</p> : null}
 
-      <div className="grid gap-4 lg:grid-cols-2">
-        <div className="space-y-3">
+      <div className="grid min-w-0 gap-4 lg:grid-cols-2">
+        <div className="min-w-0 space-y-3">
           <div className="overflow-hidden rounded border border-slate-800 bg-slate-900">
             <div className="flex items-center justify-between border-b border-slate-800 px-4 py-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
               <span>Lots disponibles</span>
@@ -405,7 +405,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
           </div>
         </div>
 
-        <div className="space-y-3">
+        <div className="min-w-0 space-y-3">
           {canEdit ? (
             <form className="rounded border border-slate-800 bg-slate-900 p-3" onSubmit={handleSubmitLot}>
               <h4 className="text-sm font-semibold text-white">{editingLotId ? "Modifier le lot" : "Créer un lot"}</h4>

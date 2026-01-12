@@ -6,7 +6,9 @@ This project uses `EditablePageLayout` (react-grid-layout) to provide global, re
 
 - **pageKey**: A stable key for the page, used by the backend to store user layouts.
 - **blocks**: Declarative blocks for the page. Each block has a stable `id`, default layout values per breakpoint, and a render function.
-- **breakpoints**: `lg`, `md`, `sm`, `xs` with centralized column counts.
+- **breakpoints**: `lg`, `md`, `sm`, `xs` with centralized column counts in `EditablePageLayout` (`LAYOUT_BREAKPOINTS` + `LAYOUT_COLUMNS`).
+- **normalization**: layouts are sanitized on load and before save (clamped sizes/positions, no overlaps, unknown blocks removed).
+- **defaults**: default layouts render immediately, even while user layouts are loading.
 
 ## Example usage
 
@@ -45,4 +47,5 @@ return (
 
 - Always use stable block IDs.
 - Avoid fixed widths or min-widths inside business pages.
+- Edit mode is available on pages with at least two blocks (per user).
 - The layout saves per user via `GET /user-layouts/{pageKey}` and `PUT /user-layouts/{pageKey}`.

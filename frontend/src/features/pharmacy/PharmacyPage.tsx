@@ -1,4 +1,5 @@
 import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import clsx from "clsx";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ColumnManager } from "../../components/ColumnManager";
@@ -529,7 +530,7 @@ export function PharmacyPage() {
   };
 
   const mainContent = (
-    <section className="space-y-6">
+    <section className="min-w-0 space-y-6">
       <header className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
         <div>
           <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
@@ -562,8 +563,8 @@ export function PharmacyPage() {
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
-      <div className={`grid gap-6 ${isFormVisible && canEdit ? "lg:grid-cols-3" : ""}`}>
-        <div className={isFormVisible && canEdit ? "lg:col-span-2" : ""}>
+      <div className={`grid min-w-0 gap-6 ${isFormVisible && canEdit ? "lg:grid-cols-3" : ""}`}>
+        <div className={clsx("min-w-0", isFormVisible && canEdit ? "lg:col-span-2" : "")}>
           <div className="flex flex-col gap-2 pb-3 sm:flex-row sm:items-center sm:justify-between">
             <AppTextInput
               value={searchValue}
@@ -578,7 +579,7 @@ export function PharmacyPage() {
               </p>
             ) : null}
           </div>
-          <div className="overflow-y-auto rounded-lg border border-slate-800">
+          <div className="min-w-0 overflow-auto rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
@@ -1037,6 +1038,7 @@ export function PharmacyPage() {
       id: "pharmacy-lots",
       title: "Lots pharmacie",
       permissions: ["pharmacy"],
+      minH: 14,
       variant: "plain",
       defaultLayout: {
         lg: { x: 0, y: 24, w: 12, h: 14 },
@@ -1054,6 +1056,7 @@ export function PharmacyPage() {
       id: "pharmacy-orders",
       title: "Bons de commande",
       permissions: ["pharmacy"],
+      minH: 14,
       variant: "plain",
       defaultLayout: {
         lg: { x: 0, y: 38, w: 12, h: 14 },
