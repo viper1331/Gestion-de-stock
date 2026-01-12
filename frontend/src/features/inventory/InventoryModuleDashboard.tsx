@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
 import {
   useMutation,
@@ -107,8 +107,16 @@ interface Supplier {
   name: string;
 }
 
+type InventoryModuleDashboardSections = {
+  header: ReactNode;
+  filters: ReactNode;
+  table: ReactNode;
+  orders?: ReactNode;
+};
+
 interface InventoryModuleDashboardProps {
   config?: InventoryModuleConfig;
+  renderLayout?: (sections: InventoryModuleDashboardSections) => ReactNode;
 }
 
 type InventoryColumnKey =
@@ -125,7 +133,10 @@ type InventoryColumnKey =
 
 type ExpirationStatus = "expired" | "expiring-soon" | null;
 
-export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: InventoryModuleDashboardProps) {
+export function InventoryModuleDashboard({
+  config = DEFAULT_INVENTORY_CONFIG,
+  renderLayout
+}: InventoryModuleDashboardProps) {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
   const queryClient = useQueryClient();
@@ -599,8 +610,521 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
     }
   };
 
-  const blocks = useMemo<EditablePageBlock[]>(() => {
-    const mainBlock: EditablePageBlock = {
+  const headerContent = (
+    <div className="rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
+      <div className="space-y-1">
+        <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
+        <p className="text-sm text-slate-400">{config.description}</p>
+      </div>
+      {message || error ? (
+        <div className="mt-4 space-y-3">
+          {message ? <Alert tone="success" message={message} /> : null}
+          {error ? <Alert tone="error" message={error} /> : null}
+        </div>
+      ) : null}
+    </div>
+  );
+
+  const renderToolbar = (controls?: {
+    editButton?: ReactNode;
+    actionButtons?: ReactNode;
+    isEditing?: boolean;
+  }) => (
+    <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+      <AppTextInput
+        value={searchValue}
+        onChange={(event) => setSearchValue(event.target.value)}
+        placeholder={searchPlaceholder}
+        className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none lg:w-72"
+        title={searchPlaceholder}
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <ColumnManager
+          options={columnOptions}
+          visibility={columnVisibility}
+          onToggle={(key) => toggleColumnVisibility(key as InventoryColumnKey)}
+          onReset={resetColumnVisibility}
+          description="Choisissez les colonnes à afficher dans la liste."
+        />
+        {config.exportPdfPath ? (
+          <button
+            type="button"
+            onClick={() => exportInventoryPdf.mutateAsync()}
+            disabled={exportInventoryPdf.isPending}
+            className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+            title="Exporter l'inventaire au format PDF"
+          >
+            {exportInventoryPdf.isPending ? "Export en cours…" : "Exporter en PDF"}
+          </button>
+        ) : null}
+        <button
+          type="button"
+          onClick={() => {
+            if (isSidebarOpen) {
+              closeSidebar();
+            } else {
+              openSidebar();
+            }
+          }}
+          className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          title={
+            isSidebarOpen
+              ? "Masquer le panneau latéral des formulaires"
+              : "Afficher le panneau latéral des formulaires"
+          }
+        >
+          {isSidebarOpen ? "Masquer les formulaires" : "Afficher les formulaires"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setFormMode("create");
+            setSelectedItem(null);
+            openSidebar();
+          }}
+          className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+          title={`${itemNoun.newLabel} dans l'inventaire`}
+        >
+          {itemNoun.newLabel}
+        </button>
+        {controls?.editButton}
+        {controls?.isEditing ? controls.actionButtons : null}
+      </div>
+    </div>
+  );
+
+  const filtersContent = (
+    <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 shadow">
+      {renderToolbar()}
+    </div>
+  );
+
+  const tableContent = (
+    <div className="flex min-h-0 flex-col gap-6 lg:flex-row lg:items-start">
+      <div className="min-w-0 flex-1 space-y-4">
+        <div className="min-w-0 rounded-lg border border-slate-800">
+          <div className="max-h-[400px] min-h-0 min-w-0 overflow-auto">
+            <table className="w-full min-w-full table-fixed divide-y divide-slate-800">
+              <thead className="bg-slate-900/60">
+                <tr>
+                  {supportsItemImages && columnVisibility.image !== false ? (
+                    <ResizableHeader
+                      label="Image"
+                      width={columnWidths.image}
+                      onResize={(value) => saveWidth("image", value)}
+                      className="hidden min-[768px]:table-cell"
+                    />
+                  ) : null}
+                  {columnVisibility.name !== false ? (
+                    <ResizableHeader
+                      label={itemNoun.singularCapitalized}
+                      width={columnWidths.name}
+                      onResize={(value) => saveWidth("name", value)}
+                    />
+                  ) : null}
+                  {columnVisibility.sku !== false ? (
+                    <ResizableHeader
+                      label="SKU"
+                      width={columnWidths.sku}
+                      onResize={(value) => saveWidth("sku", value)}
+                      className="hidden md:table-cell"
+                    />
+                  ) : null}
+                  {columnVisibility.quantity !== false ? (
+                    <ResizableHeader
+                      label="Quantité"
+                      width={columnWidths.quantity}
+                      onResize={(value) => saveWidth("quantity", value)}
+                      className="text-center"
+                    />
+                  ) : null}
+                  {columnVisibility.size !== false ? (
+                    <ResizableHeader
+                      label="Taille / Variante"
+                      width={columnWidths.size}
+                      onResize={(value) => saveWidth("size", value)}
+                      className="hidden min-[900px]:table-cell"
+                    />
+                  ) : null}
+                  {columnVisibility.category !== false ? (
+                    <ResizableHeader
+                      label="Catégorie"
+                      width={columnWidths.category}
+                      onResize={(value) => saveWidth("category", value)}
+                      className="hidden min-[900px]:table-cell"
+                    />
+                  ) : null}
+                  {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
+                    <ResizableHeader
+                      label="Lot(s)"
+                      width={columnWidths.lotMembership}
+                      onResize={(value) => saveWidth("lotMembership", value)}
+                      className="hidden lg:table-cell"
+                    />
+                  ) : null}
+                  {columnVisibility.supplier !== false ? (
+                    <ResizableHeader
+                      label="Fournisseur"
+                      width={columnWidths.supplier}
+                      onResize={(value) => saveWidth("supplier", value)}
+                      className="hidden xl:table-cell"
+                    />
+                  ) : null}
+                  {supportsExpirationDate && columnVisibility.expiration !== false ? (
+                    <ResizableHeader
+                      label="Péremption"
+                      width={columnWidths.expiration}
+                      onResize={(value) => saveWidth("expiration", value)}
+                      className="hidden min-[900px]:table-cell"
+                    />
+                  ) : null}
+                  {columnVisibility.threshold !== false ? (
+                    <ResizableHeader
+                      label="Seuil"
+                      width={columnWidths.threshold}
+                      onResize={(value) => saveWidth("threshold", value)}
+                      className="hidden lg:table-cell text-center"
+                    />
+                  ) : null}
+                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400">
+                    Actions
+                  </th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-900 bg-slate-950/60">
+                {items.map((item, index) => {
+                  const { isOutOfStock, isLowStock } = getInventoryAlerts(
+                    item,
+                    supportsLowStockOptOut
+                  );
+                  const expirationStatus = supportsExpirationDate
+                    ? getExpirationStatus(item.expiration_date)
+                    : null;
+                  const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
+                  const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
+                  const selectionTone =
+                    selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
+                  const imageUrl = resolveMediaUrl(item.image_url);
+                  const hasImage = Boolean(imageUrl);
+                  const lotNames = item.lot_names?.filter((name) => name.trim().length > 0) ?? [];
+                  const isInLot =
+                    item.is_in_lot ??
+                    (lotNames.length > 0 || Boolean(item.lot_id) || Boolean(item.lot_name));
+                  const lotLabel = lotNames.length
+                    ? lotNames.join(", ")
+                    : item.lot_name ??
+                      (isInLot && item.lot_id ? `Lot #${item.lot_id}` : isInLot ? "Oui" : "Aucun");
+
+                  return (
+                    <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
+                      {supportsItemImages && columnVisibility.image !== false ? (
+                        <td
+                          style={columnStyles.image}
+                          className="hidden px-4 py-3 text-sm text-slate-300 min-[768px]:table-cell"
+                        >
+                          {hasImage ? (
+                            <img
+                              src={imageUrl ?? undefined}
+                              alt={`Illustration de ${item.name}`}
+                              className="h-12 w-12 rounded border border-slate-700 object-cover"
+                            />
+                          ) : (
+                            <span className="text-xs text-slate-500">Aucune</span>
+                          )}
+                        </td>
+                      ) : null}
+                      {columnVisibility.name !== false ? (
+                        <td style={columnStyles.name} className="min-w-0 px-4 py-3 text-sm text-slate-100">
+                          <span className="block truncate" title={item.name}>
+                            {item.name}
+                          </span>
+                        </td>
+                      ) : null}
+                      {columnVisibility.sku !== false ? (
+                        <td
+                          style={columnStyles.sku}
+                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 md:table-cell"
+                        >
+                          <span className="block truncate" title={item.sku ?? ""}>
+                            {item.sku}
+                          </span>
+                        </td>
+                      ) : null}
+                      {columnVisibility.quantity !== false ? (
+                        <td
+                          style={columnStyles.quantity}
+                          className={`px-4 py-3 text-center text-sm font-semibold ${
+                            isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                          }`}
+                          title={
+                            isOutOfStock
+                              ? `${itemNoun.demonstrativeCapitalized} est en rupture de stock`
+                              : isLowStock
+                                ? "Stock faible"
+                                : undefined
+                          }
+                        >
+                          {item.quantity}
+                          {isOutOfStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                              Rupture
+                            </span>
+                          ) : null}
+                          {!isOutOfStock && isLowStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                              Stock faible
+                            </span>
+                          ) : null}
+                        </td>
+                      ) : null}
+                      {columnVisibility.size !== false ? (
+                        <td
+                          style={columnStyles.size}
+                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
+                        >
+                          <span className="block truncate" title={item.size?.trim() || "-"}>
+                            {item.size?.trim() || "-"}
+                          </span>
+                        </td>
+                      ) : null}
+                      {columnVisibility.category !== false ? (
+                        <td
+                          style={columnStyles.category}
+                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
+                        >
+                          <div className="min-w-0 space-y-1">
+                            <div
+                              className="truncate"
+                              title={item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                            >
+                              {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                            </div>
+                            {item.assigned_vehicle_names?.length ? (
+                              <p className="truncate text-xs text-slate-400" title={item.assigned_vehicle_names.join(", ")}>
+                                Affecté à : {item.assigned_vehicle_names.join(", ")}
+                              </p>
+                            ) : null}
+                          </div>
+                        </td>
+                      ) : null}
+                      {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
+                        <td
+                          style={columnStyles.lotMembership}
+                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 lg:table-cell"
+                        >
+                          <div className="flex min-w-0 flex-wrap items-center gap-2">
+                            <span className="truncate" title={lotLabel}>
+                              {lotLabel}
+                            </span>
+                            <span
+                              className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isInLot ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200" : "border-slate-600 bg-slate-800 text-slate-300"}`}
+                            >
+                              {isInLot ? "Associé" : "Aucun"}
+                            </span>
+                          </div>
+                        </td>
+                      ) : null}
+                      {columnVisibility.supplier !== false ? (
+                        <td
+                          style={columnStyles.supplier}
+                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 xl:table-cell"
+                        >
+                          <span
+                            className="block truncate"
+                            title={item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                          >
+                            {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                          </span>
+                        </td>
+                      ) : null}
+                      {supportsExpirationDate && columnVisibility.expiration !== false ? (
+                        <td
+                          style={columnStyles.expiration}
+                          className={`hidden px-4 py-3 text-sm min-[900px]:table-cell ${
+                            expirationStatus === "expired"
+                              ? "text-red-300"
+                              : expirationStatus === "expiring-soon"
+                                ? "text-amber-200"
+                                : "text-slate-300"
+                          }`}
+                        >
+                          {formatExpirationDate(item.expiration_date)}
+                          {expirationStatus === "expired" ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                              Expiré
+                            </span>
+                          ) : null}
+                          {expirationStatus === "expiring-soon" ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
+                              Bientôt périmé
+                            </span>
+                          ) : null}
+                        </td>
+                      ) : null}
+                      {columnVisibility.threshold !== false ? (
+                        <td
+                          style={columnStyles.threshold}
+                          className={`hidden px-4 py-3 text-center text-sm lg:table-cell ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}
+                        >
+                          {item.low_stock_threshold}
+                        </td>
+                      ) : null}
+                      <td className="px-4 py-3 text-xs text-slate-200">
+                        <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedItem(item);
+                              setFormMode("edit");
+                              openSidebar();
+                            }}
+                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Modifier les informations de ${item.name}`}
+                          >
+                            Modifier
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setSelectedItem(item);
+                              openSidebar();
+                            }}
+                            className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
+                            title={`Saisir un mouvement de stock pour ${item.name}`}
+                          >
+                            Mouvement
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleDeleteItem(item.id)}
+                            className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
+                            title={`Supprimer définitivement ${item.name}`}
+                          >
+                            Supprimer
+                          </button>
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+        </div>
+        {isFetchingItems ? (
+          <p className="text-sm text-slate-400">Actualisation de l'inventaire...</p>
+        ) : null}
+      </div>
+
+      {isSidebarOpen ? (
+        <aside className="min-w-0 space-y-6 lg:w-1/3">
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <div className="flex items-center justify-between gap-2">
+              <h3 className="text-sm font-semibold text-white">
+                {formMode === "edit" ? `Modifier ${itemNoun.definite}` : itemNoun.newLabel}
+              </h3>
+              <button
+                type="button"
+                onClick={closeSidebar}
+                className="rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+                title="Fermer le panneau latéral"
+              >
+                Fermer
+              </button>
+            </div>
+            <ItemForm
+              key={`${formMode}-${selectedItem?.id ?? "new"}`}
+              initialValues={formInitialValues}
+              categories={categories}
+              suppliers={suppliers}
+              mode={formMode}
+              isSubmitting={createItem.isPending || updateItem.isPending}
+              onSubmit={handleSubmitItem}
+              onCancel={closeSidebar}
+              supportsItemImages={supportsItemImages}
+              initialImageUrl={initialImageUrl}
+              supportsExpirationDate={supportsExpirationDate}
+              itemNoun={itemNoun}
+              existingSkus={existingSkus}
+              barcodePrefix={barcodePrefix}
+              currentItemId={selectedItem?.id ?? null}
+              enableLowStockOptOut={supportsLowStockOptOut}
+              customFieldDefinitions={activeCustomFields}
+            />
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <h3 className="text-sm font-semibold text-white">Mouvement de stock</h3>
+            <MovementForm
+              item={selectedItem}
+              onSubmit={async (values) => {
+                if (!selectedItem) {
+                  return;
+                }
+                setMessage(null);
+                setError(null);
+                await recordMovement.mutateAsync({ itemId: selectedItem.id, ...values });
+              }}
+              isSubmitting={recordMovement.isPending}
+              itemNoun={itemNoun}
+            />
+            <MovementHistory item={selectedItem} config={config} />
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <h3 className="text-sm font-semibold text-white">Catégories</h3>
+            <CategoryManager
+              categories={categories}
+              onCreate={async (payload) => {
+                setMessage(null);
+                setError(null);
+                await createCategory.mutateAsync(payload);
+              }}
+              onDelete={async (categoryId) => {
+                setMessage(null);
+                setError(null);
+                await removeCategory.mutateAsync(categoryId);
+              }}
+              onUpdate={async (categoryId, payload) => {
+                setMessage(null);
+                setError(null);
+                await updateCategoryEntry.mutateAsync({ categoryId, payload });
+              }}
+              isSubmitting={
+                createCategory.isPending || removeCategory.isPending || updateCategoryEntry.isPending
+              }
+            />
+          </div>
+        </aside>
+      ) : null}
+    </div>
+  );
+
+  const ordersContent = config.showPurchaseOrders ? (
+    <PurchaseOrdersPanel
+      suppliers={suppliers}
+      purchaseOrdersPath={config.purchaseOrdersPath}
+      itemsPath={config.purchaseOrdersItemsPath}
+      ordersQueryKey={config.purchaseOrdersQueryKey}
+      itemsQueryKey={config.purchaseOrdersItemsQueryKey}
+      title={config.purchaseOrdersTitle}
+      description={config.purchaseOrdersDescription}
+      downloadPrefix={config.purchaseOrdersDownloadPrefix}
+      itemIdField={config.purchaseOrdersItemIdField}
+    />
+  ) : null;
+
+  if (renderLayout) {
+    return renderLayout({
+      header: headerContent,
+      filters: filtersContent,
+      table: tableContent,
+      orders: ordersContent ?? undefined
+    });
+  }
+
+  const blocks: EditablePageBlock[] = [
+    {
       id: "inventory-main",
       title: "Inventaire",
       permissions: ["clothing"],
@@ -614,476 +1138,31 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
       },
       render: () => (
         <EditableBlock id="inventory-main">
-          <div className="flex flex-col gap-6 lg:flex-row lg:items-start">
-            <div className="flex-1 space-y-4">
-              <div className="min-w-0 rounded-lg border border-slate-800">
-                <div className="max-h-[400px] min-w-0 overflow-x-hidden overflow-y-auto">
-                  <table className="w-full table-fixed divide-y divide-slate-800">
-                  <thead className="bg-slate-900/60">
-                    <tr>
-                      {supportsItemImages && columnVisibility.image !== false ? (
-                        <ResizableHeader
-                          label="Image"
-                          width={columnWidths.image}
-                          onResize={(value) => saveWidth("image", value)}
-                          className="hidden min-[768px]:table-cell"
-                        />
-                      ) : null}
-                      {columnVisibility.name !== false ? (
-                        <ResizableHeader
-                          label={itemNoun.singularCapitalized}
-                          width={columnWidths.name}
-                          onResize={(value) => saveWidth("name", value)}
-                        />
-                      ) : null}
-                      {columnVisibility.sku !== false ? (
-                        <ResizableHeader
-                          label="SKU"
-                          width={columnWidths.sku}
-                          onResize={(value) => saveWidth("sku", value)}
-                          className="hidden md:table-cell"
-                        />
-                      ) : null}
-                      {columnVisibility.quantity !== false ? (
-                        <ResizableHeader
-                          label="Quantité"
-                          width={columnWidths.quantity}
-                          onResize={(value) => saveWidth("quantity", value)}
-                          className="text-center"
-                        />
-                      ) : null}
-                      {columnVisibility.size !== false ? (
-                        <ResizableHeader
-                          label="Taille / Variante"
-                          width={columnWidths.size}
-                          onResize={(value) => saveWidth("size", value)}
-                          className="hidden min-[900px]:table-cell"
-                        />
-                      ) : null}
-                      {columnVisibility.category !== false ? (
-                        <ResizableHeader
-                          label="Catégorie"
-                          width={columnWidths.category}
-                          onResize={(value) => saveWidth("category", value)}
-                          className="hidden min-[900px]:table-cell"
-                        />
-                      ) : null}
-                      {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
-                        <ResizableHeader
-                          label="Lot(s)"
-                          width={columnWidths.lotMembership}
-                          onResize={(value) => saveWidth("lotMembership", value)}
-                          className="hidden lg:table-cell"
-                        />
-                      ) : null}
-                      {columnVisibility.supplier !== false ? (
-                        <ResizableHeader
-                          label="Fournisseur"
-                          width={columnWidths.supplier}
-                          onResize={(value) => saveWidth("supplier", value)}
-                          className="hidden xl:table-cell"
-                        />
-                      ) : null}
-                      {supportsExpirationDate && columnVisibility.expiration !== false ? (
-                        <ResizableHeader
-                          label="Péremption"
-                          width={columnWidths.expiration}
-                          onResize={(value) => saveWidth("expiration", value)}
-                          className="hidden min-[900px]:table-cell"
-                        />
-                      ) : null}
-                      {columnVisibility.threshold !== false ? (
-                        <ResizableHeader
-                          label="Seuil"
-                          width={columnWidths.threshold}
-                          onResize={(value) => saveWidth("threshold", value)}
-                          className="hidden lg:table-cell text-center"
-                        />
-                      ) : null}
-                      <th className="w-32 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400 sm:w-40">
-                        Actions
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-900 bg-slate-950/60">
-                    {items.map((item, index) => {
-                      const { isOutOfStock, isLowStock } = getInventoryAlerts(
-                        item,
-                        supportsLowStockOptOut
-                      );
-                    const expirationStatus = supportsExpirationDate
-                      ? getExpirationStatus(item.expiration_date)
-                      : null;
-                    const zebraTone = index % 2 === 0 ? "bg-slate-950" : "bg-slate-900/40";
-                    const alertTone = isOutOfStock ? "bg-red-950/60" : isLowStock ? "bg-amber-950/40" : "";
-                    const selectionTone =
-                      selectedItem?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : "";
-                    const imageUrl = resolveMediaUrl(item.image_url);
-                    const hasImage = Boolean(imageUrl);
-                    const lotNames = item.lot_names?.filter((name) => name.trim().length > 0) ?? [];
-                    const isInLot =
-                      item.is_in_lot ??
-                      (lotNames.length > 0 || Boolean(item.lot_id) || Boolean(item.lot_name));
-                    const lotLabel = lotNames.length
-                      ? lotNames.join(", ")
-                      : item.lot_name ??
-                        (isInLot && item.lot_id ? `Lot #${item.lot_id}` : isInLot ? "Oui" : "Aucun");
-
-                    return (
-                      <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
-                        {supportsItemImages && columnVisibility.image !== false ? (
-                          <td
-                            style={columnStyles.image}
-                            className="hidden px-4 py-3 text-sm text-slate-300 min-[768px]:table-cell"
-                          >
-                            {hasImage ? (
-                              <img
-                                src={imageUrl ?? undefined}
-                                alt={`Illustration de ${item.name}`}
-                                className="h-12 w-12 rounded border border-slate-700 object-cover"
-                              />
-                            ) : (
-                              <span className="text-xs text-slate-500">Aucune</span>
-                            )}
-                          </td>
-                        ) : null}
-                        {columnVisibility.name !== false ? (
-                          <td style={columnStyles.name} className="min-w-0 px-4 py-3 text-sm text-slate-100">
-                            <span className="block truncate" title={item.name}>
-                              {item.name}
-                            </span>
-                          </td>
-                        ) : null}
-                        {columnVisibility.sku !== false ? (
-                          <td
-                            style={columnStyles.sku}
-                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 md:table-cell"
-                          >
-                            <span className="block truncate" title={item.sku ?? ""}>
-                              {item.sku}
-                            </span>
-                          </td>
-                        ) : null}
-                        {columnVisibility.quantity !== false ? (
-                          <td
-                            style={columnStyles.quantity}
-                            className={`px-4 py-3 text-center text-sm font-semibold ${
-                              isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
-                            }`}
-                            title={
-                              isOutOfStock
-                                ? `${itemNoun.demonstrativeCapitalized} est en rupture de stock`
-                                : isLowStock
-                                  ? "Stock faible"
-                                  : undefined
-                            }
-                          >
-                            {item.quantity}
-                            {isOutOfStock ? (
-                              <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                                Rupture
-                              </span>
-                            ) : null}
-                            {!isOutOfStock && isLowStock ? (
-                              <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                                Stock faible
-                              </span>
-                            ) : null}
-                          </td>
-                        ) : null}
-                        {columnVisibility.size !== false ? (
-                          <td
-                            style={columnStyles.size}
-                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
-                          >
-                            <span className="block truncate" title={item.size?.trim() || "-"}>
-                              {item.size?.trim() || "-"}
-                            </span>
-                          </td>
-                        ) : null}
-                        {columnVisibility.category !== false ? (
-                          <td
-                            style={columnStyles.category}
-                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
-                          >
-                            <div className="min-w-0 space-y-1">
-                              <div
-                                className="truncate"
-                                title={item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
-                              >
-                                {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
-                              </div>
-                              {item.assigned_vehicle_names?.length ? (
-                                <p className="truncate text-xs text-slate-400" title={item.assigned_vehicle_names.join(", ")}>
-                                  Affecté à : {item.assigned_vehicle_names.join(", ")}
-                                </p>
-                              ) : null}
-                            </div>
-                          </td>
-                        ) : null}
-                        {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
-                          <td
-                            style={columnStyles.lotMembership}
-                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 lg:table-cell"
-                          >
-                            <div className="flex min-w-0 flex-wrap items-center gap-2">
-                              <span className="truncate" title={lotLabel}>
-                                {lotLabel}
-                              </span>
-                              <span
-                                className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isInLot ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200" : "border-slate-600 bg-slate-800 text-slate-300"}`}
-                              >
-                                {isInLot ? "Associé" : "Aucun"}
-                              </span>
-                            </div>
-                          </td>
-                        ) : null}
-                        {columnVisibility.supplier !== false ? (
-                          <td
-                            style={columnStyles.supplier}
-                            className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 xl:table-cell"
-                          >
-                            <span
-                              className="block truncate"
-                              title={item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
-                            >
-                              {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
-                            </span>
-                          </td>
-                        ) : null}
-                        {supportsExpirationDate && columnVisibility.expiration !== false ? (
-                          <td
-                            style={columnStyles.expiration}
-                            className={`hidden px-4 py-3 text-sm min-[900px]:table-cell ${
-                              expirationStatus === "expired"
-                                ? "text-red-300"
-                                : expirationStatus === "expiring-soon"
-                                  ? "text-amber-200"
-                                  : "text-slate-300"
-                            }`}
-                          >
-                            {formatExpirationDate(item.expiration_date)}
-                            {expirationStatus === "expired" ? (
-                              <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                                Expiré
-                              </span>
-                            ) : null}
-                            {expirationStatus === "expiring-soon" ? (
-                              <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
-                                Bientôt périmé
-                              </span>
-                            ) : null}
-                          </td>
-                        ) : null}
-                        {columnVisibility.threshold !== false ? (
-                          <td
-                            style={columnStyles.threshold}
-                            className={`hidden px-4 py-3 text-center text-sm lg:table-cell ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}
-                          >
-                            {item.low_stock_threshold}
-                          </td>
-                        ) : null}
-                        <td className="px-4 py-3 text-xs text-slate-200">
-                          <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedItem(item);
-                                setFormMode("edit");
-                                openSidebar();
-                              }}
-                              className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                              title={`Modifier les informations de ${item.name}`}
-                            >
-                              Modifier
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => {
-                                setSelectedItem(item);
-                                openSidebar();
-                              }}
-                              className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
-                              title={`Saisir un mouvement de stock pour ${item.name}`}
-                            >
-                              Mouvement
-                            </button>
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteItem(item.id)}
-                              className="rounded bg-red-600 px-2 py-1 hover:bg-red-500"
-                              title={`Supprimer définitivement ${item.name}`}
-                            >
-                              Supprimer
-                            </button>
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-          {isFetchingItems ? (
-            <p className="text-sm text-slate-400">Actualisation de l'inventaire...</p>
-          ) : null}
-        </div>
-
-        {isSidebarOpen ? (
-          <aside className="w-full space-y-6 lg:w-96">
-            <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-              <div className="flex items-center justify-between gap-2">
-                <h3 className="text-sm font-semibold text-white">
-                  {formMode === "edit" ? `Modifier ${itemNoun.definite}` : itemNoun.newLabel}
-                </h3>
-                <button
-                  type="button"
-                  onClick={closeSidebar}
-                  className="rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-                  title="Fermer le panneau latéral"
-                >
-                  Fermer
-                </button>
-              </div>
-              <ItemForm
-                key={`${formMode}-${selectedItem?.id ?? "new"}`}
-                initialValues={formInitialValues}
-                categories={categories}
-                suppliers={suppliers}
-                mode={formMode}
-                isSubmitting={createItem.isPending || updateItem.isPending}
-                onSubmit={handleSubmitItem}
-                onCancel={closeSidebar}
-                supportsItemImages={supportsItemImages}
-                initialImageUrl={initialImageUrl}
-                supportsExpirationDate={supportsExpirationDate}
-                itemNoun={itemNoun}
-                existingSkus={existingSkus}
-                barcodePrefix={barcodePrefix}
-                currentItemId={selectedItem?.id ?? null}
-                enableLowStockOptOut={supportsLowStockOptOut}
-                customFieldDefinitions={activeCustomFields}
-              />
-            </div>
-
-            <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-              <h3 className="text-sm font-semibold text-white">Mouvement de stock</h3>
-              <MovementForm
-                item={selectedItem}
-                onSubmit={async (values) => {
-                  if (!selectedItem) {
-                    return;
-                  }
-                  setMessage(null);
-                  setError(null);
-                  await recordMovement.mutateAsync({ itemId: selectedItem.id, ...values });
-                }}
-                isSubmitting={recordMovement.isPending}
-                itemNoun={itemNoun}
-              />
-              <MovementHistory item={selectedItem} config={config} />
-            </div>
-
-            <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-              <h3 className="text-sm font-semibold text-white">Catégories</h3>
-              <CategoryManager
-                categories={categories}
-                onCreate={async (payload) => {
-                  setMessage(null);
-                  setError(null);
-                  await createCategory.mutateAsync(payload);
-                }}
-                onDelete={async (categoryId) => {
-                  setMessage(null);
-                  setError(null);
-                  await removeCategory.mutateAsync(categoryId);
-                }}
-                onUpdate={async (categoryId, payload) => {
-                  setMessage(null);
-                  setError(null);
-                  await updateCategoryEntry.mutateAsync({ categoryId, payload });
-                }}
-                isSubmitting={
-                  createCategory.isPending || removeCategory.isPending || updateCategoryEntry.isPending
-                }
-              />
-            </div>
-          </aside>
-        ) : null}
-      </div>
-    </EditableBlock>
+          {tableContent}
+        </EditableBlock>
       )
-    };
+    }
+  ];
 
-  const layoutBlocks: EditablePageBlock[] = [mainBlock];
-
-    if (config.showPurchaseOrders) {
-      layoutBlocks.push({
-        id: "inventory-orders",
-        title: config.purchaseOrdersTitle ?? "Bons de commande",
-        permissions: ["clothing"],
-        variant: "plain",
-        defaultLayout: {
-          lg: { x: 0, y: 18, w: 12, h: 12 },
-          md: { x: 0, y: 18, w: 10, h: 12 },
-          sm: { x: 0, y: 18, w: 6, h: 12 },
-          xs: { x: 0, y: 18, w: 4, h: 12 }
-        },
-        render: () => (
-          <EditableBlock id="inventory-orders">
-            <PurchaseOrdersPanel
-            suppliers={suppliers}
-            purchaseOrdersPath={config.purchaseOrdersPath}
-            itemsPath={config.purchaseOrdersItemsPath}
-            ordersQueryKey={config.purchaseOrdersQueryKey}
-            itemsQueryKey={config.purchaseOrdersItemsQueryKey}
-            title={config.purchaseOrdersTitle}
-            description={config.purchaseOrdersDescription}
-            downloadPrefix={config.purchaseOrdersDownloadPrefix}
-            itemIdField={config.purchaseOrdersItemIdField}
-          />
+  if (config.showPurchaseOrders && ordersContent) {
+    blocks.push({
+      id: "inventory-orders",
+      title: config.purchaseOrdersTitle ?? "Bons de commande",
+      permissions: ["clothing"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 18, w: 12, h: 12 },
+        md: { x: 0, y: 18, w: 10, h: 12 },
+        sm: { x: 0, y: 18, w: 6, h: 12 },
+        xs: { x: 0, y: 18, w: 4, h: 12 }
+      },
+      render: () => (
+        <EditableBlock id="inventory-orders">
+          {ordersContent}
         </EditableBlock>
       )
     });
   }
-
-  return layoutBlocks;
-  }, [
-    activeCustomFields,
-    columnStyles.category,
-    columnStyles.expiration,
-    columnStyles.lotMembership,
-    columnStyles.name,
-    columnStyles.quantity,
-    columnStyles.size,
-    columnStyles.sku,
-    columnStyles.supplier,
-    columnStyles.threshold,
-    columnVisibility,
-    columnWidths,
-    categoryNames,
-    config,
-    createCategory.isPending,
-    createItem.isPending,
-    existingSkus,
-    formInitialValues,
-    formMode,
-    handleSubmitItem,
-    isFetchingItems,
-    isSidebarOpen,
-    itemNoun,
-    items,
-    removeCategory.isPending,
-    selectedItem,
-    supplierNames,
-    suppliers,
-    supportsExpirationDate,
-    supportsItemImages,
-    supportsLowStockOptOut,
-    updateCategoryEntry.isPending,
-    updateItem.isPending
-  ]);
 
   return (
     <EditablePageLayout
@@ -1096,67 +1175,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
               <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
               <p className="text-sm text-slate-400">{config.description}</p>
             </div>
-            <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
-              <AppTextInput
-                value={searchValue}
-                onChange={(event) => setSearchValue(event.target.value)}
-                placeholder={searchPlaceholder}
-                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none lg:w-72"
-                title={searchPlaceholder}
-              />
-              <div className="flex flex-wrap items-center gap-2">
-                <ColumnManager
-                  options={columnOptions}
-                  visibility={columnVisibility}
-                  onToggle={(key) => toggleColumnVisibility(key as InventoryColumnKey)}
-                  onReset={resetColumnVisibility}
-                  description="Choisissez les colonnes à afficher dans la liste."
-                />
-                {config.exportPdfPath ? (
-                  <button
-                    type="button"
-                    onClick={() => exportInventoryPdf.mutateAsync()}
-                    disabled={exportInventoryPdf.isPending}
-                    className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
-                    title="Exporter l'inventaire au format PDF"
-                  >
-                    {exportInventoryPdf.isPending ? "Export en cours…" : "Exporter en PDF"}
-                  </button>
-                ) : null}
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (isSidebarOpen) {
-                      closeSidebar();
-                    } else {
-                      openSidebar();
-                    }
-                  }}
-                  className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-                  title={
-                    isSidebarOpen
-                      ? "Masquer le panneau latéral des formulaires"
-                      : "Afficher le panneau latéral des formulaires"
-                  }
-                >
-                  {isSidebarOpen ? "Masquer les formulaires" : "Afficher les formulaires"}
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    setFormMode("create");
-                    setSelectedItem(null);
-                    openSidebar();
-                  }}
-                  className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-                  title={`${itemNoun.newLabel} dans l'inventaire`}
-                >
-                  {itemNoun.newLabel}
-                </button>
-                {editButton}
-                {isEditing ? actionButtons : null}
-              </div>
-            </div>
+            {renderToolbar({ editButton, actionButtons, isEditing })}
           </header>
 
           {message ? <Alert tone="success" message={message} /> : null}

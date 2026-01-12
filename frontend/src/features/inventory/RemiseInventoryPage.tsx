@@ -47,52 +47,118 @@ export function RemiseInventoryPage() {
     [moduleTitle]
   );
 
-  const blocks = useMemo<EditablePageBlock[]>(
-    () => [
-      {
-        id: "remise-inventory-dashboard",
-        title: "Inventaire remises",
-        required: true,
-        permissions: ["inventory_remise"],
-        variant: "plain",
-        defaultLayout: {
-          lg: { x: 0, y: 0, w: 12, h: 18 },
-          md: { x: 0, y: 0, w: 10, h: 18 },
-          sm: { x: 0, y: 0, w: 6, h: 18 },
-          xs: { x: 0, y: 0, w: 4, h: 18 }
-        },
-        render: () => (
-          <EditableBlock id="remise-inventory-dashboard">
-            <InventoryModuleDashboard config={config} />
-          </EditableBlock>
-        )
-      },
-      {
-        id: "remise-lots",
-        title: "Lots",
-        permissions: ["inventory_remise"],
-        variant: "plain",
-        minH: 10,
-        defaultLayout: {
-          lg: { x: 0, y: 18, w: 12, h: 14 },
-          md: { x: 0, y: 18, w: 10, h: 14 },
-          sm: { x: 0, y: 18, w: 6, h: 14 },
-          xs: { x: 0, y: 18, w: 4, h: 14 }
-        },
-        render: () => (
-          <EditableBlock id="remise-lots">
-            <RemiseLotsPanel />
-          </EditableBlock>
-        )
-      }
-    ],
-    [config]
-  );
-
   return (
-    <EditablePageLayout
-      pageKey="module:remise:inventory"
-      blocks={blocks}
+    <InventoryModuleDashboard
+      config={config}
+      renderLayout={({ header, filters, table, orders }) => {
+        const blocks: EditablePageBlock[] = [
+          {
+            id: "remise-header",
+            title: "Inventaire remises",
+            required: true,
+            permissions: ["inventory_remise"],
+            variant: "plain",
+            defaultLayout: {
+              lg: { x: 0, y: 0, w: 12, h: 6 },
+              md: { x: 0, y: 0, w: 10, h: 6 },
+              sm: { x: 0, y: 0, w: 6, h: 6 },
+              xs: { x: 0, y: 0, w: 4, h: 6 }
+            },
+            render: () => (
+              <EditableBlock id="remise-header">
+                {header}
+              </EditableBlock>
+            )
+          },
+          {
+            id: "remise-filters",
+            title: "Filtres et actions",
+            permissions: ["inventory_remise"],
+            variant: "plain",
+            defaultLayout: {
+              lg: { x: 0, y: 6, w: 12, h: 6 },
+              md: { x: 0, y: 6, w: 10, h: 6 },
+              sm: { x: 0, y: 6, w: 6, h: 6 },
+              xs: { x: 0, y: 6, w: 4, h: 6 }
+            },
+            render: () => (
+              <EditableBlock id="remise-filters">
+                {filters}
+              </EditableBlock>
+            )
+          },
+          {
+            id: "remise-items",
+            title: "Matériels en remise",
+            permissions: ["inventory_remise"],
+            variant: "plain",
+            defaultLayout: {
+              lg: { x: 0, y: 12, w: 12, h: 20 },
+              md: { x: 0, y: 12, w: 10, h: 20 },
+              sm: { x: 0, y: 12, w: 6, h: 20 },
+              xs: { x: 0, y: 12, w: 4, h: 20 }
+            },
+            render: () => (
+              <EditableBlock id="remise-items">
+                {table}
+              </EditableBlock>
+            )
+          }
+        ];
+
+        if (orders) {
+          blocks.push({
+            id: "remise-orders",
+            title: "Bons de commande remises",
+            permissions: ["inventory_remise"],
+            variant: "plain",
+            minH: 12,
+            defaultLayout: {
+              lg: { x: 0, y: 32, w: 12, h: 12 },
+              md: { x: 0, y: 32, w: 10, h: 12 },
+              sm: { x: 0, y: 32, w: 6, h: 12 },
+              xs: { x: 0, y: 32, w: 4, h: 12 }
+            },
+            render: () => (
+              <EditableBlock id="remise-orders">
+                {orders}
+              </EditableBlock>
+            )
+          });
+        }
+
+        blocks.push({
+          id: "remise-lots",
+          title: "Lots",
+          permissions: ["inventory_remise"],
+          variant: "plain",
+          minH: 10,
+          defaultLayout: {
+            lg: { x: 0, y: 44, w: 12, h: 14 },
+            md: { x: 0, y: 44, w: 10, h: 14 },
+            sm: { x: 0, y: 44, w: 6, h: 14 },
+            xs: { x: 0, y: 44, w: 4, h: 14 }
+          },
+          render: () => (
+            <EditableBlock id="remise-lots">
+              <RemiseLotsPanel />
+            </EditableBlock>
+          )
+        });
+
+        return (
+          <EditablePageLayout
+            pageKey="module:remise:inventory"
+            blocks={blocks}
+            renderHeader={({ editButton, actionButtons, isEditing }) => (
+              <div className="flex flex-wrap justify-end gap-2">
+                {editButton}
+                {isEditing ? actionButtons : null}
+              </div>
+            )}
+          />
+        );
+      }}
     />
   );
 }
