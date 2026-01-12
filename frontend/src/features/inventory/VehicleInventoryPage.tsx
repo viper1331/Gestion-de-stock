@@ -299,7 +299,7 @@ type DraggedItemData = {
   kind: DragKind;
   sourceType?: InventorySourceType;
   sourceId?: number;
-  vehicleItemId?: number;
+  vehicleItemId?: number | null;
   categoryId?: number | null;
   remiseItemId?: number | null;
   pharmacyItemId?: number | null;
@@ -507,7 +507,7 @@ function writeItemDragPayload(
     pharmacyItemId: source.pharmacyItemId,
     quantity: source.quantity,
     lotId: item.lot_id ?? null,
-    lotName: item.lot_name ?? undefined,
+    lotName: item.lot_name ?? null,
     assignedLotItemIds: options?.assignedLotItemIds,
     offsetX: event.clientX - rect.left,
     offsetY: event.clientY - rect.top,
@@ -666,7 +666,7 @@ export function VehicleInventoryPage() {
   const [newSubViewName, setNewSubViewName] = useState("");
   const renderCountRef = useRef(0);
   renderCountRef.current += 1;
-  if (process.env.NODE_ENV !== "production") {
+  if (import.meta.env.DEV) {
     console.debug("[VehicleInventoryPage] render", {
       count: renderCountRef.current,
       selectedVehicleId,
@@ -751,7 +751,7 @@ export function VehicleInventoryPage() {
     setVehicleExtra((previous) => {
       const nextExtra = buildCustomFieldDefaults(activeVehicleCustomFields, previous);
       const shouldUpdate = !areExtraValuesEqual(previous, nextExtra);
-      if (process.env.NODE_ENV !== "production") {
+      if (import.meta.env.DEV) {
         console.debug("[VehicleInventoryPage] extra sync effect", {
           activeVehicleCustomFieldsCount: activeVehicleCustomFields.length,
           shouldUpdate,
@@ -1466,7 +1466,7 @@ export function VehicleInventoryPage() {
           stopExportPolling();
           return;
         }
-        if (process.env.NODE_ENV !== "production") {
+        if (import.meta.env.DEV) {
           console.warn("[VehicleInventoryPage] export status polling failed", error);
         }
       }
@@ -1567,7 +1567,7 @@ export function VehicleInventoryPage() {
   ]);
 
   const handleExportPdf = useCallback(() => {
-    if (process.env.NODE_ENV !== "production") {
+    if (import.meta.env.DEV) {
       console.debug("[VehicleInventoryPage] export requested");
     }
     requestAnimationFrame(() => {
@@ -1772,7 +1772,8 @@ export function VehicleInventoryPage() {
         categoryId: selectedVehicle.id,
         name: selectedVehicle.name,
         sizes: updatedViews,
-        vehicleType: selectedVehicle.vehicle_type ?? "incendie"
+        vehicleType: selectedVehicle.vehicle_type ?? "incendie",
+        extra: selectedVehicle.extra ?? {}
       },
       {
         onSuccess: () => {
@@ -3998,7 +3999,22 @@ function VehicleCompartment({
                     ? (quantity) => onUpdateItemQuantity(item.id, quantity)
                     : undefined
                 }
-                onUpdatePosition={(position) => onDropItem(item.id, position, { isReposition: true })}
+                onUpdatePosition={(position) => {
+                  const dropRequest = buildDropRequestPayload({
+                    sourceType: "vehicle",
+                    sourceId: item.id,
+                    vehicleItemId: item.id,
+                    categoryId,
+                    selectedView,
+                    position,
+                    quantity: item.quantity,
+                    sourceCategoryId: item.category_id ?? null,
+                    remiseItemId: item.remise_item_id ?? null,
+                    pharmacyItemId: item.pharmacy_item_id ?? null,
+                    isReposition: true
+                  });
+                  onDropItem(dropRequest);
+                }}
               />
             ))}
             {items.length === 0 && (
@@ -4107,6 +4123,9 @@ function VehicleItemMarker({
       writeAppliedLotDragPayload(event, entry.applied_lot_id);
       return;
     }
+    if (entry.primaryItemId === null) {
+      return;
+    }
     writeItemDragPayload(
       event,
       {
@@ -4115,7 +4134,8 @@ function VehicleItemMarker({
         remise_item_id: entry.remise_item_id,
         pharmacy_item_id: entry.pharmacy_item_id,
         lot_id: entry.lot_id,
-        lot_name: entry.lot_name
+        lot_name: entry.lot_name,
+        quantity: entry.quantity
       },
       {
         assignedLotItemIds: entry.isLot ? entry.lotItemIds : undefined
@@ -4888,7 +4908,7 @@ function ItemCard({
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const renderCountRef = useRef(0);
   renderCountRef.current += 1;
-  if (process.env.NODE_ENV !== "production") {
+  if (import.meta.env.DEV) {
     console.debug("[ItemCard] render", { itemId: item.id, count: renderCountRef.current });
   }
   const [isEditingPosition, setIsEditingPosition] = useState(false);
@@ -4927,7 +4947,7 @@ function ItemCard({
     };
     setDraftPosition((previous) => {
       const shouldUpdate = previous.x !== nextDraft.x || previous.y !== nextDraft.y;
-      if (process.env.NODE_ENV !== "production") {
+      if (import.meta.env.DEV) {
         console.debug("[ItemCard] position sync effect", {
           itemId: item.id,
           shouldUpdate,
@@ -4942,7 +4962,7 @@ function ItemCard({
     // Évite de relancer un rendu si la quantité n'a pas changé.
     setDraftQuantity((previous) => {
       const shouldUpdate = previous !== item.quantity;
-      if (process.env.NODE_ENV !== "production") {
+      if (import.meta.env.DEV) {
         console.debug("[ItemCard] quantity sync effect", {
           itemId: item.id,
           shouldUpdate,
@@ -4959,7 +4979,7 @@ function ItemCard({
     const nextExtra = buildCustomFieldDefaults(customFieldDefinitions, item.extra ?? {});
     setExtraDraft((previous) => {
       const shouldUpdate = !areExtraValuesEqual(previous, nextExtra);
-      if (process.env.NODE_ENV !== "production") {
+      if (import.meta.env.DEV) {
         console.debug("[ItemCard] extra sync effect", {
           itemId: item.id,
           shouldUpdate,
@@ -5126,7 +5146,9 @@ function ItemCard({
           remise_item_id: item.remise_item_id,
           pharmacy_item_id: item.pharmacy_item_id,
           lot_id: item.lot_id,
-          lot_name: item.lot_name
+          lot_name: item.lot_name,
+          quantity: item.quantity,
+          available_quantity: item.available_quantity ?? null
         });
       }}
     >
@@ -5564,12 +5586,12 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
 
   try {
     const parsed = JSON.parse(rawData) as Partial<DraggedItemData>;
-    const hasKind =
-      parsed.kind === "library_item" ||
-      parsed.kind === "pharmacy_lot" ||
-      parsed.kind === "remise_lot" ||
-      parsed.kind === "applied_lot";
-    if (!hasKind) {
+    const isDragKind = (value: unknown): value is DragKind =>
+      value === "library_item" ||
+      value === "pharmacy_lot" ||
+      value === "remise_lot" ||
+      value === "applied_lot";
+    if (!isDragKind(parsed.kind)) {
       return null;
     }
     const hasSourceType =

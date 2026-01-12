@@ -330,7 +330,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
             type="button"
             onClick={() => {
               setEditingLotId(null);
-              setLotForm({ name: "", description: "" });
+              setLotForm({ name: "", description: "", extra: {} });
             }}
             className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400"
           >
