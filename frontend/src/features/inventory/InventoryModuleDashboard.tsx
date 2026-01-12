@@ -71,7 +71,7 @@ interface ItemFormValues {
   track_low_stock: boolean;
   supplier_id: number | null;
   requires_expiration_date: boolean;
-  expiration_date: string;
+  expiration_date: string | null;
   extra: Record<string, unknown>;
 }
 
@@ -1382,9 +1382,8 @@ function ItemForm({
       supportsExpirationDate && values.requires_expiration_date && values.expiration_date
         ? values.expiration_date
         : null;
-    const { requires_expiration_date: _requiresExpirationDate, ...restValues } = values;
     const payload = {
-      ...restValues,
+      ...values,
       sku: finalSku,
       quantity: Number(values.quantity) || 0,
       low_stock_threshold: Number(values.low_stock_threshold) || 0,
@@ -1406,7 +1405,7 @@ function ItemForm({
         supplier_id: null,
         requires_expiration_date: false,
         expiration_date: "",
-        extra: buildCustomFieldDefaults(activeCustomFields, {})
+        extra: buildCustomFieldDefaults(customFieldDefinitions, {})
       });
       setIsSkuAuto(true);
       if (supportsItemImages) {
@@ -1562,7 +1561,7 @@ function ItemForm({
               <AppTextInput
                 id="item-expiration-date"
                 type="date"
-                value={values.expiration_date}
+                value={values.expiration_date ?? ""}
                 onChange={(event) =>
                   setValues((prev) => ({ ...prev, expiration_date: event.target.value }))
                 }

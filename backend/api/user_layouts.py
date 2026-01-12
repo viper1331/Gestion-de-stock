@@ -204,6 +204,15 @@ def _normalize_layout(
     return normalized
 
 
+def _serialize_layout(layout: dict[str, list[models.PageLayoutItem]]) -> str:
+    return json.dumps(
+        {
+            breakpoint: [item.model_dump() for item in items]
+            for breakpoint, items in layout.items()
+        }
+    )
+
+
 @router.get("/{page_key:path}", response_model=models.UserPageLayoutResponse)
 async def get_user_layout(
     page_key: str,
@@ -276,7 +285,7 @@ async def upsert_user_layout(
     normalized_layout = _normalize_layout(payload.layout, allowed_blocks)
     normalized_hidden = [block for block in payload.hidden_blocks if block in allowed_blocks]
 
-    layout_json = json.dumps(normalized_layout)
+    layout_json = _serialize_layout(normalized_layout)
     hidden_json = json.dumps(normalized_hidden)
 
     with db.get_users_connection() as conn:
