@@ -633,7 +633,7 @@ export function CollaboratorsPage() {
 
       {isImportOpen ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-3 py-4 sm:px-4 md:px-6">
-          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-[1100px] flex-col rounded-lg border border-slate-800 bg-slate-900 text-slate-100 shadow-xl">
+          <div className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl flex-col rounded-lg border border-slate-800 bg-slate-900 text-slate-100 shadow-xl">
             <div className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 px-4 py-4 sm:px-6">
               <div>
                 <h3 className="text-lg font-semibold text-white">Importer des collaborateurs</h3>

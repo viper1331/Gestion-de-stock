@@ -511,7 +511,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
 
                 {canEdit ? (
                   <form className="flex flex-wrap items-end gap-2" onSubmit={handleAddLotItem}>
-                    <div className="flex-1 min-w-[200px]">
+                    <div className="flex-1 min-w-0">
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor="pharmacy-lot-item">
                         Article
                       </label>
@@ -530,7 +530,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                         ))}
                       </select>
                     </div>
-                    <div className="min-w-[180px]">
+                    <div className="flex-1 min-w-0 sm:max-w-xs">
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor="pharmacy-lot-compartment">
                         Compartiment
                       </label>

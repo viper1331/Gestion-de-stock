@@ -709,7 +709,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
                           className="hidden lg:table-cell text-center"
                         />
                       ) : null}
-                      <th className="w-[160px] px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400 sm:w-[180px]">
+                      <th className="w-32 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400 sm:w-40">
                         Actions
                       </th>
                     </tr>
@@ -940,7 +940,7 @@ export function InventoryModuleDashboard({ config = DEFAULT_INVENTORY_CONFIG }: 
         </div>
 
         {isSidebarOpen ? (
-          <aside className="w-full space-y-6 lg:w-[380px]">
+          <aside className="w-full space-y-6 lg:w-96">
             <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
               <div className="flex items-center justify-between gap-2">
                 <h3 className="text-sm font-semibold text-white">

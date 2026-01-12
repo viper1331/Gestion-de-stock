@@ -6,6 +6,7 @@ import { isAxiosError } from "axios";
 import { api } from "../lib/api";
 import { useAuth } from "../features/auth/useAuth";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
+import { SafeBlock } from "./SafeBlock";
 
 const ResponsiveGridLayout = WidthProvider(Responsive);
 
@@ -54,6 +55,94 @@ type EditablePageLayoutProps = {
 
 const DEFAULT_BREAKPOINTS = { lg: 1200, md: 768, sm: 0 } as const;
 const DEFAULT_COLUMNS = { lg: 12, md: 6, sm: 1 } as const;
+const DEFAULT_ROW_HEIGHT = 32;
+const MIN_LAYOUT_WIDTH = 1;
+const MIN_LAYOUT_HEIGHT = 4;
+
+function sanitizeLayoutItems(
+  items: EditableLayoutItem[],
+  cols: number
+): { items: EditableLayoutItem[]; isValid: boolean } {
+  const seen = new Set<string>();
+  const sanitized: EditableLayoutItem[] = [];
+  let isValid = true;
+
+  for (const item of items) {
+    if (seen.has(item.i)) {
+      isValid = false;
+      continue;
+    }
+    if (
+      !Number.isFinite(item.x) ||
+      !Number.isFinite(item.y) ||
+      !Number.isFinite(item.w) ||
+      !Number.isFinite(item.h)
+    ) {
+      isValid = false;
+      continue;
+    }
+    seen.add(item.i);
+    const w = Math.min(cols, Math.max(MIN_LAYOUT_WIDTH, Math.floor(item.w)));
+    const h = Math.max(MIN_LAYOUT_HEIGHT, Math.floor(item.h));
+    let x = Math.max(0, Math.floor(item.x));
+    let y = Math.max(0, Math.floor(item.y));
+
+    if (item.x < 0 || item.y < 0 || item.w <= 0 || item.h <= 0 || item.w > cols) {
+      isValid = false;
+    }
+
+    if (x + w > cols) {
+      x = Math.max(0, cols - w);
+      isValid = false;
+    }
+
+    sanitized.push({ ...item, x, y, w, h });
+  }
+
+  for (let index = 0; index < sanitized.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < sanitized.length; otherIndex += 1) {
+      const first = sanitized[index];
+      const second = sanitized[otherIndex];
+      const overlaps =
+        first.x < second.x + second.w &&
+        first.x + first.w > second.x &&
+        first.y < second.y + second.h &&
+        first.y + first.h > second.y;
+      if (overlaps) {
+        isValid = false;
+        break;
+      }
+    }
+    if (!isValid) {
+      break;
+    }
+  }
+
+  return { items: sanitized, isValid };
+}
+
+function sanitizeLayouts(
+  layouts: EditableLayoutSet,
+  fallbackLayouts: EditableLayoutSet
+): EditableLayoutSet {
+  const breakpoints: EditableLayoutBreakpoint[] = ["lg", "md", "sm"];
+  const sanitized: EditableLayoutSet = { lg: [], md: [], sm: [] };
+
+  for (const breakpoint of breakpoints) {
+    const cols = DEFAULT_COLUMNS[breakpoint];
+    const { items, isValid } = sanitizeLayoutItems(layouts[breakpoint] ?? [], cols);
+    if (!isValid) {
+      sanitized[breakpoint] = sanitizeLayoutItems(
+        fallbackLayouts[breakpoint] ?? [],
+        cols
+      ).items;
+    } else {
+      sanitized[breakpoint] = items;
+    }
+  }
+
+  return sanitized;
+}
 
 function normalizeLayouts(
   defaultLayouts: EditableLayoutSet,
@@ -85,7 +174,7 @@ function normalizeLayouts(
     normalized[breakpoint] = layoutItems;
   }
 
-  return normalized;
+  return sanitizeLayouts(normalized, normalized);
 }
 
 function mergeLayouts(
@@ -143,7 +232,7 @@ function mergeLayouts(
     merged[breakpoint] = nextItems;
   }
 
-  return merged;
+  return sanitizeLayouts(merged, defaults);
 }
 
 function areLayoutsEqual(a: EditableLayoutSet, b: EditableLayoutSet): boolean {
@@ -461,9 +550,13 @@ export function EditablePageLayout({
     return allowedBlocks.filter((block) => hiddenIds.has(block.id));
   }, [activeLayouts.lg, allowedBlocks]);
 
+  const sectionClassName = ["editable-page", "space-y-6", className]
+    .filter(Boolean)
+    .join(" ");
+
   if (layoutQuery.isLoading && !layoutQuery.data) {
     return (
-      <section className={className ?? "space-y-6"}>
+      <section className={sectionClassName}>
         {renderHeader ? renderHeader({ isEditing, isDirty, editButton, actionButtons }) : null}
         <p className="text-sm text-slate-400">Chargement de la mise en page...</p>
       </section>
@@ -471,15 +564,20 @@ export function EditablePageLayout({
   }
 
   return (
-    <section className={className ?? "space-y-6"}>
+    <section className={sectionClassName}>
       {renderHeader ? renderHeader({ isEditing, isDirty, editButton, actionButtons }) : null}
       <ResponsiveGridLayout
         className="layout"
         layouts={visibleLayouts}
         breakpoints={DEFAULT_BREAKPOINTS}
         cols={DEFAULT_COLUMNS}
-        rowHeight={32}
+        rowHeight={DEFAULT_ROW_HEIGHT}
+        containerPadding={[16, 16]}
         margin={[16, 16]}
+        preventCollision
+        isBounded
+        useCSSTransforms
+        measureBeforeMount={false}
         isResizable={isEditing}
         isDraggable={isEditing}
         draggableHandle=".layout-drag-handle"
@@ -493,47 +591,47 @@ export function EditablePageLayout({
               block.containerClassName ?? "rounded-lg border border-slate-800 bg-slate-900 p-4";
             const editingClassName = isEditing ? "ring-1 ring-slate-700" : "";
             const containerClassName = [
-              "min-w-0 max-w-full",
+              "min-w-0 max-w-full h-full",
               baseClassName,
               editingClassName
             ]
               .filter(Boolean)
               .join(" ");
             return (
-            <div key={block.id} className={containerClassName}>
-              {isEditing ? (
-                <div className="mb-3 flex items-start justify-between gap-3">
-                  <div className="flex items-center gap-2">
-                    <span
-                      className="layout-drag-handle inline-flex h-7 w-7 cursor-move items-center justify-center rounded border border-slate-700 text-slate-300"
-                      title="Déplacer le bloc"
+              <div key={block.id} className={containerClassName}>
+                {isEditing ? (
+                  <div className="mb-3 flex items-start justify-between gap-3">
+                    <div className="flex items-center gap-2">
+                      <span
+                        className="layout-drag-handle inline-flex h-7 w-7 cursor-move items-center justify-center rounded border border-slate-700 text-slate-300"
+                        title="Déplacer le bloc"
+                      >
+                        <span className="text-xs">↕</span>
+                      </span>
+                      {block.title ? (
+                        <h3 className="text-sm font-semibold text-white">{block.title}</h3>
+                      ) : null}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => toggleHidden(block.id)}
+                      disabled={block.required}
+                      className="inline-flex items-center gap-2 text-xs font-semibold text-slate-200 hover:text-white"
+                      title={
+                        activeLayouts.lg.find((item) => item.i === block.id)?.hidden
+                          ? "Afficher ce bloc"
+                          : "Masquer ce bloc"
+                      }
                     >
-                      <span className="text-xs">↕</span>
-                    </span>
-                    {block.title ? (
-                      <h3 className="text-sm font-semibold text-white">{block.title}</h3>
-                    ) : null}
+                      <EyeIcon
+                        hidden={Boolean(activeLayouts.lg.find((item) => item.i === block.id)?.hidden)}
+                      />
+                      {activeLayouts.lg.find((item) => item.i === block.id)?.hidden ? "Afficher" : "Masquer"}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => toggleHidden(block.id)}
-                    disabled={block.required}
-                    className="inline-flex items-center gap-2 text-xs font-semibold text-slate-200 hover:text-white"
-                    title={
-                      activeLayouts.lg.find((item) => item.i === block.id)?.hidden
-                        ? "Afficher ce bloc"
-                        : "Masquer ce bloc"
-                    }
-                  >
-                    <EyeIcon
-                      hidden={Boolean(activeLayouts.lg.find((item) => item.i === block.id)?.hidden)}
-                    />
-                    {activeLayouts.lg.find((item) => item.i === block.id)?.hidden ? "Afficher" : "Masquer"}
-                  </button>
-                </div>
-              ) : null}
-              {block.render()}
-            </div>
+                ) : null}
+                <SafeBlock>{block.render()}</SafeBlock>
+              </div>
             );
           })}
       </ResponsiveGridLayout>
