@@ -10,7 +10,12 @@ from backend.core import db, security, services
 client = TestClient(app)
 
 
-def _create_user(username: str, password: str, role: str = "user") -> None:
+def _create_user(
+    username: str,
+    password: str,
+    role: str = "user",
+    with_permissions: bool = True,
+) -> None:
     services.ensure_database_ready()
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
@@ -25,10 +30,11 @@ def _create_user(username: str, password: str, role: str = "user") -> None:
             "DELETE FROM module_permissions WHERE user_id = ? AND module = ?",
             (user_id, "clothing"),
         )
-        conn.execute(
-            "INSERT INTO module_permissions (user_id, module, can_view, can_edit) VALUES (?, ?, 1, 1)",
-            (user_id, "clothing"),
-        )
+        if with_permissions:
+            conn.execute(
+                "INSERT INTO module_permissions (user_id, module, can_view, can_edit) VALUES (?, ?, 1, 1)",
+                (user_id, "clothing"),
+            )
         conn.commit()
 
 
@@ -121,7 +127,7 @@ def test_layout_normalization_clamps_values() -> None:
 
 
 def test_layout_strips_blocks_without_permissions() -> None:
-    _create_user("layout-user-4", "layout-pass")
+    _create_user("layout-user-4", "layout-pass", with_permissions=False)
     headers = _login_headers("layout-user-4", "layout-pass")
 
     payload = {

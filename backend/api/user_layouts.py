@@ -81,7 +81,10 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
     },
     "module:remise:inventory": {
         "blocks": {
-            "remise-inventory-dashboard": ("inventory_remise", "view"),
+            "remise-header": ("inventory_remise", "view"),
+            "remise-filters": ("inventory_remise", "view"),
+            "remise-items": ("inventory_remise", "view"),
+            "remise-orders": ("inventory_remise", "view"),
             "remise-lots": ("inventory_remise", "view"),
         }
     },

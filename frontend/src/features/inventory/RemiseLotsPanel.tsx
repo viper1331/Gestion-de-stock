@@ -772,8 +772,8 @@ export function RemiseLotsPanel() {
                   </div>
                 </form>
 
-                <div className="overflow-hidden rounded-md border border-slate-800">
-                  <table className="min-w-full divide-y divide-slate-800">
+                <div className="min-w-0 overflow-auto rounded-md border border-slate-800">
+                  <table className="w-full min-w-full divide-y divide-slate-800">
                     <thead className="bg-slate-900/60">
                       <tr>
                         <th className="px-3 py-2 text-left text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -819,7 +819,7 @@ export function RemiseLotsPanel() {
                                       [item.id]: Number(event.target.value)
                                     }))
                                   }
-                                  className="w-24 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                                  className="w-full min-w-0 rounded-md border border-slate-800 bg-slate-900 px-2 py-1 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                                 />
                               </td>
                               <td className="px-3 py-3 text-sm text-slate-200">{item.available_quantity}</td>
