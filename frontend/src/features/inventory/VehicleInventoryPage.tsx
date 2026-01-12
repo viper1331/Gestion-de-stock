@@ -2547,7 +2547,7 @@ export function VehicleInventoryPage() {
       render: () =>
         !selectedVehicle ? (
           <EditableBlock id="vehicle-list">
-            <section className="grid w-full gap-6 lg:grid-cols-3">
+            <section className="grid min-w-0 w-full gap-6 lg:grid-cols-3">
               {vehicles.map((vehicle) => (
                 <VehicleCard
                   key={vehicle.id}
@@ -2792,20 +2792,21 @@ export function VehicleInventoryPage() {
             </div>
           ) : null}
 
-          <div className="grid gap-6 lg:grid-cols-[2fr,1fr]">
-            <VehicleCompartment
-              title={selectedView ?? DEFAULT_VIEW_LABEL}
-              description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
-              items={itemsForSelectedView}
-              allItems={items}
-              appliedLots={appliedLots}
-              appliedLotItemsByAssignment={appliedLotItemsByAssignment}
-              categoryId={selectedVehicle.id}
-              viewConfig={selectedViewConfig}
-              availablePhotos={vehiclePhotos}
-              selectedView={selectedView}
-              onDragStartCapture={lockViewSelection}
-              onDropItem={(dropRequest) => {
+          <div className="grid min-w-0 gap-6 lg:grid-cols-[2fr,1fr]">
+            <div className="min-w-0">
+              <VehicleCompartment
+                title={selectedView ?? DEFAULT_VIEW_LABEL}
+                description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
+                items={itemsForSelectedView}
+                allItems={items}
+                appliedLots={appliedLots}
+                appliedLotItemsByAssignment={appliedLotItemsByAssignment}
+                categoryId={selectedVehicle.id}
+                viewConfig={selectedViewConfig}
+                availablePhotos={vehiclePhotos}
+                selectedView={selectedView}
+                onDragStartCapture={lockViewSelection}
+                onDropItem={(dropRequest) => {
                 const targetView = dropRequest.targetView;
 
                 logDebug("DROP EVENT", {
@@ -2957,9 +2958,10 @@ export function VehicleInventoryPage() {
                   successMessage: "Quantité mise à jour."
                 });
               }}
-            />
+              />
+            </div>
 
-            <aside className="space-y-6">
+            <aside className="min-w-0 space-y-6">
               <VehicleItemsPanel
                 title="Matériel dans les autres vues"
                 description="Faites glisser un équipement vers la vue courante pour le déplacer."
@@ -3085,9 +3087,9 @@ function VehicleCard({
     <button
       type="button"
       onClick={onClick}
-      className="group flex h-full flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-1 hover:border-slate-300 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600"
+      className="group flex h-full w-full min-w-0 flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white text-left shadow-sm transition hover:-translate-y-1 hover:border-slate-300 hover:shadow-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600"
     >
-      <div className="relative h-44 w-full bg-slate-50 dark:bg-slate-800">
+      <div className="relative h-44 w-full min-w-0 bg-slate-50 dark:bg-slate-800">
         <img
           src={imageSource}
           alt={`Illustration du véhicule ${vehicle.name}`}
@@ -3096,7 +3098,7 @@ function VehicleCard({
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900/30 via-transparent" />
       </div>
-      <div className="flex flex-1 flex-col gap-2 p-5">
+      <div className="flex min-w-0 flex-1 flex-col gap-2 p-5">
         <div>
           <h2 className="text-lg font-semibold text-slate-900 dark:text-slate-100">
             {vehicle.name}
@@ -3743,10 +3745,10 @@ function VehicleCompartment({
       };
 
   return (
-    <div>
+    <div className="min-w-0">
       <div
         className={clsx(
-          "flex h-full flex-col gap-6 rounded-2xl border-2 border-dashed bg-white p-6 text-slate-600 shadow-sm transition dark:bg-slate-900",
+          "flex h-full min-w-0 flex-col gap-6 rounded-2xl border-2 border-dashed bg-white p-6 text-slate-600 shadow-sm transition dark:bg-slate-900",
           isHovering
             ? "border-blue-400 bg-blue-50/60 text-blue-700 dark:border-blue-500 dark:bg-blue-950/40 dark:text-blue-200"
             : "border-slate-300 dark:border-slate-700"

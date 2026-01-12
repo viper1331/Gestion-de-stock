@@ -45,9 +45,11 @@ type EditablePageLayoutProps = {
   className?: string;
 };
 
-const DEFAULT_BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480 } as const;
-const DEFAULT_COLUMNS = { lg: 12, md: 10, sm: 6, xs: 4 } as const;
-const DEFAULT_ROW_HEIGHT = 32;
+export const LAYOUT_BREAKPOINTS = { lg: 1200, md: 996, sm: 768, xs: 480 } as const;
+export const LAYOUT_COLUMNS = { lg: 12, md: 10, sm: 6, xs: 4 } as const;
+export const LAYOUT_ROW_HEIGHT = 32;
+export const LAYOUT_CONTAINER_PADDING: [number, number] = [16, 16];
+export const LAYOUT_MARGIN: [number, number] = [16, 16];
 const MIN_LAYOUT_SIZE = 1;
 
 const BREAKPOINTS: EditableLayoutBreakpoint[] = ["lg", "md", "sm", "xs"];
@@ -117,7 +119,7 @@ function normalizeLayouts(
   const normalized: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
 
   for (const breakpoint of BREAKPOINTS) {
-    const cols = DEFAULT_COLUMNS[breakpoint];
+    const cols = LAYOUT_COLUMNS[breakpoint];
     normalized[breakpoint] = normalizeLayoutItems(layouts[breakpoint] ?? [], cols, blocksById);
   }
 
@@ -128,7 +130,7 @@ function buildDefaultLayouts(blocks: EditablePageBlock[]): EditableLayoutSet {
   const layoutSet: EditableLayoutSet = { lg: [], md: [], sm: [], xs: [] };
 
   for (const breakpoint of BREAKPOINTS) {
-    const cols = DEFAULT_COLUMNS[breakpoint];
+    const cols = LAYOUT_COLUMNS[breakpoint];
     let nextY = 0;
 
     for (const block of blocks) {
@@ -327,9 +329,16 @@ export function EditablePageLayout({
     enabled: Boolean(user)
   });
 
+  const sanitizedSavedLayouts = useMemo(() => {
+    if (!layoutQuery.data?.layout) {
+      return null;
+    }
+    return normalizeLayouts(layoutQuery.data.layout, allowedBlocks);
+  }, [allowedBlocks, layoutQuery.data?.layout]);
+
   const mergedLayouts = useMemo(
-    () => mergeLayouts(defaultLayouts, layoutQuery.data?.layout ?? null, allowedBlocks),
-    [allowedBlocks, defaultLayouts, layoutQuery.data?.layout]
+    () => mergeLayouts(defaultLayouts, sanitizedSavedLayouts, allowedBlocks),
+    [allowedBlocks, defaultLayouts, sanitizedSavedLayouts]
   );
 
   const mergedHiddenBlocks = useMemo(() => {
@@ -356,6 +365,8 @@ export function EditablePageLayout({
     }
   }, [isEditing, mergedLayouts, mergedHiddenBlocks]);
 
+  const isLayoutLoading = layoutQuery.isLoading && !layoutQuery.data;
+
   const isDirty = useMemo(() => {
     if (!areLayoutsEqual(activeLayouts, savedLayouts)) {
       return true;
@@ -381,7 +392,10 @@ export function EditablePageLayout({
     }
   });
 
-  const canEditLayout = useMemo(() => Boolean(user), [user]);
+  const canEditLayout = useMemo(
+    () => Boolean(user) && allowedBlocks.length > 1,
+    [allowedBlocks, user]
+  );
 
   const editButton = canEditLayout ? (
     <button
@@ -403,6 +417,7 @@ export function EditablePageLayout({
           const safeLayouts = normalizeLayouts(activeLayouts, allowedBlocks);
           const hiddenIds = Array.from(hiddenBlocks);
           await saveMutation.mutateAsync({ layout: safeLayouts, hiddenBlocks: hiddenIds });
+          setActiveLayouts(safeLayouts);
           setSavedLayouts(safeLayouts);
           setSavedHiddenBlocks(new Set(hiddenBlocks));
           setIsEditing(false);
@@ -489,28 +504,31 @@ export function EditablePageLayout({
     [allowedBlocks, hiddenBlocks]
   );
 
-  const sectionClassName = ["editable-page", "space-y-6", className].filter(Boolean).join(" ");
-
-  if (layoutQuery.isLoading && !layoutQuery.data) {
-    return (
-      <section className={sectionClassName}>
-        {renderHeader ? renderHeader({ isEditing, isDirty, editButton, actionButtons }) : null}
-        <p className="text-sm text-slate-400">Chargement de la mise en page...</p>
-      </section>
-    );
-  }
+  const sectionClassName = [
+    "editable-page",
+    "min-h-0",
+    "min-w-0",
+    "space-y-6",
+    "overflow-x-hidden",
+    className
+  ]
+    .filter(Boolean)
+    .join(" ");
 
   return (
     <section className={sectionClassName}>
       {renderHeader ? renderHeader({ isEditing, isDirty, editButton, actionButtons }) : null}
+      {isLayoutLoading ? (
+        <p className="text-sm text-slate-400">Chargement de la mise en page...</p>
+      ) : null}
       <ResponsiveGridLayout
-        className="layout"
+        className="layout min-h-0 min-w-0"
         layouts={visibleLayouts}
-        breakpoints={DEFAULT_BREAKPOINTS}
-        cols={DEFAULT_COLUMNS}
-        rowHeight={DEFAULT_ROW_HEIGHT}
-        containerPadding={[16, 16]}
-        margin={[16, 16]}
+        breakpoints={LAYOUT_BREAKPOINTS}
+        cols={LAYOUT_COLUMNS}
+        rowHeight={LAYOUT_ROW_HEIGHT}
+        containerPadding={LAYOUT_CONTAINER_PADDING}
+        margin={LAYOUT_MARGIN}
         preventCollision
         isBounded
         useCSSTransforms

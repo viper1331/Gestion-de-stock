@@ -4,6 +4,8 @@ import { isAxiosError } from "axios";
 
 import { api } from "../../lib/api";
 import { resolveMediaUrl } from "../../lib/media";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface VehicleQrInfo {
   item_id: number;
@@ -46,7 +48,7 @@ export function VehicleGuidePage() {
 
   const coverUrl = useMemo(() => resolveMediaUrl(info?.image_url), [info?.image_url]);
 
-  return (
+  const content = (
     <div className="min-h-screen bg-gradient-to-br from-slate-950 via-slate-900 to-slate-950 px-4 py-10 text-slate-100">
       <div className="mx-auto max-w-3xl rounded-3xl border border-slate-800/60 bg-slate-900/70 shadow-2xl backdrop-blur">
         <div className="border-b border-slate-800/60 px-6 pb-4 pt-6">
@@ -106,6 +108,28 @@ export function VehicleGuidePage() {
       </div>
     </div>
   );
+
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "vehicle-guide-main",
+      title: "Fiche matériel véhicule",
+      required: true,
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 20 },
+        md: { x: 0, y: 0, w: 10, h: 20 },
+        sm: { x: 0, y: 0, w: 6, h: 20 },
+        xs: { x: 0, y: 0, w: 4, h: 20 }
+      },
+      render: () => (
+        <EditableBlock id="vehicle-guide-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return <EditablePageLayout pageKey="module:vehicle:guide" blocks={blocks} className="space-y-6" />;
 }
 
 interface ResourceCardProps {

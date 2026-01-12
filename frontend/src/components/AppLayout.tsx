@@ -487,7 +487,7 @@ export function AppLayout() {
   return (
     <div className="flex h-screen min-h-0 bg-slate-950 text-slate-50">
       <aside
-        className={`relative flex h-full flex-col border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
+        className={`relative flex h-full min-h-0 flex-col border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
           sidebarOpen ? "w-64 p-6" : "w-20 p-4"
         }`}
       >
@@ -644,7 +644,7 @@ export function AppLayout() {
           </button>
         </div>
       </aside>
-      <main className="flex min-h-0 min-w-0 flex-1 overflow-y-auto bg-slate-950 p-6">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-slate-950 p-6">
         <Outlet />
       </main>
     </div>

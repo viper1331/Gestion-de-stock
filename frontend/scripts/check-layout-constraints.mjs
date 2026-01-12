@@ -1,7 +1,10 @@
 import fs from "node:fs";
 import path from "node:path";
 
-const FEATURES_DIR = path.resolve("frontend/src/features");
+const SOURCE_DIRS = [
+  path.resolve("frontend/src/features"),
+  path.resolve("frontend/src/components")
+];
 
 const widthClassRegex = /\b(?:w|min-w|max-w)-\[(\d+)px\]/;
 const heightClassRegex = /(?<!max-|min-)h-\[(\d+)px\]/;
@@ -28,34 +31,44 @@ function walk(dir) {
         violations.push({
           file: fullPath,
           line: index + 1,
-          message: "Fixed width class detected"
+          message:
+            "Fixed width class detected. Prefer min-w-0, w-full, responsive grids, or table-layout: fixed with truncation."
         });
       }
       if (inlineWidthRegex.test(line)) {
         violations.push({
           file: fullPath,
           line: index + 1,
-          message: "Fixed width style detected"
+          message:
+            "Fixed width style detected. Prefer min-w-0, w-full, responsive grids, or table-layout: fixed with truncation."
         });
       }
       if (heightClassRegex.test(line) && !heightAllowlist.test(line)) {
         violations.push({
           file: fullPath,
           line: index + 1,
-          message: "Fixed height class detected"
+          message:
+            "Fixed height class detected on a dynamic container. Prefer auto height, min-h-0, and overflow-auto where needed."
         });
       }
     });
   }
 }
 
-walk(FEATURES_DIR);
+SOURCE_DIRS.forEach((dir) => {
+  if (fs.existsSync(dir)) {
+    walk(dir);
+  }
+});
 
 if (violations.length > 0) {
   console.error("Layout constraint violations detected:");
   for (const violation of violations) {
     console.error(`- ${violation.file}:${violation.line} ${violation.message}`);
   }
+  console.error(
+    "Use responsive primitives instead (min-w-0, w-full, responsive grids, or table-layout: fixed with truncation/wrap)."
+  );
   process.exit(1);
 }
 
