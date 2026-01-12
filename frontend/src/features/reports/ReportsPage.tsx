@@ -5,7 +5,7 @@ import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { AppTextInput } from "components/AppTextInput";
-import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
 interface LowStockItem {
@@ -147,22 +147,19 @@ export function ReportsPage() {
     </section>
   );
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [{ i: "reports-main", x: 0, y: 0, w: 12, h: 18 }],
-      md: [{ i: "reports-main", x: 0, y: 0, w: 6, h: 18 }],
-      sm: [{ i: "reports-main", x: 0, y: 0, w: 1, h: 18 }]
-    }),
-    []
-  );
-
   const blocks: EditablePageBlock[] = [
     {
       id: "reports-main",
       title: "Rapports",
       required: true,
-      permission: { module: "clothing", action: "view" },
-      containerClassName: "rounded-none border-0 bg-transparent p-0",
+      permissions: ["clothing"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 18 },
+        md: { x: 0, y: 0, w: 10, h: 18 },
+        sm: { x: 0, y: 0, w: 6, h: 18 },
+        xs: { x: 0, y: 0, w: 4, h: 18 }
+      },
       render: () => (
         <EditableBlock id="reports-main">
           {content}
@@ -173,10 +170,8 @@ export function ReportsPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:reports:clothing"
+      pageKey="module:reports:clothing"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ module: "clothing", action: "view" }}
       className="space-y-6"
     />
   );

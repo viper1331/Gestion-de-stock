@@ -4,6 +4,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { AppTextInput } from "components/AppTextInput";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditableBlock } from "../../components/EditableBlock";
 
 interface ModulePermissionEntry {
   id: number;
@@ -206,7 +208,7 @@ export function ModulePermissionsPage() {
 
   const isProcessing = upsertPermission.isPending || deletePermission.isPending;
 
-  return (
+  const content = (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">Permissions des modules</h2>
@@ -446,5 +448,29 @@ export function ModulePermissionsPage() {
       </div>
     </section>
   );
-}
 
+  const blocks: EditablePageBlock[] = [
+    {
+      id: "permissions-main",
+      title: "Autorisations",
+      required: true,
+      permissions: ["admin"],
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 24 },
+        md: { x: 0, y: 0, w: 10, h: 24 },
+        sm: { x: 0, y: 0, w: 6, h: 24 },
+        xs: { x: 0, y: 0, w: 4, h: 24 }
+      },
+      variant: "plain",
+      render: () => (
+        <EditableBlock id="permissions-main">
+          {content}
+        </EditableBlock>
+      )
+    }
+  ];
+
+  return (
+    <EditablePageLayout pageKey="admin:permissions" blocks={blocks} className="space-y-6" />
+  );
+}

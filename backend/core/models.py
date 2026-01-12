@@ -4,7 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import Literal, Optional
 
-from pydantic import BaseModel, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
 BACKUP_WEEKDAY_INDEX: dict[str, int] = {
     "monday": 0,
@@ -482,6 +482,42 @@ class UserLayout(BaseModel):
             if not isinstance(items, list):
                 raise ValueError("Mise en page invalide")
         return value
+
+
+class PageLayoutItem(BaseModel):
+    i: str
+    x: int
+    y: int
+    w: int
+    h: int
+
+
+class UserPageLayoutPayload(BaseModel):
+    layout: dict[str, list[PageLayoutItem]] = Field(default_factory=dict)
+    hidden_blocks: list[str] = Field(default_factory=list, alias="hiddenBlocks")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("layout")
+    @classmethod
+    def _validate_layouts(
+        cls, value: dict[str, list[PageLayoutItem]]
+    ) -> dict[str, list[PageLayoutItem]]:
+        if not isinstance(value, dict):
+            raise ValueError("Mise en page invalide")
+        for key, items in value.items():
+            if key not in {"lg", "md", "sm", "xs"}:
+                raise ValueError("Point de rupture invalide")
+            if not isinstance(items, list):
+                raise ValueError("Mise en page invalide")
+        return value
+
+
+class UserPageLayoutResponse(UserPageLayoutPayload):
+    page_key: str = Field(alias="pageKey")
+    updated_at: str | None = Field(default=None, alias="updatedAt")
+
+    model_config = ConfigDict(populate_by_name=True)
 
 class BackupSchedule(BaseModel):
     enabled: bool = False

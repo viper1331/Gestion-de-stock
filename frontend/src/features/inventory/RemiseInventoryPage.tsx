@@ -4,7 +4,7 @@ import { InventoryModuleDashboard } from "./InventoryModuleDashboard";
 import { RemiseLotsPanel } from "./RemiseLotsPanel";
 import { type InventoryModuleConfig } from "./config";
 import { useModuleTitle } from "../../lib/moduleTitles";
-import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
 const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
@@ -47,32 +47,20 @@ export function RemiseInventoryPage() {
     [moduleTitle]
   );
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [
-        { i: "remise-inventory-dashboard", x: 0, y: 0, w: 12, h: 18 },
-        { i: "remise-lots", x: 0, y: 18, w: 12, h: 12 }
-      ],
-      md: [
-        { i: "remise-inventory-dashboard", x: 0, y: 0, w: 6, h: 18 },
-        { i: "remise-lots", x: 0, y: 18, w: 6, h: 12 }
-      ],
-      sm: [
-        { i: "remise-inventory-dashboard", x: 0, y: 0, w: 1, h: 18 },
-        { i: "remise-lots", x: 0, y: 18, w: 1, h: 12 }
-      ]
-    }),
-    []
-  );
-
   const blocks = useMemo<EditablePageBlock[]>(
     () => [
       {
         id: "remise-inventory-dashboard",
         title: "Inventaire remises",
         required: true,
-        permission: { module: "inventory_remise", action: "view" },
-        containerClassName: "rounded-none border-0 bg-transparent p-0",
+        permissions: ["inventory_remise"],
+        variant: "plain",
+        defaultLayout: {
+          lg: { x: 0, y: 0, w: 12, h: 18 },
+          md: { x: 0, y: 0, w: 10, h: 18 },
+          sm: { x: 0, y: 0, w: 6, h: 18 },
+          xs: { x: 0, y: 0, w: 4, h: 18 }
+        },
         render: () => (
           <EditableBlock id="remise-inventory-dashboard">
             <InventoryModuleDashboard config={config} />
@@ -82,8 +70,15 @@ export function RemiseInventoryPage() {
       {
         id: "remise-lots",
         title: "Lots",
-        permission: { module: "inventory_remise", action: "view" },
-        containerClassName: "rounded-none border-0 bg-transparent p-0",
+        permissions: ["inventory_remise"],
+        variant: "plain",
+        minH: 10,
+        defaultLayout: {
+          lg: { x: 0, y: 18, w: 12, h: 14 },
+          md: { x: 0, y: 18, w: 10, h: 14 },
+          sm: { x: 0, y: 18, w: 6, h: 14 },
+          xs: { x: 0, y: 18, w: 4, h: 14 }
+        },
         render: () => (
           <EditableBlock id="remise-lots">
             <RemiseLotsPanel />
@@ -96,10 +91,8 @@ export function RemiseInventoryPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:remise:inventory"
+      pageKey="module:remise:inventory"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ module: "inventory_remise", action: "view" }}
     />
   );
 }

@@ -26,7 +26,7 @@ import { useModuleTitle } from "../../lib/moduleTitles";
 import { useAuth } from "../auth/useAuth";
 import { useThrottledHoverState } from "./useThrottledHoverState";
 import { AppTextInput } from "components/AppTextInput";
-import { EditablePageLayout, type EditableLayoutSet, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
 interface VehicleViewConfig {
@@ -2288,36 +2288,19 @@ export function VehicleInventoryPage() {
 
   const vehicleViews = selectedVehicle?.sizes ?? [];
 
-  const defaultLayouts = useMemo<EditableLayoutSet>(
-    () => ({
-      lg: [
-        { i: "vehicle-header", x: 0, y: 0, w: 12, h: 12 },
-        { i: "vehicle-list", x: 0, y: 12, w: 12, h: 16 },
-        { i: "vehicle-detail", x: 0, y: 28, w: 12, h: 30 }
-      ],
-      md: [
-        { i: "vehicle-header", x: 0, y: 0, w: 6, h: 12 },
-        { i: "vehicle-list", x: 0, y: 12, w: 6, h: 16 },
-        { i: "vehicle-detail", x: 0, y: 28, w: 6, h: 30 }
-      ],
-      sm: [
-        { i: "vehicle-header", x: 0, y: 0, w: 1, h: 12 },
-        { i: "vehicle-list", x: 0, y: 12, w: 1, h: 16 },
-        { i: "vehicle-detail", x: 0, y: 28, w: 1, h: 30 }
-      ]
-    }),
-    []
-  );
-
-  const bareContainerClassName = "rounded-none border-0 bg-transparent p-0";
-
   const blocks: EditablePageBlock[] = [
     {
       id: "vehicle-header",
       title: "Synthèse",
       required: true,
-      permission: { module: "vehicle_inventory", action: "view" },
-      containerClassName: bareContainerClassName,
+      permissions: ["vehicle_inventory"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 12 },
+        md: { x: 0, y: 0, w: 10, h: 12 },
+        sm: { x: 0, y: 0, w: 6, h: 12 },
+        xs: { x: 0, y: 0, w: 4, h: 12 }
+      },
       render: () => (
         <EditableBlock id="vehicle-header">
           <header className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
@@ -2553,12 +2536,18 @@ export function VehicleInventoryPage() {
     {
       id: "vehicle-list",
       title: "Véhicules",
-      permission: { module: "vehicle_inventory", action: "view" },
-      containerClassName: bareContainerClassName,
+      permissions: ["vehicle_inventory"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 12, w: 12, h: 16 },
+        md: { x: 0, y: 12, w: 10, h: 16 },
+        sm: { x: 0, y: 12, w: 6, h: 16 },
+        xs: { x: 0, y: 12, w: 4, h: 16 }
+      },
       render: () =>
         !selectedVehicle ? (
           <EditableBlock id="vehicle-list">
-            <section className="grid gap-6 lg:grid-cols-3">
+            <section className="grid w-full gap-6 lg:grid-cols-3">
               {vehicles.map((vehicle) => (
                 <VehicleCard
                   key={vehicle.id}
@@ -2584,8 +2573,14 @@ export function VehicleInventoryPage() {
     {
       id: "vehicle-detail",
       title: "Organisation véhicule",
-      permission: { module: "vehicle_inventory", action: "view" },
-      containerClassName: bareContainerClassName,
+      permissions: ["vehicle_inventory"],
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 28, w: 12, h: 30 },
+        md: { x: 0, y: 28, w: 10, h: 30 },
+        sm: { x: 0, y: 28, w: 6, h: 30 },
+        xs: { x: 0, y: 28, w: 4, h: 30 }
+      },
       render: () =>
         selectedVehicle && selectedView ? (
           <EditableBlock id="vehicle-detail">
@@ -3057,10 +3052,8 @@ export function VehicleInventoryPage() {
 
   return (
     <EditablePageLayout
-      pageId="module:vehicle:inventory"
+      pageKey="module:vehicle:inventory"
       blocks={blocks}
-      defaultLayouts={defaultLayouts}
-      pagePermission={{ module: "vehicle_inventory", action: "view" }}
       className="space-y-6"
     />
   );
@@ -4252,7 +4245,7 @@ function VehicleItemMarker({
             </svg>
             <span
               className="pointer-events-none absolute block -translate-x-1/2 -translate-y-1/2 rounded-full border-2 border-white bg-blue-500 shadow-lg"
-              style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%`, width: "10px", height: "10px" }}
+              style={{ left: `${anchorX * 100}%`, top: `${anchorY * 100}%`, width: "0.625rem", height: "0.625rem" }}
             />
           </>
         ) : null}

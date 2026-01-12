@@ -1,50 +1,25 @@
-# Layout rules: responsive blocks only
+# Layout Rules
 
-EditablePageLayout relies on responsive sizing rules. Fixed widths break the grid,
-create horizontal scrollbars, and cause blocks to overlap. Business pages must
-follow these guidelines.
+These rules prevent regressions in the global editable layout system.
 
-## ✅ Allowed
+## Do
 
-- `w-full`, `max-w-full`, `min-w-0`
-- Responsive utilities (`sm:`, `md:`, `lg:`)
-- Flex/grid sizing (`flex-1`, `basis-*`, `grid-cols-*`)
-- Truncation/wrapping to handle long content (`truncate`, `break-words`)
+- Use `EditablePageLayout` on all business pages.
+- Define stable block IDs and default layouts for each breakpoint.
+- Keep blocks responsive with `min-w-0` containers and `overflow-auto` on table wrappers.
 
-## ❌ Forbidden (business pages)
+## Avoid
 
-- Tailwind fixed widths:
-  - `w-[Npx]`
-  - `min-w-[Npx]`
-  - `max-w-[Npx]`
-- Inline styles with fixed widths:
-  - `style={{ width: 320 }}`
-  - `style={{ minWidth: "320px" }}`
+- Fixed widths/min-widths in business pages (`w-[Npx]`, `min-w-[Npx]`, inline `width: 120px`).
+- Fixed heights on dynamic lists or tables (`h-[Npx]`), except for media thumbnails.
+- Page-specific CSS hacks to force widths.
 
-## Why this matters
+## Enforcement
 
-Fixed widths force child content to escape its grid cell and generate horizontal
-overflow. EditablePageLayout depends on blocks shrinking and growing inside the
-react-grid-layout columns.
+Run the guard from the frontend:
 
-## Examples
-
-### ✅ Good
-
-```tsx
-<div className="min-w-0 w-full">
-  <table className="w-full table-fixed">
-    ...
-  </table>
-</div>
+```bash
+npm -C frontend run lint:layout
 ```
 
-### ❌ Bad
-
-```tsx
-<div className="w-[320px]">
-  ...
-</div>
-```
-
-If you must use a fixed width, document it explicitly and keep the exception rare.
+The guard scans `frontend/src/features/**` and fails if forbidden patterns are found.
