@@ -14,7 +14,7 @@
 | Suppliers | `/suppliers` | `frontend/src/features/suppliers/SuppliersPage.tsx` | `module:suppliers` | `suppliers-main` | Migrated | EditablePageLayout already applied. |
 | Collaborators | `/collaborators` | `frontend/src/features/dotations/CollaboratorsPage.tsx` | `module:clothing:collaborators` | `collaborators-table`, `collaborators-form` | Migrated | EditablePageLayout already applied. |
 | Dotations | `/dotations` | `frontend/src/features/dotations/DotationsPage.tsx` | `module:dotations` | `dotations-main` | Migrated | EditablePageLayout already applied. |
-| Pharmacy | `/pharmacy` | `frontend/src/features/pharmacy/PharmacyPage.tsx` | `module:pharmacy:inventory` | `pharmacy-main`, `pharmacy-lots`, `pharmacy-orders` | Migrated | Added min-w-0 + overflow-auto wrappers; enforced minH for lots/orders. |
+| Pharmacy | `/pharmacy` | `frontend/src/features/pharmacy/PharmacyPage.tsx` | `module:pharmacy:inventory` | `pharmacy-header`, `pharmacy-search`, `pharmacy-items`, `pharmacy-lots`, `pharmacy-low-stock`, `pharmacy-orders`, `pharmacy-side-panel`, `pharmacy-categories`, `pharmacy-stats` | Migrated | Split into header/search/items/side panel/stats blocks with lots/orders coverage and responsive tables. |
 | Messages | `/messages` | `frontend/src/features/messages/MessagesPage.tsx` | `system:messages` | `messages-main` | Migrated | EditablePageLayout already applied. |
 | Settings | `/settings` | `frontend/src/features/settings/SettingsPage.tsx` | `module:settings` | `settings-main` | Migrated | EditablePageLayout already applied. |
 | Admin Settings | `/admin-settings` | `frontend/src/features/admin/AdminSettingsPage.tsx` | `admin:settings` | `admin-settings-main` | Migrated | EditablePageLayout already applied. |

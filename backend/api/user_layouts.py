@@ -57,9 +57,15 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
     },
     "module:pharmacy:inventory": {
         "blocks": {
-            "pharmacy-main": ("pharmacy", "view"),
+            "pharmacy-header": ("pharmacy", "view"),
+            "pharmacy-search": ("pharmacy", "view"),
+            "pharmacy-items": ("pharmacy", "view"),
             "pharmacy-lots": ("pharmacy", "view"),
+            "pharmacy-low-stock": ("pharmacy", "view"),
             "pharmacy-orders": ("pharmacy", "view"),
+            "pharmacy-side-panel": ("pharmacy", "view"),
+            "pharmacy-categories": ("pharmacy", "view"),
+            "pharmacy-stats": ("pharmacy", "view"),
         }
     },
     "module:vehicle:inventory": {

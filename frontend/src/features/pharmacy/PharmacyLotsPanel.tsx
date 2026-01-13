@@ -317,7 +317,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
   const formatCompartment = (value: string | null) => (value && value.trim() ? value : "Général");
 
   return (
-    <section className="mt-6 min-w-0 space-y-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
+    <section className="min-w-0 space-y-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-white">Lots pharmacie</h3>
@@ -365,7 +365,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                         isSelected ? "bg-slate-800/80" : ""
                       }`}
                     >
-                      <div className="h-12 w-12 overflow-hidden rounded border border-slate-800 bg-slate-950">
+                      <div className="aspect-square h-12 overflow-hidden rounded border border-slate-800 bg-slate-950">
                         {imageUrl ? (
                           <img src={imageUrl} alt={lot.name} className="h-full w-full object-cover" />
                         ) : (
@@ -511,7 +511,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
 
                 {canEdit ? (
                   <form className="flex flex-wrap items-end gap-2" onSubmit={handleAddLotItem}>
-                    <div className="flex-1 min-w-0">
+                    <div className="min-w-0 flex-1">
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor="pharmacy-lot-item">
                         Article
                       </label>
@@ -530,7 +530,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                         ))}
                       </select>
                     </div>
-                    <div className="flex-1 min-w-0 sm:max-w-xs">
+                    <div className="min-w-0 flex-1">
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor="pharmacy-lot-compartment">
                         Compartiment
                       </label>
@@ -552,7 +552,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                         </datalist>
                       ) : null}
                     </div>
-                    <div>
+                    <div className="min-w-0 flex-1">
                       <label className="text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor="pharmacy-lot-quantity">
                         Quantité
                       </label>
@@ -564,7 +564,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                         onChange={(event) =>
                           setLotItemForm((previous) => ({ ...previous, quantity: Number(event.target.value) }))
                         }
-                        className="mt-1 w-24 rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                        className="mt-1 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
                         required
                       />
                     </div>
@@ -578,8 +578,8 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                   </form>
                 ) : null}
 
-                <div className="overflow-hidden rounded border border-slate-800">
-                  <table className="min-w-full divide-y divide-slate-800 text-sm text-slate-100">
+                <div className="overflow-auto rounded border border-slate-800">
+                  <table className="w-full divide-y divide-slate-800 text-sm text-slate-100">
                     <thead className="bg-slate-900 text-xs uppercase tracking-wide text-slate-400">
                       <tr>
                         <th className="px-3 py-2 text-left">Article</th>
@@ -619,7 +619,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
                                     type="number"
                                     min={1}
                                     defaultValue={item.quantity}
-                                    className="w-20 rounded border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
+                                    className="min-w-0 flex-1 rounded border border-slate-800 bg-slate-950 px-2 py-1 text-xs text-white focus:border-indigo-500 focus:outline-none"
                                     onChange={(event) => {
                                       const value = Number(event.target.value);
                                       updateLotItem.mutate({ lotId: item.lot_id, lotItemId: item.id, quantity: value });
