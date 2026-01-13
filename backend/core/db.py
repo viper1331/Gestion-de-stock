@@ -150,6 +150,7 @@ def init_databases() -> None:
                     size TEXT,
                     quantity INTEGER NOT NULL DEFAULT 0,
                     low_stock_threshold INTEGER NOT NULL DEFAULT 0,
+                    track_low_stock INTEGER NOT NULL DEFAULT 0,
                     supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
                 );
                 CREATE TABLE IF NOT EXISTS movements (
