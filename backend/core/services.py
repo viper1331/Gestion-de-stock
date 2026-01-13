@@ -1250,6 +1250,11 @@ def _apply_schema_migrations() -> None:
             execute(
                 "ALTER TABLE items ADD COLUMN supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL"
             )
+        if "track_low_stock" not in columns:
+            execute(
+                "ALTER TABLE items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 0"
+            )
+            execute("UPDATE items SET track_low_stock = 0 WHERE track_low_stock IS NULL")
 
         executescript(
             """
@@ -2446,6 +2451,9 @@ def _create_inventory_item_internal(
             values.append(int(payload.track_low_stock))
             columns.append("expiration_date")
             values.append(expiration_date)
+        if module == "default":
+            columns.append("track_low_stock")
+            values.append(int(payload.track_low_stock))
         if module == "vehicle_inventory":
             columns.append("lot_id")
             values.append(lot_id)
@@ -2499,6 +2507,8 @@ def _update_inventory_item_internal(
         fields.pop("show_in_qr", None)
         fields.pop("vehicle_type", None)
         fields.pop("pharmacy_item_id", None)
+    if module == "vehicle_inventory":
+        fields.pop("track_low_stock", None)
     if module != "inventory_remise":
         fields.pop("expiration_date", None)
     elif "expiration_date" in fields:
@@ -2507,6 +2517,9 @@ def _update_inventory_item_internal(
             if fields["expiration_date"] is not None
             else None
         )
+    if module != "vehicle_inventory" and "track_low_stock" in fields:
+        if fields["track_low_stock"] is not None:
+            fields["track_low_stock"] = int(bool(fields["track_low_stock"]))
     if not fields:
         return _get_inventory_item_internal(module, item_id)
     if module == "vehicle_inventory":
