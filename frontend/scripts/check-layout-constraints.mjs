@@ -10,6 +10,9 @@ const widthClassRegex = /\b(?:w|min-w|max-w)-\[(\d+)px\]/;
 const heightClassRegex = /(?<!max-|min-)h-\[(\d+)px\]/;
 const inlineWidthRegex = /\b(?:width|minWidth|maxWidth)\s*:\s*['"`]?\d+px['"`]?/;
 const heightAllowlist = /thumbnail|avatar|icon|image|img|logo|preview|iframe/i;
+const navShellRegex = /frontend\/src\/components\/.*(AppLayout|Sidebar|Navigation).*\.tsx?$/;
+const navPositionClassRegex = /\b(?:left|right|min-w|w)-\[(\d+)px\]/;
+const inlinePositionRegex = /\b(?:left|right)\s*:\s*['"`]?\d+px['"`]?/;
 
 const violations = [];
 
@@ -49,6 +52,22 @@ function walk(dir) {
           line: index + 1,
           message:
             "Fixed height class detected on a dynamic container. Prefer auto height, min-h-0, and overflow-auto where needed."
+        });
+      }
+      if (navShellRegex.test(fullPath) && navPositionClassRegex.test(line)) {
+        violations.push({
+          file: fullPath,
+          line: index + 1,
+          message:
+            "Fixed px position/width class detected in navigation shell. Use responsive sizing (rem/vw) and avoid px offsets."
+        });
+      }
+      if (navShellRegex.test(fullPath) && inlinePositionRegex.test(line)) {
+        violations.push({
+          file: fullPath,
+          line: index + 1,
+          message:
+            "Fixed px position style detected in navigation shell. Use responsive sizing (rem/vw) and avoid px offsets."
         });
       }
     });
