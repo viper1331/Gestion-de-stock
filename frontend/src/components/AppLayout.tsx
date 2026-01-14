@@ -1,5 +1,5 @@
-import { Link, NavLink, Outlet, useNavigate } from "react-router-dom";
-import { useEffect, useMemo, useState } from "react";
+import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 
 import { shallow } from "zustand/shallow";
@@ -17,6 +17,7 @@ export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
+  const location = useLocation();
   const { sidebarOpen, toggleSidebar } = useUiStore(
     (state) => ({
       sidebarOpen: state.sidebarOpen,
@@ -24,6 +25,11 @@ export function AppLayout() {
     }),
     shallow
   );
+  const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [isDesktop, setIsDesktop] = useState(() =>
+    typeof window === "undefined" ? true : window.matchMedia("(min-width: 768px)").matches
+  );
+  const drawerRef = useRef<HTMLDivElement | null>(null);
 
   const { data: configEntries = [] } = useQuery({
     queryKey: ["config", "global"],
@@ -56,6 +62,31 @@ export function AppLayout() {
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    const mediaQuery = window.matchMedia("(min-width: 768px)");
+    const handleChange = (event: MediaQueryListEvent) => {
+      setIsDesktop(event.matches);
+    };
+    setIsDesktop(mediaQuery.matches);
+    mediaQuery.addEventListener("change", handleChange);
+    return () => {
+      mediaQuery.removeEventListener("change", handleChange);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (isDesktop) {
+      setMobileDrawerOpen(false);
+    }
+  }, [isDesktop]);
+
+  useEffect(() => {
+    setMobileDrawerOpen(false);
+  }, [location.pathname]);
 
   useEffect(() => {
     const previousOverflow = document.body.style.overflow;
@@ -105,6 +136,47 @@ export function AppLayout() {
       document.removeEventListener("visibilitychange", handleVisibilityChange);
     };
   }, [inactivityCooldownMs, logout, user]);
+
+  useEffect(() => {
+    if (!mobileDrawerOpen) {
+      return undefined;
+    }
+    const drawer = drawerRef.current;
+    const focusableSelector =
+      "a[href],button:not([disabled]),textarea,input,select,[tabindex]:not([tabindex='-1'])";
+    const focusable = drawer ? Array.from(drawer.querySelectorAll<HTMLElement>(focusableSelector)) : [];
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setMobileDrawerOpen(false);
+        return;
+      }
+      if (event.key !== "Tab" || focusable.length === 0) {
+        return;
+      }
+      const activeElement = document.activeElement;
+      if (event.shiftKey) {
+        if (activeElement === first || activeElement === drawer) {
+          event.preventDefault();
+          last?.focus();
+        }
+      } else if (activeElement === last) {
+        event.preventDefault();
+        first?.focus();
+      }
+    };
+
+    document.addEventListener("keydown", handleKeyDown);
+    requestAnimationFrame(() => {
+      first?.focus();
+    });
+
+    return () => {
+      document.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [mobileDrawerOpen]);
 
   const navigationGroups = useMemo(
     () => {
@@ -484,17 +556,21 @@ export function AppLayout() {
     return null;
   }
 
+  const isSidebarExpanded = isDesktop && sidebarOpen;
+  const showPopoverMenu = isDesktop && !sidebarOpen;
+  const navLinkHandler = mobileDrawerOpen ? () => setMobileDrawerOpen(false) : undefined;
+
   return (
-    <div className="flex h-screen min-h-0 bg-slate-950 text-slate-50">
+    <div className="flex h-screen min-h-0 overflow-hidden bg-slate-950 text-slate-50">
       <aside
-        className={`relative flex h-full min-h-0 flex-col border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
-          sidebarOpen ? "w-64 p-6" : "w-20 p-4"
+        className={`relative flex h-full min-h-0 shrink-0 flex-col border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
+          isDesktop ? (sidebarOpen ? "w-64 p-6" : "w-20 p-4") : "w-14 p-3"
         }`}
       >
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
-              <span aria-hidden>{sidebarOpen ? "Gestion Stock Pro" : "GSP"}</span>
+              <span aria-hidden>{isSidebarExpanded ? "Gestion Stock Pro" : "GSP"}</span>
               <span className="sr-only">Gestion Stock Pro</span>
             </Link>
             {isDebugActive ? (
@@ -503,84 +579,230 @@ export function AppLayout() {
               </span>
             ) : null}
           </div>
-          <button
-            type="button"
-            onClick={toggleSidebar}
-            className="rounded-md border border-slate-800 bg-slate-900 p-2 text-slate-200 shadow hover:bg-slate-800"
-            aria-label={sidebarOpen ? "Réduire le menu principal" : "Déplier le menu principal"}
-          >
-            <span aria-hidden>{sidebarOpen ? "⟨" : "⟩"}</span>
-          </button>
+          {isDesktop ? (
+            <button
+              type="button"
+              onClick={toggleSidebar}
+              className="rounded-md border border-slate-800 bg-slate-900 p-2 text-slate-200 shadow hover:bg-slate-800"
+              aria-label={sidebarOpen ? "Réduire le menu principal" : "Déplier le menu principal"}
+            >
+              <span aria-hidden>{sidebarOpen ? "⟨" : "⟩"}</span>
+            </button>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setMobileDrawerOpen(true)}
+              className="rounded-md border border-slate-800 bg-slate-900 p-2 text-slate-200 shadow hover:bg-slate-800"
+              aria-label="Ouvrir le menu principal"
+            >
+              <span aria-hidden>☰</span>
+            </button>
+          )}
         </div>
-        <div
-          className={`mt-8 flex min-h-0 flex-1 flex-col ${
-            sidebarOpen ? "overflow-hidden" : "overflow-visible"
-          }`}
-        >
-          <nav
-            className={`flex min-h-0 flex-1 flex-col gap-3 text-sm ${
-              sidebarOpen ? "overflow-y-auto pr-2" : "overflow-visible items-center"
-            }`}
-          >
-            <NavLink
-              to="/"
-              end
-              className={({ isActive }) => navClass(isActive, sidebarOpen)}
-              title="Accéder à la page d'accueil personnalisée"
-          >
-            <NavIcon symbol="🏠" label="Accueil" />
-            <span className={sidebarOpen ? "block" : "sr-only"}>Accueil</span>
-          </NavLink>
-            {navigationGroups.map((group) => {
-              const isOpen = openGroups[group.id] ?? false;
+        {isDesktop ? (
+          <>
+            <div
+              className={`mt-8 flex min-h-0 flex-1 flex-col ${
+                isSidebarExpanded ? "overflow-hidden" : "overflow-visible"
+              }`}
+            >
+              <nav
+                className={`flex min-h-0 flex-1 flex-col gap-3 text-sm ${
+                  isSidebarExpanded ? "overflow-y-auto pr-2" : "overflow-visible items-center"
+                }`}
+              >
+                <NavLink
+                  to="/"
+                  end
+                  className={({ isActive }) => navClass(isActive, isSidebarExpanded)}
+                  title="Accéder à la page d'accueil personnalisée"
+                >
+                  <NavIcon symbol="🏠" label="Accueil" />
+                  <span className={isSidebarExpanded ? "block" : "sr-only"}>Accueil</span>
+                </NavLink>
+                {navigationGroups.map((group) => {
+                  const isOpen = openGroups[group.id] ?? false;
 
-              return (
-                <div key={group.id} className="relative w-full">
-                  <button
-                    type="button"
-                    onClick={() => toggleGroup(group.id)}
-                    className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
-                      sidebarOpen ? "justify-between px-3 py-2" : "h-11 justify-center"
-                    }`}
-                    aria-expanded={isOpen}
-                    title={group.tooltip}
-                  >
-                    <span className="flex items-center gap-3">
-                      <NavIcon symbol={group.icon} label={group.label} />
-                      <span className={sidebarOpen ? "block text-left" : "sr-only"}>{group.label}</span>
-                    </span>
-                    {sidebarOpen ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
-                  </button>
-                  {isOpen ? (
-                    sidebarOpen ? (
-                      <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
-                        {group.sections.map((section) => (
-                          <div key={section.id}>
-                            <p
-                              className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                              title={section.tooltip}
-                            >
-                              {section.label}
-                            </p>
-                            <div className="mt-2 flex flex-col gap-1">
-                              {section.links.map((link) => (
-                                <NavLink
-                                  key={link.to}
-                                  to={link.to}
-                                  end={link.to === "/" || link.to === "/inventory"}
-                                  className={({ isActive }) => navClass(isActive, sidebarOpen)}
-                                  title={link.tooltip}
-                                >
-                                  <NavIcon symbol={link.icon} label={link.label} />
-                                  <span>{link.label}</span>
-                                </NavLink>
-                              ))}
+                  return (
+                    <div key={group.id} className="relative w-full">
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(group.id)}
+                        className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
+                          isSidebarExpanded ? "justify-between px-3 py-2" : "h-11 justify-center"
+                        }`}
+                        aria-expanded={isOpen}
+                        title={group.tooltip}
+                      >
+                        <span className="flex items-center gap-3">
+                          <NavIcon symbol={group.icon} label={group.label} />
+                          <span className={isSidebarExpanded ? "block text-left" : "sr-only"}>
+                            {group.label}
+                          </span>
+                        </span>
+                        {isSidebarExpanded ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
+                      </button>
+                      {isOpen && isSidebarExpanded ? (
+                        <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
+                          {group.sections.map((section) => (
+                            <div key={section.id}>
+                              <p
+                                className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                                title={section.tooltip}
+                              >
+                                {section.label}
+                              </p>
+                              <div className="mt-2 flex flex-col gap-1">
+                                {section.links.map((link) => (
+                                  <NavLink
+                                    key={link.to}
+                                    to={link.to}
+                                    end={link.to === "/" || link.to === "/inventory"}
+                                    className={({ isActive }) => navClass(isActive, isSidebarExpanded)}
+                                    title={link.tooltip}
+                                  >
+                                    <NavIcon symbol={link.icon} label={link.label} />
+                                    <span>{link.label}</span>
+                                  </NavLink>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : (
-                      <div className="absolute left-full top-0 z-20 ml-3 w-64 space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
+                          ))}
+                        </div>
+                      ) : null}
+                      {isOpen && showPopoverMenu ? (
+                        <div className="fixed left-20 top-4 bottom-4 z-30 ml-3 w-72 max-w-[90vw] overflow-y-auto rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
+                          {group.sections.map((section) => (
+                            <div key={section.id}>
+                              <p
+                                className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                                title={section.tooltip}
+                              >
+                                {section.label}
+                              </p>
+                              <div className="mt-2 flex flex-col gap-1">
+                                {section.links.map((link) => (
+                                  <NavLink
+                                    key={link.to}
+                                    to={link.to}
+                                    end={link.to === "/" || link.to === "/inventory"}
+                                    className={({ isActive }) => navClass(isActive, true)}
+                                    title={link.tooltip}
+                                    onClick={() => toggleGroup(group.id)}
+                                  >
+                                    <NavIcon symbol={link.icon} label={link.label} />
+                                    <span>{link.label}</span>
+                                  </NavLink>
+                                ))}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </nav>
+              {modulePermissions.isLoading && user?.role !== "admin" ? (
+                <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
+              ) : null}
+            </div>
+            <div className="mt-auto flex w-full flex-col gap-3 pt-6">
+              <div
+                className={`flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
+                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-1 justify-center"
+                }`}
+              >
+                <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
+                <div className={isSidebarExpanded ? "leading-tight" : "sr-only"}>
+                  <p className="font-semibold text-slate-200">{user.username}</p>
+                  <p>Rôle : {user.role}</p>
+                </div>
+                {!isSidebarExpanded ? <span className="sr-only">Rôle : {user.role}</span> : null}
+              </div>
+              <MicToggle compact={!isSidebarExpanded} />
+              <ThemeToggle compact={!isSidebarExpanded} />
+              <button
+                onClick={logout}
+                className={`flex items-center justify-center gap-2 rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
+                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
+                }`}
+                title="Se déconnecter de votre session"
+              >
+                <span aria-hidden>⎋</span>
+                <span className={isSidebarExpanded ? "block" : "sr-only"}>Se déconnecter</span>
+              </button>
+            </div>
+          </>
+        ) : null}
+      </aside>
+      {mobileDrawerOpen ? (
+        <div
+          className="fixed inset-0 z-40 flex md:hidden"
+          role="presentation"
+          onClick={() => setMobileDrawerOpen(false)}
+        >
+          <div className="absolute inset-0 bg-slate-950/70" />
+          <div
+            ref={drawerRef}
+            role="dialog"
+            aria-modal="true"
+            aria-label="Menu principal"
+            className="relative z-50 h-full w-[90vw] max-w-[20rem] overflow-y-auto border-r border-slate-800 bg-slate-900 p-4 text-slate-50 shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+            tabIndex={-1}
+          >
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Link to="/" className="block text-base font-semibold" title="Revenir à l'accueil">
+                  <span aria-hidden>Gestion Stock Pro</span>
+                  <span className="sr-only">Gestion Stock Pro</span>
+                </Link>
+                {isDebugActive ? (
+                  <span className="rounded bg-red-600 px-2 py-1 text-[10px] font-bold uppercase tracking-wide text-white">
+                    DEBUG
+                  </span>
+                ) : null}
+              </div>
+              <button
+                type="button"
+                onClick={() => setMobileDrawerOpen(false)}
+                className="rounded-md border border-slate-800 bg-slate-900 p-2 text-slate-200 shadow hover:bg-slate-800"
+                aria-label="Fermer le menu principal"
+              >
+                <span aria-hidden>✕</span>
+              </button>
+            </div>
+            <nav className="mt-6 flex min-h-0 flex-1 flex-col gap-3 text-sm">
+              <NavLink
+                to="/"
+                end
+                className={({ isActive }) => navClass(isActive, true)}
+                title="Accéder à la page d'accueil personnalisée"
+                onClick={navLinkHandler}
+              >
+                <NavIcon symbol="🏠" label="Accueil" />
+                <span>Accueil</span>
+              </NavLink>
+              {navigationGroups.map((group) => {
+                const isOpen = openGroups[group.id] ?? false;
+                return (
+                  <div key={group.id} className="w-full">
+                    <button
+                      type="button"
+                      onClick={() => toggleGroup(group.id)}
+                      className="group flex w-full items-center justify-between rounded-md px-3 py-2 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+                      aria-expanded={isOpen}
+                      title={group.tooltip}
+                    >
+                      <span className="flex items-center gap-3">
+                        <NavIcon symbol={group.icon} label={group.label} />
+                        <span className="text-left">{group.label}</span>
+                      </span>
+                      <span aria-hidden>{isOpen ? "−" : "+"}</span>
+                    </button>
+                    {isOpen ? (
+                      <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
                         {group.sections.map((section) => (
                           <div key={section.id}>
                             <p
@@ -597,7 +819,7 @@ export function AppLayout() {
                                   end={link.to === "/" || link.to === "/inventory"}
                                   className={({ isActive }) => navClass(isActive, true)}
                                   title={link.tooltip}
-                                  onClick={() => toggleGroup(group.id)}
+                                  onClick={navLinkHandler}
                                 >
                                   <NavIcon symbol={link.icon} label={link.label} />
                                   <span>{link.label}</span>
@@ -607,44 +829,34 @@ export function AppLayout() {
                           </div>
                         ))}
                       </div>
-                    )
-                  ) : null}
+                    ) : null}
+                  </div>
+                );
+              })}
+            </nav>
+            <div className="mt-6 flex w-full flex-col gap-3">
+              <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
+                <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
+                <div className="leading-tight">
+                  <p className="font-semibold text-slate-200">{user.username}</p>
+                  <p>Rôle : {user.role}</p>
                 </div>
-              );
-            })}
-          </nav>
-          {modulePermissions.isLoading && user?.role !== "admin" ? (
-            <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
-          ) : null}
-        </div>
-        <div className="mt-auto flex w-full flex-col gap-3 pt-6">
-          <div
-            className={`flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
-              sidebarOpen ? "px-3 py-2" : "px-2 py-1 justify-center"
-            }`}
-          >
-            <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
-            <div className={sidebarOpen ? "leading-tight" : "sr-only"}>
-              <p className="font-semibold text-slate-200">{user.username}</p>
-              <p>Rôle : {user.role}</p>
+              </div>
+              <MicToggle compact />
+              <ThemeToggle compact />
+              <button
+                onClick={logout}
+                className="flex items-center justify-center gap-2 rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-red-400"
+                title="Se déconnecter de votre session"
+              >
+                <span aria-hidden>⎋</span>
+                <span>Se déconnecter</span>
+              </button>
             </div>
-            {!sidebarOpen ? <span className="sr-only">Rôle : {user.role}</span> : null}
           </div>
-          <MicToggle compact={!sidebarOpen} />
-          <ThemeToggle compact={!sidebarOpen} />
-          <button
-            onClick={logout}
-            className={`flex items-center justify-center gap-2 rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
-              sidebarOpen ? "px-3 py-2" : "px-2 py-2"
-            }`}
-            title="Se déconnecter de votre session"
-          >
-            <span aria-hidden>⎋</span>
-            <span className={sidebarOpen ? "block" : "sr-only"}>Se déconnecter</span>
-          </button>
         </div>
-      </aside>
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-x-hidden overflow-y-auto bg-slate-950 p-6">
+      ) : null}
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto bg-slate-950 p-6">
         <Outlet />
       </main>
     </div>

@@ -38,3 +38,22 @@ test.describe("Editable layouts are responsive", () => {
     });
   }
 });
+
+test.describe("Mobile navigation drawer", () => {
+  test("opens configuration PDF from the drawer", async ({ page }) => {
+    await page.setViewportSize({ width: 390, height: 844 });
+    await page.goto("/inventory", { waitUntil: "networkidle" });
+
+    await page.getByRole("button", { name: /ouvrir le menu principal/i }).click();
+
+    const administrationButton = page.getByRole("button", { name: /administration/i });
+    await administrationButton.click();
+
+    const pdfLink = page.getByRole("link", { name: "Configuration PDF" });
+    await expect(pdfLink).toBeVisible();
+    await expect(pdfLink).toBeInViewport();
+
+    await pdfLink.click();
+    await expect(page).toHaveURL(/\/pdf-config/);
+  });
+});
