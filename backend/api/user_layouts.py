@@ -117,6 +117,7 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
     "admin:settings": {
         "blocks": {
             "admin-settings-main": ("__admin__", "role"),
+            "admin-db-settings": ("__admin__", "role"),
         }
     },
     "admin:system-config": {
@@ -240,7 +241,7 @@ async def get_user_layout(
         if _is_allowed(requirement, user, permissions)
     }
 
-    with db.get_users_connection() as conn:
+    with db.get_core_connection() as conn:
         row = conn.execute(
             """
             SELECT layout_json, hidden_blocks_json, updated_at
@@ -302,7 +303,7 @@ async def upsert_user_layout(
     layout_json = _serialize_layout(normalized_layout)
     hidden_json = json.dumps(normalized_hidden)
 
-    with db.get_users_connection() as conn:
+    with db.get_core_connection() as conn:
         conn.execute(
             """
             INSERT INTO user_page_layouts (username, page_key, layout_json, hidden_blocks_json)

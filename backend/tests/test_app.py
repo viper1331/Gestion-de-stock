@@ -3597,6 +3597,9 @@ def test_update_settings_invalid_remote(monkeypatch: Any) -> None:
 
 def test_vehicle_types_crud_admin() -> None:
     headers = _login_headers("admin", "admin123")
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM vehicle_types WHERE code = ?", ("vsav",))
+        conn.commit()
     create_resp = client.post(
         "/admin/vehicle-types",
         json={"code": "vsav", "label": "VSAV"},

@@ -80,6 +80,24 @@ class User(UserBase):
     is_active: bool = True
 
 
+class SiteInfo(BaseModel):
+    site_key: str
+    display_name: str
+    db_path: str
+    is_active: bool = True
+
+
+class SiteContext(BaseModel):
+    assigned_site_key: str
+    active_site_key: str
+    override_site_key: Optional[str] = None
+    sites: list[SiteInfo] | None = None
+
+
+class SiteSelectionRequest(BaseModel):
+    site_key: Optional[str] = None
+
+
 class UserUpdate(BaseModel):
     role: Optional[str] = Field(default=None, pattern=r"^(admin|user)$")
     password: Optional[str] = Field(default=None, min_length=8, max_length=128)

@@ -1,28 +1,28 @@
-# Layout Rules
+# Règles de layout responsive
 
-These rules prevent regressions in the global editable layout system.
+## Principes généraux
+- Toutes les pages métiers doivent rester fluides du mobile au desktop.
+- Pas de scroll horizontal sur des écrans standards.
+- Le scroll principal est géré par `AppLayout` (pas de pièges de scroll imbriqués).
+- Les tables défilent dans leur carte (`overflow-auto`), pas sur la page entière.
+- Les panels latéraux se replient sous le contenu en viewport réduit.
 
-## Do
+## Interdictions (anti-regression)
+Dans `frontend/src/features/**` et `frontend/src/components/**` :
+- classes Tailwind `w-[Npx]`, `min-w-[Npx]`, `max-w-[Npx]`
+- styles inline `width/minWidth/maxWidth` en pixels
+- `h-[Npx]` sur les conteneurs dynamiques (sauf exceptions média)
 
-- Use `EditablePageLayout` on all business pages.
-- Define stable block IDs and default layouts for each breakpoint.
-- Keep blocks responsive with `min-w-0` containers and `overflow-auto` on table wrappers.
-- Ensure only the main content area scrolls (AppLayout), with `min-h-0` on flex parents.
-- Use `PageBlockCard` defaults: `min-w-0`, `max-w-full`, `overflow-hidden`, and `flex flex-col` with inner `min-w-0 min-h-0`.
+## Vérification automatisée
+Un guard dédié est disponible :
 
-## Avoid
-
-- Fixed widths/min-widths in business pages (`w-[Npx]`, `min-w-[Npx]`, inline `width: 120px`).
-- Fixed heights on dynamic lists or tables (`h-[Npx]`), except for media thumbnails.
-- Page-specific CSS hacks to force widths.
-- Allowing tables to force page-level horizontal scrolling (wrap tables in an overflow container instead).
-
-## Enforcement
-
-Run the guard from the frontend:
-
-```bash
+```
 npm -C frontend run lint:layout
 ```
 
-The guard scans `frontend/src/features/**` and shared business components under `frontend/src/components/**`.
+Le script analyse les composants et échoue si un pattern interdit est détecté.
+
+## Recommandations
+- Utiliser `min-w-0` sur les conteneurs flex et grids.
+- Préférer `w-full`, `flex`, `grid` et `overflow-auto` pour les tables.
+- Vérifier le rendu avec des breakpoints `xs/sm/md/lg`.
