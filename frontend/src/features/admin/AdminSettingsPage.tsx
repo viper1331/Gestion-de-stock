@@ -1,7 +1,8 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
+import { fetchSiteContext, updateActiveSite, type SiteContext } from "../../lib/sites";
 import {
   CUSTOM_FIELD_SCOPES,
   CUSTOM_FIELD_TYPES,
@@ -77,6 +78,9 @@ export function AdminSettingsPage() {
     isLogPersistenceEnabled()
   );
   const [logMessage, setLogMessage] = useState<string | null>(null);
+  const [siteMessage, setSiteMessage] = useState<string | null>(null);
+  const [siteError, setSiteError] = useState<string | null>(null);
+  const [selectedSite, setSelectedSite] = useState<string>("");
 
   const { data: vehicleTypes = [] } = useQuery({
     queryKey: ["admin-vehicle-types"],
@@ -97,6 +101,16 @@ export function AdminSettingsPage() {
     },
     enabled: isAdmin
   });
+
+  const { data: siteContext } = useQuery<SiteContext>({
+    queryKey: ["site-context"],
+    queryFn: fetchSiteContext,
+    enabled: isAdmin
+  });
+
+  useEffect(() => {
+    setSelectedSite(siteContext?.override_site_key ?? "");
+  }, [siteContext?.override_site_key]);
 
   const resetVehicleTypeForm = () => {
     setVehicleTypeForm(EMPTY_VEHICLE_TYPE_FORM);
@@ -265,6 +279,19 @@ export function AdminSettingsPage() {
     clearPersistedLogs();
     setLogMessage("Logs frontend supprimés.");
   };
+
+  const updateSiteSelection = useMutation({
+    mutationFn: async (siteKey: string | null) => updateActiveSite(siteKey),
+    onSuccess: async (data) => {
+      setSiteMessage("Base de données active mise à jour.");
+      setSiteError(null);
+      await queryClient.invalidateQueries({ queryKey: ["site-context"] });
+      queryClient.setQueryData(["site-context"], data);
+    },
+    onError: () => {
+      setSiteError("Impossible de mettre à jour la base de données active.");
+    }
+  });
 
   if (!isAdmin) {
     return (
@@ -666,6 +693,77 @@ export function AdminSettingsPage() {
     </section>
   );
 
+  const databaseSection = (
+    <section className="space-y-4">
+      <header className="space-y-1">
+        <h3 className="text-lg font-semibold text-white">Base de Données</h3>
+        <p className="text-sm text-slate-400">
+          Gérer la base active pour les sites disponibles.
+        </p>
+      </header>
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="space-y-1 text-xs text-slate-300">
+            <p className="font-semibold text-slate-200">Site assigné</p>
+            <p>{siteContext?.assigned_site_key ?? "JLL"}</p>
+          </div>
+          <div className="space-y-1 text-xs text-slate-300">
+            <p className="font-semibold text-slate-200">Site actif</p>
+            <p>{siteContext?.active_site_key ?? "JLL"}</p>
+          </div>
+        </div>
+        <label className="block space-y-1 text-xs text-slate-300">
+          <span className="font-semibold text-slate-200">Forcer un site</span>
+          <select
+            value={selectedSite}
+            onChange={(event) => setSelectedSite(event.target.value)}
+            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+          >
+            <option value="">Aucun (site assigné)</option>
+            {(siteContext?.sites ?? []).map((site) => (
+              <option key={site.site_key} value={site.site_key}>
+                {site.display_name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            onClick={() => updateSiteSelection.mutate(selectedSite || null)}
+            className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+            disabled={updateSiteSelection.isPending}
+          >
+            Appliquer
+          </button>
+          <button
+            type="button"
+            onClick={() => updateSiteSelection.mutate(null)}
+            className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300"
+            disabled={updateSiteSelection.isPending}
+          >
+            Réinitialiser
+          </button>
+        </div>
+        {siteMessage ? (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+            {siteMessage}
+          </div>
+        ) : null}
+        {siteError ? (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+            {siteError}
+          </div>
+        ) : null}
+        {siteContext?.sites?.length ? (
+          <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-400">
+            {siteContext.sites.map((site) => `${site.site_key} → ${site.db_path}`).join(" • ")}
+          </div>
+        ) : null}
+      </div>
+    </section>
+  );
+
   const blocks: EditablePageBlock[] = [
     {
       id: "admin-settings-main",
@@ -682,6 +780,24 @@ export function AdminSettingsPage() {
       render: () => (
         <EditableBlock id="admin-settings-main">
           {content}
+        </EditableBlock>
+      )
+    },
+    {
+      id: "admin-db-settings",
+      title: "Base de Données",
+      required: true,
+      permissions: ["admin"],
+      defaultLayout: {
+        lg: { x: 0, y: 24, w: 12, h: 12 },
+        md: { x: 0, y: 24, w: 10, h: 12 },
+        sm: { x: 0, y: 24, w: 6, h: 12 },
+        xs: { x: 0, y: 24, w: 4, h: 12 }
+      },
+      variant: "plain",
+      render: () => (
+        <EditableBlock id="admin-db-settings">
+          {databaseSection}
         </EditableBlock>
       )
     }

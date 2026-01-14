@@ -502,7 +502,7 @@ async def delete_vehicle_item(
     logger.info(
         "[VEHICLE_INVENTORY] Delete request pid=%s db=%s item_id=%s user=%s",
         os.getpid(),
-        db.STOCK_DB_PATH.resolve(),
+        db.get_stock_db_path().resolve(),
         item_id,
         user.username,
     )
@@ -518,7 +518,7 @@ async def delete_vehicle_item(
         logger.exception(
             "[VEHICLE_INVENTORY] Delete failed pid=%s db=%s item_id=%s user=%s",
             os.getpid(),
-            db.STOCK_DB_PATH.resolve(),
+            db.get_stock_db_path().resolve(),
             item_id,
             user.username,
         )

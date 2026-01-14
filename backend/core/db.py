@@ -1,6 +1,7 @@
 """Gestion basique des connexions SQLite."""
 from __future__ import annotations
 
+import contextvars
 import logging
 import os
 import sqlite3
@@ -14,11 +15,25 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 DATA_DIR = BASE_DIR / "data"
 USERS_DB_PATH = DATA_DIR / "users.db"
 STOCK_DB_PATH = DATA_DIR / "stock.db"
+CORE_DB_PATH = DATA_DIR / "core.db"
+
+SITE_KEYS = ("JLL", "GSM", "ST_ELOIS", "CENTRAL_ENTITY")
+DEFAULT_SITE_KEY = "JLL"
+SITE_DISPLAY_NAMES = {
+    "JLL": "JLL",
+    "GSM": "GSM",
+    "ST_ELOIS": "Saint-Élois",
+    "CENTRAL_ENTITY": "Entité centrale",
+}
 
 logger = logging.getLogger(__name__)
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 logger.info("[DB] pid=%s STOCK_DB_PATH=%s", os.getpid(), STOCK_DB_PATH.resolve())
+
+_site_context: contextvars.ContextVar[str | None] = contextvars.ContextVar(
+    "site_key", default=None
+)
 
 _db_lock = RLock()
 
@@ -52,8 +67,79 @@ def get_users_connection() -> ContextManager[sqlite3.Connection]:
     return _managed_connection(USERS_DB_PATH)
 
 
-def get_stock_connection() -> ContextManager[sqlite3.Connection]:
-    return _managed_connection(STOCK_DB_PATH)
+def get_core_connection() -> ContextManager[sqlite3.Connection]:
+    return _managed_connection(CORE_DB_PATH)
+
+
+def set_current_site(site_key: str | None) -> contextvars.Token[str | None]:
+    return _site_context.set(site_key)
+
+
+def reset_current_site(token: contextvars.Token[str | None]) -> None:
+    _site_context.reset(token)
+
+
+def get_current_site_key() -> str:
+    return _site_context.get() or DEFAULT_SITE_KEY
+
+
+def _resolve_jll_db_path() -> Path:
+    env_path = os.environ.get("JLL_DB_PATH")
+    if env_path:
+        return Path(env_path).expanduser()
+    return STOCK_DB_PATH
+
+
+def get_default_site_db_paths() -> dict[str, Path]:
+    return {
+        "JLL": _resolve_jll_db_path(),
+        "GSM": DATA_DIR / "GSM.db",
+        "ST_ELOIS": DATA_DIR / "ST_ELOIS.db",
+        "CENTRAL_ENTITY": DATA_DIR / "CENTRAL_ENTITY.db",
+    }
+
+
+def get_site_db_path(site_key: str) -> Path:
+    site_key = site_key.upper()
+    default_paths = get_default_site_db_paths()
+    try:
+        with get_core_connection() as conn:
+            row = conn.execute(
+                "SELECT db_path FROM sites WHERE site_key = ?",
+                (site_key,),
+            ).fetchone()
+    except sqlite3.OperationalError:
+        row = None
+    if row and row["db_path"]:
+        return Path(row["db_path"])
+    return default_paths.get(site_key, default_paths[DEFAULT_SITE_KEY])
+
+
+def get_stock_connection(site_key: str | None = None) -> ContextManager[sqlite3.Connection]:
+    resolved_key = (site_key or get_current_site_key()).upper()
+    return _managed_connection(get_site_db_path(resolved_key))
+
+
+def get_stock_db_path(site_key: str | None = None) -> Path:
+    resolved_key = (site_key or get_current_site_key()).upper()
+    return get_site_db_path(resolved_key)
+
+
+def list_site_keys() -> list[str]:
+    try:
+        with get_core_connection() as conn:
+            rows = conn.execute(
+                "SELECT site_key FROM sites WHERE is_active = 1 ORDER BY site_key"
+            ).fetchall()
+        if rows:
+            return [row["site_key"] for row in rows]
+    except sqlite3.OperationalError:
+        pass
+    return list(SITE_KEYS)
+
+
+def list_site_db_paths() -> dict[str, Path]:
+    return {site_key: get_site_db_path(site_key) for site_key in list_site_keys()}
 
 
 def init_databases() -> None:
@@ -129,9 +215,125 @@ def init_databases() -> None:
                 );
                 """
             )
-        with get_stock_connection() as conn:
-            conn.executescript(
+        _init_core_database()
+        for site_key in SITE_KEYS:
+            site_path = get_site_db_path(site_key)
+            site_path.parent.mkdir(parents=True, exist_ok=True)
+            with _managed_connection(site_path) as conn:
+                _init_stock_schema(conn)
+
+
+def _init_core_database() -> None:
+    with get_core_connection() as conn:
+        conn.executescript(
+            """
+            CREATE TABLE IF NOT EXISTS sites (
+                site_key TEXT PRIMARY KEY,
+                display_name TEXT NOT NULL,
+                db_path TEXT NOT NULL,
+                is_active INTEGER NOT NULL DEFAULT 1
+            );
+            CREATE TABLE IF NOT EXISTS user_site_assignments (
+                username TEXT PRIMARY KEY,
+                site_key TEXT NOT NULL REFERENCES sites(site_key)
+            );
+            CREATE TABLE IF NOT EXISTS user_site_overrides (
+                username TEXT PRIMARY KEY,
+                site_key TEXT REFERENCES sites(site_key),
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE TABLE IF NOT EXISTS user_page_layouts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT NOT NULL,
+                page_key TEXT NOT NULL,
+                layout_json TEXT NOT NULL,
+                hidden_blocks_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(username, page_key)
+            );
+            """
+        )
+        default_paths = get_default_site_db_paths()
+        for site_key in SITE_KEYS:
+            conn.execute(
                 """
+                INSERT INTO sites (site_key, display_name, db_path, is_active)
+                VALUES (?, ?, ?, 1)
+                ON CONFLICT(site_key) DO UPDATE SET
+                  display_name = excluded.display_name,
+                  db_path = excluded.db_path,
+                  is_active = 1
+                """,
+                (
+                    site_key,
+                    SITE_DISPLAY_NAMES.get(site_key, site_key),
+                    str(default_paths[site_key]),
+                ),
+            )
+        _migrate_user_layouts_to_core(conn)
+        _backfill_user_site_assignments(conn)
+        conn.commit()
+
+
+def _migrate_user_layouts_to_core(core_conn: sqlite3.Connection) -> None:
+    row = core_conn.execute("SELECT COUNT(*) AS count FROM user_page_layouts").fetchone()
+    if row and row["count"]:
+        return
+    try:
+        with get_users_connection() as users_conn:
+            existing_rows = users_conn.execute(
+                """
+                SELECT username, page_key, layout_json, hidden_blocks_json, updated_at
+                FROM user_page_layouts
+                """
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return
+    if not existing_rows:
+        return
+    core_conn.executemany(
+        """
+        INSERT INTO user_page_layouts (username, page_key, layout_json, hidden_blocks_json, updated_at)
+        VALUES (?, ?, ?, ?, ?)
+        ON CONFLICT(username, page_key) DO UPDATE SET
+          layout_json = excluded.layout_json,
+          hidden_blocks_json = excluded.hidden_blocks_json,
+          updated_at = excluded.updated_at
+        """,
+        [
+            (
+                row["username"],
+                row["page_key"],
+                row["layout_json"],
+                row["hidden_blocks_json"],
+                row["updated_at"],
+            )
+            for row in existing_rows
+        ],
+    )
+    core_conn.commit()
+
+
+def _backfill_user_site_assignments(core_conn: sqlite3.Connection) -> None:
+    try:
+        with get_users_connection() as users_conn:
+            user_rows = users_conn.execute("SELECT username FROM users").fetchall()
+    except sqlite3.OperationalError:
+        return
+    if not user_rows:
+        return
+    core_conn.executemany(
+        """
+        INSERT OR IGNORE INTO user_site_assignments (username, site_key)
+        VALUES (?, ?)
+        """,
+        [(row["username"], DEFAULT_SITE_KEY) for row in user_rows],
+    )
+
+
+def _init_stock_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
                 CREATE TABLE IF NOT EXISTS categories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL
@@ -251,4 +453,4 @@ def init_databases() -> None:
                     quantity_received INTEGER NOT NULL DEFAULT 0
                 );
                 """
-            )
+    )

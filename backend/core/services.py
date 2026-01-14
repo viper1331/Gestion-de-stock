@@ -29,7 +29,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
-from backend.core import db, models, security
+from backend.core import db, models, security, sites
 from backend.core.pdf_config_models import PdfColumnConfig, PdfConfig
 from backend.core.storage import (
     MEDIA_ROOT,
@@ -933,7 +933,7 @@ def ensure_database_ready() -> None:
             return
         with _migration_lock():
             db.init_databases()
-            _apply_schema_migrations()
+            apply_site_schema_migrations()
 
         _restore_inventory_snapshots()
         seed_default_admin()
@@ -1233,8 +1233,13 @@ def _ensure_vehicle_item_qr_tokens(
         _persist_after_commit(conn, "vehicle_inventory")
 
 
-def _apply_schema_migrations() -> None:
-    with db.get_stock_connection() as conn:
+def apply_site_schema_migrations() -> None:
+    for site_key in db.list_site_keys():
+        _apply_schema_migrations_for_site(site_key)
+
+
+def _apply_schema_migrations_for_site(site_key: str) -> None:
+    with db.get_stock_connection(site_key) as conn:
         def execute(statement: str, params: tuple[Any, ...] = ()) -> sqlite3.Cursor:
             return _execute_with_retry(conn, statement, params)
 
@@ -3098,6 +3103,7 @@ def seed_default_admin() -> None:
                 (default_username, hashed_password, "admin"),
             )
             conn.commit()
+            sites.set_user_site_assignment(default_username, db.DEFAULT_SITE_KEY)
             return
 
         needs_update = False
@@ -3112,6 +3118,7 @@ def seed_default_admin() -> None:
                 (hashed_password, "admin", row["id"]),
             )
             conn.commit()
+    sites.set_user_site_assignment(default_username, db.DEFAULT_SITE_KEY)
 
 
 def get_user(username: str) -> Optional[models.User]:
@@ -3541,6 +3548,7 @@ def create_user(payload: models.UserCreate) -> models.User:
     created = get_user_by_id(user_id)
     if created is None:  # pragma: no cover - inserted row should exist
         raise ValueError("Échec de la création de l'utilisateur")
+    sites.set_user_site_assignment(payload.username, db.DEFAULT_SITE_KEY)
     return created
 
 
@@ -3590,6 +3598,11 @@ def delete_user(user_id: int) -> None:
         raise ValueError("Impossible de supprimer l'utilisateur administrateur par défaut")
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
+        conn.commit()
+    with db.get_core_connection() as conn:
+        conn.execute("DELETE FROM user_site_assignments WHERE username = ?", (current.username,))
+        conn.execute("DELETE FROM user_site_overrides WHERE username = ?", (current.username,))
+        conn.execute("DELETE FROM user_page_layouts WHERE username = ?", (current.username,))
         conn.commit()
 
 
@@ -4069,7 +4082,7 @@ def delete_vehicle_item(item_id: int) -> bool:
             logger.info(
                 "[VEHICLE_INVENTORY] Delete lookup pid=%s db=%s item_id=%s vehicle_items_count=%s exists=%s",
                 os.getpid(),
-                db.STOCK_DB_PATH.resolve(),
+                db.get_stock_db_path().resolve(),
                 item_id,
                 total_count["n"] if total_count else None,
                 None if existence is None else existence["id"],

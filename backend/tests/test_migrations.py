@@ -39,6 +39,7 @@ def test_track_low_stock_migration_adds_column_and_allows_updates(tmp_path, monk
     monkeypatch.setattr(db, "DATA_DIR", data_dir)
     monkeypatch.setattr(db, "STOCK_DB_PATH", stock_path)
     monkeypatch.setattr(db, "USERS_DB_PATH", users_path)
+    monkeypatch.setattr(db, "CORE_DB_PATH", data_dir / "core.db")
     monkeypatch.setattr(services, "_MIGRATION_LOCK_PATH", data_dir / "schema_migration.lock")
     monkeypatch.setattr(services, "_INVENTORY_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(services, "_db_initialized", False)

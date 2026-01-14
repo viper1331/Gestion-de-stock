@@ -33,7 +33,9 @@ from backend.api import (
     logs,
     messages,
     user_layouts,
+    sites as sites_api,
 )
+from backend.api.site_context import SiteContextMiddleware
 from backend.core.logging_config import (
     LOG_BACKUP_COUNT,
     LOG_DIR,
@@ -81,6 +83,7 @@ app.add_middleware(
     ProxyHeadersMiddleware,
     trusted_hosts="*",
 )
+app.add_middleware(SiteContextMiddleware)
 rebuild_cors_middleware(app, get_effective_cors_origins())
 
 app.include_router(auth.router, prefix="/auth", tags=["auth"])
@@ -109,6 +112,7 @@ app.include_router(logs.router, prefix="/logs", tags=["logs"])
 app.include_router(messages.router, prefix="/messages", tags=["messages"])
 app.include_router(user_layouts.router, prefix="/user-layouts", tags=["user-layouts"])
 app.include_router(user_layouts.router, prefix="/ui/layouts", tags=["user-layouts"])
+app.include_router(sites_api.router, prefix="/sites", tags=["sites"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
 

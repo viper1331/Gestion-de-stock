@@ -28,10 +28,20 @@ def create_backup_archive() -> Path:
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
     with TemporaryDirectory() as tmpdir:
         temp_dir = Path(tmpdir)
-        stock_path = temp_dir / "stock.db"
         users_path = temp_dir / "users.db"
-        copy2(db.STOCK_DB_PATH, stock_path)
         copy2(db.USERS_DB_PATH, users_path)
+        if db.CORE_DB_PATH.exists():
+            core_path = temp_dir / "core.db"
+            copy2(db.CORE_DB_PATH, core_path)
+        sites_dir = temp_dir / "sites"
+        sites_dir.mkdir(parents=True, exist_ok=True)
+        site_paths = db.list_site_db_paths()
+        for site_key, site_path in site_paths.items():
+            if site_path.exists():
+                copy2(site_path, sites_dir / f"{site_key}.db")
+        jll_path = site_paths.get("JLL", db.STOCK_DB_PATH)
+        if jll_path.exists():
+            copy2(jll_path, temp_dir / "stock.db")
         media_target = temp_dir / "media"
         if MEDIA_ROOT.exists():
             copytree(MEDIA_ROOT, media_target, dirs_exist_ok=True)
@@ -128,6 +138,7 @@ def _restore_sqlite_db(source: Path, destination: Path) -> None:
     # the tests.  Nesting the context managers ensures the destination
     # connection is closed before the read-only source connection, releasing the
     # handle on the extracted file as soon as the function exits.
+    destination.parent.mkdir(parents=True, exist_ok=True)
     with _open_sqlite_readonly(source) as source_conn:
         # ``sqlite3.Connection`` implements the context manager protocol but does
         # not automatically close the database when leaving the ``with`` block.
@@ -155,6 +166,8 @@ def restore_backup_from_zip(archive_path: Path) -> None:
 
         stock_candidates = list(temp_dir.rglob("stock.db"))
         users_candidates = list(temp_dir.rglob("users.db"))
+        core_candidates = list(temp_dir.rglob("core.db"))
+        site_candidates = list((temp_dir / "sites").glob("*.db"))
         if not stock_candidates or not users_candidates:
             raise BackupImportError("Archive incomplète: bases manquantes")
 
@@ -165,7 +178,18 @@ def restore_backup_from_zip(archive_path: Path) -> None:
         _verify_sqlite_database(stock_source)
         _verify_sqlite_database(users_source)
 
-        _restore_sqlite_db(stock_source, db.STOCK_DB_PATH)
+        if core_candidates:
+            _verify_sqlite_database(core_candidates[0])
+            _restore_sqlite_db(core_candidates[0], db.CORE_DB_PATH)
+        if site_candidates:
+            for site_path in site_candidates:
+                site_key = site_path.stem.upper()
+                if site_key not in db.SITE_KEYS:
+                    continue
+                _verify_sqlite_database(site_path)
+                _restore_sqlite_db(site_path, db.get_site_db_path(site_key))
+        else:
+            _restore_sqlite_db(stock_source, db.get_site_db_path("JLL"))
         _restore_sqlite_db(users_source, db.USERS_DB_PATH)
 
         if media_source.exists():
