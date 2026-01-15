@@ -361,6 +361,42 @@ export function AppLayout() {
           ]
         },
         {
+          id: "operations",
+          label: "Opérations",
+          tooltip: "Accéder aux opérations terrain",
+          icon: "🛠️",
+          sections: [
+            {
+              id: "operations-links",
+              label: "Liens personnalisés",
+              tooltip: "Gérer les liens partagés par module",
+              links: [
+                {
+                  to: "/operations/vehicle-qr",
+                  label: "QR codes véhicules",
+                  tooltip: "Gérer les liens et QR codes véhicules",
+                  icon: "🔖",
+                  modules: ["vehicle_qrcodes", "vehicle_inventory"]
+                },
+                {
+                  to: "/operations/pharmacy-links",
+                  label: "Liens Pharmacie",
+                  tooltip: "Gérer les liens associés aux articles pharmacie",
+                  icon: "💊",
+                  module: "pharmacy"
+                },
+                {
+                  to: "/operations/link-categories",
+                  label: "Configuration liens",
+                  tooltip: "Configurer les catégories de liens",
+                  icon: "⚙️",
+                  adminOnly: true
+                }
+              ]
+            }
+          ]
+        },
+        {
           id: "pharmacie",
           label: moduleTitles.pharmacy,
           tooltip: "Accéder aux fonctionnalités de pharmacie",

@@ -25,6 +25,8 @@ import { AboutPage } from "../features/about/AboutPage";
 import { SystemConfigPage } from "../features/system-config/SystemConfigPage";
 import { MessagesPage } from "../features/messages/MessagesPage";
 import { PdfStudioPage } from "../features/pdf-config/PdfStudioPage";
+import { PharmacyLinksPage } from "../features/operations/PharmacyLinksPage";
+import { LinkCategoriesPage } from "../features/operations/LinkCategoriesPage";
 
 export const router = createBrowserRouter([
   {
@@ -44,6 +46,9 @@ export const router = createBrowserRouter([
       { path: "inventory", element: <Dashboard /> },
       { path: "vehicle-inventory", element: <VehicleInventoryPage /> },
       { path: "vehicle-inventory/qr-codes", element: <VehicleQrManagerPage /> },
+      { path: "operations/vehicle-qr", element: <VehicleQrManagerPage /> },
+      { path: "operations/pharmacy-links", element: <PharmacyLinksPage /> },
+      { path: "operations/link-categories", element: <LinkCategoriesPage /> },
       { path: "remise-inventory", element: <RemiseInventoryPage /> },
       { path: "barcode", element: <BarcodePage /> },
       { path: "reports", element: <ReportsPage /> },

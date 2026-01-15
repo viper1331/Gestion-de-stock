@@ -20,6 +20,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import wrap
 from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional, TypeVar
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from reportlab.lib import colors
@@ -149,6 +150,25 @@ _INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
             movements="remise_movements",
         )
     ),
+}
+
+_LINK_MODULE_CONFIG: dict[str, dict[str, Any]] = {
+    "vehicle_qr": {
+        "item_table": "vehicle_items",
+        "link_table": "vehicle_item_links",
+        "item_id_column": "vehicle_item_id",
+        "legacy_map": {
+            "onedrive": "shared_file_url",
+            "documentation": "documentation_url",
+            "tutoriel": "tutorial_url",
+        },
+    },
+    "pharmacy": {
+        "item_table": "pharmacy_items",
+        "link_table": "pharmacy_item_links",
+        "item_id_column": "pharmacy_item_id",
+        "legacy_map": {},
+    },
 }
 
 _BARCODE_MODULE_SOURCES: tuple[tuple[str, str, str], ...] = (
@@ -927,6 +947,313 @@ def delete_custom_field_definition(custom_field_id: int) -> None:
         conn.commit()
 
 
+def list_link_categories(module: str, *, include_inactive: bool = True) -> list[models.LinkCategory]:
+    ensure_database_ready()
+    module = _validate_link_module(module)
+    with db.get_stock_connection() as conn:
+        rows = _fetch_link_categories(conn, module, active_only=not include_inactive)
+        return [
+            models.LinkCategory(
+                id=row["id"],
+                module=row["module"],
+                key=row["key"],
+                label=row["label"],
+                placeholder=row["placeholder"],
+                help_text=row["help_text"],
+                is_required=bool(row["is_required"]),
+                sort_order=int(row["sort_order"] or 0),
+                is_active=bool(row["is_active"]),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in rows
+        ]
+
+
+def create_link_category(payload: models.LinkCategoryCreate) -> models.LinkCategory:
+    ensure_database_ready()
+    module = _validate_link_module(payload.module)
+    key = _normalize_link_key(payload.key)
+    with db.get_stock_connection() as conn:
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO link_categories (
+                    module,
+                    key,
+                    label,
+                    placeholder,
+                    help_text,
+                    is_required,
+                    sort_order,
+                    is_active,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (
+                    module,
+                    key,
+                    payload.label.strip(),
+                    payload.placeholder,
+                    payload.help_text,
+                    int(payload.is_required),
+                    int(payload.sort_order),
+                    int(payload.is_active),
+                ),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Cette catégorie de lien existe déjà") from exc
+        category_id = cur.lastrowid
+    return get_link_category(category_id)
+
+
+def get_link_category(category_id: int) -> models.LinkCategory:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id,
+                   module,
+                   key,
+                   label,
+                   placeholder,
+                   help_text,
+                   is_required,
+                   sort_order,
+                   is_active,
+                   created_at,
+                   updated_at
+            FROM link_categories
+            WHERE id = ?
+            """,
+            (category_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Catégorie de lien introuvable")
+    return models.LinkCategory(
+        id=row["id"],
+        module=row["module"],
+        key=row["key"],
+        label=row["label"],
+        placeholder=row["placeholder"],
+        help_text=row["help_text"],
+        is_required=bool(row["is_required"]),
+        sort_order=int(row["sort_order"] or 0),
+        is_active=bool(row["is_active"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def update_link_category(
+    category_id: int, payload: models.LinkCategoryUpdate
+) -> models.LinkCategory:
+    ensure_database_ready()
+    updates: list[str] = []
+    values: list[Any] = []
+    if payload.module is not None:
+        module = _validate_link_module(payload.module)
+        updates.append("module = ?")
+        values.append(module)
+    if payload.key is not None:
+        updates.append("key = ?")
+        values.append(_normalize_link_key(payload.key))
+    if payload.label is not None:
+        updates.append("label = ?")
+        values.append(payload.label.strip())
+    if payload.placeholder is not None:
+        updates.append("placeholder = ?")
+        values.append(payload.placeholder)
+    if payload.help_text is not None:
+        updates.append("help_text = ?")
+        values.append(payload.help_text)
+    if payload.is_required is not None:
+        updates.append("is_required = ?")
+        values.append(int(payload.is_required))
+    if payload.sort_order is not None:
+        updates.append("sort_order = ?")
+        values.append(int(payload.sort_order))
+    if payload.is_active is not None:
+        updates.append("is_active = ?")
+        values.append(int(payload.is_active))
+
+    if not updates:
+        return get_link_category(category_id)
+
+    updates.append("updated_at = CURRENT_TIMESTAMP")
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM link_categories WHERE id = ?", (category_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Catégorie de lien introuvable")
+        values.append(category_id)
+        try:
+            conn.execute(
+                f"UPDATE link_categories SET {', '.join(updates)} WHERE id = ?",
+                tuple(values),
+            )
+        except sqlite3.IntegrityError as exc:
+            raise ValueError("Cette catégorie de lien existe déjà") from exc
+    return get_link_category(category_id)
+
+
+def delete_link_category(category_id: int) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute("SELECT id FROM link_categories WHERE id = ?", (category_id,))
+        if cur.fetchone() is None:
+            raise ValueError("Catégorie de lien introuvable")
+        conn.execute(
+            "UPDATE link_categories SET is_active = 0, updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (category_id,),
+        )
+        conn.commit()
+
+
+def get_item_links(module: str, item_id: int) -> list[models.LinkCategoryValue]:
+    ensure_database_ready()
+    module = _validate_link_module(module)
+    config = _LINK_MODULE_CONFIG[module]
+    item_table = config["item_table"]
+    item_id_column = config["item_id_column"]
+    legacy_map: dict[str, str] = config["legacy_map"]
+    with db.get_stock_connection() as conn:
+        legacy_columns = [column for column in legacy_map.values()]
+        select_columns = ", ".join(["id"] + legacy_columns)
+        row = conn.execute(
+            f"SELECT {select_columns} FROM {item_table} WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        categories = conn.execute(
+            """
+            SELECT id,
+                   key,
+                   label,
+                   placeholder,
+                   help_text,
+                   is_required,
+                   sort_order
+            FROM link_categories
+            WHERE module = ? AND is_active = 1
+            ORDER BY sort_order, label COLLATE NOCASE
+            """,
+            (module,),
+        ).fetchall()
+        if not categories:
+            return []
+        link_rows = conn.execute(
+            f"""
+            SELECT category_id, url
+            FROM {config['link_table']}
+            WHERE {item_id_column} = ?
+            """,
+            (item_id,),
+        ).fetchall()
+        link_map = {entry["category_id"]: entry["url"] for entry in link_rows}
+        results: list[models.LinkCategoryValue] = []
+        for category in categories:
+            url_value = link_map.get(category["id"], "") or ""
+            if (
+                not url_value
+                and module == "vehicle_qr"
+                and category["key"] in legacy_map
+                and legacy_map[category["key"]] in row.keys()
+            ):
+                url_value = row[legacy_map[category["key"]]] or ""
+            results.append(
+                models.LinkCategoryValue(
+                    category_key=category["key"],
+                    label=category["label"],
+                    placeholder=category["placeholder"],
+                    help_text=category["help_text"],
+                    is_required=bool(category["is_required"]),
+                    sort_order=int(category["sort_order"] or 0),
+                    url=url_value,
+                )
+            )
+        return results
+
+
+def save_item_links(
+    module: str, item_id: int, links: list[models.LinkItemEntry]
+) -> list[models.LinkCategoryValue]:
+    ensure_database_ready()
+    module = _validate_link_module(module)
+    config = _LINK_MODULE_CONFIG[module]
+    item_table = config["item_table"]
+    item_id_column = config["item_id_column"]
+    legacy_map: dict[str, str] = config["legacy_map"]
+    payload_map: dict[str, str] = {}
+    for entry in links:
+        key = _normalize_link_key(entry.category_key)
+        if key in payload_map:
+            raise ValueError("Catégorie de lien dupliquée")
+        payload_map[key] = entry.url or ""
+
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            f"SELECT id FROM {item_table} WHERE id = ?",
+            (item_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Article introuvable")
+        categories = conn.execute(
+            """
+            SELECT id,
+                   key,
+                   label,
+                   is_required
+            FROM link_categories
+            WHERE module = ? AND is_active = 1
+            ORDER BY sort_order, label COLLATE NOCASE
+            """,
+            (module,),
+        ).fetchall()
+        category_map = {category["key"]: category for category in categories}
+        for key in payload_map:
+            if key not in category_map:
+                raise ValueError("Catégorie de lien inconnue")
+        rows_to_save: list[tuple[int, int, str]] = []
+        normalized_values: dict[str, str] = {}
+        for category in categories:
+            raw_value = payload_map.get(category["key"], "")
+            normalized_value = _validate_link_url(
+                raw_value, is_required=bool(category["is_required"])
+            )
+            rows_to_save.append((item_id, category["id"], normalized_value))
+            normalized_values[category["key"]] = normalized_value
+
+        if rows_to_save:
+            conn.executemany(
+                f"""
+                INSERT INTO {config['link_table']} ({item_id_column}, category_id, url, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT({item_id_column}, category_id)
+                DO UPDATE SET url = excluded.url, updated_at = CURRENT_TIMESTAMP
+                """,
+                rows_to_save,
+            )
+
+        if module == "vehicle_qr" and legacy_map:
+            legacy_updates: list[str] = []
+            legacy_values: list[Any] = []
+            for key, column in legacy_map.items():
+                if key in normalized_values:
+                    legacy_updates.append(f"{column} = ?")
+                    legacy_values.append(normalized_values[key] or None)
+            if legacy_updates:
+                legacy_values.append(item_id)
+                conn.execute(
+                    f"UPDATE vehicle_items SET {', '.join(legacy_updates)} WHERE id = ?",
+                    tuple(legacy_values),
+                )
+        conn.commit()
+    return get_item_links(module, item_id)
+
+
 def ensure_database_ready() -> None:
     global _db_initialized
     if _db_initialized:
@@ -1009,6 +1336,53 @@ def _parse_extra_json(raw: str | None) -> dict[str, Any]:
 
 def _dump_extra_json(payload: dict[str, Any]) -> str:
     return json.dumps(payload, ensure_ascii=False)
+
+
+def _validate_link_module(module: str) -> str:
+    if module not in _LINK_MODULE_CONFIG:
+        raise ValueError("Module de lien invalide")
+    return module
+
+
+def _normalize_link_key(value: str) -> str:
+    return value.strip()
+
+
+def _validate_link_url(value: str, *, is_required: bool) -> str:
+    trimmed = value.strip()
+    if not trimmed:
+        if is_required:
+            raise ValueError("Lien requis")
+        return ""
+    parsed = urlparse(trimmed)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        raise ValueError("Lien invalide (HTTP/HTTPS requis)")
+    return trimmed
+
+
+def _fetch_link_categories(
+    conn: sqlite3.Connection, module: str, *, active_only: bool
+) -> list[sqlite3.Row]:
+    clause = " AND is_active = 1" if active_only else ""
+    return conn.execute(
+        f"""
+        SELECT id,
+               module,
+               key,
+               label,
+               placeholder,
+               help_text,
+               is_required,
+               sort_order,
+               is_active,
+               created_at,
+               updated_at
+        FROM link_categories
+        WHERE module = ?{clause}
+        ORDER BY sort_order, label COLLATE NOCASE
+        """,
+        (module,),
+    ).fetchall()
 
 
 def _ensure_vehicle_item_columns(
@@ -1203,6 +1577,169 @@ def _ensure_pharmacy_lot_item_columns(
         CREATE INDEX IF NOT EXISTS idx_pharmacy_lot_items_item ON pharmacy_lot_items(pharmacy_item_id);
         """
     )
+
+
+def _ensure_link_tables(
+    conn: sqlite3.Connection, executescript: Callable[[str], sqlite3.Cursor] | None = None
+) -> None:
+    if executescript is None:
+        executescript = conn.executescript
+    executescript(
+        """
+        CREATE TABLE IF NOT EXISTS link_categories (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            module TEXT NOT NULL,
+            key TEXT NOT NULL,
+            label TEXT NOT NULL,
+            placeholder TEXT,
+            help_text TEXT,
+            is_required INTEGER NOT NULL DEFAULT 0,
+            sort_order INTEGER NOT NULL DEFAULT 0,
+            is_active INTEGER NOT NULL DEFAULT 1,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(module, key)
+        );
+        CREATE INDEX IF NOT EXISTS idx_link_categories_module ON link_categories(module);
+        CREATE TABLE IF NOT EXISTS vehicle_item_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicle_item_id INTEGER NOT NULL REFERENCES vehicle_items(id) ON DELETE CASCADE,
+            category_id INTEGER NOT NULL REFERENCES link_categories(id) ON DELETE CASCADE,
+            url TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(vehicle_item_id, category_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_vehicle_item_links_item ON vehicle_item_links(vehicle_item_id);
+        CREATE TABLE IF NOT EXISTS pharmacy_item_links (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
+            category_id INTEGER NOT NULL REFERENCES link_categories(id) ON DELETE CASCADE,
+            url TEXT NOT NULL DEFAULT '',
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(pharmacy_item_id, category_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_pharmacy_item_links_item ON pharmacy_item_links(pharmacy_item_id);
+        """
+    )
+
+
+def _seed_default_link_categories(conn: sqlite3.Connection) -> None:
+    defaults: list[tuple[str, str, str, str | None, str | None, int, int, int]] = [
+        (
+            "vehicle_qr",
+            "onedrive",
+            "Fichier OneDrive",
+            "https://onedrive.live.com/...",
+            "Lien partagé du fichier hébergé dans OneDrive.",
+            0,
+            0,
+            1,
+        ),
+        (
+            "vehicle_qr",
+            "documentation",
+            "Documentation",
+            "https://...",
+            None,
+            0,
+            10,
+            1,
+        ),
+        (
+            "vehicle_qr",
+            "tutoriel",
+            "Tutoriel",
+            "https://...",
+            None,
+            0,
+            20,
+            1,
+        ),
+        (
+            "pharmacy",
+            "documentation",
+            "Documentation",
+            "https://...",
+            None,
+            0,
+            0,
+            1,
+        ),
+        (
+            "pharmacy",
+            "tutoriel",
+            "Tutoriel",
+            "https://...",
+            None,
+            0,
+            10,
+            1,
+        ),
+        (
+            "pharmacy",
+            "supplier",
+            "Fournisseur",
+            "https://...",
+            "Lien vers la fiche fournisseur ou la notice.",
+            0,
+            20,
+            1,
+        ),
+    ]
+    conn.executemany(
+        """
+        INSERT OR IGNORE INTO link_categories (
+            module,
+            key,
+            label,
+            placeholder,
+            help_text,
+            is_required,
+            sort_order,
+            is_active,
+            created_at,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+        """,
+        defaults,
+    )
+
+
+def _migrate_vehicle_link_legacy_fields(conn: sqlite3.Connection) -> None:
+    vehicle_item_info = conn.execute("PRAGMA table_info(vehicle_items)").fetchall()
+    if not vehicle_item_info:
+        return
+    vehicle_item_columns = {row["name"] for row in vehicle_item_info}
+    category_rows = conn.execute(
+        "SELECT id, key FROM link_categories WHERE module = 'vehicle_qr'"
+    ).fetchall()
+    if not category_rows:
+        return
+    category_map = {row["key"]: row["id"] for row in category_rows}
+    legacy_map: dict[str, str] = _LINK_MODULE_CONFIG["vehicle_qr"]["legacy_map"]
+    for key, column in legacy_map.items():
+        if column not in vehicle_item_columns:
+            continue
+        category_id = category_map.get(key)
+        if not category_id:
+            continue
+        rows = conn.execute(
+            f"""
+            SELECT id, {column} AS legacy_url
+            FROM vehicle_items
+            WHERE {column} IS NOT NULL AND {column} != ''
+            """
+        ).fetchall()
+        if not rows:
+            continue
+        conn.executemany(
+            """
+            INSERT OR IGNORE INTO vehicle_item_links (vehicle_item_id, category_id, url, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            """,
+            [(row["id"], category_id, row["legacy_url"]) for row in rows],
+        )
 
 
 def _ensure_vehicle_item_qr_tokens(
@@ -1610,6 +2147,9 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         _ensure_vehicle_applied_lot_table(conn, executescript=executescript)
         _ensure_vehicle_item_columns(conn, execute=execute)
         _ensure_vehicle_item_qr_tokens(conn, execute=execute)
+        _ensure_link_tables(conn, executescript=executescript)
+        _seed_default_link_categories(conn)
+        _migrate_vehicle_link_legacy_fields(conn)
         execute(
             "CREATE INDEX IF NOT EXISTS idx_vehicle_items_remise ON vehicle_items(remise_item_id)"
         )
