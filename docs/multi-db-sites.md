@@ -9,12 +9,13 @@ L’application utilise un modèle multi-sites avec une base SQLite par site :
 - `CENTRAL_ENTITY`
 
 ## Fichiers et mapping
-Un `core.db` central stocke :
+Un stockage central (users/core DB) conserve :
 
 - `sites` (mapping `site_key → db_path`)
-- `user_site_assignments`
-- `user_site_overrides`
+- `users.site_key` (site assigné, défaut `JLL`)
+- `users.admin_active_site_key` (override admin)
 - `user_page_layouts`
+- `user_site_assignments` / `user_site_overrides` (compatibilité historique)
 
 Les bases de site sont créées automatiquement dans `backend/data/` (ex. `GSM.db`).
 
@@ -26,8 +27,8 @@ Les bases de site sont créées automatiquement dans `backend/data/` (ex. `GSM.d
 Le site actif est déterminé par ordre de priorité :
 
 1. **Header `X-Site-Key`** (uniquement admin / testing)
-2. **Override admin** (UI “Base de Données”)
-3. **Site assigné** dans `core.db`
+2. **Override admin** (UI “Base de Données”, stocké dans `users.admin_active_site_key`)
+3. **Site assigné** (`users.site_key`)
 4. **Fallback** `JLL`
 
 Les non-admin restent toujours sur leur site assigné.

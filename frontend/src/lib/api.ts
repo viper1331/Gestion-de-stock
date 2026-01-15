@@ -10,6 +10,12 @@ export const api = axios.create({
   baseURL: DEFAULT_BASE_URL
 });
 
+let adminSiteOverride: string | null = null;
+
+export function setAdminSiteOverride(siteKey: string | null) {
+  adminSiteOverride = siteKey;
+}
+
 async function ensureBaseUrl(): Promise<string> {
   try {
     const { baseUrl } = await resolveApiBaseUrl();
@@ -25,6 +31,12 @@ async function ensureBaseUrl(): Promise<string> {
 api.interceptors.request.use(async (config) => {
   const baseUrl = await ensureBaseUrl();
   config.baseURL = baseUrl;
+  if (adminSiteOverride) {
+    config.headers = {
+      ...(config.headers ?? {}),
+      "X-Site-Key": adminSiteOverride
+    };
+  }
   apiDebug("Request", {
     url: config.url,
     method: config.method,

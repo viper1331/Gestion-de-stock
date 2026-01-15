@@ -215,7 +215,9 @@ def init_databases() -> None:
                 );
                 """
             )
+            _ensure_user_site_columns(conn)
         _init_core_database()
+        _sync_user_site_preferences()
         for site_key in SITE_KEYS:
             site_path = get_site_db_path(site_key)
             site_path.parent.mkdir(parents=True, exist_ok=True)
@@ -329,6 +331,58 @@ def _backfill_user_site_assignments(core_conn: sqlite3.Connection) -> None:
         """,
         [(row["username"], DEFAULT_SITE_KEY) for row in user_rows],
     )
+
+
+def _ensure_user_site_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "site_key" not in columns:
+        conn.execute(
+            "ALTER TABLE users ADD COLUMN site_key TEXT NOT NULL DEFAULT 'JLL'"
+        )
+    if "admin_active_site_key" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN admin_active_site_key TEXT")
+
+
+def _sync_user_site_preferences() -> None:
+    try:
+        with get_users_connection() as users_conn, get_core_connection() as core_conn:
+            users = users_conn.execute(
+                "SELECT id, username FROM users"
+            ).fetchall()
+            if not users:
+                return
+            assignments = core_conn.execute(
+                "SELECT username, site_key FROM user_site_assignments"
+            ).fetchall()
+            overrides = core_conn.execute(
+                "SELECT username, site_key FROM user_site_overrides"
+            ).fetchall()
+    except sqlite3.OperationalError:
+        return
+
+    assignment_map = {row["username"]: row["site_key"] for row in assignments}
+    override_map = {row["username"]: row["site_key"] for row in overrides}
+
+    with get_users_connection() as users_conn:
+        for row in users:
+            username = row["username"]
+            assignment = assignment_map.get(username)
+            override = override_map.get(username)
+            if assignment:
+                users_conn.execute(
+                    "UPDATE users SET site_key = ? WHERE username = ?",
+                    (assignment, username),
+                )
+            else:
+                users_conn.execute(
+                    "UPDATE users SET site_key = COALESCE(site_key, ?) WHERE username = ?",
+                    (DEFAULT_SITE_KEY, username),
+                )
+            if override is not None:
+                users_conn.execute(
+                    "UPDATE users SET admin_active_site_key = ? WHERE username = ?",
+                    (override, username),
+                )
 
 
 def _init_stock_schema(conn: sqlite3.Connection) -> None:

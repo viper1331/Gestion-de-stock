@@ -10,6 +10,7 @@ import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
 import { fetchConfigEntries } from "../lib/config";
+import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
 
@@ -35,6 +36,11 @@ export function AppLayout() {
     queryKey: ["config", "global"],
     queryFn: fetchConfigEntries,
     enabled: Boolean(user)
+  });
+  const { data: siteContext } = useQuery({
+    queryKey: ["site-context", user?.username],
+    queryFn: fetchSiteContext,
+    enabled: user?.role === "admin"
   });
 
   const moduleTitles = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
@@ -559,6 +565,10 @@ export function AppLayout() {
   const isSidebarExpanded = isDesktop && sidebarOpen;
   const showPopoverMenu = isDesktop && !sidebarOpen;
   const navLinkHandler = mobileDrawerOpen ? () => setMobileDrawerOpen(false) : undefined;
+  const activeSiteLabel =
+    user.role === "admin"
+      ? siteContext?.override_site_key ?? user.site_key ?? "JLL"
+      : user.site_key ?? "JLL";
 
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-slate-950 text-slate-50">
@@ -857,6 +867,11 @@ export function AppLayout() {
         </div>
       ) : null}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto bg-slate-950 p-6">
+        <div className="flex items-center justify-end pb-4">
+          <span className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200">
+            Site: {activeSiteLabel}
+          </span>
+        </div>
         <Outlet />
       </main>
     </div>

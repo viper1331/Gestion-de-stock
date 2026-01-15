@@ -3092,18 +3092,17 @@ def seed_default_admin() -> None:
     default_password = "admin123"
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT id, password, role, is_active FROM users WHERE username = ?",
+            "SELECT id, password, role, is_active, site_key FROM users WHERE username = ?",
             (default_username,),
         )
         row = cur.fetchone()
         hashed_password = security.hash_password(default_password)
         if row is None:
             conn.execute(
-                "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
-                (default_username, hashed_password, "admin"),
+                "INSERT INTO users (username, password, role, is_active, site_key) VALUES (?, ?, ?, 1, ?)",
+                (default_username, hashed_password, "admin", db.DEFAULT_SITE_KEY),
             )
             conn.commit()
-            sites.set_user_site_assignment(default_username, db.DEFAULT_SITE_KEY)
             return
 
         needs_update = False
@@ -3111,14 +3110,26 @@ def seed_default_admin() -> None:
             needs_update = True
         if row["role"] != "admin" or not bool(row["is_active"]):
             needs_update = True
+        if row["site_key"] != db.DEFAULT_SITE_KEY:
+            needs_update = True
 
         if needs_update:
             conn.execute(
-                "UPDATE users SET password = ?, role = ?, is_active = 1 WHERE id = ?",
-                (hashed_password, "admin", row["id"]),
+                "UPDATE users SET password = ?, role = ?, is_active = 1, site_key = ? WHERE id = ?",
+                (hashed_password, "admin", db.DEFAULT_SITE_KEY, row["id"]),
             )
             conn.commit()
-    sites.set_user_site_assignment(default_username, db.DEFAULT_SITE_KEY)
+
+
+def _build_user_from_row(row: sqlite3.Row) -> models.User:
+    site_key = row["site_key"] if "site_key" in row.keys() and row["site_key"] else db.DEFAULT_SITE_KEY
+    return models.User(
+        id=row["id"],
+        username=row["username"],
+        role=row["role"],
+        is_active=bool(row["is_active"]),
+        site_key=site_key,
+    )
 
 
 def get_user(username: str) -> Optional[models.User]:
@@ -3128,12 +3139,7 @@ def get_user(username: str) -> Optional[models.User]:
         row = cur.fetchone()
         if not row:
             return None
-        return models.User(
-            id=row["id"],
-            username=row["username"],
-            role=row["role"],
-            is_active=bool(row["is_active"]),
-        )
+        return _build_user_from_row(row)
 
 
 def get_user_by_id(user_id: int) -> Optional[models.User]:
@@ -3143,12 +3149,7 @@ def get_user_by_id(user_id: int) -> Optional[models.User]:
         row = cur.fetchone()
         if not row:
             return None
-        return models.User(
-            id=row["id"],
-            username=row["username"],
-            role=row["role"],
-            is_active=bool(row["is_active"]),
-        )
+        return _build_user_from_row(row)
 
 
 def list_users() -> list[models.User]:
@@ -3159,12 +3160,7 @@ def list_users() -> list[models.User]:
         )
         rows = cur.fetchall()
         return [
-            models.User(
-                id=row["id"],
-                username=row["username"],
-                role=row["role"],
-                is_active=bool(row["is_active"]),
-            )
+            _build_user_from_row(row)
             for row in rows
         ]
 
@@ -3535,11 +3531,12 @@ def _archive_message_safe(
 def create_user(payload: models.UserCreate) -> models.User:
     ensure_database_ready()
     hashed = security.hash_password(payload.password)
+    site_key = sites.normalize_site_key(payload.site_key) if payload.site_key else db.DEFAULT_SITE_KEY
     with db.get_users_connection() as conn:
         try:
             cur = conn.execute(
-                "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
-                (payload.username, hashed, payload.role),
+                "INSERT INTO users (username, password, role, is_active, site_key) VALUES (?, ?, ?, 1, ?)",
+                (payload.username, hashed, payload.role, site_key),
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
             raise ValueError("Ce nom d'utilisateur existe déjà") from exc
@@ -3548,7 +3545,7 @@ def create_user(payload: models.UserCreate) -> models.User:
     created = get_user_by_id(user_id)
     if created is None:  # pragma: no cover - inserted row should exist
         raise ValueError("Échec de la création de l'utilisateur")
-    sites.set_user_site_assignment(payload.username, db.DEFAULT_SITE_KEY)
+    sites.set_user_site_assignment(payload.username, site_key)
     return created
 
 
@@ -3571,6 +3568,8 @@ def update_user(user_id: int, payload: models.UserUpdate) -> models.User:
         fields["password"] = security.hash_password(payload.password)
     if payload.is_active is not None:
         fields["is_active"] = 1 if payload.is_active else 0
+    if payload.site_key is not None:
+        fields["site_key"] = sites.normalize_site_key(payload.site_key) or db.DEFAULT_SITE_KEY
 
     if not fields:
         return current
@@ -3586,6 +3585,8 @@ def update_user(user_id: int, payload: models.UserUpdate) -> models.User:
     updated = get_user_by_id(user_id)
     if updated is None:  # pragma: no cover
         raise ValueError("Utilisateur introuvable")
+    if payload.site_key is not None:
+        sites.set_user_site_assignment(updated.username, updated.site_key)
     return updated
 
 
@@ -3615,12 +3616,7 @@ def authenticate(username: str, password: str) -> Optional[models.User]:
             return None
         if not security.verify_password(password, row["password"]):
             return None
-        return models.User(
-            id=row["id"],
-            username=row["username"],
-            role=row["role"],
-            is_active=bool(row["is_active"]),
-        )
+        return _build_user_from_row(row)
 
 
 def list_items(search: str | None = None) -> list[models.Item]:
