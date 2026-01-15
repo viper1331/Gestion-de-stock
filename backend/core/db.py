@@ -517,6 +517,13 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     quantity_ordered INTEGER NOT NULL,
                     quantity_received INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS backup_settings (
+                    site_key TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    interval_minutes INTEGER NOT NULL DEFAULT 60,
+                    retention_count INTEGER NOT NULL DEFAULT 3,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
                 CREATE TABLE IF NOT EXISTS collaborators (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     full_name TEXT NOT NULL COLLATE NOCASE,
