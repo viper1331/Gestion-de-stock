@@ -532,6 +532,13 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     quantity_ordered INTEGER NOT NULL,
                     quantity_received INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS ui_menu_prefs (
+                    username TEXT NOT NULL,
+                    menu_key TEXT NOT NULL,
+                    order_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    PRIMARY KEY (username, menu_key)
+                );
                 CREATE TABLE IF NOT EXISTS backup_settings (
                     site_key TEXT PRIMARY KEY,
                     enabled INTEGER NOT NULL DEFAULT 0,

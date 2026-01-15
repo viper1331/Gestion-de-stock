@@ -76,6 +76,9 @@ MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
 _MESSAGE_RATE_LIMIT_DEFAULT_COUNT = 5
 _MESSAGE_RATE_LIMIT_DEFAULT_WINDOW_SECONDS = 60
 
+_MENU_ORDER_MAX_ITEMS = 100
+_MENU_ORDER_MAX_ID_LENGTH = 100
+
 
 class MessageRateLimitError(RuntimeError):
     def __init__(self, *, count: int, window_seconds: int) -> None:
@@ -1837,6 +1840,17 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_purchase_order_items_item ON purchase_order_items(item_id);
             CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
         """
+        )
+        execute(
+            """
+            CREATE TABLE IF NOT EXISTS ui_menu_prefs (
+                username TEXT NOT NULL,
+                menu_key TEXT NOT NULL,
+                order_json TEXT NOT NULL,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (username, menu_key)
+            );
+            """
         )
 
         backup_settings_info = execute("PRAGMA table_info(backup_settings)").fetchall()
@@ -3765,6 +3779,60 @@ def get_user_by_id(user_id: int) -> Optional[models.User]:
         if not row:
             return None
         return _build_user_from_row(row)
+
+
+def _normalize_menu_order(order: Iterable[str]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_id in order:
+        if not isinstance(raw_id, str):
+            continue
+        trimmed = raw_id.strip()
+        if not trimmed or len(trimmed) > _MENU_ORDER_MAX_ID_LENGTH:
+            continue
+        if trimmed in seen:
+            continue
+        seen.add(trimmed)
+        normalized.append(trimmed)
+        if len(normalized) >= _MENU_ORDER_MAX_ITEMS:
+            break
+    return normalized
+
+
+def get_menu_order(username: str, menu_key: str) -> list[str] | None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT order_json FROM ui_menu_prefs WHERE username = ? AND menu_key = ?",
+            (username, menu_key),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        parsed = json.loads(row["order_json"])
+    except json.JSONDecodeError:
+        return []
+    if not isinstance(parsed, list):
+        return []
+    return _normalize_menu_order([item for item in parsed if isinstance(item, str)])
+
+
+def set_menu_order(username: str, menu_key: str, order: list[str]) -> list[str]:
+    ensure_database_ready()
+    normalized = _normalize_menu_order(order)
+    payload = json.dumps(normalized, ensure_ascii=False)
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO ui_menu_prefs (username, menu_key, order_json, updated_at)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(username, menu_key)
+            DO UPDATE SET order_json = excluded.order_json, updated_at = CURRENT_TIMESTAMP
+            """,
+            (username, menu_key, payload),
+        )
+        conn.commit()
+    return normalized
 
 
 def list_users() -> list[models.User]:
