@@ -14,7 +14,6 @@ from backend.services.backup_manager import (
     create_backup_archive,
     restore_backup_from_zip,
 )
-from backend.services.backup_scheduler import backup_scheduler
 
 router = APIRouter()
 
@@ -59,21 +58,3 @@ async def import_backup(
                 detail="Impossible d'importer la sauvegarde",
             ) from exc
 
-
-@router.get("/schedule", response_model=models.BackupScheduleStatus)
-async def get_backup_schedule(
-    user: models.User = Depends(get_current_user),
-) -> models.BackupScheduleStatus:
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
-    return await backup_scheduler.get_status()
-
-
-@router.post("/schedule", status_code=204)
-async def update_backup_schedule(
-    schedule: models.BackupSchedule,
-    user: models.User = Depends(get_current_user),
-) -> None:
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
-    await backup_scheduler.update_schedule(schedule)

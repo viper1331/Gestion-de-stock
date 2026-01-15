@@ -3,158 +3,139 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from configparser import ConfigParser
 from datetime import datetime, timedelta
-from pathlib import Path
 
-from pydantic import ValidationError
-
-from backend.core import models
+from backend.core import db, models
 from backend.services.backup_manager import create_backup_archive
+from backend.services.backup_settings import load_backup_settings_from_db, save_backup_settings
 
 logger = logging.getLogger(__name__)
 
-_CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
-
 
 class BackupScheduler:
-    """Gère la planification des sauvegardes automatiques."""
+    """Gère la planification des sauvegardes automatiques par site."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
-        self._task: asyncio.Task[None] | None = None
-        self._stop_event = asyncio.Event()
-        self._schedule_event = asyncio.Event()
-        self._schedule = models.BackupSchedule(enabled=False, days=[], times=["02:00"])
-        self._day_numbers: set[int] = set()
-        self._next_run: datetime | None = None
-        self._last_run: datetime | None = None
+        self._update_mutex = asyncio.Lock()
+        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._stop_events: dict[str, asyncio.Event] = {}
+        self._update_events: dict[str, asyncio.Event] = {}
+        self._settings: dict[str, models.BackupSettings] = {}
+        self._next_run: dict[str, datetime | None] = {}
+        self._last_run: dict[str, datetime | None] = {}
 
     async def start(self) -> None:
-        """Démarre la boucle de planification."""
-        await self.reload_from_config()
-        async with self._lock:
-            if self._task and not self._task.done():
-                return
-            self._stop_event = asyncio.Event()
-            self._schedule_event = asyncio.Event()
-            self._task = asyncio.create_task(self._run())
-            logger.info("Planificateur de sauvegardes initialisé")
+        """Démarre les planificateurs pour chaque site."""
+        await self.reload_from_db()
+        logger.info("Planificateur de sauvegardes initialisé")
 
     async def stop(self) -> None:
-        """Arrête la boucle de planification."""
+        """Arrête toutes les planifications."""
         async with self._lock:
-            task = self._task
-            if not task:
-                return
-            self._stop_event.set()
-            self._schedule_event.set()
-        await task
-        async with self._lock:
-            self._task = None
-            logger.info("Planificateur de sauvegardes arrêté")
+            site_keys = list(self._tasks.keys())
+        for site_key in site_keys:
+            await self._stop_site_task(site_key)
+        logger.info("Planificateur de sauvegardes arrêté")
 
-    async def reload_from_config(self) -> None:
-        """Recharge la configuration depuis ``config.ini``."""
-        parser = ConfigParser()
-        parser.read(_CONFIG_PATH, encoding="utf-8")
-        enabled = parser.getboolean("backup", "enabled", fallback=False)
-        days_value = parser.get("backup", "days", fallback="")
-        times_value = parser.get("backup", "times", fallback="")
-        time_value = parser.get("backup", "time", fallback="02:00")
-        last_run_value = parser.get("backup", "last_run", fallback="")
-        raw_days = [part.strip() for part in days_value.split(",") if part.strip()]
-        raw_times = [part.strip() for part in times_value.split(",") if part.strip()]
-        if not raw_times and time_value:
-            raw_times = [time_value]
-        try:
-            schedule = models.BackupSchedule(enabled=enabled, days=raw_days, times=raw_times)
-        except ValidationError as exc:
-            logger.warning("Configuration de sauvegarde invalide, désactivation: %s", exc)
-            schedule = models.BackupSchedule(enabled=False, days=[], times=["02:00"])
+    async def reload_from_db(self) -> None:
+        """Recharge la configuration depuis les bases sites."""
+        for site_key in db.list_site_keys():
+            settings = load_backup_settings_from_db(site_key)
+            await self._apply_settings(site_key, settings)
 
-        last_run = None
-        if last_run_value:
-            try:
-                last_run = datetime.fromisoformat(last_run_value)
-            except ValueError:
-                logger.warning("Horodatage de dernière sauvegarde invalide: %s", last_run_value)
-
-        await self._apply_schedule(schedule, last_run=last_run)
-
-    async def update_schedule(self, schedule: models.BackupSchedule) -> None:
+    async def update_settings(self, site_key: str, settings: models.BackupSettings) -> None:
         """Enregistre et applique une nouvelle configuration."""
-        self._write_schedule(schedule)
-        await self._apply_schedule(schedule)
+        async with self._update_mutex:
+            save_backup_settings(site_key, settings)
+            await self._apply_settings(site_key, settings)
 
-    async def get_status(self) -> models.BackupScheduleStatus:
+    async def get_status(self, site_key: str) -> models.BackupSettingsStatus:
         """Retourne l'état courant de la planification."""
         async with self._lock:
-            schedule = self._schedule
-            next_run = self._next_run
-            last_run = self._last_run
-        return models.BackupScheduleStatus(
-            enabled=schedule.enabled,
-            days=list(schedule.days),
-            times=list(schedule.times),
+            settings = self._settings.get(site_key)
+            if settings is None:
+                settings = load_backup_settings_from_db(site_key)
+                self._settings[site_key] = settings
+            next_run = self._next_run.get(site_key)
+            last_run = self._last_run.get(site_key)
+        return models.BackupSettingsStatus(
+            enabled=settings.enabled,
+            interval_minutes=settings.interval_minutes,
+            retention_count=settings.retention_count,
             next_run=next_run,
             last_run=last_run,
         )
 
-    async def _apply_schedule(
-        self, schedule: models.BackupSchedule, *, last_run: datetime | None = None
-    ) -> None:
+    async def get_job_count(self, site_key: str) -> int:
         async with self._lock:
-            self._schedule = schedule
-            self._day_numbers = {models.BACKUP_WEEKDAY_INDEX[day] for day in schedule.days}
-            if last_run is not None:
-                self._last_run = last_run
-            self._next_run = None
-        self._schedule_event.set()
+            task = self._tasks.get(site_key)
+            if task and not task.done():
+                return 1
+            return 0
 
-    def _write_schedule(self, schedule: models.BackupSchedule) -> None:
-        parser = ConfigParser()
-        parser.read(_CONFIG_PATH, encoding="utf-8")
-        if not parser.has_section("backup"):
-            parser.add_section("backup")
-        parser.set("backup", "enabled", "true" if schedule.enabled else "false")
-        parser.set("backup", "days", ",".join(schedule.days))
-        parser.set("backup", "times", ",".join(schedule.times))
-        if schedule.times:
-            parser.set("backup", "time", schedule.times[0])
-        else:
-            parser.remove_option("backup", "time")
-        with _CONFIG_PATH.open("w", encoding="utf-8") as configfile:
-            parser.write(configfile)
+    async def _apply_settings(self, site_key: str, settings: models.BackupSettings) -> None:
+        await self._stop_site_task(site_key)
+        async with self._lock:
+            self._settings[site_key] = settings
+            self._next_run[site_key] = None
+            if not settings.enabled:
+                self._update_events.pop(site_key, None)
+                self._stop_events.pop(site_key, None)
+                return
+            stop_event = asyncio.Event()
+            update_event = asyncio.Event()
+            self._stop_events[site_key] = stop_event
+            self._update_events[site_key] = update_event
+            self._tasks[site_key] = asyncio.create_task(
+                self._run_site(site_key, stop_event, update_event)
+            )
+        logger.info("Planificateur mis à jour pour le site %s", site_key)
 
-    async def _run(self) -> None:
+    async def _stop_site_task(self, site_key: str) -> None:
+        async with self._lock:
+            task = self._tasks.get(site_key)
+            stop_event = self._stop_events.get(site_key)
+            update_event = self._update_events.get(site_key)
+            if task is None:
+                return
+            if stop_event:
+                stop_event.set()
+            if update_event:
+                update_event.set()
+        await task
+        async with self._lock:
+            if self._tasks.get(site_key) is task:
+                self._tasks.pop(site_key, None)
+            self._stop_events.pop(site_key, None)
+            self._update_events.pop(site_key, None)
+            self._next_run.pop(site_key, None)
+
+    async def _run_site(
+        self, site_key: str, stop_event: asyncio.Event, update_event: asyncio.Event
+    ) -> None:
         while True:
-            if self._stop_event.is_set():
+            if stop_event.is_set():
                 break
-
             async with self._lock:
-                schedule = self._schedule
-                day_numbers = set(self._day_numbers)
-                next_run = self._next_run
-
-            if not schedule.enabled or not day_numbers:
-                await self._wait_for_update()
+                settings = self._settings.get(site_key)
+                next_run = self._next_run.get(site_key)
+                last_run = self._last_run.get(site_key)
+            if settings is None or not settings.enabled:
+                await self._wait_for_update(stop_event, update_event)
                 continue
 
             now = datetime.now()
             if next_run is None or next_run <= now:
-                next_run = self._calculate_next_run(now, day_numbers, schedule.times)
+                reference = last_run or now
+                next_run = reference + timedelta(minutes=settings.interval_minutes)
                 async with self._lock:
-                    self._next_run = next_run
-
-            if next_run is None:
-                await self._wait_for_update()
-                continue
+                    self._next_run[site_key] = next_run
 
             delay = max(0.0, (next_run - datetime.now()).total_seconds())
             sleep_task = asyncio.create_task(asyncio.sleep(delay))
-            update_task = asyncio.create_task(self._schedule_event.wait())
-            stop_task = asyncio.create_task(self._stop_event.wait())
+            update_task = asyncio.create_task(update_event.wait())
+            stop_task = asyncio.create_task(stop_event.wait())
 
             done, pending = await asyncio.wait(
                 {sleep_task, update_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
@@ -166,78 +147,42 @@ class BackupScheduler:
                 break
 
             if update_task in done:
-                self._schedule_event.clear()
+                update_event.clear()
                 continue
 
             if sleep_task in done:
-                await self._execute_backup()
+                await self._execute_backup(site_key)
                 async with self._lock:
-                    self._last_run = datetime.now()
-                self._write_last_run(self._last_run)
-                async with self._lock:
-                    self._next_run = None
+                    self._last_run[site_key] = datetime.now()
+                    self._next_run[site_key] = None
 
-        logger.info("Fin de la tâche de planification des sauvegardes")
+        logger.info("Fin de la tâche de planification des sauvegardes pour %s", site_key)
 
-    async def _wait_for_update(self) -> None:
-        update_task = asyncio.create_task(self._schedule_event.wait())
-        stop_task = asyncio.create_task(self._stop_event.wait())
+    async def _wait_for_update(
+        self, stop_event: asyncio.Event, update_event: asyncio.Event
+    ) -> None:
+        update_task = asyncio.create_task(update_event.wait())
+        stop_task = asyncio.create_task(stop_event.wait())
         done, pending = await asyncio.wait(
             {update_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
         )
         for task in pending:
             task.cancel()
         if update_task in done:
-            self._schedule_event.clear()
+            update_event.clear()
 
-    async def _execute_backup(self) -> None:
+    async def _execute_backup(self, site_key: str) -> None:
+        async with self._lock:
+            settings = self._settings.get(site_key)
+        if settings is None:
+            return
         try:
-            archive_path = create_backup_archive()
-            logger.info("Sauvegarde automatique créée: %s", archive_path.name)
+            archive_path = create_backup_archive(
+                site_key=site_key, retention_count=settings.retention_count
+            )
+            logger.info("Sauvegarde automatique créée pour %s: %s", site_key, archive_path.name)
         except Exception:  # pragma: no cover - journalisation d'erreur
-            logger.exception("Échec de la sauvegarde automatique")
-
-    def _calculate_next_run(
-        self, reference: datetime, day_numbers: set[int], time_values: list[str]
-    ) -> datetime | None:
-        if not day_numbers:
-            return None
-        parsed_times: list[tuple[int, int]] = []
-        for raw_value in time_values:
-            try:
-                hour, minute = [int(part) for part in raw_value.split(":", 1)]
-            except ValueError:
-                logger.error("Heure de sauvegarde invalide: %s", raw_value)
-                continue
-            parsed_times.append((hour, minute))
-
-        if not parsed_times:
-            return None
-
-        parsed_times.sort()
-        for offset in range(0, 8):
-            candidate_day = reference + timedelta(days=offset)
-            if candidate_day.weekday() not in day_numbers:
-                continue
-            for hour, minute in parsed_times:
-                candidate = candidate_day.replace(
-                    hour=hour, minute=minute, second=0, microsecond=0
-                )
-                if candidate > reference:
-                    return candidate
-        return None
-
-    def _write_last_run(self, last_run: datetime | None) -> None:
-        parser = ConfigParser()
-        parser.read(_CONFIG_PATH, encoding="utf-8")
-        if not parser.has_section("backup"):
-            parser.add_section("backup")
-        if last_run is None:
-            parser.remove_option("backup", "last_run")
-        else:
-            parser.set("backup", "last_run", last_run.isoformat())
-        with _CONFIG_PATH.open("w", encoding="utf-8") as configfile:
-            parser.write(configfile)
+            logger.exception("Échec de la sauvegarde automatique pour %s", site_key)
 
 
 backup_scheduler = BackupScheduler()

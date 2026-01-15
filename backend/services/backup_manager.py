@@ -23,9 +23,12 @@ BACKUP_ROOT.mkdir(parents=True, exist_ok=True)
 MAX_BACKUP_FILES = 3
 
 
-def create_backup_archive() -> Path:
+def create_backup_archive(
+    site_key: str | None = None, retention_count: int | None = None
+) -> Path:
     """Crée une archive ZIP contenant les bases de données."""
     timestamp = datetime.now().strftime("%Y%m%d-%H%M%S")
+    normalized_site = site_key.upper() if site_key else None
     with TemporaryDirectory() as tmpdir:
         temp_dir = Path(tmpdir)
         users_path = temp_dir / "users.db"
@@ -35,23 +38,33 @@ def create_backup_archive() -> Path:
             copy2(db.CORE_DB_PATH, core_path)
         sites_dir = temp_dir / "sites"
         sites_dir.mkdir(parents=True, exist_ok=True)
-        site_paths = db.list_site_db_paths()
-        for site_key, site_path in site_paths.items():
+        if normalized_site:
+            site_paths = {normalized_site: db.get_site_db_path(normalized_site)}
+        else:
+            site_paths = db.list_site_db_paths()
+        for site_key_value, site_path in site_paths.items():
             if site_path.exists():
-                copy2(site_path, sites_dir / f"{site_key}.db")
-        jll_path = site_paths.get("JLL", db.STOCK_DB_PATH)
-        if jll_path.exists():
-            copy2(jll_path, temp_dir / "stock.db")
+                copy2(site_path, sites_dir / f"{site_key_value}.db")
+        if normalized_site:
+            stock_source = site_paths.get(normalized_site, db.STOCK_DB_PATH)
+        else:
+            stock_source = site_paths.get("JLL", db.STOCK_DB_PATH)
+        if stock_source.exists():
+            copy2(stock_source, temp_dir / "stock.db")
         media_target = temp_dir / "media"
         if MEDIA_ROOT.exists():
             copytree(MEDIA_ROOT, media_target, dirs_exist_ok=True)
-        base_name = BACKUP_ROOT / f"backup-{timestamp}"
+        prefix = f"backup-{normalized_site}-" if normalized_site else "backup-"
+        base_name = BACKUP_ROOT / f"{prefix}{timestamp}"
         archive_path = Path(make_archive(str(base_name), "zip", tmpdir))
-    _prune_old_backups(MAX_BACKUP_FILES)
+    _prune_old_backups(
+        retention_count if retention_count is not None else MAX_BACKUP_FILES,
+        prefix=f"backup-{normalized_site}-" if normalized_site else "backup-",
+    )
     return archive_path
 
 
-def _prune_old_backups(max_count: int) -> None:
+def _prune_old_backups(max_count: int, *, prefix: str = "backup-") -> None:
     """Supprime les anciennes sauvegardes en excès."""
 
     if max_count <= 0:
@@ -59,7 +72,7 @@ def _prune_old_backups(max_count: int) -> None:
 
     try:
         backups = sorted(
-            BACKUP_ROOT.glob("backup-*.zip"),
+            BACKUP_ROOT.glob(f"{prefix}*.zip"),
             key=lambda path: (path.name, path.stat().st_mtime),
             reverse=True,
         )

@@ -51,6 +51,10 @@ from backend.services.pdf_config import (
 from backend.services.pdf.theme import apply_theme_reportlab, resolve_reportlab_theme, scale_reportlab_theme
 from backend.services.pdf import VehiclePdfOptions, render_vehicle_inventory_pdf
 from backend.services.pdf.grouping import GroupNode, build_group_tree, compute_group_stats
+from backend.services.backup_settings import (
+    DEFAULT_BACKUP_INTERVAL_MINUTES,
+    DEFAULT_BACKUP_RETENTION_COUNT,
+)
 
 # Initialisation des bases de données au chargement du module
 _db_initialized = False
@@ -1281,6 +1285,18 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             CREATE INDEX IF NOT EXISTS idx_purchase_order_items_item ON purchase_order_items(item_id);
             CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
         """
+        )
+
+        executescript(
+            f"""
+            CREATE TABLE IF NOT EXISTS backup_settings (
+                id INTEGER PRIMARY KEY CHECK (id = 1),
+                enabled INTEGER NOT NULL DEFAULT 0,
+                interval_minutes INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_INTERVAL_MINUTES},
+                retention_count INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_RETENTION_COUNT},
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            """
         )
 
         po_info = execute("PRAGMA table_info(purchase_orders)").fetchall()

@@ -27,6 +27,7 @@ from backend.core import db, models, security, services
 from backend.core.storage import MEDIA_ROOT
 from backend.services import barcode as barcode_service, update_service
 from backend.services.backup_manager import create_backup_archive, restore_backup_from_zip
+from backend.services.backup_scheduler import backup_scheduler
 
 client = TestClient(app)
 
@@ -3281,40 +3282,60 @@ def test_remise_lot_listing_with_items() -> None:
     client.delete(f"/remise-inventory/categories/{category_id}", headers=admin_headers)
 
 
-def test_backup_schedule_roundtrip() -> None:
+def test_backup_settings_roundtrip_and_isolation() -> None:
     headers = _login_headers("admin", "admin123")
+    gsm_headers = {**headers, "X-Site-Key": "GSM"}
     try:
-        response = client.post(
-            "/backup/schedule",
-            json={
-                "enabled": True,
-                "days": ["monday", "wednesday"],
-                "times": ["22:30", "09:15"],
-            },
+        response = client.put(
+            "/admin/backup/settings",
+            json={"enabled": True, "interval_minutes": 7, "retention_count": 3},
             headers=headers,
         )
-        assert response.status_code == 204, response.text
+        assert response.status_code == 200, response.text
+        response = client.put(
+            "/admin/backup/settings",
+            json={"enabled": True, "interval_minutes": 11, "retention_count": 2},
+            headers=gsm_headers,
+        )
+        assert response.status_code == 200, response.text
 
-        fetched = client.get("/backup/schedule", headers=headers)
+        asyncio.run(backup_scheduler.reload_from_db())
+
+        fetched = client.get("/admin/backup/settings", headers=headers)
         assert fetched.status_code == 200, fetched.text
         data = fetched.json()
         assert data["enabled"] is True
-        assert set(data["days"]) == {"monday", "wednesday"}
-        assert set(data["times"]) == {"22:30", "09:15"}
-    finally:
-        reset = client.post(
-            "/backup/schedule",
-            json={"enabled": False, "days": [], "times": ["02:00"]},
+        assert data["interval_minutes"] == 7
+
+        fetched_gsm = client.get("/admin/backup/settings", headers=gsm_headers)
+        assert fetched_gsm.status_code == 200, fetched_gsm.text
+        data_gsm = fetched_gsm.json()
+        assert data_gsm["enabled"] is True
+        assert data_gsm["interval_minutes"] == 11
+
+        assert asyncio.run(backup_scheduler.get_job_count("JLL")) == 1
+        assert asyncio.run(backup_scheduler.get_job_count("GSM")) == 1
+
+        response = client.put(
+            "/admin/backup/settings",
+            json={"enabled": True, "interval_minutes": 9, "retention_count": 3},
             headers=headers,
         )
-        assert reset.status_code == 204, reset.text
+        assert response.status_code == 200, response.text
+        assert asyncio.run(backup_scheduler.get_job_count("JLL")) == 1
+    finally:
+        reset_payload = {"enabled": False, "interval_minutes": 60, "retention_count": 3}
+        reset = client.put("/admin/backup/settings", json=reset_payload, headers=headers)
+        assert reset.status_code == 200, reset.text
+        reset_gsm = client.put("/admin/backup/settings", json=reset_payload, headers=gsm_headers)
+        assert reset_gsm.status_code == 200, reset_gsm.text
 
 
-def test_backup_schedule_requires_admin() -> None:
+def test_backup_settings_requires_admin() -> None:
     username = f"backup-user-{uuid4().hex[:6]}"
     _create_user(username, "Password123!", role="user")
     headers = _login_headers(username, "Password123!")
-    response = client.get("/backup/schedule", headers=headers)
+    response = client.get("/admin/backup/settings", headers=headers)
     assert response.status_code == 403
 
 

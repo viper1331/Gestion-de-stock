@@ -603,6 +603,17 @@ class BackupScheduleStatus(BackupSchedule):
     last_run: datetime | None = None
 
 
+class BackupSettings(BaseModel):
+    enabled: bool = False
+    interval_minutes: int = Field(ge=1)
+    retention_count: int = Field(ge=1)
+
+
+class BackupSettingsStatus(BackupSettings):
+    next_run: datetime | None = None
+    last_run: datetime | None = None
+
+
 class PullRequestInfo(BaseModel):
     number: int
     title: str

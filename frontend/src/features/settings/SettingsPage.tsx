@@ -25,31 +25,19 @@ import { EditableBlock } from "../../components/EditableBlock";
 
 const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
 
-interface BackupScheduleStatus {
+interface BackupSettingsStatus {
   enabled: boolean;
-  days: string[];
-  times: string[];
+  interval_minutes: number;
+  retention_count: number;
   next_run: string | null;
   last_run: string | null;
 }
 
-interface BackupScheduleInput {
+interface BackupSettingsInput {
   enabled: boolean;
-  days: string[];
-  times: string[];
+  interval_minutes: number;
+  retention_count: number;
 }
-
-const WEEK_DAYS = [
-  { value: "monday", label: "Lundi" },
-  { value: "tuesday", label: "Mardi" },
-  { value: "wednesday", label: "Mercredi" },
-  { value: "thursday", label: "Jeudi" },
-  { value: "friday", label: "Vendredi" },
-  { value: "saturday", label: "Samedi" },
-  { value: "sunday", label: "Dimanche" }
-];
-
-const WEEK_DAY_ORDER = WEEK_DAYS.map((day) => day.value);
 
 type HomepageFieldType = "text" | "textarea" | "url";
 
@@ -171,9 +159,9 @@ export function SettingsPage() {
     queryFn: fetchConfigEntries
   });
   const { data: scheduleStatus, isFetching: isScheduleFetching } = useQuery({
-    queryKey: ["backup", "schedule"],
+    queryKey: ["backup", "settings"],
     queryFn: async () => {
-      const response = await api.get<BackupScheduleStatus>("/backup/schedule");
+      const response = await api.get<BackupSettingsStatus>("/admin/backup/settings");
       return response.data;
     },
     enabled: isAdmin
@@ -190,10 +178,10 @@ export function SettingsPage() {
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
-  const [scheduleForm, setScheduleForm] = useState<BackupScheduleInput>({
+  const [scheduleForm, setScheduleForm] = useState<BackupSettingsInput>({
     enabled: false,
-    days: [],
-    times: ["02:00"]
+    interval_minutes: 60,
+    retention_count: 3
   });
   const [debugConfig, setDebugConfig] = useState<DebugFlags>({
     frontend_debug: false,
@@ -233,8 +221,8 @@ export function SettingsPage() {
     if (scheduleStatus) {
       setScheduleForm({
         enabled: scheduleStatus.enabled,
-        days: scheduleStatus.days,
-        times: scheduleStatus.times.length ? scheduleStatus.times : ["02:00"]
+        interval_minutes: scheduleStatus.interval_minutes,
+        retention_count: scheduleStatus.retention_count
       });
     }
   }, [scheduleStatus]);
@@ -276,17 +264,6 @@ export function SettingsPage() {
     };
   }, [isAdmin]);
 
-  const backupTimeInputs = scheduleForm.times.length ? scheduleForm.times : ["02:00"];
-
-  const orderDays = (days: string[]) => WEEK_DAY_ORDER.filter((value) => days.includes(value));
-
-  const toggleDay = (value: string) => {
-    setScheduleForm((prev) => {
-      const exists = prev.days.includes(value);
-      const nextDays = exists ? prev.days.filter((day) => day !== value) : [...prev.days, value];
-      return { ...prev, days: orderDays(nextDays) };
-    });
-  };
 
   const entriesWithModuleTitles = useMemo(() => {
     const existingKeys = new Set(entries.map((entry) => `${entry.section}.${entry.key}`));
@@ -349,12 +326,12 @@ export function SettingsPage() {
   });
 
   const updateSchedule = useMutation({
-    mutationFn: async (payload: BackupScheduleInput) => {
-      await api.post("/backup/schedule", payload);
+    mutationFn: async (payload: BackupSettingsInput) => {
+      await api.put("/admin/backup/settings", payload);
     },
     onSuccess: async () => {
       setMessage("Planification enregistrée.");
-      await queryClient.invalidateQueries({ queryKey: ["backup", "schedule"] });
+      await queryClient.invalidateQueries({ queryKey: ["backup", "settings"] });
     },
     onError: () => setError("Impossible d'enregistrer la planification."),
     onSettled: () => setTimeout(() => setMessage(null), 4000)
@@ -483,58 +460,21 @@ export function SettingsPage() {
 
   const handleScheduleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (scheduleForm.enabled && scheduleForm.days.length === 0) {
-      setError("Sélectionnez au moins un jour pour la sauvegarde automatique.");
+    if (scheduleForm.interval_minutes < 1) {
+      setError("L'intervalle doit être supérieur ou égal à 1 minute.");
       return;
     }
-    const uniqueTimes = getUniqueTimes(scheduleForm.times);
-    if (scheduleForm.enabled && uniqueTimes.length === 0) {
-      setError("Ajoutez au moins une heure pour la sauvegarde automatique.");
+    if (scheduleForm.retention_count < 1) {
+      setError("Le nombre de sauvegardes à conserver doit être supérieur ou égal à 1.");
       return;
     }
     setMessage(null);
     setError(null);
     try {
-      await updateSchedule.mutateAsync({ ...scheduleForm, times: uniqueTimes });
+      await updateSchedule.mutateAsync({ ...scheduleForm });
     } catch (err) {
       // L'erreur est gérée via onError.
     }
-  };
-
-  const getUniqueTimes = (values: string[]) => {
-    const seen = new Set<string>();
-    return values
-      .map((value) => value.trim())
-      .filter((value) => value)
-      .filter((value) => {
-        if (seen.has(value)) {
-          return false;
-        }
-        seen.add(value);
-        return true;
-      });
-  };
-
-  const handleTimeChange = (index: number, value: string) => {
-    setScheduleForm((prev) => {
-      const updatedTimes = [...prev.times];
-      updatedTimes[index] = value;
-      return { ...prev, times: updatedTimes };
-    });
-  };
-
-  const handleAddTime = () => {
-    setScheduleForm((prev) => {
-      const fallback = prev.times[prev.times.length - 1] ?? "12:00";
-      return { ...prev, times: [...prev.times, fallback] };
-    });
-  };
-
-  const handleRemoveTime = (index: number) => {
-    setScheduleForm((prev) => ({
-      ...prev,
-      times: prev.times.filter((_, idx) => idx !== index)
-    }));
   };
 
   const formatDateTime = (value: string | null) => {
@@ -956,64 +896,47 @@ export function SettingsPage() {
                   </label>
                   <div>
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Jours de sauvegarde
+                      Intervalle (minutes)
                     </p>
-                    <div className="mt-2 grid grid-cols-2 gap-2 sm:grid-cols-4">
-                      {WEEK_DAYS.map((day) => (
-                        <label
-                          key={day.value}
-                          className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-2 text-xs text-slate-200"
-                        >
-                          <AppTextInput
-                            type="checkbox"
-                            checked={scheduleForm.days.includes(day.value)}
-                            onChange={() => toggleDay(day.value)}
-                            disabled={!scheduleForm.enabled}
-                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
-                          />
-                          {day.label}
-                        </label>
-                      ))}
+                    <div className="mt-2 max-w-xs">
+                      <AppTextInput
+                        type="number"
+                        min={1}
+                        value={scheduleForm.interval_minutes}
+                        onChange={(event) =>
+                          setScheduleForm((prev) => ({
+                            ...prev,
+                            interval_minutes: Number(event.target.value)
+                          }))
+                        }
+                        disabled={!scheduleForm.enabled}
+                        className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                      />
                     </div>
                   </div>
-                  <div className="space-y-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Heures de sauvegarde</p>
-                    <div className="space-y-2">
-                      {backupTimeInputs.map((timeValue, index) => (
-                        <div key={`backup-time-${index}`} className="flex flex-col gap-2 sm:flex-row sm:items-center">
-                          <AppTextInput
-                            type="time"
-                            value={timeValue}
-                            onChange={(event) => handleTimeChange(index, event.target.value)}
-                            disabled={!scheduleForm.enabled}
-                            className="w-full max-w-xs rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveTime(index)}
-                            disabled={!scheduleForm.enabled || backupTimeInputs.length === 1}
-                            className="inline-flex items-center justify-center rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:border-slate-600 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
-                          >
-                            Supprimer
-                          </button>
-                        </div>
-                      ))}
-                      <button
-                        type="button"
-                        onClick={handleAddTime}
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      Sauvegardes à conserver
+                    </p>
+                    <div className="mt-2 max-w-xs">
+                      <AppTextInput
+                        type="number"
+                        min={1}
+                        value={scheduleForm.retention_count}
+                        onChange={(event) =>
+                          setScheduleForm((prev) => ({
+                            ...prev,
+                            retention_count: Number(event.target.value)
+                          }))
+                        }
                         disabled={!scheduleForm.enabled}
-                        className="inline-flex items-center justify-center rounded-md border border-indigo-500 px-3 py-2 text-xs font-semibold text-indigo-100 hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-70"
-                      >
-                        Ajouter un horaire
-                      </button>
+                        className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                      />
                     </div>
                   </div>
                   <button
                     type="submit"
-                    disabled={
-                      updateSchedule.isPending ||
-                      (scheduleForm.enabled && scheduleForm.days.length === 0)
-                    }
+                    disabled={updateSchedule.isPending}
                     className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
                   >
                     {updateSchedule.isPending ? "Enregistrement..." : "Sauvegarder la planification"}
