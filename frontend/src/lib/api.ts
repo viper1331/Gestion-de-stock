@@ -7,7 +7,8 @@ import { apiDebug } from "./debug";
 const DEFAULT_BASE_URL = API_BASE_URL.replace(/\/$/, "");
 
 export const api = axios.create({
-  baseURL: DEFAULT_BASE_URL
+  baseURL: DEFAULT_BASE_URL,
+  withCredentials: true
 });
 
 let adminSiteOverride: string | null = null;

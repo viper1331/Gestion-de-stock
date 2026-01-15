@@ -22,6 +22,7 @@ import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
+import { QRCodeCanvas } from "qrcode.react";
 
 const COLLAPSED_STORAGE_KEY = "settings:collapsedSections";
 
@@ -37,6 +38,21 @@ interface BackupSettingsInput {
   enabled: boolean;
   interval_minutes: number;
   retention_count: number;
+}
+
+interface TwoFactorStatus {
+  enabled: boolean;
+  confirmed_at: string | null;
+}
+
+interface TwoFactorSetupStartResponse {
+  otpauth_uri: string;
+  secret_masked: string;
+}
+
+interface TwoFactorSetupConfirmResponse {
+  enabled: boolean;
+  recovery_codes: string[];
 }
 
 type HomepageFieldType = "text" | "textarea" | "url";
@@ -170,6 +186,18 @@ export function SettingsPage() {
     queryKey: ["config", "homepage", "personal"],
     queryFn: fetchUserHomepageConfig
   });
+  const {
+    data: twoFactorStatus,
+    isFetching: isFetchingTwoFactorStatus,
+    refetch: refetchTwoFactorStatus
+  } = useQuery({
+    queryKey: ["auth", "2fa", "status"],
+    queryFn: async () => {
+      const response = await api.get<TwoFactorStatus>("/auth/2fa/status");
+      return response.data;
+    },
+    enabled: Boolean(user)
+  });
 
   const [changes, setChanges] = useState<Record<string, string>>({});
   const [homepageChanges, setHomepageChanges] = useState<Partial<Record<HomePageConfigKey, string>>>({});
@@ -178,6 +206,15 @@ export function SettingsPage() {
   const [isBackingUp, setIsBackingUp] = useState(false);
   const [isImporting, setIsImporting] = useState(false);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
+  const [twoFactorSetupUri, setTwoFactorSetupUri] = useState<string | null>(null);
+  const [twoFactorSecretMasked, setTwoFactorSecretMasked] = useState<string | null>(null);
+  const [twoFactorConfirmCode, setTwoFactorConfirmCode] = useState("");
+  const [twoFactorRecoveryCodes, setTwoFactorRecoveryCodes] = useState<string[]>([]);
+  const [twoFactorDisablePassword, setTwoFactorDisablePassword] = useState("");
+  const [twoFactorDisableCode, setTwoFactorDisableCode] = useState("");
+  const [twoFactorMessage, setTwoFactorMessage] = useState<string | null>(null);
+  const [twoFactorError, setTwoFactorError] = useState<string | null>(null);
+  const [isTwoFactorBusy, setIsTwoFactorBusy] = useState(false);
   const [scheduleForm, setScheduleForm] = useState<BackupSettingsInput>({
     enabled: false,
     interval_minutes: 60,
@@ -521,6 +558,78 @@ export function SettingsPage() {
   const homepageSectionKey = "homepage";
   const backupsSectionKey = "backups";
 
+  const handleTwoFactorStart = async () => {
+    setTwoFactorError(null);
+    setTwoFactorMessage(null);
+    setIsTwoFactorBusy(true);
+    try {
+      const response = await api.post<TwoFactorSetupStartResponse>("/auth/2fa/setup/start");
+      setTwoFactorSetupUri(response.data.otpauth_uri);
+      setTwoFactorSecretMasked(response.data.secret_masked);
+      setTwoFactorRecoveryCodes([]);
+    } catch (err) {
+      setTwoFactorError("Impossible de démarrer l'activation 2FA.");
+    } finally {
+      setIsTwoFactorBusy(false);
+    }
+  };
+
+  const handleTwoFactorConfirm = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTwoFactorError(null);
+    setTwoFactorMessage(null);
+    setIsTwoFactorBusy(true);
+    try {
+      const response = await api.post<TwoFactorSetupConfirmResponse>("/auth/2fa/setup/confirm", {
+        code: twoFactorConfirmCode
+      });
+      setTwoFactorRecoveryCodes(response.data.recovery_codes);
+      setTwoFactorConfirmCode("");
+      setTwoFactorMessage("2FA activée. Sauvegardez vos codes de récupération.");
+      await refetchTwoFactorStatus();
+    } catch (err) {
+      setTwoFactorError("Code 2FA invalide.");
+    } finally {
+      setIsTwoFactorBusy(false);
+    }
+  };
+
+  const handleTwoFactorDisable = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    setTwoFactorError(null);
+    setTwoFactorMessage(null);
+    setIsTwoFactorBusy(true);
+    try {
+      await api.post("/auth/2fa/disable", {
+        password: twoFactorDisablePassword,
+        code: twoFactorDisableCode
+      });
+      setTwoFactorDisablePassword("");
+      setTwoFactorDisableCode("");
+      setTwoFactorSetupUri(null);
+      setTwoFactorSecretMasked(null);
+      setTwoFactorRecoveryCodes([]);
+      setTwoFactorMessage("2FA désactivée.");
+      await refetchTwoFactorStatus();
+    } catch (err) {
+      setTwoFactorError("Impossible de désactiver la 2FA.");
+    } finally {
+      setIsTwoFactorBusy(false);
+    }
+  };
+
+  const handleCopyRecoveryCodes = async () => {
+    if (!twoFactorRecoveryCodes.length) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(twoFactorRecoveryCodes.join("\n"));
+      setTwoFactorMessage("Codes de récupération copiés dans le presse-papiers.");
+    } catch (err) {
+      setTwoFactorError("Impossible de copier les codes.");
+    }
+  };
+
   const content = (
     <section className="space-y-6">
       <header className="space-y-1">
@@ -577,6 +686,134 @@ export function SettingsPage() {
               </select>
             </label>
           </div>
+        </div>
+      </div>
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+        <div className="space-y-4">
+          <header className="space-y-1">
+            <h3 className="text-sm font-semibold uppercase tracking-wide text-slate-300">
+              Sécurité
+            </h3>
+            <p className="text-xs text-slate-400">
+              Protégez votre compte avec une authentification à deux facteurs.
+            </p>
+          </header>
+          {isFetchingTwoFactorStatus ? (
+            <p className="text-xs text-slate-400">Chargement de l'état 2FA...</p>
+          ) : null}
+          {twoFactorMessage ? <p className="text-xs text-emerald-300">{twoFactorMessage}</p> : null}
+          {twoFactorError ? <p className="text-xs text-red-400">{twoFactorError}</p> : null}
+          {twoFactorStatus?.enabled ? (
+            <div className="space-y-4">
+              <div className="rounded-md border border-emerald-500/20 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+                2FA activée {twoFactorStatus.confirmed_at ? `le ${formatDateTime(twoFactorStatus.confirmed_at)}` : null}
+              </div>
+              <form onSubmit={handleTwoFactorDisable} className="space-y-3">
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-300">
+                      Mot de passe
+                    </label>
+                    <AppTextInput
+                      type="password"
+                      value={twoFactorDisablePassword}
+                      onChange={(event) => setTwoFactorDisablePassword(event.target.value)}
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-300">
+                      Code 2FA ou recovery
+                    </label>
+                    <AppTextInput
+                      value={twoFactorDisableCode}
+                      onChange={(event) => setTwoFactorDisableCode(event.target.value.toUpperCase())}
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={isTwoFactorBusy}
+                  className="rounded-md bg-red-500 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-70"
+                >
+                  Désactiver 2FA
+                </button>
+              </form>
+            </div>
+          ) : (
+            <div className="space-y-4">
+              <button
+                type="button"
+                onClick={handleTwoFactorStart}
+                disabled={isTwoFactorBusy}
+                className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+              >
+                Activer 2FA
+              </button>
+              {twoFactorSetupUri ? (
+                <div className="space-y-4 rounded-md border border-slate-800 bg-slate-950 p-4">
+                  <div className="flex flex-col gap-4 sm:flex-row sm:items-center">
+                    <QRCodeCanvas value={twoFactorSetupUri} size={160} />
+                    <div className="space-y-2 text-xs text-slate-300">
+                      <p>Scannez le QR code avec votre application Authenticator.</p>
+                      {twoFactorSecretMasked ? (
+                        <p className="text-slate-400">
+                          Secret affiché : <span className="font-mono text-slate-200">{twoFactorSecretMasked}</span>
+                        </p>
+                      ) : null}
+                    </div>
+                  </div>
+                  <form onSubmit={handleTwoFactorConfirm} className="space-y-3">
+                    <label className="block text-xs font-semibold uppercase tracking-wide text-slate-300">
+                      Code de confirmation
+                    </label>
+                    <AppTextInput
+                      value={twoFactorConfirmCode}
+                      onChange={(event) => setTwoFactorConfirmCode(event.target.value)}
+                      className="w-full rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                    <button
+                      type="submit"
+                      disabled={isTwoFactorBusy}
+                      className="rounded-md bg-emerald-500 px-4 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      Confirmer 2FA
+                    </button>
+                  </form>
+                </div>
+              ) : null}
+              {twoFactorRecoveryCodes.length ? (
+                <div className="space-y-3 rounded-md border border-slate-800 bg-slate-950 p-4">
+                  <div className="flex items-center justify-between">
+                    <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                      Codes de récupération
+                    </h4>
+                    <button
+                      type="button"
+                      onClick={handleCopyRecoveryCodes}
+                      className="text-xs font-semibold text-indigo-300 hover:text-indigo-200"
+                    >
+                      Copier
+                    </button>
+                  </div>
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {twoFactorRecoveryCodes.map((code) => (
+                      <div
+                        key={code}
+                        className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 font-mono text-xs text-slate-200"
+                      >
+                        {code}
+                      </div>
+                    ))}
+                  </div>
+                  <p className="text-[11px] text-slate-500">
+                    Conservez ces codes en lieu sûr. Ils ne seront plus affichés.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+          )}
         </div>
       </div>
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
