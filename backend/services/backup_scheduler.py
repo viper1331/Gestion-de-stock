@@ -78,11 +78,43 @@ class BackupScheduler:
         )
 
     async def get_job_count(self, site_key: str) -> int:
+        await self._ensure_task(site_key)
         async with self._lock:
             task = self._tasks.get(site_key)
             if task and not task.done():
                 return 1
             return 0
+
+    async def _ensure_task(self, site_key: str) -> None:
+        async with self._lock:
+            settings = self._settings.get(site_key)
+        if settings is None:
+            settings = load_backup_settings_from_db(site_key)
+            async with self._lock:
+                self._settings[site_key] = settings
+        if not settings.enabled:
+            return
+        async with self._lock:
+            task = self._tasks.get(site_key)
+        if task and not task.done():
+            try:
+                task_loop = task.get_loop()
+            except RuntimeError:
+                task_loop = None
+            if task_loop is not None and not task_loop.is_closed():
+                return
+        await self._stop_site_task(site_key)
+        async with self._lock:
+            if not settings.enabled:
+                return
+            stop_event = asyncio.Event()
+            update_event = asyncio.Event()
+            self._stop_events[site_key] = stop_event
+            self._update_events[site_key] = update_event
+            self._next_run[site_key] = None
+            self._tasks[site_key] = asyncio.create_task(
+                self._run_site(site_key, stop_event, update_event)
+            )
 
     async def _apply_settings(self, site_key: str, settings: models.BackupSettings) -> None:
         try:
