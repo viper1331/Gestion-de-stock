@@ -22,6 +22,7 @@ interface UserEntry {
   role: UserRole;
   is_active: boolean;
   site_key: string;
+  status: "active" | "pending" | "rejected" | "disabled";
 }
 
 interface CreateUserForm {
@@ -50,11 +51,12 @@ export function AdminUsersPage() {
     site_key: "JLL"
   });
   const [drafts, setDrafts] = useState<Record<number, UserDraft>>({});
+  const [showPendingOnly, setShowPendingOnly] = useState(false);
 
   const { data: users = [], isFetching } = useQuery({
     queryKey: ["admin-users"],
     queryFn: async () => {
-      const response = await api.get<UserEntry[]>("/users/");
+      const response = await api.get<UserEntry[]>("/users/?include_pending=true");
       return response.data;
     },
     enabled: user?.role === "admin"
@@ -118,6 +120,38 @@ export function AdminUsersPage() {
     },
     onError: () => {
       setError("Impossible de supprimer l'utilisateur.");
+      clearMessageLater();
+    }
+  });
+
+  const approveUser = useMutation({
+    mutationFn: async (id: number) => {
+      await api.post(`/users/${id}/approve`);
+    },
+    onSuccess: async () => {
+      setMessage("Compte approuvé.");
+      setError(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      clearMessageLater();
+    },
+    onError: () => {
+      setError("Impossible d'approuver ce compte.");
+      clearMessageLater();
+    }
+  });
+
+  const rejectUser = useMutation({
+    mutationFn: async (id: number) => {
+      await api.post(`/users/${id}/reject`);
+    },
+    onSuccess: async () => {
+      setMessage("Compte refusé.");
+      setError(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
+      clearMessageLater();
+    },
+    onError: () => {
+      setError("Impossible de refuser ce compte.");
       clearMessageLater();
     }
   });
@@ -240,7 +274,16 @@ export function AdminUsersPage() {
     await deleteUser.mutateAsync(entry.id);
   };
 
-  const isProcessing = createUser.isPending || updateUser.isPending || deleteUser.isPending;
+  const isProcessing =
+    createUser.isPending ||
+    updateUser.isPending ||
+    deleteUser.isPending ||
+    approveUser.isPending ||
+    rejectUser.isPending;
+
+  const filteredUsers = showPendingOnly
+    ? users.filter((entry) => entry.status === "pending")
+    : users;
 
   const content = (
     <section className="space-y-6">
@@ -249,6 +292,15 @@ export function AdminUsersPage() {
         <p className="text-sm text-slate-400">
           Créez de nouveaux comptes et ajustez les droits des membres de votre équipe.
         </p>
+        <label className="flex items-center gap-2 text-sm text-slate-300">
+          <AppTextInput
+            type="checkbox"
+            checked={showPendingOnly}
+            onChange={(event) => setShowPendingOnly(event.target.checked)}
+            title="Afficher uniquement les comptes en attente"
+          />
+          Afficher les demandes en attente
+        </label>
       </header>
       {isFetching ? <p className="text-sm text-slate-400">Chargement des utilisateurs...</p> : null}
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
@@ -259,13 +311,13 @@ export function AdminUsersPage() {
         onSubmit={handleCreate}
       >
         <div className="flex flex-1 flex-col">
-          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">Identifiant</label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">Email</label>
           <AppTextInput
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             value={createForm.username}
             onChange={(event) => setCreateForm((prev) => ({ ...prev, username: event.target.value }))}
-            placeholder="ex: jdupont"
-            title="Identifiant de connexion du nouvel utilisateur"
+            placeholder="ex: jdupont@entreprise.fr"
+            title="Email de connexion du nouvel utilisateur"
           />
         </div>
         <div className="flex flex-1 flex-col">
@@ -324,17 +376,30 @@ export function AdminUsersPage() {
         <table className="min-w-full divide-y divide-slate-800">
           <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
             <tr>
-              <th className="px-4 py-2 text-left">Identifiant</th>
+              <th className="px-4 py-2 text-left">Email</th>
               <th className="px-4 py-2 text-left">Rôle</th>
               <th className="px-4 py-2 text-left">Site</th>
-              <th className="px-4 py-2 text-left">Actif</th>
+              <th className="px-4 py-2 text-left">Statut</th>
+              <th className="px-4 py-2 text-left">Activation</th>
               <th className="px-4 py-2 text-left">Mot de passe</th>
               <th className="px-4 py-2 text-left">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-slate-800 bg-slate-900 text-sm text-slate-200">
-            {users.map((entry) => {
+            {filteredUsers.map((entry) => {
               const draft = draftsWithDefaults[entry.id];
+              const statusLabel = {
+                active: "Actif",
+                pending: "En attente",
+                rejected: "Refusé",
+                disabled: "Désactivé"
+              }[entry.status];
+              const statusClasses = {
+                active: "bg-emerald-500/10 text-emerald-200 border-emerald-500/30",
+                pending: "bg-amber-500/10 text-amber-200 border-amber-500/30",
+                rejected: "bg-red-500/10 text-red-200 border-red-500/30",
+                disabled: "bg-slate-500/10 text-slate-300 border-slate-500/30"
+              }[entry.status];
               return (
                 <tr key={entry.id}>
                   <td className="px-4 py-3 font-medium text-white">{entry.username}</td>
@@ -368,6 +433,11 @@ export function AdminUsersPage() {
                     </select>
                   </td>
                   <td className="px-4 py-3">
+                    <span className={`inline-flex items-center rounded-full border px-2 py-1 text-xs ${statusClasses}`}>
+                      {statusLabel}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3">
                     <label className="flex items-center gap-2 text-xs text-slate-300">
                       <AppTextInput
                         type="checkbox"
@@ -375,9 +445,10 @@ export function AdminUsersPage() {
                         onChange={(event) =>
                           handleDraftChange(entry, { is_active: event.target.checked })
                         }
+                        disabled={entry.status !== "active" && entry.status !== "disabled"}
                         title="Activer ou désactiver le compte"
                       />
-                      Actif
+                      {draft.is_active ? "Actif" : "Désactivé"}
                     </label>
                   </td>
                   <td className="px-4 py-3">
@@ -392,6 +463,28 @@ export function AdminUsersPage() {
                   </td>
                   <td className="px-4 py-3">
                     <div className="flex flex-wrap gap-2">
+                      {entry.status === "pending" ? (
+                        <>
+                          <button
+                            type="button"
+                            onClick={() => approveUser.mutateAsync(entry.id)}
+                            disabled={approveUser.isPending}
+                            className="rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                            title="Approuver ce compte"
+                          >
+                            {approveUser.isPending ? "Approbation..." : "Approuver"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => rejectUser.mutateAsync(entry.id)}
+                            disabled={rejectUser.isPending}
+                            className="rounded-md bg-amber-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-70"
+                            title="Refuser ce compte"
+                          >
+                            {rejectUser.isPending ? "Refus..." : "Refuser"}
+                          </button>
+                        </>
+                      ) : null}
                       <button
                         type="button"
                         onClick={() => handleSave(entry)}
@@ -423,9 +516,9 @@ export function AdminUsersPage() {
                 </tr>
               );
             })}
-            {users.length === 0 ? (
+            {filteredUsers.length === 0 ? (
               <tr>
-                <td colSpan={6} className="px-4 py-6 text-center text-sm text-slate-400">
+                <td colSpan={7} className="px-4 py-6 text-center text-sm text-slate-400">
                   Aucun utilisateur trouvé.
                 </td>
               </tr>

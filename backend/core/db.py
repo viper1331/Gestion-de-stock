@@ -167,9 +167,22 @@ def init_databases() -> None:
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
+                    email TEXT NOT NULL,
+                    email_normalized TEXT NOT NULL UNIQUE,
                     password TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'user',
-                    is_active INTEGER NOT NULL DEFAULT 1
+                    is_active INTEGER NOT NULL DEFAULT 1,
+                    status TEXT NOT NULL DEFAULT 'active',
+                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    approved_at TIMESTAMP,
+                    approved_by TEXT,
+                    rejected_at TIMESTAMP,
+                    rejected_by TEXT,
+                    notify_on_approval INTEGER NOT NULL DEFAULT 1,
+                    otp_email_enabled INTEGER NOT NULL DEFAULT 0,
+                    site_key TEXT NOT NULL DEFAULT 'JLL',
+                    admin_active_site_key TEXT,
+                    display_name TEXT
                 );
                 CREATE TABLE IF NOT EXISTS user_trusted_devices (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -273,6 +286,7 @@ def init_databases() -> None:
                 """
             )
             _ensure_user_site_columns(conn)
+            _ensure_user_account_columns(conn)
             _ensure_two_factor_columns(conn)
             _ensure_two_factor_challenge_columns(conn)
         _init_core_database()
@@ -410,6 +424,64 @@ def _ensure_user_site_columns(conn: sqlite3.Connection) -> None:
         )
     if "admin_active_site_key" not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN admin_active_site_key TEXT")
+
+
+def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "email" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
+    if "email_normalized" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN email_normalized TEXT")
+    if "status" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+    if "created_at" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP")
+    if "approved_at" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN approved_at TIMESTAMP")
+    if "approved_by" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN approved_by TEXT")
+    if "rejected_at" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN rejected_at TIMESTAMP")
+    if "rejected_by" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN rejected_by TEXT")
+    if "notify_on_approval" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN notify_on_approval INTEGER NOT NULL DEFAULT 1")
+    if "otp_email_enabled" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN otp_email_enabled INTEGER NOT NULL DEFAULT 0")
+    if "display_name" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+
+    conn.execute(
+        """
+        UPDATE users
+        SET email = COALESCE(NULLIF(TRIM(email), ''), username)
+        WHERE email IS NULL OR TRIM(email) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE users
+        SET email_normalized = LOWER(TRIM(email))
+        WHERE email_normalized IS NULL OR TRIM(email_normalized) = ''
+        """
+    )
+    conn.execute(
+        """
+        UPDATE users
+        SET status = 'disabled'
+        WHERE is_active = 0 AND status = 'active'
+        """
+    )
+    conn.execute(
+        """
+        UPDATE users
+        SET is_active = CASE WHEN status = 'active' THEN 1 ELSE 0 END
+        WHERE status IS NOT NULL
+        """
+    )
+    conn.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users(email_normalized)"
+    )
 
 
 def _ensure_two_factor_columns(conn: sqlite3.Connection) -> None:

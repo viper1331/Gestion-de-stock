@@ -2,6 +2,7 @@ import { FormEvent, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { useAuth } from "./useAuth";
 import { AppTextInput } from "components/AppTextInput";
+import { api } from "../../lib/api";
 
 export function Login() {
   const { login, verifyTwoFactor, confirmTotpEnrollment, clearError, isLoading, error } = useAuth();
@@ -14,6 +15,12 @@ export function Login() {
   const [secretPlain, setSecretPlain] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [step, setStep] = useState<"credentials" | "totp" | "enroll">("credentials");
+  const [mode, setMode] = useState<"login" | "register" | "register-success">("login");
+  const [registerEmail, setRegisterEmail] = useState("");
+  const [registerPassword, setRegisterPassword] = useState("");
+  const [registerDisplayName, setRegisterDisplayName] = useState("");
+  const [registerError, setRegisterError] = useState<string | null>(null);
+  const [registerLoading, setRegisterLoading] = useState(false);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -34,6 +41,28 @@ export function Login() {
       setStep("enroll");
       setTotpCode("");
       clearError();
+    }
+  };
+
+  const handleRegister = async (event: FormEvent) => {
+    event.preventDefault();
+    setRegisterError(null);
+    setRegisterLoading(true);
+    try {
+      await api.post("/auth/register", {
+        email: registerEmail,
+        password: registerPassword,
+        display_name: registerDisplayName || undefined
+      });
+      setMode("register-success");
+    } catch (err) {
+      const detail =
+        typeof err === "object" && err && "response" in err
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null;
+      setRegisterError(detail ?? "Impossible d'envoyer la demande.");
+    } finally {
+      setRegisterLoading(false);
     }
   };
 
@@ -125,6 +154,87 @@ export function Login() {
     );
   }
 
+  if (mode !== "login") {
+    return (
+      <form className="space-y-6" onSubmit={handleRegister}>
+        <header className="space-y-1 text-center">
+          <h1 className="text-2xl font-semibold">Créer un compte</h1>
+          <p className="text-sm text-slate-400">
+            {mode === "register-success"
+              ? "Demande envoyée, en attente de validation."
+              : "Complétez le formulaire pour envoyer votre demande."}
+          </p>
+        </header>
+        {mode === "register-success" ? (
+          <div className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            Votre demande a bien été transmise à l’administrateur.
+          </div>
+        ) : (
+          <>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-200" htmlFor="registerEmail">
+                Email
+              </label>
+              <AppTextInput
+                id="registerEmail"
+                type="email"
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+                value={registerEmail}
+                onChange={(event) => setRegisterEmail(event.target.value)}
+                title="Entrez votre email"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-200" htmlFor="registerPassword">
+                Mot de passe
+              </label>
+              <AppTextInput
+                id="registerPassword"
+                type="password"
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+                value={registerPassword}
+                onChange={(event) => setRegisterPassword(event.target.value)}
+                title="Choisissez un mot de passe"
+              />
+            </div>
+            <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-200" htmlFor="registerDisplayName">
+                Nom affiché (optionnel)
+              </label>
+              <AppTextInput
+                id="registerDisplayName"
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+                value={registerDisplayName}
+                onChange={(event) => setRegisterDisplayName(event.target.value)}
+                title="Nom affiché"
+              />
+            </div>
+            {registerError ? <p className="text-sm text-red-400">{registerError}</p> : null}
+            <button
+              type="submit"
+              disabled={registerLoading}
+              className="w-full rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+              title="Envoyer la demande de création de compte"
+            >
+              {registerLoading ? "Envoi..." : "Envoyer ma demande"}
+            </button>
+          </>
+        )}
+        <button
+          type="button"
+          onClick={() => {
+            setMode("login");
+            setRegisterError(null);
+            setRegisterLoading(false);
+          }}
+          className="text-sm text-slate-400 hover:text-slate-200"
+        >
+          Retour à la connexion
+        </button>
+      </form>
+    );
+  }
+
   return (
     <form className="space-y-6" onSubmit={handleSubmit}>
       <header className="space-y-1 text-center">
@@ -133,14 +243,15 @@ export function Login() {
       </header>
       <div className="space-y-2">
         <label className="block text-sm font-medium text-slate-200" htmlFor="username">
-          Identifiant
+          Email
         </label>
         <AppTextInput
           id="username"
+          type="email"
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
           value={username}
           onChange={(event) => setUsername(event.target.value)}
-          title="Entrez votre identifiant de connexion"
+          title="Entrez votre email"
         />
       </div>
       <div className="space-y-2">
@@ -173,6 +284,16 @@ export function Login() {
         title="Valider mes identifiants"
       >
         {isLoading ? "Connexion..." : "Se connecter"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setMode("register");
+          clearError();
+        }}
+        className="w-full text-sm text-slate-400 hover:text-slate-200"
+      >
+        Créer un compte
       </button>
     </form>
   );

@@ -54,8 +54,11 @@ def _create_user(username: str, password: str, role: str = "user") -> int:
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.execute(
-            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
-            (username, security.hash_password(password), role),
+            """
+            INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
+            VALUES (?, ?, ?, ?, ?, 1, 'active')
+            """,
+            (username, username, username.lower(), security.hash_password(password), role),
         )
         conn.commit()
         row = conn.execute(

@@ -9,7 +9,7 @@ vi.mock("./useAuth", () => ({
   useAuth: () => ({
     login: vi.fn().mockResolvedValue({ status: "authenticated" }),
     verifyTwoFactor: vi.fn(),
-    verifyRecoveryCode: vi.fn(),
+    confirmTotpEnrollment: vi.fn(),
     clearError: vi.fn(),
     isLoading: false,
     error: null
@@ -25,6 +25,6 @@ describe("Login", () => {
     );
 
     expect(screen.getByText("Connexion")).toBeInTheDocument();
-    expect(screen.getByLabelText("Identifiant")).toBeInTheDocument();
+    expect(screen.getByLabelText("Email")).toBeInTheDocument();
   });
 });

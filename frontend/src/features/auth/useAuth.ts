@@ -46,6 +46,7 @@ interface UserProfile {
   role: string;
   is_active: boolean;
   site_key: string;
+  status: "active" | "pending" | "rejected" | "disabled";
 }
 
 interface AuthState {
@@ -182,7 +183,21 @@ export function useAuth() {
         setError("Réponse inattendue du serveur");
         return { status: "error" };
       } catch (err) {
-        setError("Identifiants invalides");
+        const detail = getErrorDetail(err);
+        if (detail) {
+          const lower = detail.toLowerCase();
+          if (lower.includes("attente")) {
+            setError("En attente de validation admin");
+          } else if (lower.includes("refusé")) {
+            setError("Compte refusé. Contactez un administrateur.");
+          } else if (lower.includes("désactivé")) {
+            setError("Compte désactivé.");
+          } else {
+            setError(detail);
+          }
+        } else {
+          setError("Identifiants invalides");
+        }
         return { status: "error" };
       } finally {
         setLoading(false);
