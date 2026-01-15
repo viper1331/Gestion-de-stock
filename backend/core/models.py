@@ -64,6 +64,7 @@ class TokenPayload(BaseModel):
 
 
 VehicleType = str
+UserStatus = Literal["active", "pending", "rejected", "disabled"]
 
 
 class UserBase(BaseModel):
@@ -80,6 +81,16 @@ class User(UserBase):
     id: int
     is_active: bool = True
     site_key: str
+    email: str
+    status: UserStatus = "active"
+    created_at: str | None = None
+    approved_at: str | None = None
+    approved_by: str | None = None
+    rejected_at: str | None = None
+    rejected_by: str | None = None
+    notify_on_approval: bool = True
+    otp_email_enabled: bool = False
+    display_name: str | None = None
 
 
 class SiteInfo(BaseModel):
@@ -191,6 +202,16 @@ class LoginRequest(BaseModel):
     username: str
     password: str
     remember_me: bool = False
+
+
+class RegisterRequest(BaseModel):
+    email: str
+    password: str
+    display_name: str | None = None
+
+
+class RegisterResponse(BaseModel):
+    message: str
 
 
 class LoginUserSummary(BaseModel):

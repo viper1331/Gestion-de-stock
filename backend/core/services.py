@@ -3716,20 +3716,48 @@ def _fetch_inventory_movements_internal(
         ]
 
 
+def _normalize_email(value: str) -> str:
+    return value.strip().lower()
+
+
 def seed_default_admin() -> None:
     default_username = "admin"
     default_password = "admin123"
+    normalized_email = _normalize_email(default_username)
     with db.get_users_connection() as conn:
         cur = conn.execute(
-            "SELECT id, password, role, is_active, site_key FROM users WHERE username = ?",
+            """
+            SELECT id, password, role, is_active, site_key, status, email_normalized
+            FROM users
+            WHERE username = ?
+            """,
             (default_username,),
         )
         row = cur.fetchone()
         hashed_password = security.hash_password(default_password)
         if row is None:
             conn.execute(
-                "INSERT INTO users (username, password, role, is_active, site_key) VALUES (?, ?, ?, 1, ?)",
-                (default_username, hashed_password, "admin", db.DEFAULT_SITE_KEY),
+                """
+                INSERT INTO users (
+                    username,
+                    email,
+                    email_normalized,
+                    password,
+                    role,
+                    is_active,
+                    status,
+                    site_key
+                )
+                VALUES (?, ?, ?, ?, ?, 1, 'active', ?)
+                """,
+                (
+                    default_username,
+                    default_username,
+                    normalized_email,
+                    hashed_password,
+                    "admin",
+                    db.DEFAULT_SITE_KEY,
+                ),
             )
             conn.commit()
             return
@@ -3741,23 +3769,59 @@ def seed_default_admin() -> None:
             needs_update = True
         if row["site_key"] != db.DEFAULT_SITE_KEY:
             needs_update = True
+        if row["email_normalized"] != normalized_email:
+            needs_update = True
 
         if needs_update:
             conn.execute(
-                "UPDATE users SET password = ?, role = ?, is_active = 1, site_key = ? WHERE id = ?",
-                (hashed_password, "admin", db.DEFAULT_SITE_KEY, row["id"]),
+                """
+                UPDATE users
+                SET password = ?,
+                    role = ?,
+                    is_active = 1,
+                    status = 'active',
+                    site_key = ?,
+                    email = ?,
+                    email_normalized = ?
+                WHERE id = ?
+                """,
+                (
+                    hashed_password,
+                    "admin",
+                    db.DEFAULT_SITE_KEY,
+                    default_username,
+                    normalized_email,
+                    row["id"],
+                ),
             )
             conn.commit()
 
 
 def _build_user_from_row(row: sqlite3.Row) -> models.User:
     site_key = row["site_key"] if "site_key" in row.keys() and row["site_key"] else db.DEFAULT_SITE_KEY
+    email = row["email"] if "email" in row.keys() and row["email"] else row["username"]
+    if "status" in row.keys() and row["status"]:
+        status = row["status"]
+    else:
+        status = "active" if bool(row["is_active"]) else "disabled"
     return models.User(
         id=row["id"],
         username=row["username"],
         role=row["role"],
         is_active=bool(row["is_active"]),
         site_key=site_key,
+        email=email,
+        status=status,
+        created_at=row["created_at"] if "created_at" in row.keys() else None,
+        approved_at=row["approved_at"] if "approved_at" in row.keys() else None,
+        approved_by=row["approved_by"] if "approved_by" in row.keys() else None,
+        rejected_at=row["rejected_at"] if "rejected_at" in row.keys() else None,
+        rejected_by=row["rejected_by"] if "rejected_by" in row.keys() else None,
+        notify_on_approval=bool(row["notify_on_approval"])
+        if "notify_on_approval" in row.keys()
+        else True,
+        otp_email_enabled=bool(row["otp_email_enabled"]) if "otp_email_enabled" in row.keys() else False,
+        display_name=row["display_name"] if "display_name" in row.keys() else None,
     )
 
 
@@ -3887,11 +3951,12 @@ def set_menu_order(
     return {"version": payload.version, "items": normalized}
 
 
-def list_users() -> list[models.User]:
+def list_users(*, include_pending: bool = True) -> list[models.User]:
     ensure_database_ready()
     with db.get_users_connection() as conn:
+        clause = "" if include_pending else "WHERE status != 'pending'"
         cur = conn.execute(
-            "SELECT * FROM users ORDER BY username COLLATE NOCASE",
+            f"SELECT * FROM users {clause} ORDER BY username COLLATE NOCASE",
         )
         rows = cur.fetchall()
         return [
@@ -3907,7 +3972,7 @@ def list_message_recipients(current_user: models.User) -> list[models.MessageRec
             """
             SELECT username, role
             FROM users
-            WHERE is_active = 1 AND username != ?
+            WHERE status = 'active' AND username != ?
             ORDER BY username COLLATE NOCASE
             """,
             (current_user.username,),
@@ -3986,7 +4051,7 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
     with db.get_users_connection() as conn:
         if payload.broadcast:
             cur = conn.execute(
-                "SELECT username FROM users WHERE is_active = 1 ORDER BY username COLLATE NOCASE"
+                "SELECT username FROM users WHERE status = 'active' ORDER BY username COLLATE NOCASE"
             )
             recipients = [row["username"] for row in cur.fetchall()]
         else:
@@ -4001,7 +4066,7 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
             f"""
             SELECT username
             FROM users
-            WHERE is_active = 1 AND username IN ({placeholders})
+            WHERE status = 'active' AND username IN ({placeholders})
             """,
             recipients,
         )
@@ -4267,14 +4332,36 @@ def create_user(payload: models.UserCreate) -> models.User:
     ensure_database_ready()
     hashed = security.hash_password(payload.password)
     site_key = sites.normalize_site_key(payload.site_key) if payload.site_key else db.DEFAULT_SITE_KEY
+    email = payload.username.strip()
+    normalized_email = _normalize_email(email)
+    if not normalized_email:
+        raise ValueError("L'email est requis")
     with db.get_users_connection() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM users WHERE email_normalized = ?",
+            (normalized_email,),
+        ).fetchone()
+        if exists:
+            raise ValueError("Cet email existe déjà")
         try:
             cur = conn.execute(
-                "INSERT INTO users (username, password, role, is_active, site_key) VALUES (?, ?, ?, 1, ?)",
-                (payload.username, hashed, payload.role, site_key),
+                """
+                INSERT INTO users (
+                    username,
+                    email,
+                    email_normalized,
+                    password,
+                    role,
+                    is_active,
+                    status,
+                    site_key
+                )
+                VALUES (?, ?, ?, ?, ?, 1, 'active', ?)
+                """,
+                (payload.username, email, normalized_email, hashed, payload.role, site_key),
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
-            raise ValueError("Ce nom d'utilisateur existe déjà") from exc
+            raise ValueError("Cet email existe déjà") from exc
         conn.commit()
         user_id = cur.lastrowid
     created = get_user_by_id(user_id)
@@ -4302,7 +4389,9 @@ def update_user(user_id: int, payload: models.UserUpdate) -> models.User:
     if payload.password is not None:
         fields["password"] = security.hash_password(payload.password)
     if payload.is_active is not None:
-        fields["is_active"] = 1 if payload.is_active else 0
+        if current.status in ("active", "disabled"):
+            fields["is_active"] = 1 if payload.is_active else 0
+            fields["status"] = "active" if payload.is_active else "disabled"
     if payload.site_key is not None:
         fields["site_key"] = sites.normalize_site_key(payload.site_key) or db.DEFAULT_SITE_KEY
 
@@ -4344,14 +4433,110 @@ def delete_user(user_id: int) -> None:
 
 def authenticate(username: str, password: str) -> Optional[models.User]:
     ensure_database_ready()
+    normalized_email = _normalize_email(username)
     with db.get_users_connection() as conn:
-        cur = conn.execute("SELECT * FROM users WHERE username = ?", (username,))
+        cur = conn.execute(
+            "SELECT * FROM users WHERE email_normalized = ?",
+            (normalized_email,),
+        )
         row = cur.fetchone()
         if not row:
             return None
         if not security.verify_password(password, row["password"]):
             return None
         return _build_user_from_row(row)
+
+
+def register_user(payload: models.RegisterRequest) -> models.User:
+    ensure_database_ready()
+    email = payload.email.strip()
+    normalized_email = _normalize_email(email)
+    if not normalized_email:
+        raise ValueError("L'email est requis")
+    hashed = security.hash_password(payload.password)
+    with db.get_users_connection() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM users WHERE email_normalized = ?",
+            (normalized_email,),
+        ).fetchone()
+        if exists:
+            raise ValueError("Cet email existe déjà")
+        cur = conn.execute(
+            """
+            INSERT INTO users (
+                username,
+                email,
+                email_normalized,
+                password,
+                role,
+                is_active,
+                status,
+                site_key,
+                display_name
+            )
+            VALUES (?, ?, ?, ?, 'user', 0, 'pending', ?, ?)
+            """,
+            (email, email, normalized_email, hashed, db.DEFAULT_SITE_KEY, payload.display_name),
+        )
+        conn.commit()
+        user_id = cur.lastrowid
+    created = get_user_by_id(user_id)
+    if created is None:  # pragma: no cover
+        raise ValueError("Échec de la création de l'utilisateur")
+    sites.set_user_site_assignment(created.username, db.DEFAULT_SITE_KEY)
+    return created
+
+
+def approve_user(user_id: int, approved_by: models.User) -> models.User:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            raise ValueError("Utilisateur introuvable")
+        conn.execute(
+            """
+            UPDATE users
+            SET status = 'active',
+                is_active = 1,
+                approved_at = CURRENT_TIMESTAMP,
+                approved_by = ?,
+                rejected_at = NULL,
+                rejected_by = NULL
+            WHERE id = ?
+            """,
+            (approved_by.username, user_id),
+        )
+        conn.commit()
+    updated = get_user_by_id(user_id)
+    if updated is None:  # pragma: no cover
+        raise ValueError("Utilisateur introuvable")
+    return updated
+
+
+def reject_user(user_id: int, rejected_by: models.User) -> models.User:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute("SELECT id FROM users WHERE id = ?", (user_id,)).fetchone()
+        if not row:
+            raise ValueError("Utilisateur introuvable")
+        conn.execute(
+            """
+            UPDATE users
+            SET status = 'rejected',
+                is_active = 0,
+                rejected_at = CURRENT_TIMESTAMP,
+                rejected_by = ?,
+                approved_at = NULL,
+                approved_by = NULL
+            WHERE id = ?
+            """,
+            (rejected_by.username, user_id),
+        )
+        conn.commit()
+    updated = get_user_by_id(user_id)
+    if updated is None:  # pragma: no cover
+        raise ValueError("Utilisateur introuvable")
+    return updated
 
 
 def list_items(search: str | None = None) -> list[models.Item]:

@@ -82,8 +82,11 @@ def _create_user(username: str, password: str, role: str = "user") -> int:
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.execute(
-            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
-            (username, security.hash_password(password), role),
+            """
+            INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
+            VALUES (?, ?, ?, ?, ?, 1, 'active')
+            """,
+            (username, username, username.lower(), security.hash_password(password), role),
         )
         conn.commit()
         cur = conn.execute(
@@ -146,8 +149,11 @@ def test_seed_admin_recreates_missing_user() -> None:
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = 'admin'")
         conn.execute(
-            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
-            ("demo", security.hash_password("demo1234"), "user"),
+            """
+            INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
+            VALUES (?, ?, ?, ?, ?, 1, 'active')
+            """,
+            ("demo", "demo", "demo", security.hash_password("demo1234"), "user"),
         )
         conn.commit()
 
@@ -162,8 +168,11 @@ def test_seed_admin_repairs_invalid_state() -> None:
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = 'admin'")
         conn.execute(
-            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 0)",
-            ("admin", "notahash", "user"),
+            """
+            INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
+            VALUES (?, ?, ?, ?, ?, 0, 'disabled')
+            """,
+            ("admin", "admin", "admin", "notahash", "user"),
         )
         conn.commit()
 
@@ -3447,8 +3456,17 @@ def test_backup_import_restores_user_database() -> None:
         with closing(sqlite3.connect(users_copy)) as conn:
             conn.execute("DELETE FROM users WHERE username = ?", (restored_username,))
             conn.execute(
-                "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
-                (restored_username, security.hash_password("demo-pass"), "user"),
+                """
+                INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
+                VALUES (?, ?, ?, ?, ?, 1, 'active')
+                """,
+                (
+                    restored_username,
+                    restored_username,
+                    restored_username.lower(),
+                    security.hash_password("demo-pass"),
+                    "user",
+                ),
             )
             conn.commit()
 

@@ -19,8 +19,11 @@ def _create_user(username: str, password: str) -> None:
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.execute(
-            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, 'user', 1)",
-            (username, security.hash_password(password)),
+            """
+            INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
+            VALUES (?, ?, ?, ?, 'user', 1, 'active')
+            """,
+            (username, username, username.lower(), security.hash_password(password)),
         )
 
 

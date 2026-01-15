@@ -60,6 +60,18 @@ def _build_login_user_summary(user: models.User) -> models.LoginUserSummary:
     )
 
 
+def _ensure_user_active(user: models.User) -> None:
+    if user.status == "active":
+        return
+    if user.status == "pending":
+        detail = "Compte en attente de validation administrateur."
+    elif user.status == "rejected":
+        detail = "Compte refusé. Contactez un administrateur."
+    else:
+        detail = "Compte désactivé."
+    raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=detail)
+
+
 def _get_two_factor_row(username: str) -> dict[str, object]:
     with db.get_users_connection() as conn:
         row = conn.execute(
@@ -90,6 +102,7 @@ async def login(
     user = services.authenticate(credentials.username, credentials.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identifiants invalides")
+    _ensure_user_active(user)
     two_factor_row = _get_two_factor_row(user.username)
     if bool(two_factor_row.get("two_factor_enabled")):
         challenge_token = two_factor.create_challenge(user.username, purpose="verify")
@@ -111,6 +124,15 @@ async def login(
         secret_plain_if_allowed=secret if _allow_secret_plaintext() else None,
         user=_build_login_user_summary(user),
     )
+
+
+@router.post("/register", response_model=models.RegisterResponse, status_code=status.HTTP_201_CREATED)
+async def register(payload: models.RegisterRequest) -> models.RegisterResponse:
+    try:
+        services.register_user(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return models.RegisterResponse(message="Demande envoyée, en attente de validation.")
 
 
 @router.post("/refresh", response_model=models.Token)
