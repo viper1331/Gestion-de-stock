@@ -1,4 +1,6 @@
 from datetime import datetime
+import asyncio
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -17,6 +19,7 @@ from backend.services.backup_scheduler import backup_scheduler
 from backend.services.backup_settings import MAX_BACKUP_INTERVAL_MINUTES
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 
 class LogFileEntry(BaseModel):
@@ -171,5 +174,20 @@ async def update_backup_settings(
             detail=f"Intervalle maximum autorisé: {MAX_BACKUP_INTERVAL_MINUTES} minutes",
         )
     site_key = db.get_current_site_key()
-    await backup_scheduler.update_settings(site_key, settings)
+    try:
+        await backup_scheduler.update_settings(site_key, settings)
+    except asyncio.CancelledError:
+        logger.debug(
+            "Annulation absorbée lors de la mise à jour de la planification pour %s",
+            site_key,
+        )
+    except Exception as exc:  # pragma: no cover - gestion d'erreur HTTP
+        logger.exception(
+            "Échec de la mise à jour de la planification des sauvegardes pour %s",
+            site_key,
+        )
+        raise HTTPException(
+            status_code=500,
+            detail="Impossible d'appliquer la planification des sauvegardes",
+        ) from exc
     return await backup_scheduler.get_status(site_key)
