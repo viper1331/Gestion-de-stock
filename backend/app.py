@@ -43,6 +43,7 @@ from backend.core.logging_config import (
     configure_logging,
     purge_rotated_logs,
 )
+from backend.core.env_loader import load_env
 from backend.core.services import _ensure_vehicle_pharmacy_templates, ensure_database_ready
 from backend.core import two_factor_crypto
 from backend.core.storage import MEDIA_ROOT
@@ -54,7 +55,7 @@ from backend.services.pdf.vehicle_inventory.playwright_support import (
 from backend.core.system_config import get_effective_cors_origins, rebuild_cors_middleware
 from backend.ws import camera, voice
 
-
+load_env()
 configure_logging()
 logger = logging.getLogger(__name__)
 
