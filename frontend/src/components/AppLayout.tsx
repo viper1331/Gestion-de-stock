@@ -27,6 +27,9 @@ export function AppLayout() {
     shallow
   );
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
+  const [isMobile, setIsMobile] = useState(() =>
+    typeof window === "undefined" ? false : window.matchMedia("(max-width: 640px)").matches
+  );
   const [isDesktop, setIsDesktop] = useState(() =>
     typeof window === "undefined" ? true : window.matchMedia("(min-width: 768px)").matches
   );
@@ -74,13 +77,20 @@ export function AppLayout() {
       return undefined;
     }
     const mediaQuery = window.matchMedia("(min-width: 768px)");
+    const mobileQuery = window.matchMedia("(max-width: 640px)");
     const handleChange = (event: MediaQueryListEvent) => {
       setIsDesktop(event.matches);
     };
+    const handleMobileChange = (event: MediaQueryListEvent) => {
+      setIsMobile(event.matches);
+    };
     setIsDesktop(mediaQuery.matches);
+    setIsMobile(mobileQuery.matches);
     mediaQuery.addEventListener("change", handleChange);
+    mobileQuery.addEventListener("change", handleMobileChange);
     return () => {
       mediaQuery.removeEventListener("change", handleChange);
+      mobileQuery.removeEventListener("change", handleMobileChange);
     };
   }, []);
 
@@ -91,16 +101,25 @@ export function AppLayout() {
   }, [isDesktop]);
 
   useEffect(() => {
+    if (!isMobile) {
+      setMobileDrawerOpen(false);
+    }
+  }, [isMobile]);
+
+  useEffect(() => {
     setMobileDrawerOpen(false);
   }, [location.pathname]);
 
   useEffect(() => {
+    if (!mobileDrawerOpen || !isMobile) {
+      return undefined;
+    }
     const previousOverflow = document.body.style.overflow;
     document.body.style.overflow = "hidden";
     return () => {
       document.body.style.overflow = previousOverflow;
     };
-  }, []);
+  }, [mobileDrawerOpen, isMobile]);
 
   useEffect(() => {
     if (isReady && !user) {
@@ -746,23 +765,23 @@ export function AppLayout() {
           </>
         ) : null}
       </aside>
-      {mobileDrawerOpen ? (
+      {mobileDrawerOpen && isMobile ? (
         <div
-          className="fixed inset-0 z-40 flex md:hidden"
+          className="fixed inset-0 z-40 flex items-start justify-start p-2 sm:p-4 md:hidden"
           role="presentation"
           onClick={() => setMobileDrawerOpen(false)}
         >
-          <div className="absolute inset-0 bg-slate-950/70" />
+          <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" />
           <div
             ref={drawerRef}
             role="dialog"
             aria-modal="true"
             aria-label="Menu principal"
-            className="relative z-50 h-full w-[90vw] max-w-[20rem] overflow-y-auto border-r border-slate-800 bg-slate-900 p-4 text-slate-50 shadow-2xl"
+            className="relative z-50 flex max-h-[calc(100dvh-1rem)] w-11/12 max-w-sm flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 text-slate-50 shadow-2xl sm:max-w-md"
             onClick={(event) => event.stopPropagation()}
             tabIndex={-1}
           >
-            <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
               <div className="flex items-center gap-2">
                 <Link to="/" className="block text-base font-semibold" title="Revenir à l'accueil">
                   <span aria-hidden>Gestion Stock Pro</span>
@@ -783,85 +802,87 @@ export function AppLayout() {
                 <span aria-hidden>✕</span>
               </button>
             </div>
-            <nav className="mt-6 flex min-h-0 flex-1 flex-col gap-3 text-sm">
-              <NavLink
-                to="/"
-                end
-                className={({ isActive }) => navClass(isActive, true)}
-                title="Accéder à la page d'accueil personnalisée"
-                onClick={navLinkHandler}
-              >
-                <NavIcon symbol="🏠" label="Accueil" />
-                <span>Accueil</span>
-              </NavLink>
-              {navigationGroups.map((group) => {
-                const isOpen = openGroups[group.id] ?? false;
-                return (
-                  <div key={group.id} className="w-full">
-                    <button
-                      type="button"
-                      onClick={() => toggleGroup(group.id)}
-                      className="group flex w-full items-center justify-between rounded-md px-3 py-2 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
-                      aria-expanded={isOpen}
-                      title={group.tooltip}
-                    >
-                      <span className="flex items-center gap-3">
-                        <NavIcon symbol={group.icon} label={group.label} />
-                        <span className="text-left">{group.label}</span>
-                      </span>
-                      <span aria-hidden>{isOpen ? "−" : "+"}</span>
-                    </button>
-                    {isOpen ? (
-                      <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
-                        {group.sections.map((section) => (
-                          <div key={section.id}>
-                            <p
-                              className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                              title={section.tooltip}
-                            >
-                              {section.label}
-                            </p>
-                            <div className="mt-2 flex flex-col gap-1">
-                              {section.links.map((link) => (
-                                <NavLink
-                                  key={link.to}
-                                  to={link.to}
-                                  end={link.to === "/" || link.to === "/inventory"}
-                                  className={({ isActive }) => navClass(isActive, true)}
-                                  title={link.tooltip}
-                                  onClick={navLinkHandler}
-                                >
-                                  <NavIcon symbol={link.icon} label={link.label} />
-                                  <span>{link.label}</span>
-                                </NavLink>
-                              ))}
+            <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+              <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1 text-sm">
+                <NavLink
+                  to="/"
+                  end
+                  className={({ isActive }) => navClass(isActive, true)}
+                  title="Accéder à la page d'accueil personnalisée"
+                  onClick={navLinkHandler}
+                >
+                  <NavIcon symbol="🏠" label="Accueil" />
+                  <span>Accueil</span>
+                </NavLink>
+                {navigationGroups.map((group) => {
+                  const isOpen = openGroups[group.id] ?? false;
+                  return (
+                    <div key={group.id} className="w-full">
+                      <button
+                        type="button"
+                        onClick={() => toggleGroup(group.id)}
+                        className="group flex w-full items-center justify-between rounded-md px-3 py-2 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
+                        aria-expanded={isOpen}
+                        title={group.tooltip}
+                      >
+                        <span className="flex items-center gap-3">
+                          <NavIcon symbol={group.icon} label={group.label} />
+                          <span className="text-left">{group.label}</span>
+                        </span>
+                        <span aria-hidden>{isOpen ? "−" : "+"}</span>
+                      </button>
+                      {isOpen ? (
+                        <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
+                          {group.sections.map((section) => (
+                            <div key={section.id}>
+                              <p
+                                className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                                title={section.tooltip}
+                              >
+                                {section.label}
+                              </p>
+                              <div className="mt-2 flex flex-col gap-1">
+                                {section.links.map((link) => (
+                                  <NavLink
+                                    key={link.to}
+                                    to={link.to}
+                                    end={link.to === "/" || link.to === "/inventory"}
+                                    className={({ isActive }) => navClass(isActive, true)}
+                                    title={link.tooltip}
+                                    onClick={navLinkHandler}
+                                  >
+                                    <NavIcon symbol={link.icon} label={link.label} />
+                                    <span>{link.label}</span>
+                                  </NavLink>
+                                ))}
+                              </div>
                             </div>
-                          </div>
-                        ))}
-                      </div>
-                    ) : null}
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  );
+                })}
+              </nav>
+              <div className="mt-6 flex w-full flex-col gap-3">
+                <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
+                  <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
+                  <div className="leading-tight">
+                    <p className="font-semibold text-slate-200">{user.username}</p>
+                    <p>Rôle : {user.role}</p>
                   </div>
-                );
-              })}
-            </nav>
-            <div className="mt-6 flex w-full flex-col gap-3">
-              <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
-                <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
-                <div className="leading-tight">
-                  <p className="font-semibold text-slate-200">{user.username}</p>
-                  <p>Rôle : {user.role}</p>
                 </div>
+                <MicToggle compact />
+                <ThemeToggle compact />
+                <button
+                  onClick={logout}
+                  className="flex items-center justify-center gap-2 rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-red-400"
+                  title="Se déconnecter de votre session"
+                >
+                  <span aria-hidden>⎋</span>
+                  <span>Se déconnecter</span>
+                </button>
               </div>
-              <MicToggle compact />
-              <ThemeToggle compact />
-              <button
-                onClick={logout}
-                className="flex items-center justify-center gap-2 rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-red-400"
-                title="Se déconnecter de votre session"
-              >
-                <span aria-hidden>⎋</span>
-                <span>Se déconnecter</span>
-              </button>
             </div>
           </div>
         </div>
