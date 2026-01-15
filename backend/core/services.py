@@ -1824,17 +1824,61 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         """
         )
 
-        executescript(
-            f"""
-            CREATE TABLE IF NOT EXISTS backup_settings (
-                id INTEGER PRIMARY KEY CHECK (id = 1),
-                enabled INTEGER NOT NULL DEFAULT 0,
-                interval_minutes INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_INTERVAL_MINUTES},
-                retention_count INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_RETENTION_COUNT},
-                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
-            );
-            """
-        )
+        backup_settings_info = execute("PRAGMA table_info(backup_settings)").fetchall()
+        backup_settings_columns = {row["name"] for row in backup_settings_info}
+        if not backup_settings_info:
+            executescript(
+                f"""
+                CREATE TABLE IF NOT EXISTS backup_settings (
+                    site_key TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    interval_minutes INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_INTERVAL_MINUTES},
+                    retention_count INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_RETENTION_COUNT},
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+        elif "site_key" not in backup_settings_columns:
+            execute(
+                f"""
+                CREATE TABLE IF NOT EXISTS backup_settings_new (
+                    site_key TEXT PRIMARY KEY,
+                    enabled INTEGER NOT NULL DEFAULT 0,
+                    interval_minutes INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_INTERVAL_MINUTES},
+                    retention_count INTEGER NOT NULL DEFAULT {DEFAULT_BACKUP_RETENTION_COUNT},
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                """
+            )
+            legacy_row = execute(
+                """
+                SELECT enabled, interval_minutes, retention_count, updated_at
+                FROM backup_settings
+                WHERE id = 1
+                """
+            ).fetchone()
+            if legacy_row:
+                execute(
+                    """
+                    INSERT INTO backup_settings_new (
+                        site_key, enabled, interval_minutes, retention_count, updated_at
+                    )
+                    VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        site_key,
+                        legacy_row["enabled"],
+                        legacy_row["interval_minutes"],
+                        legacy_row["retention_count"],
+                        legacy_row["updated_at"] or datetime.now().isoformat(),
+                    ),
+                )
+            execute("DROP TABLE backup_settings")
+            execute("ALTER TABLE backup_settings_new RENAME TO backup_settings")
+        elif "updated_at" not in backup_settings_columns:
+            execute(
+                "ALTER TABLE backup_settings ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+            )
 
         po_info = execute("PRAGMA table_info(purchase_orders)").fetchall()
         po_columns = {row["name"] for row in po_info}

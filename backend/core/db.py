@@ -99,6 +99,23 @@ def get_default_site_db_paths() -> dict[str, Path]:
     }
 
 
+def _discover_site_db_paths() -> dict[str, Path]:
+    candidates: dict[str, Path] = {}
+    default_paths = get_default_site_db_paths()
+    for site_key, path in default_paths.items():
+        if path.exists():
+            candidates[site_key] = path
+    search_dirs = [DATA_DIR, DATA_DIR / "sites"]
+    for folder in search_dirs:
+        if not folder.exists():
+            continue
+        for entry in folder.glob("*.db"):
+            site_key = entry.stem.upper()
+            if site_key in SITE_KEYS:
+                candidates[site_key] = entry
+    return candidates
+
+
 def get_site_db_path(site_key: str) -> Path:
     site_key = site_key.upper()
     default_paths = get_default_site_db_paths()
@@ -300,6 +317,16 @@ def _init_core_database() -> None:
                     SITE_DISPLAY_NAMES.get(site_key, site_key),
                     str(default_paths[site_key]),
                 ),
+            )
+        discovered_paths = _discover_site_db_paths()
+        for site_key, path in discovered_paths.items():
+            conn.execute(
+                """
+                UPDATE sites
+                SET db_path = ?, is_active = 1
+                WHERE site_key = ?
+                """,
+                (str(path), site_key),
             )
         _migrate_user_layouts_to_core(conn)
         _backfill_user_site_assignments(conn)
