@@ -173,6 +173,15 @@ def init_databases() -> None:
                     count INTEGER NOT NULL,
                     PRIMARY KEY (username, ip_address)
                 );
+                CREATE TABLE IF NOT EXISTS two_factor_challenges (
+                    challenge_id TEXT PRIMARY KEY,
+                    username TEXT NOT NULL,
+                    created_at_ts INTEGER NOT NULL,
+                    expires_at_ts INTEGER NOT NULL,
+                    used_at_ts INTEGER,
+                    attempts INTEGER NOT NULL DEFAULT 0,
+                    locked_until_ts INTEGER
+                );
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sender_username TEXT NOT NULL,

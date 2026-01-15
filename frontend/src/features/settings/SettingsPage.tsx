@@ -55,6 +55,10 @@ interface TwoFactorSetupConfirmResponse {
   recovery_codes: string[];
 }
 
+interface SecuritySettings {
+  require_totp_for_login: boolean;
+}
+
 type HomepageFieldType = "text" | "textarea" | "url";
 
 const ENTRY_DESCRIPTIONS: Record<string, string> = {
@@ -197,6 +201,34 @@ export function SettingsPage() {
       return response.data;
     },
     enabled: Boolean(user)
+  });
+  const {
+    data: securitySettings,
+    isFetching: isFetchingSecuritySettings
+  } = useQuery({
+    queryKey: ["admin", "security", "settings"],
+    queryFn: async () => {
+      const response = await api.get<SecuritySettings>("/admin/security/settings");
+      return response.data;
+    },
+    enabled: isAdmin
+  });
+  const [securityMessage, setSecurityMessage] = useState<string | null>(null);
+  const [securityError, setSecurityError] = useState<string | null>(null);
+  const updateSecuritySettings = useMutation({
+    mutationFn: async (payload: SecuritySettings) => {
+      const response = await api.put<SecuritySettings>("/admin/security/settings", payload);
+      return response.data;
+    },
+    onSuccess: async () => {
+      setSecurityMessage("Paramètres de sécurité mis à jour.");
+      setSecurityError(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin", "security", "settings"] });
+    },
+    onError: () => {
+      setSecurityError("Impossible de mettre à jour la sécurité.");
+      setSecurityMessage(null);
+    }
   });
 
   const [changes, setChanges] = useState<Record<string, string>>({});
@@ -814,6 +846,37 @@ export function SettingsPage() {
               ) : null}
             </div>
           )}
+          {isAdmin ? (
+            <div className="space-y-3 rounded-md border border-slate-800 bg-slate-950 p-3">
+              <div className="space-y-1">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                  Politique globale
+                </p>
+                <p className="text-xs text-slate-400">
+                  Imposer la saisie d'un code TOTP à chaque connexion.
+                </p>
+              </div>
+              {isFetchingSecuritySettings ? (
+                <p className="text-xs text-slate-400">Chargement de la politique 2FA...</p>
+              ) : null}
+              {securityMessage ? <p className="text-xs text-emerald-300">{securityMessage}</p> : null}
+              {securityError ? <p className="text-xs text-red-400">{securityError}</p> : null}
+              <label className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200">
+                <span>Imposer TOTP à chaque connexion (2FA obligatoire)</span>
+                <input
+                  type="checkbox"
+                  checked={Boolean(securitySettings?.require_totp_for_login)}
+                  onChange={(event) =>
+                    updateSecuritySettings.mutate({
+                      require_totp_for_login: event.target.checked
+                    })
+                  }
+                  disabled={updateSecuritySettings.isPending}
+                  className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 disabled:cursor-not-allowed"
+                />
+              </label>
+            </div>
+          ) : null}
         </div>
       </div>
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">

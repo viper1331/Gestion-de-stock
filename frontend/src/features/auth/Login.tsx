@@ -1,8 +1,10 @@
 import { FormEvent, useState } from "react";
+import { useNavigate } from "react-router-dom";
 import { useAuth } from "./useAuth";
 import { AppTextInput } from "components/AppTextInput";
 
 export function Login() {
+  const navigate = useNavigate();
   const { login, verifyTwoFactor, verifyRecoveryCode, clearError, isLoading, error } = useAuth();
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin123");
@@ -10,8 +12,8 @@ export function Login() {
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [recoveryCode, setRecoveryCode] = useState("");
-  const [rememberDevice, setRememberDevice] = useState(true);
   const [step, setStep] = useState<"credentials" | "totp" | "recovery">("credentials");
+  const [needsTwoFactorSetup, setNeedsTwoFactorSetup] = useState(false);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -21,7 +23,13 @@ export function Login() {
       setStep("totp");
       setTotpCode("");
       setRecoveryCode("");
+      setNeedsTwoFactorSetup(false);
       clearError();
+    }
+    if (result.status === "2fa_setup_required") {
+      setNeedsTwoFactorSetup(true);
+    } else {
+      setNeedsTwoFactorSetup(false);
     }
   };
 
@@ -33,7 +41,6 @@ export function Login() {
     await verifyTwoFactor({
       challengeId,
       code: totpCode,
-      rememberDevice,
       rememberSession: remember
     });
   };
@@ -46,7 +53,6 @@ export function Login() {
     await verifyRecoveryCode({
       challengeId,
       recoveryCode,
-      rememberDevice,
       rememberSession: remember
     });
   };
@@ -91,15 +97,6 @@ export function Login() {
             />
           </div>
         )}
-        <label className="flex items-center gap-2 text-sm text-slate-300">
-          <AppTextInput
-            type="checkbox"
-            checked={rememberDevice}
-            onChange={(event) => setRememberDevice(event.target.checked)}
-            title="Se souvenir de cet appareil pendant 30 jours"
-          />
-          Se souvenir de cet appareil (30 jours)
-        </label>
         <div className="flex flex-wrap gap-3 text-sm">
           {step === "totp" ? (
             <button
@@ -129,6 +126,7 @@ export function Login() {
             onClick={() => {
               setStep("credentials");
               setChallengeId(null);
+              setNeedsTwoFactorSetup(false);
               clearError();
             }}
             className="text-slate-400 hover:text-slate-200"
@@ -190,6 +188,18 @@ export function Login() {
         Se souvenir de moi
       </label>
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {needsTwoFactorSetup ? (
+        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
+          <p>La 2FA est obligatoire pour se connecter.</p>
+          <button
+            type="button"
+            onClick={() => navigate("/settings")}
+            className="mt-2 inline-flex items-center text-sm font-semibold text-amber-100 hover:text-amber-50"
+          >
+            Configurer 2FA
+          </button>
+        </div>
+      ) : null}
       <button
         type="submit"
         disabled={isLoading}

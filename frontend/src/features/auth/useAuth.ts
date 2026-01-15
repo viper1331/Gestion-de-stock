@@ -12,12 +12,19 @@ interface LoginPayload {
 }
 
 interface TwoFactorChallenge {
-  requires_2fa: boolean;
+  status?: string;
+  requires_2fa?: boolean;
   challenge_id: string;
   available_methods: string[];
   username: string;
-  trusted_device_supported: boolean;
+  trusted_device_supported?: boolean;
 }
+
+type LoginResult =
+  | { status: "authenticated" }
+  | { status: "requires_2fa"; challenge: TwoFactorChallenge }
+  | { status: "2fa_setup_required" }
+  | { status: "error" };
 
 interface UserProfile {
   id: number;
@@ -130,7 +137,7 @@ export function useAuth() {
   );
 
   const login = useCallback(
-    async ({ username, password, remember }: LoginPayload) => {
+    async ({ username, password, remember }: LoginPayload): Promise<LoginResult> => {
       try {
         setLoading(true);
         setError(null);
@@ -142,13 +149,28 @@ export function useAuth() {
             remember_me: remember
           }
         );
-        if ("requires_2fa" in data && data.requires_2fa) {
+        if (
+          ("status" in data && data.status === "totp_required") ||
+          ("requires_2fa" in data && data.requires_2fa)
+        ) {
           setReady(true);
           return { status: "requires_2fa", challenge: data };
         }
-        await completeLogin(data, remember);
-        return { status: "authenticated" };
+        if ("access_token" in data && "refresh_token" in data) {
+          await completeLogin(data, remember);
+          return { status: "authenticated" };
+        }
+        setError("Réponse inattendue du serveur");
+        return { status: "error" };
       } catch (err) {
+        const detail =
+          typeof err === "object" && err && "response" in err
+            ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+            : null;
+        if (detail === "2FA_REQUIRED_SETUP") {
+          setError("La 2FA est obligatoire. Activez-la pour continuer.");
+          return { status: "2fa_setup_required" };
+        }
         setError("Identifiants invalides");
         return { status: "error" };
       } finally {
@@ -163,12 +185,10 @@ export function useAuth() {
     async ({
       challengeId,
       code,
-      rememberDevice,
       rememberSession
     }: {
       challengeId: string;
       code: string;
-      rememberDevice: boolean;
       rememberSession: boolean;
     }) => {
       try {
@@ -177,7 +197,7 @@ export function useAuth() {
         const { data } = await api.post("/auth/2fa/verify", {
           challenge_id: challengeId,
           code,
-          remember_device: rememberDevice
+          remember_device: false
         });
         await completeLogin(data, rememberSession);
         return { status: "authenticated" };
@@ -196,12 +216,10 @@ export function useAuth() {
     async ({
       challengeId,
       recoveryCode,
-      rememberDevice,
       rememberSession
     }: {
       challengeId: string;
       recoveryCode: string;
-      rememberDevice: boolean;
       rememberSession: boolean;
     }) => {
       try {
@@ -210,7 +228,7 @@ export function useAuth() {
         const { data } = await api.post("/auth/2fa/recovery", {
           challenge_id: challengeId,
           recovery_code: recoveryCode,
-          remember_device: rememberDevice
+          remember_device: false
         });
         await completeLogin(data, rememberSession);
         return { status: "authenticated" };

@@ -81,6 +81,12 @@ interface ItemFormSubmitPayload {
   removeImage: boolean;
 }
 
+type ColumnOption = {
+  key: string;
+  label: string;
+  kind?: "native" | "custom";
+};
+
 interface InventoryItemNounForms {
   singular: string;
   plural: string;
@@ -438,8 +444,8 @@ export function InventoryModuleDashboard({
     [activeCustomFields]
   );
 
-  const columnOptions = useMemo(() => {
-    const options: { key: string; label: string; kind: "native" | "custom" }[] = [
+  const columnOptions = useMemo<ColumnOption[]>(() => {
+    const options: ColumnOption[] = [
       { key: "name", label: itemNoun.singularCapitalized, kind: "native" },
       { key: "sku", label: "SKU", kind: "native" },
       { key: "quantity", label: "Quantité", kind: "native" },
@@ -461,7 +467,7 @@ export function InventoryModuleDashboard({
           label: column.label,
           kind: "custom" as const
         }))
-      );
+      ) as ColumnOption[];
     }
     return options.concat(
       customColumns.map((column) => ({
@@ -469,7 +475,7 @@ export function InventoryModuleDashboard({
         label: column.label,
         kind: "custom" as const
       }))
-    );
+    ) as ColumnOption[];
   }, [
     config.showLotMembershipColumn,
     customColumns,

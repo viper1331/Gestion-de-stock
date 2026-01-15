@@ -7,6 +7,7 @@ from pydantic import BaseModel
 
 from backend.api.auth import get_current_user
 from backend.core import db, models, services
+from backend.core.system_config import get_config, save_config
 from backend.core.logging_config import (
     LOG_BACKUP_COUNT,
     LOG_DIR,
@@ -156,6 +157,22 @@ def get_logs_status(user: models.User = Depends(require_admin)):
 def purge_logs(user: models.User = Depends(require_admin)):
     purge_rotated_logs(LOG_DIR, LOG_BACKUP_COUNT)
     return get_logs_status(user)
+
+
+@router.get("/security/settings", response_model=models.SecuritySettings)
+def get_security_settings(user: models.User = Depends(require_admin)) -> models.SecuritySettings:
+    config = get_config()
+    return models.SecuritySettings(require_totp_for_login=config.security.require_totp_for_login)
+
+
+@router.put("/security/settings", response_model=models.SecuritySettings)
+def update_security_settings(
+    payload: models.SecuritySettings, user: models.User = Depends(require_admin)
+) -> models.SecuritySettings:
+    config = get_config()
+    config.security.require_totp_for_login = payload.require_totp_for_login
+    save_config(config)
+    return payload
 
 
 @router.get("/backup/settings", response_model=models.BackupSettingsStatus)

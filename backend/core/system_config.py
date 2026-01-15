@@ -21,6 +21,12 @@ DEFAULT_CORS_ORIGINS = [
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "system_config.json"
 
 
+class SecurityConfig(BaseModel):
+    require_totp_for_login: bool = Field(
+        False, description="Impose un code TOTP à chaque connexion"
+    )
+
+
 class SystemConfig(BaseModel):
     """Configuration technique du système exposée à l'administration."""
 
@@ -47,6 +53,10 @@ class SystemConfig(BaseModel):
     )
     extra: dict[str, str] = Field(default_factory=dict, description="Réglages additionnels")
     pdf_exports: PdfExportConfig | None = Field(default=None, description="Configuration des exports PDF")
+    security: SecurityConfig = Field(
+        default_factory=SecurityConfig,
+        description="Paramètres de sécurité globaux",
+    )
 
     @model_validator(mode="before")
     @classmethod

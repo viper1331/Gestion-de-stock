@@ -51,22 +51,108 @@ def _get_serializer(salt: str) -> URLSafeTimedSerializer:
     return URLSafeTimedSerializer(security.SECRET_KEY, salt=salt)
 
 
+def _now_ts() -> int:
+    return int(time.time())
+
+
 def create_challenge(username: str) -> str:
-    payload = {"username": username, "nonce": secrets.token_urlsafe(16)}
-    serializer = _get_serializer("two-factor-challenge")
-    return serializer.dumps(payload)
+    challenge_id = secrets.token_urlsafe(32)
+    now = _now_ts()
+    ttl = _get_int_env("TWO_FACTOR_CHALLENGE_TTL_SECONDS", 120)
+    with db.get_users_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO two_factor_challenges (
+                challenge_id, username, created_at_ts, expires_at_ts, used_at_ts, attempts, locked_until_ts
+            )
+            VALUES (?, ?, ?, ?, NULL, 0, NULL)
+            """,
+            (challenge_id, username, now, now + ttl),
+        )
+    return challenge_id
 
 
 def load_challenge(token: str) -> dict[str, Any]:
-    serializer = _get_serializer("two-factor-challenge")
-    max_age = _get_int_env("TWO_FACTOR_CHALLENGE_TTL_SECONDS", 300)
-    try:
-        payload = serializer.loads(token, max_age=max_age)
-    except SignatureExpired as exc:
-        raise ChallengeError("Challenge expiré") from exc
-    except BadSignature as exc:
-        raise ChallengeError("Challenge invalide") from exc
-    return payload
+    now = _now_ts()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT username, expires_at_ts, used_at_ts, attempts, locked_until_ts
+            FROM two_factor_challenges
+            WHERE challenge_id = ?
+            """,
+            (token,),
+        ).fetchone()
+        if not row:
+            raise ChallengeError("Challenge invalide")
+        if row["used_at_ts"]:
+            raise ChallengeError("Challenge invalide")
+        if int(row["expires_at_ts"]) <= now:
+            raise ChallengeError("Challenge expiré")
+        locked_until = row["locked_until_ts"]
+        if locked_until and int(locked_until) > now:
+            raise RateLimitError("Too many attempts")
+        if locked_until and int(locked_until) <= now and int(row["attempts"]) > 0:
+            conn.execute(
+                """
+                UPDATE two_factor_challenges
+                SET attempts = 0, locked_until_ts = NULL
+                WHERE challenge_id = ?
+                """,
+                (token,),
+            )
+    return {"username": row["username"]}
+
+
+def consume_challenge(token: str) -> None:
+    with db.get_users_connection() as conn:
+        conn.execute(
+            """
+            UPDATE two_factor_challenges
+            SET used_at_ts = ?
+            WHERE challenge_id = ? AND used_at_ts IS NULL
+            """,
+            (_now_ts(), token),
+        )
+
+
+def register_challenge_failure(token: str) -> None:
+    max_attempts = _get_int_env("TWO_FACTOR_CHALLENGE_MAX_ATTEMPTS", 5)
+    cooldown = _get_int_env("TWO_FACTOR_CHALLENGE_COOLDOWN_SECONDS", 300)
+    now = _now_ts()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT attempts, locked_until_ts
+            FROM two_factor_challenges
+            WHERE challenge_id = ?
+            """,
+            (token,),
+        ).fetchone()
+        if not row:
+            raise ChallengeError("Challenge invalide")
+        locked_until = row["locked_until_ts"]
+        if locked_until and int(locked_until) > now:
+            raise RateLimitError("Too many attempts")
+        attempts = int(row["attempts"]) + 1
+        if attempts > max_attempts:
+            conn.execute(
+                """
+                UPDATE two_factor_challenges
+                SET attempts = ?, locked_until_ts = ?
+                WHERE challenge_id = ?
+                """,
+                (attempts, now + cooldown, token),
+            )
+            raise RateLimitError("Too many attempts")
+        conn.execute(
+            """
+            UPDATE two_factor_challenges
+            SET attempts = ?
+            WHERE challenge_id = ?
+            """,
+            (attempts, token),
+        )
 
 
 def generate_totp_secret() -> str:

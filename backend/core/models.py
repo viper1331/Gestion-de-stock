@@ -154,14 +154,17 @@ class LoginRequest(BaseModel):
     username: str
     password: str
     remember_me: bool = False
+    totp_code: str | None = None
+    challenge_id: str | None = None
 
 
 class TwoFactorChallengeResponse(BaseModel):
+    status: str = "totp_required"
     requires_2fa: bool = True
     challenge_id: str
     available_methods: list[str]
     username: str
-    trusted_device_supported: bool = True
+    trusted_device_supported: bool = False
 
 
 class TwoFactorVerifyRequest(BaseModel):
@@ -198,6 +201,10 @@ class TwoFactorDisableRequest(BaseModel):
 class TwoFactorStatus(BaseModel):
     enabled: bool
     confirmed_at: str | None = None
+
+
+class SecuritySettings(BaseModel):
+    require_totp_for_login: bool = False
 
 
 class RefreshRequest(BaseModel):
