@@ -193,6 +193,8 @@ def init_databases() -> None:
                 CREATE TABLE IF NOT EXISTS two_factor_challenges (
                     challenge_id TEXT PRIMARY KEY,
                     username TEXT NOT NULL,
+                    purpose TEXT NOT NULL DEFAULT 'verify',
+                    secret_enc TEXT,
                     created_at_ts INTEGER NOT NULL,
                     expires_at_ts INTEGER NOT NULL,
                     used_at_ts INTEGER,
@@ -262,6 +264,7 @@ def init_databases() -> None:
             )
             _ensure_user_site_columns(conn)
             _ensure_two_factor_columns(conn)
+            _ensure_two_factor_challenge_columns(conn)
         _init_core_database()
         _sync_user_site_preferences()
         for site_key in SITE_KEYS:
@@ -413,6 +416,18 @@ def _ensure_two_factor_columns(conn: sqlite3.Connection) -> None:
         conn.execute("ALTER TABLE users ADD COLUMN two_factor_last_used_at TEXT")
     if "two_factor_required" not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN two_factor_required INTEGER NOT NULL DEFAULT 0")
+
+
+def _ensure_two_factor_challenge_columns(conn: sqlite3.Connection) -> None:
+    columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(two_factor_challenges)").fetchall()
+    }
+    if "purpose" not in columns:
+        conn.execute(
+            "ALTER TABLE two_factor_challenges ADD COLUMN purpose TEXT NOT NULL DEFAULT 'verify'"
+        )
+    if "secret_enc" not in columns:
+        conn.execute("ALTER TABLE two_factor_challenges ADD COLUMN secret_enc TEXT")
 
 
 def _sync_user_site_preferences() -> None:

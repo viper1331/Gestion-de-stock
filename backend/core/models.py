@@ -154,8 +154,27 @@ class LoginRequest(BaseModel):
     username: str
     password: str
     remember_me: bool = False
-    totp_code: str | None = None
-    challenge_id: str | None = None
+
+
+class LoginUserSummary(BaseModel):
+    username: str
+    role: str
+    site_key: str | None = None
+
+
+class TotpRequiredResponse(BaseModel):
+    status: Literal["totp_required"] = "totp_required"
+    challenge_token: str
+    user: LoginUserSummary
+
+
+class TotpEnrollRequiredResponse(BaseModel):
+    status: Literal["totp_enroll_required"] = "totp_enroll_required"
+    challenge_token: str
+    otpauth_uri: str
+    secret_masked: str
+    secret_plain_if_allowed: str | None = None
+    user: LoginUserSummary
 
 
 class TwoFactorChallengeResponse(BaseModel):
@@ -171,6 +190,16 @@ class TwoFactorVerifyRequest(BaseModel):
     challenge_id: str
     code: str
     remember_device: bool = False
+
+
+class TotpVerifyRequest(BaseModel):
+    challenge_token: str
+    code: str
+
+
+class TotpEnrollConfirmRequest(BaseModel):
+    challenge_token: str
+    code: str
 
 
 class TwoFactorRecoveryRequest(BaseModel):
@@ -191,6 +220,12 @@ class TwoFactorSetupConfirmRequest(BaseModel):
 class TwoFactorSetupConfirmResponse(BaseModel):
     enabled: bool
     recovery_codes: list[str]
+
+
+class TokenWithUser(BaseModel):
+    access_token: str
+    refresh_token: str
+    user: LoginUserSummary
 
 
 class TwoFactorDisableRequest(BaseModel):

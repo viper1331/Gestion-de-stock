@@ -17,13 +17,15 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+import pyotp
+import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from backend.app import app
-from backend.core import db, models, security, services
+from backend.core import db, models, security, services, two_factor_crypto
 from backend.core.storage import MEDIA_ROOT
 from backend.services import barcode as barcode_service, update_service
 from backend.services.backup_manager import create_backup_archive, restore_backup_from_zip
@@ -99,7 +101,35 @@ def _login_headers(username: str, password: str) -> dict[str, str]:
         json={"username": username, "password": password, "remember_me": False},
     )
     assert response.status_code == 200, response.text
-    token = response.json()["access_token"]
+    payload = response.json()
+    if payload.get("status") == "totp_enroll_required":
+        parsed = urllib.parse.urlparse(payload["otpauth_uri"])
+        secret = urllib.parse.parse_qs(parsed.query)["secret"][0]
+        code = pyotp.TOTP(secret).now()
+        confirm = client.post(
+            "/auth/totp/enroll/confirm",
+            json={"challenge_token": payload["challenge_token"], "code": code},
+        )
+        assert confirm.status_code == 200, confirm.text
+        token = confirm.json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+    if payload.get("status") == "totp_required":
+        with db.get_users_connection() as conn:
+            row = conn.execute(
+                "SELECT two_factor_secret_enc FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        assert row and row["two_factor_secret_enc"], "Missing 2FA secret for user"
+        secret = two_factor_crypto.decrypt_secret(str(row["two_factor_secret_enc"]))
+        code = pyotp.TOTP(secret).now()
+        verify = client.post(
+            "/auth/totp/verify",
+            json={"challenge_token": payload["challenge_token"], "code": code},
+        )
+        assert verify.status_code == 200, verify.text
+        token = verify.json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+    raise AssertionError(f"Unexpected login response: {payload}")
     return {"Authorization": f"Bearer {token}"}
 
 
@@ -157,18 +187,13 @@ def test_login_returns_tokens() -> None:
     )
     assert response.status_code == 200
     data = response.json()
-    assert "access_token" in data
-    assert "refresh_token" in data
+    assert data["status"] == "totp_enroll_required"
+    assert data.get("challenge_token")
+    assert data.get("otpauth_uri")
 
 
 def test_record_movement_updates_quantity() -> None:
-    login = client.post(
-        "/auth/login",
-        json={"username": "admin", "password": "admin123", "remember_me": False},
-    )
-    assert login.status_code == 200
-    token = login.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _login_headers("admin", "admin123")
 
     sku = f"SKU-{uuid4().hex[:8]}"
     create = client.post(
@@ -198,12 +223,7 @@ def test_record_movement_updates_quantity() -> None:
 
 
 def test_record_movement_unknown_item_returns_404() -> None:
-    login = client.post(
-        "/auth/login",
-        json={"username": "admin", "password": "admin123", "remember_me": False},
-    )
-    token = login.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _login_headers("admin", "admin123")
 
     response = client.post(
         "/items/99999/movements",
@@ -214,12 +234,7 @@ def test_record_movement_unknown_item_returns_404() -> None:
 
 
 def test_low_stock_triggers_auto_purchase_order() -> None:
-    login = client.post(
-        "/auth/login",
-        json={"username": "admin", "password": "admin123", "remember_me": False},
-    )
-    token = login.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _login_headers("admin", "admin123")
 
     supplier_resp = client.post(
         "/suppliers/",
@@ -297,12 +312,7 @@ def test_low_stock_triggers_auto_purchase_order() -> None:
 
 
 def test_no_auto_purchase_order_without_supplier() -> None:
-    login = client.post(
-        "/auth/login",
-        json={"username": "admin", "password": "admin123", "remember_me": False},
-    )
-    token = login.json()["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
+    headers = _login_headers("admin", "admin123")
 
     sku = f"SKU-{uuid4().hex[:8]}"
     create_item_resp = client.post(

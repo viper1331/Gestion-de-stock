@@ -12,18 +12,32 @@ interface LoginPayload {
 }
 
 interface TwoFactorChallenge {
-  status?: string;
-  requires_2fa?: boolean;
-  challenge_id: string;
-  available_methods: string[];
-  username: string;
-  trusted_device_supported?: boolean;
+  status: "totp_required";
+  challenge_token: string;
+  user: {
+    username: string;
+    role: string;
+    site_key: string | null;
+  };
+}
+
+interface TwoFactorEnrollChallenge {
+  status: "totp_enroll_required";
+  challenge_token: string;
+  otpauth_uri: string;
+  secret_masked: string;
+  secret_plain_if_allowed?: string | null;
+  user: {
+    username: string;
+    role: string;
+    site_key: string | null;
+  };
 }
 
 type LoginResult =
   | { status: "authenticated" }
   | { status: "requires_2fa"; challenge: TwoFactorChallenge }
-  | { status: "2fa_setup_required" }
+  | { status: "enroll_required"; challenge: TwoFactorEnrollChallenge }
   | { status: "error" };
 
 interface UserProfile {
@@ -94,6 +108,14 @@ async function fetchProfile(): Promise<UserProfile> {
   return data;
 }
 
+const getErrorDetail = (err: unknown): string | null => {
+  if (typeof err === "object" && err && "response" in err) {
+    const response = (err as { response?: { data?: { detail?: string } } }).response;
+    return response?.data?.detail ?? null;
+  }
+  return null;
+};
+
 export function useAuth() {
   const navigate = useNavigate();
   const {
@@ -141,7 +163,7 @@ export function useAuth() {
       try {
         setLoading(true);
         setError(null);
-        const { data } = await api.post<TwoFactorChallenge | { access_token: string; refresh_token: string }>(
+        const { data } = await api.post<TwoFactorChallenge | TwoFactorEnrollChallenge>(
           "/auth/login",
           {
             username,
@@ -149,28 +171,17 @@ export function useAuth() {
             remember_me: remember
           }
         );
-        if (
-          ("status" in data && data.status === "totp_required") ||
-          ("requires_2fa" in data && data.requires_2fa)
-        ) {
+        if ("status" in data && data.status === "totp_required") {
           setReady(true);
           return { status: "requires_2fa", challenge: data };
         }
-        if ("access_token" in data && "refresh_token" in data) {
-          await completeLogin(data, remember);
-          return { status: "authenticated" };
+        if ("status" in data && data.status === "totp_enroll_required") {
+          setReady(true);
+          return { status: "enroll_required", challenge: data };
         }
         setError("Réponse inattendue du serveur");
         return { status: "error" };
       } catch (err) {
-        const detail =
-          typeof err === "object" && err && "response" in err
-            ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
-            : null;
-        if (detail === "2FA_REQUIRED_SETUP") {
-          setError("La 2FA est obligatoire. Activez-la pour continuer.");
-          return { status: "2fa_setup_required" };
-        }
         setError("Identifiants invalides");
         return { status: "error" };
       } finally {
@@ -178,7 +189,7 @@ export function useAuth() {
         setReady(true);
       }
     },
-    [completeLogin, setError, setLoading, setReady]
+    [setError, setLoading, setReady]
   );
 
   const verifyTwoFactor = useCallback(
@@ -194,15 +205,21 @@ export function useAuth() {
       try {
         setLoading(true);
         setError(null);
-        const { data } = await api.post("/auth/2fa/verify", {
-          challenge_id: challengeId,
-          code,
-          remember_device: false
+        const { data } = await api.post("/auth/totp/verify", {
+          challenge_token: challengeId,
+          code
         });
         await completeLogin(data, rememberSession);
         return { status: "authenticated" };
       } catch (err) {
-        setError("Code 2FA invalide");
+        const detail = getErrorDetail(err);
+        if (detail?.toLowerCase().includes("expir")) {
+          setError("Challenge expiré. Réessayez.");
+        } else if (detail?.toLowerCase().includes("challenge")) {
+          setError("Challenge invalide. Réessayez.");
+        } else {
+          setError("Code 2FA invalide");
+        }
         return { status: "error" };
       } finally {
         setLoading(false);
@@ -212,28 +229,34 @@ export function useAuth() {
     [completeLogin, setError, setLoading, setReady]
   );
 
-  const verifyRecoveryCode = useCallback(
+  const confirmTotpEnrollment = useCallback(
     async ({
-      challengeId,
-      recoveryCode,
+      challengeToken,
+      code,
       rememberSession
     }: {
-      challengeId: string;
-      recoveryCode: string;
+      challengeToken: string;
+      code: string;
       rememberSession: boolean;
     }) => {
       try {
         setLoading(true);
         setError(null);
-        const { data } = await api.post("/auth/2fa/recovery", {
-          challenge_id: challengeId,
-          recovery_code: recoveryCode,
-          remember_device: false
+        const { data } = await api.post("/auth/totp/enroll/confirm", {
+          challenge_token: challengeToken,
+          code
         });
         await completeLogin(data, rememberSession);
         return { status: "authenticated" };
       } catch (err) {
-        setError("Code de récupération invalide");
+        const detail = getErrorDetail(err);
+        if (detail?.toLowerCase().includes("expir")) {
+          setError("Challenge expiré. Réessayez.");
+        } else if (detail?.toLowerCase().includes("challenge")) {
+          setError("Challenge invalide. Réessayez.");
+        } else {
+          setError("Code 2FA invalide");
+        }
         return { status: "error" };
       } finally {
         setLoading(false);
@@ -297,7 +320,7 @@ export function useAuth() {
       isCheckingSession,
       login,
       verifyTwoFactor,
-      verifyRecoveryCode,
+      confirmTotpEnrollment,
       clearError,
       logout,
       initialize
@@ -313,7 +336,7 @@ export function useAuth() {
       token,
       user,
       verifyTwoFactor,
-      verifyRecoveryCode,
+      confirmTotpEnrollment,
       clearError
     ]
   );

@@ -10,7 +10,6 @@ from backend.app import app
 import time
 
 from backend.core import db, security, two_factor, services
-from backend.core.system_config import get_config, save_config
 
 client = TestClient(app)
 
@@ -41,35 +40,40 @@ def _login(username: str, password: str, payload: dict[str, object] | None = Non
     return response.json()
 
 
-def _enable_2fa(username: str, password: str) -> tuple[str, list[str]]:
+def _enroll_2fa(username: str, password: str) -> str:
     login = _login(username, password)
-    token = login["access_token"]
-    headers = {"Authorization": f"Bearer {token}"}
-    start = client.post("/auth/2fa/setup/start", headers=headers)
-    assert start.status_code == 200, start.text
-    otpauth_uri = start.json()["otpauth_uri"]
+    assert login["status"] == "totp_enroll_required"
+    otpauth_uri = login["otpauth_uri"]
     parsed = urllib.parse.urlparse(otpauth_uri)
     secret = urllib.parse.parse_qs(parsed.query)["secret"][0]
     code = pyotp.TOTP(secret).now()
-    confirm = client.post("/auth/2fa/setup/confirm", headers=headers, json={"code": code})
+    confirm = client.post(
+        "/auth/totp/enroll/confirm",
+        json={"challenge_token": login["challenge_token"], "code": code},
+    )
     assert confirm.status_code == 200, confirm.text
-    return secret, confirm.json()["recovery_codes"]
+    return secret
 
 
-def test_login_without_2fa_returns_tokens() -> None:
+def test_login_without_2fa_returns_enroll_challenge() -> None:
     username = f"user-{uuid4().hex[:8]}"
     _create_user(username, "password123")
     payload = _login(username, "password123")
-    assert "access_token" in payload
-    assert "refresh_token" in payload
-    assert payload.get("requires_2fa") is None
+    assert payload["status"] == "totp_enroll_required"
+    assert payload.get("challenge_token")
+    assert payload.get("otpauth_uri")
 
 
-def test_setup_start_confirm_enables_2fa() -> None:
+def test_enroll_confirm_enables_2fa() -> None:
     username = f"user-{uuid4().hex[:8]}"
     _create_user(username, "password123")
-    _, recovery_codes = _enable_2fa(username, "password123")
-    assert len(recovery_codes) == 10
+    _enroll_2fa(username, "password123")
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            "SELECT two_factor_enabled FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+        assert row["two_factor_enabled"] == 1
     status = client.post(
         "/auth/login",
         json={"username": username, "password": "password123", "remember_me": False},
@@ -81,117 +85,44 @@ def test_setup_start_confirm_enables_2fa() -> None:
 def test_two_factor_verification_and_rate_limit() -> None:
     username = f"user-{uuid4().hex[:8]}"
     _create_user(username, "password123")
-    secret, _ = _enable_2fa(username, "password123")
+    secret = _enroll_2fa(username, "password123")
     login = _login(username, "password123")
-    challenge_id = login["challenge_id"]
+    challenge_id = login["challenge_token"]
     for _ in range(5):
         response = client.post(
-            "/auth/2fa/verify",
-            json={"challenge_id": challenge_id, "code": "000000", "remember_device": False},
+            "/auth/totp/verify",
+            json={"challenge_token": challenge_id, "code": "000000"},
         )
         assert response.status_code == 401
     limited = client.post(
-        "/auth/2fa/verify",
-        json={"challenge_id": challenge_id, "code": "000000", "remember_device": False},
+        "/auth/totp/verify",
+        json={"challenge_token": challenge_id, "code": "000000"},
     )
     assert limited.status_code == 429
     two_factor.clear_rate_limit(username, "testclient")
 
     login = _login(username, "password123")
-    challenge_id = login["challenge_id"]
+    challenge_id = login["challenge_token"]
     code = pyotp.TOTP(secret).now()
     valid = client.post(
-        "/auth/2fa/verify",
-        json={"challenge_id": challenge_id, "code": code, "remember_device": False},
+        "/auth/totp/verify",
+        json={"challenge_token": challenge_id, "code": code},
     )
     assert valid.status_code == 200
     assert "access_token" in valid.json()
 
 
-def test_login_with_totp_code_validates_challenge() -> None:
-    username = f"user-{uuid4().hex[:8]}"
-    _create_user(username, "password123")
-    secret, _ = _enable_2fa(username, "password123")
-    login = _login(username, "password123")
-    challenge_id = login["challenge_id"]
-    response = client.post(
-        "/auth/login",
-        json={
-            "username": username,
-            "password": "password123",
-            "remember_me": False,
-            "totp_code": "000000",
-            "challenge_id": challenge_id,
-        },
-    )
-    assert response.status_code == 401
-    code = pyotp.TOTP(secret).now()
-    response = client.post(
-        "/auth/login",
-        json={
-            "username": username,
-            "password": "password123",
-            "remember_me": False,
-            "totp_code": code,
-            "challenge_id": challenge_id,
-        },
-    )
-    assert response.status_code == 200
-    assert "access_token" in response.json()
-
-
-def test_recovery_codes_are_one_time() -> None:
-    username = f"user-{uuid4().hex[:8]}"
-    _create_user(username, "password123")
-    _, recovery_codes = _enable_2fa(username, "password123")
-    login = _login(username, "password123")
-    challenge_id = login["challenge_id"]
-    response = client.post(
-        "/auth/2fa/recovery",
-        json={"challenge_id": challenge_id, "recovery_code": recovery_codes[0], "remember_device": False},
-    )
-    assert response.status_code == 200
-    assert "access_token" in response.json()
-    login = _login(username, "password123")
-    challenge_id = login["challenge_id"]
-    reused = client.post(
-        "/auth/2fa/recovery",
-        json={"challenge_id": challenge_id, "recovery_code": recovery_codes[0], "remember_device": False},
-    )
-    assert reused.status_code == 401
-
-
-def test_login_requires_2fa_setup_when_global_setting_enabled() -> None:
-    username = f"user-{uuid4().hex[:8]}"
-    _create_user(username, "password123")
-    config = get_config()
-    previous = config.security.require_totp_for_login
-    config.security.require_totp_for_login = True
-    save_config(config)
-    try:
-        response = client.post(
-            "/auth/login",
-            json={"username": username, "password": "password123", "remember_me": False},
-        )
-        assert response.status_code == 403
-        assert response.json()["detail"] == "2FA_REQUIRED_SETUP"
-    finally:
-        config = get_config()
-        config.security.require_totp_for_login = previous
-        save_config(config)
-
-
 def test_challenge_expiration_blocks_verification(monkeypatch) -> None:
     username = f"user-{uuid4().hex[:8]}"
     _create_user(username, "password123")
-    secret, _ = _enable_2fa(username, "password123")
+    secret = _enroll_2fa(username, "password123")
     monkeypatch.setenv("TWO_FACTOR_CHALLENGE_TTL_SECONDS", "1")
     login = _login(username, "password123")
-    challenge_id = login["challenge_id"]
+    challenge_id = login["challenge_token"]
     time.sleep(1.2)
     code = pyotp.TOTP(secret).now()
     response = client.post(
-        "/auth/2fa/verify",
-        json={"challenge_id": challenge_id, "code": code, "remember_device": False},
+        "/auth/totp/verify",
+        json={"challenge_token": challenge_id, "code": code},
     )
     assert response.status_code == 401

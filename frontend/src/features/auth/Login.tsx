@@ -1,35 +1,39 @@
 import { FormEvent, useState } from "react";
-import { useNavigate } from "react-router-dom";
+import { QRCodeCanvas } from "qrcode.react";
 import { useAuth } from "./useAuth";
 import { AppTextInput } from "components/AppTextInput";
 
 export function Login() {
-  const navigate = useNavigate();
-  const { login, verifyTwoFactor, verifyRecoveryCode, clearError, isLoading, error } = useAuth();
+  const { login, verifyTwoFactor, confirmTotpEnrollment, clearError, isLoading, error } = useAuth();
   const [username, setUsername] = useState("admin");
   const [password, setPassword] = useState("admin123");
   const [remember, setRemember] = useState(true);
   const [challengeId, setChallengeId] = useState<string | null>(null);
+  const [otpauthUri, setOtpauthUri] = useState<string | null>(null);
+  const [secretMasked, setSecretMasked] = useState<string | null>(null);
+  const [secretPlain, setSecretPlain] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState("");
-  const [recoveryCode, setRecoveryCode] = useState("");
-  const [step, setStep] = useState<"credentials" | "totp" | "recovery">("credentials");
-  const [needsTwoFactorSetup, setNeedsTwoFactorSetup] = useState(false);
+  const [step, setStep] = useState<"credentials" | "totp" | "enroll">("credentials");
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
     const result = await login({ username, password, remember });
     if (result.status === "requires_2fa") {
-      setChallengeId(result.challenge.challenge_id);
+      setChallengeId(result.challenge.challenge_token);
+      setOtpauthUri(null);
+      setSecretMasked(null);
+      setSecretPlain(null);
       setStep("totp");
       setTotpCode("");
-      setRecoveryCode("");
-      setNeedsTwoFactorSetup(false);
       clearError();
-    }
-    if (result.status === "2fa_setup_required") {
-      setNeedsTwoFactorSetup(true);
-    } else {
-      setNeedsTwoFactorSetup(false);
+    } else if (result.status === "enroll_required") {
+      setChallengeId(result.challenge.challenge_token);
+      setOtpauthUri(result.challenge.otpauth_uri);
+      setSecretMasked(result.challenge.secret_masked);
+      setSecretPlain(result.challenge.secret_plain_if_allowed ?? null);
+      setStep("enroll");
+      setTotpCode("");
+      clearError();
     }
   };
 
@@ -45,88 +49,62 @@ export function Login() {
     });
   };
 
-  const handleRecovery = async (event: FormEvent) => {
+  const handleEnrollConfirm = async (event: FormEvent) => {
     event.preventDefault();
     if (!challengeId) {
       return;
     }
-    await verifyRecoveryCode({
-      challengeId,
-      recoveryCode,
+    await confirmTotpEnrollment({
+      challengeToken: challengeId,
+      code: totpCode,
       rememberSession: remember
     });
   };
 
   if (step !== "credentials") {
     return (
-      <form
-        className="space-y-6"
-        onSubmit={step === "recovery" ? handleRecovery : handleVerify}
-      >
+      <form className="space-y-6" onSubmit={step === "enroll" ? handleEnrollConfirm : handleVerify}>
         <header className="space-y-1 text-center">
-          <h1 className="text-2xl font-semibold">Vérification 2FA</h1>
+          <h1 className="text-2xl font-semibold">
+            {step === "enroll" ? "Configurer l’authentification 2 facteurs" : "Entrer votre code"}
+          </h1>
           <p className="text-sm text-slate-400">
-            Entrez le code fourni par votre application Authenticator.
+            {step === "enroll"
+              ? "Scannez le QR code puis saisissez le code généré."
+              : "Entrez le code fourni par votre application Authenticator."}
           </p>
         </header>
-        {step === "totp" ? (
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-slate-200" htmlFor="totpCode">
-              Code à 6 chiffres
-            </label>
-            <AppTextInput
-              id="totpCode"
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
-              value={totpCode}
-              onChange={(event) => setTotpCode(event.target.value)}
-              title="Saisissez le code 2FA"
-              inputMode="numeric"
-            />
+        {step === "enroll" && otpauthUri ? (
+          <div className="flex flex-col items-center gap-4 rounded-lg border border-slate-800 bg-slate-950 px-4 py-4">
+            <QRCodeCanvas value={otpauthUri} size={180} />
+            <div className="text-center text-xs text-slate-300">
+              <p>Secret : {secretMasked}</p>
+              {secretPlain ? <p className="text-slate-400">Secret (dev) : {secretPlain}</p> : null}
+            </div>
           </div>
-        ) : (
-          <div className="space-y-2">
-            <label className="block text-sm font-medium text-slate-200" htmlFor="recoveryCode">
-              Code de récupération
-            </label>
-            <AppTextInput
-              id="recoveryCode"
-              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
-              value={recoveryCode}
-              onChange={(event) => setRecoveryCode(event.target.value.toUpperCase())}
-              title="Saisissez un code de récupération"
-            />
-          </div>
-        )}
+        ) : null}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-slate-200" htmlFor="totpCode">
+            Code à 6 chiffres
+          </label>
+          <AppTextInput
+            id="totpCode"
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={totpCode}
+            onChange={(event) => setTotpCode(event.target.value)}
+            title="Saisissez le code 2FA"
+            inputMode="numeric"
+          />
+        </div>
         <div className="flex flex-wrap gap-3 text-sm">
-          {step === "totp" ? (
-            <button
-              type="button"
-              onClick={() => {
-                setStep("recovery");
-                clearError();
-              }}
-              className="text-indigo-300 hover:text-indigo-200"
-            >
-              Utiliser un code de récupération
-            </button>
-          ) : (
-            <button
-              type="button"
-              onClick={() => {
-                setStep("totp");
-                clearError();
-              }}
-              className="text-indigo-300 hover:text-indigo-200"
-            >
-              Revenir au code TOTP
-            </button>
-          )}
           <button
             type="button"
             onClick={() => {
               setStep("credentials");
               setChallengeId(null);
-              setNeedsTwoFactorSetup(false);
+              setOtpauthUri(null);
+              setSecretMasked(null);
+              setSecretPlain(null);
               clearError();
             }}
             className="text-slate-400 hover:text-slate-200"
@@ -188,18 +166,6 @@ export function Login() {
         Se souvenir de moi
       </label>
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
-      {needsTwoFactorSetup ? (
-        <div className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-sm text-amber-200">
-          <p>La 2FA est obligatoire pour se connecter.</p>
-          <button
-            type="button"
-            onClick={() => navigate("/settings")}
-            className="mt-2 inline-flex items-center text-sm font-semibold text-amber-100 hover:text-amber-50"
-          >
-            Configurer 2FA
-          </button>
-        </div>
-      ) : null}
       <button
         type="submit"
         disabled={isLoading}

@@ -3,9 +3,11 @@ from __future__ import annotations
 from pathlib import Path
 
 from fastapi.testclient import TestClient
+import pyotp
+import urllib.parse
 
 from backend.app import app
-from backend.core import db, models, security, services, sites
+from backend.core import db, models, security, services, sites, two_factor_crypto
 
 
 def _create_user(username: str, role: str = "user") -> None:
@@ -31,6 +33,42 @@ def _init_test_dbs(tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setattr(services, "_INVENTORY_SNAPSHOT_DIR", snapshot_dir)
     monkeypatch.setattr(services, "_db_initialized", False)
     services.ensure_database_ready()
+
+
+def _login_token(username: str, password: str) -> str:
+    client = TestClient(app)
+    response = client.post(
+        "/auth/login",
+        json={"username": username, "password": password, "remember_me": False},
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    if payload.get("status") == "totp_enroll_required":
+        parsed = urllib.parse.urlparse(payload["otpauth_uri"])
+        secret = urllib.parse.parse_qs(parsed.query)["secret"][0]
+        code = pyotp.TOTP(secret).now()
+        confirm = client.post(
+            "/auth/totp/enroll/confirm",
+            json={"challenge_token": payload["challenge_token"], "code": code},
+        )
+        assert confirm.status_code == 200, confirm.text
+        return confirm.json()["access_token"]
+    if payload.get("status") == "totp_required":
+        with db.get_users_connection() as conn:
+            row = conn.execute(
+                "SELECT two_factor_secret_enc FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        assert row and row["two_factor_secret_enc"], "Missing 2FA secret for user"
+        secret = two_factor_crypto.decrypt_secret(str(row["two_factor_secret_enc"]))
+        code = pyotp.TOTP(secret).now()
+        verify = client.post(
+            "/auth/totp/verify",
+            json={"challenge_token": payload["challenge_token"], "code": code},
+        )
+        assert verify.status_code == 200, verify.text
+        return verify.json()["access_token"]
+    raise AssertionError(f"Unexpected login response: {payload}")
 
 
 def test_site_selection_follows_assignment_and_override(tmp_path, monkeypatch) -> None:
@@ -106,9 +144,7 @@ def test_non_admin_site_forced_ignores_header(tmp_path, monkeypatch) -> None:
         conn.commit()
 
     client = TestClient(app)
-    login = client.post("/auth/login", json={"username": "viewer", "password": "pass", "remember_me": False})
-    assert login.status_code == 200
-    token = login.json()["access_token"]
+    token = _login_token("viewer", "pass")
     response = client.get("/items/", headers={"Authorization": f"Bearer {token}", "X-Site-Key": "JLL"})
     assert response.status_code == 200
     skus = {item["sku"] for item in response.json()}
@@ -137,9 +173,7 @@ def test_admin_can_switch_site(tmp_path, monkeypatch) -> None:
         conn.commit()
 
     client = TestClient(app)
-    login = client.post("/auth/login", json={"username": "admin-switch", "password": "pass", "remember_me": False})
-    assert login.status_code == 200
-    token = login.json()["access_token"]
+    token = _login_token("admin-switch", "pass")
     headers = {"Authorization": f"Bearer {token}"}
 
     update = client.put("/sites/active", json={"site_key": "ST_ELOIS"}, headers=headers)
