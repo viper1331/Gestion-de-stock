@@ -105,6 +105,49 @@ html:not(.dark) .text-slate-500 {
   color: #64748b;
 }
 
+/* Sidebar layout hardening */
+.Sidebar {
+  height: 100dvh;
+  max-height: 100dvh;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+.SidebarHeader {
+  flex: 0 0 auto;
+}
+
+.SidebarModules {
+  flex: 1 1 auto;
+  overflow-y: auto;
+  overflow-x: hidden;
+  min-height: 0;
+  padding-top: clamp(8px, 1.2vh, 16px);
+  padding-bottom: clamp(8px, 1.2vh, 16px);
+}
+
+.SidebarPinned {
+  flex: 0 0 auto;
+  position: sticky;
+  bottom: 0;
+  padding-top: clamp(8px, 1.5vh, 24px);
+  padding-bottom: calc(clamp(8px, 1.5vh, 24px) + env(safe-area-inset-bottom));
+  background: inherit;
+  backdrop-filter: blur(8px);
+}
+
+.Sidebar .MenuIcon {
+  width: clamp(38px, 5vh, 52px);
+  height: clamp(38px, 5vh, 52px);
+  font-size: clamp(1rem, 2.2vh, 1.25rem);
+}
+
+.Sidebar .MenuItem {
+  margin-block: clamp(6px, 1.2vh, 12px);
+}
+
 /* Editable page layout hardening */
 .editable-page {
   width: 100%;
