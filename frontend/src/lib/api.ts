@@ -1,4 +1,4 @@
-import axios, { AxiosError, AxiosRequestConfig } from "axios";
+import axios, { AxiosError, AxiosHeaders, AxiosRequestConfig } from "axios";
 
 import { API_BASE_URL } from "./env";
 import { resetApiConfigCache, resolveApiBaseUrl } from "./apiConfig";
@@ -33,10 +33,9 @@ api.interceptors.request.use(async (config) => {
   const baseUrl = await ensureBaseUrl();
   config.baseURL = baseUrl;
   if (adminSiteOverride) {
-    config.headers = {
-      ...(config.headers ?? {}),
-      "X-Site-Key": adminSiteOverride
-    };
+    const headers = AxiosHeaders.from(config.headers ?? {});
+    headers.set("X-Site-Key", adminSiteOverride);
+    config.headers = headers;
   }
   apiDebug("Request", {
     url: config.url,

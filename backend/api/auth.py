@@ -7,7 +7,15 @@ import logging
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
 from fastapi.security import OAuth2PasswordBearer
 
-from backend.core import db, models, security, services, two_factor, two_factor_crypto
+from backend.core import (
+    db,
+    models,
+    security,
+    services,
+    two_factor,
+    two_factor_crypto,
+)
+from backend.core.system_config import get_config
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -50,6 +58,14 @@ def _get_two_factor_row(username: str) -> dict[str, object]:
     return dict(row)
 
 
+def _require_totp_for_login() -> bool:
+    config = get_config()
+    security_config = getattr(config, "security", None)
+    if security_config is None:
+        return False
+    return bool(getattr(security_config, "require_totp_for_login", False))
+
+
 @router.post("/login", response_model=models.Token | models.TwoFactorChallengeResponse)
 async def login(
     credentials: models.LoginRequest,
@@ -60,18 +76,59 @@ async def login(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identifiants invalides")
     two_factor_row = _get_two_factor_row(user.username)
     if not bool(two_factor_row.get("two_factor_enabled")):
+        if _require_totp_for_login():
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail="2FA_REQUIRED_SETUP",
+            )
         return _build_token_for_user(user)
-    trusted_cookie = request.cookies.get("trusted_device")
-    if trusted_cookie:
-        trusted_username = two_factor.validate_trusted_device_cookie(trusted_cookie)
-        if trusted_username == user.username:
-            return _build_token_for_user(user)
+    if credentials.totp_code and not credentials.challenge_id:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Challenge requis")
+    if credentials.totp_code and credentials.challenge_id:
+        try:
+            challenge = two_factor.load_challenge(credentials.challenge_id)
+        except two_factor.ChallengeError as exc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+        except two_factor.RateLimitError as exc:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
+        if challenge.get("username") != user.username:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Challenge invalide")
+        ip_address = request.client.host if request.client else "unknown"
+        try:
+            two_factor.check_rate_limit(user.username, ip_address)
+        except two_factor.RateLimitError as exc:
+            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
+        secret_enc = two_factor_row.get("two_factor_secret_enc")
+        if not secret_enc:
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA non configurée")
+        secret = two_factor_crypto.decrypt_secret(str(secret_enc))
+        if not two_factor.verify_totp(secret, credentials.totp_code):
+            two_factor.register_rate_limit_failure(user.username, ip_address)
+            try:
+                two_factor.register_challenge_failure(credentials.challenge_id)
+            except two_factor.RateLimitError as exc:
+                raise HTTPException(
+                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                    detail="Trop de tentatives",
+                ) from exc
+            logger.warning("2FA failed for %s", user.username)
+            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Code 2FA invalide")
+        two_factor.clear_rate_limit(user.username, ip_address)
+        two_factor.consume_challenge(credentials.challenge_id)
+        with db.get_users_connection() as conn:
+            conn.execute(
+                "UPDATE users SET two_factor_last_used_at = ? WHERE username = ?",
+                (datetime.now(timezone.utc).isoformat(), user.username),
+            )
+        logger.info("2FA success for %s", user.username)
+        return _build_token_for_user(user)
     challenge_id = two_factor.create_challenge(user.username)
     return models.TwoFactorChallengeResponse(
+        status="totp_required",
         challenge_id=challenge_id,
         available_methods=["totp"],
         username=user.username,
-        trusted_device_supported=True,
+        trusted_device_supported=False,
     )
 
 
@@ -176,6 +233,8 @@ async def two_factor_verify(
         challenge = two_factor.load_challenge(payload.challenge_id)
     except two_factor.ChallengeError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except two_factor.RateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
     username = str(challenge.get("username"))
     ip_address = request.client.host if request.client else "unknown"
     try:
@@ -191,23 +250,21 @@ async def two_factor_verify(
     secret = two_factor_crypto.decrypt_secret(str(secret_enc))
     if not two_factor.verify_totp(secret, payload.code):
         two_factor.register_rate_limit_failure(username, ip_address)
+        try:
+            two_factor.register_challenge_failure(payload.challenge_id)
+        except two_factor.RateLimitError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de tentatives",
+            ) from exc
         logger.warning("2FA failed for %s", username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Code 2FA invalide")
     two_factor.clear_rate_limit(username, ip_address)
+    two_factor.consume_challenge(payload.challenge_id)
     with db.get_users_connection() as conn:
         conn.execute(
             "UPDATE users SET two_factor_last_used_at = ? WHERE username = ?",
             (datetime.now(timezone.utc).isoformat(), username),
-        )
-    if payload.remember_device:
-        device = two_factor.create_trusted_device(username)
-        two_factor.store_trusted_device(device)
-        response.set_cookie(
-            "trusted_device",
-            two_factor.sign_trusted_device(device),
-            httponly=True,
-            max_age=int(device.expires_at.timestamp() - datetime.now(timezone.utc).timestamp()),
-            samesite="lax",
         )
     user = services.get_user(username)
     if not user:
@@ -226,6 +283,8 @@ async def two_factor_recovery(
         challenge = two_factor.load_challenge(payload.challenge_id)
     except two_factor.ChallengeError as exc:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except two_factor.RateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
     username = str(challenge.get("username"))
     ip_address = request.client.host if request.client else "unknown"
     try:
@@ -241,9 +300,17 @@ async def two_factor_recovery(
     matched, remaining = two_factor.verify_recovery_code(recovery_hashes, payload.recovery_code)
     if not matched:
         two_factor.register_rate_limit_failure(username, ip_address)
+        try:
+            two_factor.register_challenge_failure(payload.challenge_id)
+        except two_factor.RateLimitError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de tentatives",
+            ) from exc
         logger.warning("2FA failed for %s", username)
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Code de récupération invalide")
     two_factor.clear_rate_limit(username, ip_address)
+    two_factor.consume_challenge(payload.challenge_id)
     with db.get_users_connection() as conn:
         conn.execute(
             """
@@ -256,16 +323,6 @@ async def two_factor_recovery(
                 datetime.now(timezone.utc).isoformat(),
                 username,
             ),
-        )
-    if payload.remember_device:
-        device = two_factor.create_trusted_device(username)
-        two_factor.store_trusted_device(device)
-        response.set_cookie(
-            "trusted_device",
-            two_factor.sign_trusted_device(device),
-            httponly=True,
-            max_age=int(device.expires_at.timestamp() - datetime.now(timezone.utc).timestamp()),
-            samesite="lax",
         )
     user = services.get_user(username)
     if not user:
