@@ -156,6 +156,50 @@ class LoginRequest(BaseModel):
     remember_me: bool = False
 
 
+class TwoFactorChallengeResponse(BaseModel):
+    requires_2fa: bool = True
+    challenge_id: str
+    available_methods: list[str]
+    username: str
+    trusted_device_supported: bool = True
+
+
+class TwoFactorVerifyRequest(BaseModel):
+    challenge_id: str
+    code: str
+    remember_device: bool = False
+
+
+class TwoFactorRecoveryRequest(BaseModel):
+    challenge_id: str
+    recovery_code: str
+    remember_device: bool = False
+
+
+class TwoFactorSetupStartResponse(BaseModel):
+    otpauth_uri: str
+    secret_masked: str
+
+
+class TwoFactorSetupConfirmRequest(BaseModel):
+    code: str
+
+
+class TwoFactorSetupConfirmResponse(BaseModel):
+    enabled: bool
+    recovery_codes: list[str]
+
+
+class TwoFactorDisableRequest(BaseModel):
+    password: str
+    code: str
+
+
+class TwoFactorStatus(BaseModel):
+    enabled: bool
+    confirmed_at: str | None = None
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 

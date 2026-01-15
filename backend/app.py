@@ -43,6 +43,7 @@ from backend.core.logging_config import (
     purge_rotated_logs,
 )
 from backend.core.services import _ensure_vehicle_pharmacy_templates, ensure_database_ready
+from backend.core import two_factor_crypto
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
 from backend.services.pdf.vehicle_inventory.playwright_support import (
@@ -61,6 +62,7 @@ async def _lifespan(_: FastAPI):
     try:
         purge_rotated_logs(LOG_DIR, LOG_BACKUP_COUNT, logger)
         ensure_database_ready()
+        two_factor_crypto.ensure_configured()
         _ensure_vehicle_pharmacy_templates()
     except sqlite3.IntegrityError:
         if logger:

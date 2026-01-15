@@ -11,6 +11,14 @@ interface LoginPayload {
   remember: boolean;
 }
 
+interface TwoFactorChallenge {
+  requires_2fa: boolean;
+  challenge_id: string;
+  available_methods: string[];
+  username: string;
+  trusted_device_supported: boolean;
+}
+
 interface UserProfile {
   id: number;
   username: string;
@@ -96,41 +104,130 @@ export function useAuth() {
     clear
   } = useAuthState();
 
+  const completeLogin = useCallback(
+    async (
+      data: { access_token: string; refresh_token: string },
+      remember: boolean
+    ) => {
+      setAccessToken(data.access_token);
+      const profile = await fetchProfile();
+      setAuth({
+        user: profile,
+        token: data.access_token,
+        refreshToken: remember ? data.refresh_token : null
+      });
+      if (profile.role !== "admin") {
+        setAdminSiteOverride(null);
+      }
+      if (remember) {
+        localStorage.setItem("gsp/token", data.refresh_token);
+      } else {
+        localStorage.removeItem("gsp/token");
+      }
+      navigate("/");
+    },
+    [navigate, setAuth]
+  );
+
   const login = useCallback(
     async ({ username, password, remember }: LoginPayload) => {
       try {
         setLoading(true);
         setError(null);
-        const { data } = await api.post("/auth/login", {
-          username,
-          password,
-          remember_me: remember
-        });
-        setAccessToken(data.access_token);
-        const profile = await fetchProfile();
-        setAuth({
-          user: profile,
-          token: data.access_token,
-          refreshToken: remember ? data.refresh_token : null
-        });
-        if (profile.role !== "admin") {
-          setAdminSiteOverride(null);
+        const { data } = await api.post<TwoFactorChallenge | { access_token: string; refresh_token: string }>(
+          "/auth/login",
+          {
+            username,
+            password,
+            remember_me: remember
+          }
+        );
+        if ("requires_2fa" in data && data.requires_2fa) {
+          setReady(true);
+          return { status: "requires_2fa", challenge: data };
         }
-        if (remember) {
-          localStorage.setItem("gsp/token", data.refresh_token);
-        } else {
-          localStorage.removeItem("gsp/token");
-        }
-        navigate("/");
+        await completeLogin(data, remember);
+        return { status: "authenticated" };
       } catch (err) {
         setError("Identifiants invalides");
+        return { status: "error" };
       } finally {
         setLoading(false);
         setReady(true);
       }
     },
-    [navigate, setAuth, setError, setLoading, setReady]
+    [completeLogin, setError, setLoading, setReady]
   );
+
+  const verifyTwoFactor = useCallback(
+    async ({
+      challengeId,
+      code,
+      rememberDevice,
+      rememberSession
+    }: {
+      challengeId: string;
+      code: string;
+      rememberDevice: boolean;
+      rememberSession: boolean;
+    }) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const { data } = await api.post("/auth/2fa/verify", {
+          challenge_id: challengeId,
+          code,
+          remember_device: rememberDevice
+        });
+        await completeLogin(data, rememberSession);
+        return { status: "authenticated" };
+      } catch (err) {
+        setError("Code 2FA invalide");
+        return { status: "error" };
+      } finally {
+        setLoading(false);
+        setReady(true);
+      }
+    },
+    [completeLogin, setError, setLoading, setReady]
+  );
+
+  const verifyRecoveryCode = useCallback(
+    async ({
+      challengeId,
+      recoveryCode,
+      rememberDevice,
+      rememberSession
+    }: {
+      challengeId: string;
+      recoveryCode: string;
+      rememberDevice: boolean;
+      rememberSession: boolean;
+    }) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const { data } = await api.post("/auth/2fa/recovery", {
+          challenge_id: challengeId,
+          recovery_code: recoveryCode,
+          remember_device: rememberDevice
+        });
+        await completeLogin(data, rememberSession);
+        return { status: "authenticated" };
+      } catch (err) {
+        setError("Code de récupération invalide");
+        return { status: "error" };
+      } finally {
+        setLoading(false);
+        setReady(true);
+      }
+    },
+    [completeLogin, setError, setLoading, setReady]
+  );
+
+  const clearError = useCallback(() => {
+    setError(null);
+  }, [setError]);
 
   const initialize = useCallback(async () => {
     const currentState = useAuthStore.getState();
@@ -181,9 +278,25 @@ export function useAuth() {
       isReady,
       isCheckingSession,
       login,
+      verifyTwoFactor,
+      verifyRecoveryCode,
+      clearError,
       logout,
       initialize
     }),
-    [error, initialize, isCheckingSession, isLoading, isReady, login, logout, token, user]
+    [
+      error,
+      initialize,
+      isCheckingSession,
+      isLoading,
+      isReady,
+      login,
+      logout,
+      token,
+      user,
+      verifyTwoFactor,
+      verifyRecoveryCode,
+      clearError
+    ]
   );
 }

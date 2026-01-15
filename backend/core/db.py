@@ -154,6 +154,25 @@ def init_databases() -> None:
                     role TEXT NOT NULL DEFAULT 'user',
                     is_active INTEGER NOT NULL DEFAULT 1
                 );
+                CREATE TABLE IF NOT EXISTS user_trusted_devices (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    username TEXT NOT NULL,
+                    device_id TEXT NOT NULL,
+                    token_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    last_seen_at TEXT,
+                    UNIQUE(username, device_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_user_trusted_devices_lookup
+                ON user_trusted_devices(username, device_id);
+                CREATE TABLE IF NOT EXISTS two_factor_rate_limits (
+                    username TEXT NOT NULL,
+                    ip_address TEXT NOT NULL,
+                    window_start_ts INTEGER NOT NULL,
+                    count INTEGER NOT NULL,
+                    PRIMARY KEY (username, ip_address)
+                );
                 CREATE TABLE IF NOT EXISTS messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     sender_username TEXT NOT NULL,
@@ -216,6 +235,7 @@ def init_databases() -> None:
                 """
             )
             _ensure_user_site_columns(conn)
+            _ensure_two_factor_columns(conn)
         _init_core_database()
         _sync_user_site_preferences()
         for site_key in SITE_KEYS:
@@ -341,6 +361,22 @@ def _ensure_user_site_columns(conn: sqlite3.Connection) -> None:
         )
     if "admin_active_site_key" not in columns:
         conn.execute("ALTER TABLE users ADD COLUMN admin_active_site_key TEXT")
+
+
+def _ensure_two_factor_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "two_factor_enabled" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN two_factor_enabled INTEGER NOT NULL DEFAULT 0")
+    if "two_factor_secret_enc" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN two_factor_secret_enc TEXT")
+    if "two_factor_confirmed_at" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN two_factor_confirmed_at TEXT")
+    if "two_factor_recovery_hashes" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN two_factor_recovery_hashes TEXT")
+    if "two_factor_last_used_at" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN two_factor_last_used_at TEXT")
+    if "two_factor_required" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN two_factor_required INTEGER NOT NULL DEFAULT 0")
 
 
 def _sync_user_site_preferences() -> None:

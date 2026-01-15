@@ -6,7 +6,14 @@ import { MemoryRouter } from "react-router-dom";
 import { Login } from "./Login";
 
 vi.mock("./useAuth", () => ({
-  useAuth: () => ({ login: vi.fn(), isLoading: false, error: null })
+  useAuth: () => ({
+    login: vi.fn().mockResolvedValue({ status: "authenticated" }),
+    verifyTwoFactor: vi.fn(),
+    verifyRecoveryCode: vi.fn(),
+    clearError: vi.fn(),
+    isLoading: false,
+    error: null
+  })
 }));
 
 describe("Login", () => {

@@ -3,6 +3,9 @@ uvicorn[standard]
 pydantic
 bcrypt
 pyjwt
+pyotp
+cryptography
+itsdangerous
 Pillow
 httpx
 pytest
