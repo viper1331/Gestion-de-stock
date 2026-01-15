@@ -17,8 +17,10 @@ def load_backup_settings_from_db(site_key: str) -> models.BackupSettings:
             """
             SELECT enabled, interval_minutes, retention_count
             FROM backup_settings
-            WHERE id = 1
+            WHERE site_key = ?
             """
+            ,
+            (site_key.upper(),),
         ).fetchone()
     if row is None:
         return models.BackupSettings(
@@ -35,18 +37,26 @@ def load_backup_settings_from_db(site_key: str) -> models.BackupSettings:
 
 def save_backup_settings(site_key: str, settings: models.BackupSettings) -> None:
     updated_at = datetime.now(timezone.utc).isoformat()
+    normalized_key = site_key.upper()
     with db.get_stock_connection(site_key) as conn:
         conn.execute(
             """
-            INSERT INTO backup_settings (id, enabled, interval_minutes, retention_count, updated_at)
-            VALUES (1, ?, ?, ?, ?)
-            ON CONFLICT(id) DO UPDATE SET
+            INSERT INTO backup_settings (
+                site_key,
+                enabled,
+                interval_minutes,
+                retention_count,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(site_key) DO UPDATE SET
                 enabled = excluded.enabled,
                 interval_minutes = excluded.interval_minutes,
                 retention_count = excluded.retention_count,
                 updated_at = excluded.updated_at
             """,
             (
+                normalized_key,
                 1 if settings.enabled else 0,
                 settings.interval_minutes,
                 settings.retention_count,

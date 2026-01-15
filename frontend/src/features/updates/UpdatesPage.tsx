@@ -1,5 +1,5 @@
 import axios, { AxiosError } from "axios";
-import { useMemo, useState } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useAuth } from "../auth/useAuth";
@@ -144,13 +144,13 @@ export function UpdatesPage() {
     );
   }
 
-  const handleRefresh = async () => {
+  const handleRefresh = useCallback(async () => {
     setActionError(null);
     setMessage(null);
     await refetch();
-  };
+  }, [refetch]);
 
-  const handleApply = async () => {
+  const handleApply = useCallback(async () => {
     setActionError(null);
     setMessage(null);
     try {
@@ -158,9 +158,9 @@ export function UpdatesPage() {
     } catch (err) {
       // L'erreur est gérée dans onError.
     }
-  };
+  }, [applyUpdate]);
 
-  const handleRevert = async () => {
+  const handleRevert = useCallback(async () => {
     setActionError(null);
     setMessage(null);
     try {
@@ -168,9 +168,10 @@ export function UpdatesPage() {
     } catch (err) {
       // L'erreur est gérée dans onError.
     }
-  };
+  }, [revertUpdate]);
 
-  const content = (
+  const content = useMemo(
+    () => (
     <section className="space-y-6">
       <header className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">Mises à jour GitHub</h2>
@@ -335,28 +336,51 @@ export function UpdatesPage() {
         )}
       </section>
     </section>
+    ),
+    [
+      actionError,
+      applyUpdate.isPending,
+      fetchErrorMessage,
+      formattedLastDeployment,
+      formattedMergedAt,
+      formattedPreviousDeployment,
+      handleApply,
+      handleRefresh,
+      handleRevert,
+      hasPendingUpdate,
+      isFetching,
+      isLoading,
+      isRefetching,
+      latestPullRequest,
+      message,
+      status,
+      revertUpdate.isPending
+    ]
   );
 
-  const blocks: EditablePageBlock[] = [
-    {
-      id: "updates-main",
-      title: "Mises à jour",
-      required: true,
-      permissions: ["admin"],
-      defaultLayout: {
-        lg: { x: 0, y: 0, w: 12, h: 20 },
-        md: { x: 0, y: 0, w: 10, h: 20 },
-        sm: { x: 0, y: 0, w: 6, h: 20 },
-        xs: { x: 0, y: 0, w: 4, h: 20 }
-      },
-      variant: "plain",
-      render: () => (
-        <EditableBlock id="updates-main">
-          {content}
-        </EditableBlock>
-      )
-    }
-  ];
+  const blocks = useMemo<EditablePageBlock[]>(
+    () => [
+      {
+        id: "updates-main",
+        title: "Mises à jour",
+        required: true,
+        permissions: ["admin"],
+        defaultLayout: {
+          lg: { x: 0, y: 0, w: 12, h: 20 },
+          md: { x: 0, y: 0, w: 10, h: 20 },
+          sm: { x: 0, y: 0, w: 6, h: 20 },
+          xs: { x: 0, y: 0, w: 4, h: 20 }
+        },
+        variant: "plain",
+        render: () => (
+          <EditableBlock id="updates-main">
+            {content}
+          </EditableBlock>
+        )
+      }
+    ],
+    [content]
+  );
 
   return (
     <EditablePageLayout pageKey="system:updates" blocks={blocks} className="space-y-6" />

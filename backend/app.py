@@ -76,6 +76,7 @@ async def _lifespan(_: FastAPI):
         logger.warning(
             "Playwright diagnostics at startup: status=%s", diagnostics.status
         )
+    await backup_scheduler.reload_from_db()
     await backup_scheduler.start()
     try:
         yield

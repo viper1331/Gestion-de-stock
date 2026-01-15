@@ -11,5 +11,6 @@ frontend/dist/
 desktop/tauri/node_modules/
 *.zip
 backend/config.ini
+backend/system_config.json
 logs/*.log
 logs/*.log.*

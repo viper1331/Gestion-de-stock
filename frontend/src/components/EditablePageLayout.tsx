@@ -257,6 +257,18 @@ function areLayoutsEqual(a: EditableLayoutSet, b: EditableLayoutSet): boolean {
   return true;
 }
 
+function areSetsEqual(a: Set<string>, b: Set<string>) {
+  if (a.size !== b.size) {
+    return false;
+  }
+  for (const entry of a) {
+    if (!b.has(entry)) {
+      return false;
+    }
+  }
+  return true;
+}
+
 function EyeIcon({ hidden }: { hidden: boolean }) {
   return (
     <svg
@@ -359,10 +371,18 @@ export function EditablePageLayout({
 
   useEffect(() => {
     if (!isEditing) {
-      setActiveLayouts(mergedLayouts);
-      setSavedLayouts(mergedLayouts);
-      setHiddenBlocks(new Set(mergedHiddenBlocks));
-      setSavedHiddenBlocks(new Set(mergedHiddenBlocks));
+      setActiveLayouts((prev) =>
+        areLayoutsEqual(prev, mergedLayouts) ? prev : mergedLayouts
+      );
+      setSavedLayouts((prev) =>
+        areLayoutsEqual(prev, mergedLayouts) ? prev : mergedLayouts
+      );
+      setHiddenBlocks((prev) =>
+        areSetsEqual(prev, mergedHiddenBlocks) ? prev : new Set(mergedHiddenBlocks)
+      );
+      setSavedHiddenBlocks((prev) =>
+        areSetsEqual(prev, mergedHiddenBlocks) ? prev : new Set(mergedHiddenBlocks)
+      );
     }
   }, [isEditing, mergedLayouts, mergedHiddenBlocks]);
 
