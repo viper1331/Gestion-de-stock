@@ -4,7 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.api.auth import get_current_user
-from backend.core import models, services
+from backend.core import db, models, services
 from backend.core.logging_config import (
     LOG_BACKUP_COUNT,
     LOG_DIR,
@@ -13,6 +13,8 @@ from backend.core.logging_config import (
     purge_rotated_logs,
 )
 from backend.services.debug_service import load_debug_config, save_debug_config
+from backend.services.backup_scheduler import backup_scheduler
+from backend.services.backup_settings import MAX_BACKUP_INTERVAL_MINUTES
 
 router = APIRouter()
 
@@ -151,3 +153,23 @@ def get_logs_status(user: models.User = Depends(require_admin)):
 def purge_logs(user: models.User = Depends(require_admin)):
     purge_rotated_logs(LOG_DIR, LOG_BACKUP_COUNT)
     return get_logs_status(user)
+
+
+@router.get("/backup/settings", response_model=models.BackupSettingsStatus)
+async def get_backup_settings(user: models.User = Depends(require_admin)):
+    site_key = db.get_current_site_key()
+    return await backup_scheduler.get_status(site_key)
+
+
+@router.put("/backup/settings", response_model=models.BackupSettingsStatus)
+async def update_backup_settings(
+    settings: models.BackupSettings, user: models.User = Depends(require_admin)
+):
+    if settings.interval_minutes > MAX_BACKUP_INTERVAL_MINUTES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Intervalle maximum autorisé: {MAX_BACKUP_INTERVAL_MINUTES} minutes",
+        )
+    site_key = db.get_current_site_key()
+    await backup_scheduler.update_settings(site_key, settings)
+    return await backup_scheduler.get_status(site_key)
