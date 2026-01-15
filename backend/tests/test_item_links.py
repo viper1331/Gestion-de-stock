@@ -3,9 +3,11 @@ from __future__ import annotations
 from uuid import uuid4
 
 from fastapi.testclient import TestClient
+import pyotp
+import urllib.parse
 
 from backend.app import app
-from backend.core import db, security, services
+from backend.core import db, security, services, two_factor_crypto
 
 client = TestClient(app)
 
@@ -16,8 +18,35 @@ def _login_headers(username: str, password: str) -> dict[str, str]:
         json={"username": username, "password": password, "remember_me": False},
     )
     assert response.status_code == 200, response.text
-    token = response.json()["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    payload = response.json()
+    if payload.get("status") == "totp_enroll_required":
+        parsed = urllib.parse.urlparse(payload["otpauth_uri"])
+        secret = urllib.parse.parse_qs(parsed.query)["secret"][0]
+        code = pyotp.TOTP(secret).now()
+        confirm = client.post(
+            "/auth/totp/enroll/confirm",
+            json={"challenge_token": payload["challenge_token"], "code": code},
+        )
+        assert confirm.status_code == 200, confirm.text
+        token = confirm.json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+    if payload.get("status") == "totp_required":
+        with db.get_users_connection() as conn:
+            row = conn.execute(
+                "SELECT two_factor_secret_enc FROM users WHERE username = ?",
+                (username,),
+            ).fetchone()
+        assert row and row["two_factor_secret_enc"], "Missing 2FA secret for user"
+        secret = two_factor_crypto.decrypt_secret(str(row["two_factor_secret_enc"]))
+        code = pyotp.TOTP(secret).now()
+        verify = client.post(
+            "/auth/totp/verify",
+            json={"challenge_token": payload["challenge_token"], "code": code},
+        )
+        assert verify.status_code == 200, verify.text
+        token = verify.json()["access_token"]
+        return {"Authorization": f"Bearer {token}"}
+    raise AssertionError(f"Unexpected login response: {payload}")
 
 
 def _create_user(username: str, password: str, role: str = "user") -> int:

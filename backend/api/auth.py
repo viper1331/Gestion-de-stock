@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import os
 import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
@@ -15,7 +16,6 @@ from backend.core import (
     two_factor,
     two_factor_crypto,
 )
-from backend.core.system_config import get_config
 
 router = APIRouter()
 oauth2_scheme = OAuth2PasswordBearer(tokenUrl="/auth/login")
@@ -43,6 +43,23 @@ def _build_token_for_user(user: models.User) -> models.Token:
     return models.Token(access_token=access_token, refresh_token=refresh_token)
 
 
+def _build_token_with_user(user: models.User) -> models.TokenWithUser:
+    token = _build_token_for_user(user)
+    return models.TokenWithUser(
+        access_token=token.access_token,
+        refresh_token=token.refresh_token,
+        user=_build_login_user_summary(user),
+    )
+
+
+def _build_login_user_summary(user: models.User) -> models.LoginUserSummary:
+    return models.LoginUserSummary(
+        username=user.username,
+        role=user.role,
+        site_key=user.site_key,
+    )
+
+
 def _get_two_factor_row(username: str) -> dict[str, object]:
     with db.get_users_connection() as conn:
         row = conn.execute(
@@ -58,77 +75,41 @@ def _get_two_factor_row(username: str) -> dict[str, object]:
     return dict(row)
 
 
-def _require_totp_for_login() -> bool:
-    config = get_config()
-    security_config = getattr(config, "security", None)
-    if security_config is None:
-        return False
-    return bool(getattr(security_config, "require_totp_for_login", False))
+def _allow_secret_plaintext() -> bool:
+    env_value = (os.getenv("APP_ENV") or os.getenv("ENV") or "").strip().lower()
+    return env_value == "dev"
 
 
-@router.post("/login", response_model=models.Token | models.TwoFactorChallengeResponse)
+@router.post(
+    "/login",
+    response_model=models.TotpRequiredResponse | models.TotpEnrollRequiredResponse,
+)
 async def login(
     credentials: models.LoginRequest,
-    request: Request,
-) -> models.Token | models.TwoFactorChallengeResponse:
+) -> models.TotpRequiredResponse | models.TotpEnrollRequiredResponse:
     user = services.authenticate(credentials.username, credentials.password)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identifiants invalides")
     two_factor_row = _get_two_factor_row(user.username)
-    if not bool(two_factor_row.get("two_factor_enabled")):
-        if _require_totp_for_login():
-            raise HTTPException(
-                status_code=status.HTTP_403_FORBIDDEN,
-                detail="2FA_REQUIRED_SETUP",
-            )
-        return _build_token_for_user(user)
-    if credentials.totp_code and not credentials.challenge_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Challenge requis")
-    if credentials.totp_code and credentials.challenge_id:
-        try:
-            challenge = two_factor.load_challenge(credentials.challenge_id)
-        except two_factor.ChallengeError as exc:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
-        except two_factor.RateLimitError as exc:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
-        if challenge.get("username") != user.username:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Challenge invalide")
-        ip_address = request.client.host if request.client else "unknown"
-        try:
-            two_factor.check_rate_limit(user.username, ip_address)
-        except two_factor.RateLimitError as exc:
-            raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
-        secret_enc = two_factor_row.get("two_factor_secret_enc")
-        if not secret_enc:
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA non configurée")
-        secret = two_factor_crypto.decrypt_secret(str(secret_enc))
-        if not two_factor.verify_totp(secret, credentials.totp_code):
-            two_factor.register_rate_limit_failure(user.username, ip_address)
-            try:
-                two_factor.register_challenge_failure(credentials.challenge_id)
-            except two_factor.RateLimitError as exc:
-                raise HTTPException(
-                    status_code=status.HTTP_429_TOO_MANY_REQUESTS,
-                    detail="Trop de tentatives",
-                ) from exc
-            logger.warning("2FA failed for %s", user.username)
-            raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Code 2FA invalide")
-        two_factor.clear_rate_limit(user.username, ip_address)
-        two_factor.consume_challenge(credentials.challenge_id)
-        with db.get_users_connection() as conn:
-            conn.execute(
-                "UPDATE users SET two_factor_last_used_at = ? WHERE username = ?",
-                (datetime.now(timezone.utc).isoformat(), user.username),
-            )
-        logger.info("2FA success for %s", user.username)
-        return _build_token_for_user(user)
-    challenge_id = two_factor.create_challenge(user.username)
-    return models.TwoFactorChallengeResponse(
-        status="totp_required",
-        challenge_id=challenge_id,
-        available_methods=["totp"],
-        username=user.username,
-        trusted_device_supported=False,
+    if bool(two_factor_row.get("two_factor_enabled")):
+        challenge_token = two_factor.create_challenge(user.username, purpose="verify")
+        return models.TotpRequiredResponse(
+            challenge_token=challenge_token,
+            user=_build_login_user_summary(user),
+        )
+    secret = two_factor.generate_totp_secret()
+    secret_enc = two_factor_crypto.encrypt_secret(secret)
+    challenge_token = two_factor.create_challenge(
+        user.username,
+        purpose="enroll",
+        secret_enc=secret_enc,
+    )
+    return models.TotpEnrollRequiredResponse(
+        challenge_token=challenge_token,
+        otpauth_uri=two_factor.build_otpauth_uri(user.username, secret),
+        secret_masked=two_factor.mask_secret(secret),
+        secret_plain_if_allowed=secret if _allow_secret_plaintext() else None,
+        user=_build_login_user_summary(user),
     )
 
 
@@ -235,6 +216,8 @@ async def two_factor_verify(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
     except two_factor.RateLimitError as exc:
         raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
+    if challenge.get("purpose") not in {"verify", None}:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Challenge invalide")
     username = str(challenge.get("username"))
     ip_address = request.client.host if request.client else "unknown"
     try:
@@ -271,6 +254,119 @@ async def two_factor_verify(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Utilisateur introuvable")
     logger.info("2FA success for %s", username)
     return _build_token_for_user(user)
+
+
+@router.post("/totp/verify", response_model=models.TokenWithUser)
+async def totp_verify(
+    payload: models.TotpVerifyRequest,
+    request: Request,
+) -> models.TokenWithUser:
+    try:
+        challenge = two_factor.load_challenge(payload.challenge_token)
+    except two_factor.ChallengeError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except two_factor.RateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
+    if challenge.get("purpose") != "verify":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Challenge invalide")
+    username = str(challenge.get("username"))
+    ip_address = request.client.host if request.client else "unknown"
+    try:
+        two_factor.check_rate_limit(username, ip_address)
+    except two_factor.RateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
+    row = _get_two_factor_row(username)
+    if not bool(row.get("two_factor_enabled")):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA non active")
+    secret_enc = row.get("two_factor_secret_enc")
+    if not secret_enc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="2FA non configurée")
+    secret = two_factor_crypto.decrypt_secret(str(secret_enc))
+    if not two_factor.verify_totp(secret, payload.code):
+        two_factor.register_rate_limit_failure(username, ip_address)
+        try:
+            two_factor.register_challenge_failure(payload.challenge_token)
+        except two_factor.RateLimitError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de tentatives",
+            ) from exc
+        logger.warning("2FA failed for %s", username)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Code 2FA invalide")
+    two_factor.clear_rate_limit(username, ip_address)
+    two_factor.consume_challenge(payload.challenge_token)
+    with db.get_users_connection() as conn:
+        conn.execute(
+            "UPDATE users SET two_factor_last_used_at = ? WHERE username = ?",
+            (datetime.now(timezone.utc).isoformat(), username),
+        )
+    user = services.get_user(username)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Utilisateur introuvable")
+    logger.info("2FA success for %s", username)
+    return _build_token_with_user(user)
+
+
+@router.post("/totp/enroll/confirm", response_model=models.TokenWithUser)
+async def totp_enroll_confirm(
+    payload: models.TotpEnrollConfirmRequest,
+    request: Request,
+) -> models.TokenWithUser:
+    try:
+        challenge = two_factor.load_challenge(payload.challenge_token)
+    except two_factor.ChallengeError as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(exc)) from exc
+    except two_factor.RateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
+    if challenge.get("purpose") != "enroll":
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Challenge invalide")
+    username = str(challenge.get("username"))
+    row = _get_two_factor_row(username)
+    if bool(row.get("two_factor_enabled")):
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="2FA déjà activée")
+    ip_address = request.client.host if request.client else "unknown"
+    try:
+        two_factor.check_rate_limit(username, ip_address)
+    except two_factor.RateLimitError as exc:
+        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="Trop de tentatives") from exc
+    secret_enc = challenge.get("secret_enc")
+    if not secret_enc:
+        secret = two_factor.generate_totp_secret()
+        secret_enc = two_factor_crypto.encrypt_secret(secret)
+        two_factor.set_challenge_secret(payload.challenge_token, secret_enc)
+    else:
+        secret = two_factor_crypto.decrypt_secret(str(secret_enc))
+    if not two_factor.verify_totp(secret, payload.code):
+        two_factor.register_rate_limit_failure(username, ip_address)
+        try:
+            two_factor.register_challenge_failure(payload.challenge_token)
+        except two_factor.RateLimitError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de tentatives",
+            ) from exc
+        logger.warning("2FA enroll failed for %s", username)
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Code 2FA invalide")
+    now = datetime.now(timezone.utc).isoformat()
+    with db.get_users_connection() as conn:
+        conn.execute(
+            """
+            UPDATE users
+            SET two_factor_enabled = 1,
+                two_factor_secret_enc = ?,
+                two_factor_confirmed_at = ?,
+                two_factor_last_used_at = NULL
+            WHERE username = ?
+            """,
+            (secret_enc, now, username),
+        )
+    two_factor.clear_rate_limit(username, ip_address)
+    two_factor.consume_challenge(payload.challenge_token)
+    user = services.get_user(username)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Utilisateur introuvable")
+    logger.info("2FA enabled for %s", username)
+    return _build_token_with_user(user)
 
 
 @router.post("/2fa/recovery", response_model=models.Token)

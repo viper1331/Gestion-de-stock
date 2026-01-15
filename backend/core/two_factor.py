@@ -55,7 +55,7 @@ def _now_ts() -> int:
     return int(time.time())
 
 
-def create_challenge(username: str) -> str:
+def create_challenge(username: str, purpose: str = "verify", secret_enc: str | None = None) -> str:
     challenge_id = secrets.token_urlsafe(32)
     now = _now_ts()
     ttl = _get_int_env("TWO_FACTOR_CHALLENGE_TTL_SECONDS", 120)
@@ -63,11 +63,19 @@ def create_challenge(username: str) -> str:
         conn.execute(
             """
             INSERT INTO two_factor_challenges (
-                challenge_id, username, created_at_ts, expires_at_ts, used_at_ts, attempts, locked_until_ts
+                challenge_id,
+                username,
+                purpose,
+                secret_enc,
+                created_at_ts,
+                expires_at_ts,
+                used_at_ts,
+                attempts,
+                locked_until_ts
             )
-            VALUES (?, ?, ?, ?, NULL, 0, NULL)
+            VALUES (?, ?, ?, ?, ?, ?, NULL, 0, NULL)
             """,
-            (challenge_id, username, now, now + ttl),
+            (challenge_id, username, purpose, secret_enc, now, now + ttl),
         )
     return challenge_id
 
@@ -77,7 +85,7 @@ def load_challenge(token: str) -> dict[str, Any]:
     with db.get_users_connection() as conn:
         row = conn.execute(
             """
-            SELECT username, expires_at_ts, used_at_ts, attempts, locked_until_ts
+            SELECT username, purpose, secret_enc, expires_at_ts, used_at_ts, attempts, locked_until_ts
             FROM two_factor_challenges
             WHERE challenge_id = ?
             """,
@@ -101,7 +109,23 @@ def load_challenge(token: str) -> dict[str, Any]:
                 """,
                 (token,),
             )
-    return {"username": row["username"]}
+    return {
+        "username": row["username"],
+        "purpose": row["purpose"],
+        "secret_enc": row["secret_enc"],
+    }
+
+
+def set_challenge_secret(token: str, secret_enc: str) -> None:
+    with db.get_users_connection() as conn:
+        conn.execute(
+            """
+            UPDATE two_factor_challenges
+            SET secret_enc = ?
+            WHERE challenge_id = ?
+            """,
+            (secret_enc, token),
+        )
 
 
 def consume_challenge(token: str) -> None:
