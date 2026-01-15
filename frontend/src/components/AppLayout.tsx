@@ -20,11 +20,12 @@ import { ThemeToggle } from "./ThemeToggle";
 import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
+import { getMenuOrder, setMenuOrder } from "../api/uiMenu";
 import { fetchConfigEntries } from "../lib/config";
 import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
-import { applyOrder, loadMenuOrder, saveMenuOrder } from "../lib/menuOrder";
+import { applyOrder } from "../lib/menuOrder";
 
 type MenuItem =
   | {
@@ -614,14 +615,7 @@ export function AppLayout() {
     return user.site_key ?? "JLL";
   }, [siteContext?.override_site_key, user]);
 
-  const menuStorageKey = useMemo(() => {
-    if (!user) {
-      return null;
-    }
-    return `menu:order:${siteKey}:${user.username}`;
-  }, [siteKey, user]);
-
-  const defaultMenuItems = useMemo<MenuItem[]>(
+  const moduleItems = useMemo<MenuItem[]>(
     () => [
       {
         id: "home",
@@ -643,35 +637,75 @@ export function AppLayout() {
     [navigationGroups]
   );
 
-  const defaultMenuIds = useMemo(
-    () => defaultMenuItems.map((item) => item.id),
-    [defaultMenuItems]
+  const defaultModuleIds = useMemo(
+    () => moduleItems.map((item) => item.id),
+    [moduleItems]
   );
 
   const [isReorderMode, setIsReorderMode] = useState(false);
   const [orderedIds, setOrderedIds] = useState<string[]>([]);
+  const [menuOrderError, setMenuOrderError] = useState<string | null>(null);
+  const [isMenuOrderLoading, setIsMenuOrderLoading] = useState(false);
 
   useEffect(() => {
-    if (!menuStorageKey) {
+    if (!user) {
+      setOrderedIds([]);
       return;
     }
-    setOrderedIds(loadMenuOrder(menuStorageKey, defaultMenuIds));
-  }, [defaultMenuIds, menuStorageKey]);
+    let isActive = true;
+    setIsMenuOrderLoading(true);
+    setMenuOrderError(null);
+    getMenuOrder()
+      .then((savedIds) => {
+        if (!isActive) {
+          return;
+        }
+        setOrderedIds(savedIds);
+      })
+      .catch(() => {
+        if (!isActive) {
+          return;
+        }
+        setMenuOrderError("Impossible de charger l'ordre du menu.");
+        setOrderedIds([]);
+      })
+      .finally(() => {
+        if (!isActive) {
+          return;
+        }
+        setIsMenuOrderLoading(false);
+      });
+    return () => {
+      isActive = false;
+    };
+  }, [siteKey, user]);
 
-  const orderedMenuItems = useMemo(
-    () => applyOrder(defaultMenuItems, orderedIds.length > 0 ? orderedIds : defaultMenuIds),
-    [defaultMenuItems, defaultMenuIds, orderedIds]
+  const orderedModuleItems = useMemo(
+    () => applyOrder(moduleItems, orderedIds.length > 0 ? orderedIds : defaultModuleIds),
+    [defaultModuleIds, moduleItems, orderedIds]
   );
 
-  const orderedMenuIds = useMemo(
-    () => orderedMenuItems.map((item) => item.id),
-    [orderedMenuItems]
+  const orderedModuleIds = useMemo(
+    () => orderedModuleItems.map((item) => item.id),
+    [orderedModuleItems]
   );
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { distance: 6 } })
   );
+
+  const persistMenuOrder = async (nextOrder: string[], previousOrder: string[]) => {
+    try {
+      const savedOrder = await setMenuOrder(nextOrder);
+      setMenuOrderError(null);
+      setOrderedIds(savedOrder);
+    } catch (error) {
+      console.error("Menu order update failed", error);
+      setMenuOrderError("Impossible d'enregistrer l'ordre du menu.");
+      setOrderedIds(previousOrder);
+    }
+  };
 
   const handleDragEnd = (event: DragEndEvent) => {
     const { active, over } = event;
@@ -680,26 +714,21 @@ export function AppLayout() {
     }
     const activeId = String(active.id);
     const overId = String(over.id);
-    setOrderedIds((prev) => {
-      const current = prev.length > 0 ? prev : defaultMenuIds;
-      const oldIndex = current.indexOf(activeId);
-      const newIndex = current.indexOf(overId);
-      if (oldIndex === -1 || newIndex === -1) {
-        return current;
-      }
-      const next = arrayMove(current, oldIndex, newIndex);
-      if (menuStorageKey) {
-        saveMenuOrder(menuStorageKey, next);
-      }
-      return next;
-    });
+    const current = orderedModuleIds;
+    const oldIndex = current.indexOf(activeId);
+    const newIndex = current.indexOf(overId);
+    if (oldIndex === -1 || newIndex === -1) {
+      return;
+    }
+    const next = arrayMove(current, oldIndex, newIndex);
+    setOrderedIds(next);
+    void persistMenuOrder(next, current);
   };
 
   const resetMenuOrder = () => {
-    if (typeof window !== "undefined" && menuStorageKey) {
-      window.localStorage.removeItem(menuStorageKey);
-    }
-    setOrderedIds(defaultMenuIds);
+    const previousOrder = orderedModuleIds;
+    setOrderedIds(defaultModuleIds);
+    void persistMenuOrder(defaultModuleIds, previousOrder);
   };
 
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
@@ -791,7 +820,7 @@ export function AppLayout() {
     showPopover: boolean;
     onNavigate?: () => void;
   }) =>
-    orderedMenuItems.map((item) => {
+    orderedModuleItems.map((item) => {
       if (item.type === "link") {
         return (
           <SortableMenuItem key={item.id} id={item.id} isEditMode={isReorderMode} isPinned={item.isPinned}>
@@ -976,13 +1005,19 @@ export function AppLayout() {
                   <span className={isSidebarExpanded ? "ml-2" : "sr-only"}>Réinitialiser</span>
                 </button>
               </div>
+              {isMenuOrderLoading ? (
+                <p className="mb-2 text-xs text-slate-500">Chargement de l'ordre du menu...</p>
+              ) : null}
+              {menuOrderError ? (
+                <p className="mb-2 text-xs text-red-300">{menuOrderError}</p>
+              ) : null}
               <nav
                 className={`flex min-h-0 flex-1 flex-col gap-3 text-sm ${
                   isSidebarExpanded ? "overflow-y-auto pr-2" : "overflow-visible items-center"
                 }`}
               >
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                  <SortableContext items={orderedMenuIds} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={orderedModuleIds} strategy={verticalListSortingStrategy}>
                     {renderMenuItems({
                       expanded: isSidebarExpanded,
                       showPopover: showPopoverMenu,
@@ -1081,9 +1116,15 @@ export function AppLayout() {
                   <span className="ml-2">Réinitialiser</span>
                 </button>
               </div>
+              {isMenuOrderLoading ? (
+                <p className="mb-2 text-xs text-slate-500">Chargement de l'ordre du menu...</p>
+              ) : null}
+              {menuOrderError ? (
+                <p className="mb-2 text-xs text-red-300">{menuOrderError}</p>
+              ) : null}
               <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1 text-sm">
                 <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                  <SortableContext items={orderedMenuIds} strategy={verticalListSortingStrategy}>
+                  <SortableContext items={orderedModuleIds} strategy={verticalListSortingStrategy}>
                     {renderMenuItems({
                       expanded: true,
                       showPopover: false,

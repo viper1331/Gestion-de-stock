@@ -124,6 +124,37 @@ class MessageSendResponse(BaseModel):
     recipients_count: int
 
 
+class MenuOrderPayload(BaseModel):
+    menu_key: str = Field(default="main_modules", min_length=1, max_length=64)
+    order: list[str] = Field(default_factory=list, max_length=100)
+
+    @field_validator("menu_key")
+    @classmethod
+    def _normalize_menu_key(cls, value: str) -> str:
+        trimmed = value.strip()
+        if not trimmed:
+            raise ValueError("menu_key vide")
+        return trimmed
+
+    @field_validator("order")
+    @classmethod
+    def _validate_order(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        for item in value:
+            trimmed = item.strip()
+            if not trimmed:
+                raise ValueError("Identifiant de menu vide")
+            if len(trimmed) > 100:
+                raise ValueError("Identifiant de menu trop long")
+            normalized.append(trimmed)
+        return normalized
+
+
+class MenuOrderResponse(BaseModel):
+    menu_key: str
+    order: list[str]
+
+
 class InboxMessage(BaseModel):
     id: int
     category: str
