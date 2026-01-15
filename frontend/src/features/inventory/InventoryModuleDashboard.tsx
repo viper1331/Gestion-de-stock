@@ -9,7 +9,7 @@ import {
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
-import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
+import { buildCustomFieldDefaults, CustomFieldDefinition, sortCustomFields } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
 import { persistValue, readPersistedValue } from "../../lib/persist";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
@@ -397,24 +397,26 @@ export function InventoryModuleDashboard({
     expiration: supportsExpirationDate
   };
 
-  const [columnVisibility, setColumnVisibility] = useState<Record<InventoryColumnKey, boolean>>(() => ({
+  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => ({
     ...defaultColumnVisibility,
-    ...readPersistedValue<Record<InventoryColumnKey, boolean>>(
+    ...readPersistedValue<Record<string, boolean>>(
       columnVisibilityStorageKey,
       defaultColumnVisibility
     )
   }));
 
-  const toggleColumnVisibility = (key: InventoryColumnKey) => {
+  const toggleColumnVisibility = (key: string, optionKeys: Set<string>) => {
     setColumnVisibility((previous) => {
       const isCurrentlyVisible = previous[key] !== false;
       if (isCurrentlyVisible) {
-        const visibleCount = Object.values(previous).filter(Boolean).length;
+        const visibleCount = Array.from(optionKeys).filter(
+          (optionKey) => previous[optionKey] !== false
+        ).length;
         if (visibleCount <= 1) {
           return previous;
         }
       }
-      const next = { ...previous, [key]: !isCurrentlyVisible } as Record<InventoryColumnKey, boolean>;
+      const next = { ...previous, [key]: !isCurrentlyVisible };
       persistValue(columnVisibilityStorageKey, next);
       return next;
     });
@@ -426,27 +428,78 @@ export function InventoryModuleDashboard({
     persistValue(columnVisibilityStorageKey, next);
   };
 
-  const columnOptions: { key: InventoryColumnKey; label: string }[] = useMemo(() => {
-    const options: { key: InventoryColumnKey; label: string }[] = [
-      { key: "name", label: itemNoun.singularCapitalized },
-      { key: "sku", label: "SKU" },
-      { key: "quantity", label: "Quantité" },
-      { key: "size", label: "Taille / Variante" },
-      { key: "category", label: "Catégorie" },
+  const customColumns = useMemo(
+    () =>
+      sortCustomFields(activeCustomFields).map((definition) => ({
+        key: `custom:${definition.id}`,
+        label: definition.label,
+        fieldKey: definition.key
+      })),
+    [activeCustomFields]
+  );
+
+  const columnOptions = useMemo(() => {
+    const options: { key: string; label: string; kind: "native" | "custom" }[] = [
+      { key: "name", label: itemNoun.singularCapitalized, kind: "native" },
+      { key: "sku", label: "SKU", kind: "native" },
+      { key: "quantity", label: "Quantité", kind: "native" },
+      { key: "size", label: "Taille / Variante", kind: "native" },
+      { key: "category", label: "Catégorie", kind: "native" },
       ...(config.showLotMembershipColumn
-        ? ([{ key: "lotMembership", label: "Lot" }] as const)
+        ? ([{ key: "lotMembership", label: "Lot", kind: "native" }] as const)
         : []),
-      { key: "supplier", label: "Fournisseur" },
-      { key: "threshold", label: "Seuil" }
+      { key: "supplier", label: "Fournisseur", kind: "native" },
+      { key: "threshold", label: "Seuil", kind: "native" }
     ];
     if (supportsExpirationDate) {
-      options.push({ key: "expiration", label: "Péremption" });
+      options.push({ key: "expiration", label: "Péremption", kind: "native" });
     }
     if (supportsItemImages) {
-      return [{ key: "image", label: "Image" }, ...options];
+      return [{ key: "image", label: "Image", kind: "native" }, ...options].concat(
+        customColumns.map((column) => ({
+          key: column.key,
+          label: column.label,
+          kind: "custom" as const
+        }))
+      );
     }
-    return options;
-  }, [itemNoun.singularCapitalized, supportsExpirationDate, supportsItemImages]);
+    return options.concat(
+      customColumns.map((column) => ({
+        key: column.key,
+        label: column.label,
+        kind: "custom" as const
+      }))
+    );
+  }, [
+    config.showLotMembershipColumn,
+    customColumns,
+    itemNoun.singularCapitalized,
+    supportsExpirationDate,
+    supportsItemImages
+  ]);
+
+  const columnOptionKeys = useMemo(() => new Set(columnOptions.map((option) => option.key)), [columnOptions]);
+
+  useEffect(() => {
+    setColumnVisibility((previous) => {
+      const next: Record<string, boolean> = {};
+      for (const option of columnOptions) {
+        if (previous[option.key] !== undefined) {
+          next[option.key] = previous[option.key];
+        } else if (option.key in defaultColumnVisibility) {
+          next[option.key] = defaultColumnVisibility[option.key as InventoryColumnKey];
+        } else {
+          next[option.key] = false;
+        }
+      }
+      const hasChanges = Object.keys(previous).some((key) => !columnOptionKeys.has(key))
+        || Object.keys(next).some((key) => previous[key] !== next[key]);
+      if (hasChanges) {
+        persistValue(columnVisibilityStorageKey, next);
+      }
+      return hasChanges ? next : previous;
+    });
+  }, [columnOptions, columnOptionKeys, columnVisibilityStorageKey, defaultColumnVisibility]);
 
   const columnWidths = {
     ...baseColumnWidths,
@@ -474,6 +527,24 @@ export function InventoryModuleDashboard({
 
   const saveWidth = (key: string, width: number) => {
     persistValue(columnStorageKey, { ...columnWidths, [key]: width });
+  };
+
+  const customColumnStyle = useMemo(
+    () => ({ width: toRem(180), minWidth: 0, maxWidth: toRem(180) }),
+    []
+  );
+
+  const renderCustomValue = (value: unknown) => {
+    if (value === null || value === undefined || value === "") {
+      return <span className="text-slate-500">—</span>;
+    }
+    if (typeof value === "boolean") {
+      return value ? "Oui" : "Non";
+    }
+    if (Array.isArray(value)) {
+      return value.length ? value.join(", ") : "—";
+    }
+    return String(value);
   };
 
   const categoryNames = useMemo(() => {
@@ -642,7 +713,7 @@ export function InventoryModuleDashboard({
         <ColumnManager
           options={columnOptions}
           visibility={columnVisibility}
-          onToggle={(key) => toggleColumnVisibility(key as InventoryColumnKey)}
+          onToggle={(key) => toggleColumnVisibility(key, columnOptionKeys)}
           onReset={resetColumnVisibility}
           description="Choisissez les colonnes à afficher dans la liste."
         />
@@ -786,6 +857,17 @@ export function InventoryModuleDashboard({
                       className="hidden lg:table-cell text-center"
                     />
                   ) : null}
+                  {customColumns.map((column) =>
+                    columnVisibility[column.key] === true ? (
+                      <th
+                        key={column.key}
+                        style={customColumnStyle}
+                        className="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 lg:table-cell"
+                      >
+                        {column.label}
+                      </th>
+                    ) : null
+                  )}
                   <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400">
                     Actions
                   </th>
@@ -969,6 +1051,19 @@ export function InventoryModuleDashboard({
                           {item.low_stock_threshold}
                         </td>
                       ) : null}
+                      {customColumns.map((column) =>
+                        columnVisibility[column.key] === true ? (
+                          <td
+                            key={column.key}
+                            style={customColumnStyle}
+                            className="hidden px-4 py-3 text-sm text-slate-300 lg:table-cell"
+                          >
+                            <span className="block truncate" title={String(item.extra?.[column.fieldKey] ?? "")}>
+                              {renderCustomValue(item.extra?.[column.fieldKey])}
+                            </span>
+                          </td>
+                        ) : null
+                      )}
                       <td className="px-4 py-3 text-xs text-slate-200">
                         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                           <button
