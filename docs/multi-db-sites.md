@@ -52,6 +52,12 @@ Ce script :
 - crée les bases par site si manquantes
 - applique les migrations additivement sur chaque DB
 
+## Migrations au démarrage
+Au démarrage du backend, les migrations sont appliquées automatiquement sur
+toutes les bases de site actives (JLL, GSM, ST_ELOIS, CENTRAL_ENTITY). En cas
+d'erreur « no such table » détectée en runtime, le middleware déclenche une
+réapplication des migrations pour le site concerné, puis retente la requête une fois.
+
 ## Notes
 - Les migrations sont **additives uniquement** (pas de `DROP` / `RENAME`).
 - Les données JLL existantes sont conservées.

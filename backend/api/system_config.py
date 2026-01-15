@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Request
+from pydantic import BaseModel, Field
 
 from backend.api.auth import get_current_user
 from backend.core import models
@@ -13,6 +14,26 @@ from backend.core.system_config import (
 )
 
 router = APIRouter()
+
+
+class PublicSystemConfig(BaseModel):
+    backend_url: str | None = Field(default=None)
+    backend_url_lan: str | None = Field(default=None)
+    backend_url_public: str | None = Field(default=None)
+    frontend_url: str
+    network_mode: str
+
+
+@router.get("/public-config", response_model=PublicSystemConfig)
+async def read_public_config() -> PublicSystemConfig:
+    config = get_config()
+    return PublicSystemConfig(
+        backend_url=str(config.backend_url) if config.backend_url else None,
+        backend_url_lan=str(config.backend_url_lan) if config.backend_url_lan else None,
+        backend_url_public=str(config.backend_url_public) if config.backend_url_public else None,
+        frontend_url=str(config.frontend_url),
+        network_mode=config.network_mode,
+    )
 
 
 @router.get("/config", response_model=SystemConfig)
