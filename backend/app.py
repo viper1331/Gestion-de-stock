@@ -18,6 +18,8 @@ from backend.api import (
     backup,
     suppliers,
     dotations,
+    item_links,
+    link_categories,
     pharmacy,
     pharmacy_orders,
     remise_orders,
@@ -105,6 +107,8 @@ app.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["pur
 app.include_router(remise_orders.router, prefix="/remise-inventory/orders", tags=["remise-purchase-orders"])
 app.include_router(pharmacy_orders.router, prefix="/pharmacy/orders", tags=["pharmacy-purchase-orders"])
 app.include_router(vehicle_inventory.router, prefix="/vehicle-inventory", tags=["vehicle-inventory"])
+app.include_router(item_links.router, tags=["item-links"])
+app.include_router(link_categories.router, prefix="/link-categories", tags=["link-categories"])
 app.include_router(remise_inventory.router, prefix="/remise-inventory", tags=["remise-inventory"])
 app.include_router(permissions.router, prefix="/permissions", tags=["permissions"])
 app.include_router(users.router, prefix="/users", tags=["users"])

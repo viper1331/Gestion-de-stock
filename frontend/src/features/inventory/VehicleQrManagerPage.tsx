@@ -9,6 +9,7 @@ import { useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
+import { CustomLinksEditor } from "../../components/CustomLinksEditor";
 
 type VehicleType = string;
 
@@ -39,9 +40,6 @@ interface VehicleCategory {
 }
 
 interface ResourceDraft {
-  shared_file_url: string;
-  documentation_url: string;
-  tutorial_url: string;
   show_in_qr: boolean;
 }
 
@@ -106,9 +104,6 @@ export function VehicleQrManagerPage() {
         const representative = group.representative;
         next[group.key] =
           previous[group.key] ?? {
-            shared_file_url: representative.shared_file_url ?? "",
-            documentation_url: representative.documentation_url ?? "",
-            tutorial_url: representative.tutorial_url ?? "",
             show_in_qr: representative.show_in_qr
           };
       });
@@ -192,28 +187,22 @@ export function VehicleQrManagerPage() {
   const updateResources = useMutation({
     mutationFn: async (payload: {
       itemIds: number[];
-      shared_file_url: string;
-      documentation_url: string;
-      tutorial_url: string;
       show_in_qr: boolean;
     }) => {
       await Promise.all(
         payload.itemIds.map((itemId) =>
           api.put(`/vehicle-inventory/${itemId}`, {
-            shared_file_url: payload.shared_file_url || null,
-            documentation_url: payload.documentation_url || null,
-            tutorial_url: payload.tutorial_url || null,
             show_in_qr: payload.show_in_qr
           })
         )
       );
     },
     onSuccess: async () => {
-      setFeedback("Liens mis à jour avec succès.");
+      setFeedback("Visibilité mise à jour avec succès.");
       await queryClient.invalidateQueries({ queryKey: ["vehicle-items"] });
     },
     onError: (mutationError) => {
-      let message = "Impossible d'enregistrer les liens pour cet article.";
+      let message = "Impossible de mettre à jour la visibilité.";
       if (isAxiosError(mutationError)) {
         const detail = mutationError.response?.data?.detail;
         if (typeof detail === "string" && detail.trim().length > 0) {
@@ -258,9 +247,6 @@ export function VehicleQrManagerPage() {
   const handleUpdateDraft = (groupKey: string, patch: Partial<ResourceDraft>) => {
     setDrafts((previous) => {
       const current = previous[groupKey] ?? {
-        shared_file_url: "",
-        documentation_url: "",
-        tutorial_url: "",
         show_in_qr: true
       };
       return {
@@ -270,18 +256,6 @@ export function VehicleQrManagerPage() {
           ...patch
         }
       };
-    });
-  };
-
-  const handleSave = (group: VehicleItemGroup) => {
-    const draft = drafts[group.key];
-    if (!draft) return;
-    updateResources.mutate({
-      itemIds: group.items.map((item) => item.id),
-      shared_file_url: draft.shared_file_url,
-      documentation_url: draft.documentation_url,
-      tutorial_url: draft.tutorial_url,
-      show_in_qr: draft.show_in_qr
     });
   };
 
@@ -296,9 +270,6 @@ export function VehicleQrManagerPage() {
     const primaryItem = group.representative;
     const draft =
       drafts[group.key] ?? {
-        shared_file_url: "",
-        documentation_url: "",
-        tutorial_url: "",
         show_in_qr: true
       };
     const shareUrl = buildShareUrl(primaryItem);
@@ -338,41 +309,7 @@ export function VehicleQrManagerPage() {
           </div>
         </div>
 
-        <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-          Fichier associé (OneDrive)
-          <AppTextInput
-            type="url"
-            value={draft.shared_file_url}
-            onChange={(event) => handleUpdateDraft(group.key, { shared_file_url: event.target.value })}
-            placeholder="https://onedrive.live.com/..."
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-          <p className="mt-1 text-xs font-normal text-slate-500 dark:text-slate-400">
-            Saisissez le lien partagé du fichier hébergé dans OneDrive. Il sera utilisé pour la redirection du QR code.
-          </p>
-        </label>
-
-        <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-          Documentation
-          <AppTextInput
-            type="url"
-            value={draft.documentation_url}
-            onChange={(event) => handleUpdateDraft(group.key, { documentation_url: event.target.value })}
-            placeholder="https://..."
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-        </label>
-
-        <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-          Tutoriel
-          <AppTextInput
-            type="url"
-            value={draft.tutorial_url}
-            onChange={(event) => handleUpdateDraft(group.key, { tutorial_url: event.target.value })}
-            placeholder="https://..."
-            className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-        </label>
+        <CustomLinksEditor module="vehicle_qr" itemId={String(primaryItem.id)} />
 
         <div className="rounded-lg border border-slate-200 bg-slate-50 p-3 text-sm dark:border-slate-700 dark:bg-slate-950/40">
           <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between">
@@ -388,7 +325,14 @@ export function VehicleQrManagerPage() {
                 type="checkbox"
                 className="h-4 w-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
                 checked={draft.show_in_qr}
-                onChange={(event) => handleUpdateDraft(group.key, { show_in_qr: event.target.checked })}
+                onChange={(event) => {
+                  const nextValue = event.target.checked;
+                  handleUpdateDraft(group.key, { show_in_qr: nextValue });
+                  updateResources.mutate({
+                    itemIds: group.items.map((item) => item.id),
+                    show_in_qr: nextValue
+                  });
+                }}
               />
             </label>
           </div>
@@ -400,14 +344,6 @@ export function VehicleQrManagerPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
-          <button
-            type="button"
-            onClick={() => handleSave(group)}
-            disabled={updateResources.isPending}
-            className="inline-flex items-center gap-2 rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {updateResources.isPending ? "Enregistrement..." : "Enregistrer les liens"}
-          </button>
           {hasVehicle ? (
             <>
               <button

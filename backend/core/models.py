@@ -511,6 +511,60 @@ class VehicleQrInfo(BaseModel):
     tutorial_url: str | None = None
 
 
+LinkCategoryModule = Literal["vehicle_qr", "pharmacy"]
+
+
+class LinkCategoryBase(BaseModel):
+    module: LinkCategoryModule
+    key: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=128)
+    placeholder: str | None = Field(default=None, max_length=200)
+    help_text: str | None = Field(default=None, max_length=400)
+    is_required: bool = False
+    sort_order: int = 0
+    is_active: bool = True
+
+
+class LinkCategoryCreate(LinkCategoryBase):
+    pass
+
+
+class LinkCategoryUpdate(BaseModel):
+    module: LinkCategoryModule | None = None
+    key: str | None = Field(default=None, min_length=1, max_length=64)
+    label: str | None = Field(default=None, min_length=1, max_length=128)
+    placeholder: str | None = Field(default=None, max_length=200)
+    help_text: str | None = Field(default=None, max_length=400)
+    is_required: bool | None = None
+    sort_order: int | None = None
+    is_active: bool | None = None
+
+
+class LinkCategory(LinkCategoryBase):
+    id: int
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class LinkItemEntry(BaseModel):
+    category_key: str = Field(..., min_length=1, max_length=64)
+    url: str = ""
+
+
+class LinkItemUpdate(BaseModel):
+    links: list[LinkItemEntry] = Field(default_factory=list)
+
+
+class LinkCategoryValue(BaseModel):
+    category_key: str
+    label: str
+    placeholder: str | None = None
+    help_text: str | None = None
+    is_required: bool = False
+    sort_order: int = 0
+    url: str = ""
+
+
 class LowStockReport(BaseModel):
     item: Item
     shortage: int
