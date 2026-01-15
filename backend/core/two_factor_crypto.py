@@ -4,6 +4,7 @@ from __future__ import annotations
 import base64
 import logging
 import os
+import threading
 from typing import Optional
 
 from cryptography.fernet import Fernet
@@ -12,6 +13,8 @@ logger = logging.getLogger(__name__)
 
 _fernet: Optional[Fernet] = None
 _warned_insecure = False
+_ready_logged = False
+_fernet_lock = threading.Lock()
 
 
 def _load_fernet_key() -> bytes:
@@ -41,14 +44,19 @@ def _load_fernet_key() -> bytes:
 def _get_fernet() -> Fernet:
     global _fernet
     if _fernet is None:
-        _fernet = Fernet(_load_fernet_key())
+        with _fernet_lock:
+            if _fernet is None:
+                _fernet = Fernet(_load_fernet_key())
     return _fernet
 
 
 def ensure_configured() -> None:
     """Vérifie la présence de la clé de chiffrement 2FA (fail fast en prod)."""
-
+    global _ready_logged
     _get_fernet()
+    if not _ready_logged:
+        logger.info("2FA encryption ready")
+        _ready_logged = True
 
 
 def encrypt_secret(plain: str) -> str:
