@@ -145,12 +145,6 @@ export function AppLayout() {
   }, [isDesktop]);
 
   useEffect(() => {
-    if (isReorderMode && isDesktop && !sidebarOpen) {
-      toggleSidebar();
-    }
-  }, [isDesktop, isReorderMode, sidebarOpen, toggleSidebar]);
-
-  useEffect(() => {
     if (!isMobile) {
       setMobileDrawerOpen(false);
     }
@@ -569,6 +563,12 @@ export function AppLayout() {
   const [isMenuOrderLoading, setIsMenuOrderLoading] = useState(false);
 
   useEffect(() => {
+    if (isReorderMode && isDesktop && !sidebarOpen) {
+      toggleSidebar();
+    }
+  }, [isDesktop, isReorderMode, sidebarOpen, toggleSidebar]);
+
+  useEffect(() => {
     if (!user) {
       setMenuGroups([]);
       setSavedMenuOrder(null);
@@ -949,7 +949,7 @@ export function AppLayout() {
           <button
             type="button"
             onClick={() => handleGroupClick(group.id)}
-            className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
+            className={`MenuItem group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
               options.expanded ? "justify-between px-3 py-2" : "h-11 justify-center"
             }`}
             aria-expanded={shouldShowItems}
@@ -977,11 +977,11 @@ export function AppLayout() {
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-slate-950 text-slate-50">
       <aside
-        className={`relative flex h-full min-h-0 shrink-0 flex-col border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
+        className={`Sidebar relative shrink-0 border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
           isDesktop ? (sidebarOpen ? "w-64 p-6" : "w-20 p-4") : "w-14 p-3"
         }`}
       >
-        <div className="flex items-center justify-between gap-2">
+        <div className="SidebarHeader flex items-center justify-between gap-2">
           <div className="flex items-center gap-2">
             <Link to="/" className="block text-lg font-semibold" title="Revenir à l'accueil">
               <span aria-hidden>{isSidebarExpanded ? "Gestion Stock Pro" : "GSP"}</span>
@@ -1016,7 +1016,7 @@ export function AppLayout() {
         {isDesktop ? (
           <>
             <div
-              className={`mt-8 flex min-h-0 flex-1 flex-col ${
+              className={`SidebarModules mt-8 flex min-h-0 flex-1 flex-col ${
                 isSidebarExpanded ? "overflow-hidden" : "overflow-visible"
               }`}
             >
@@ -1058,7 +1058,7 @@ export function AppLayout() {
                 <p className="mb-2 text-xs text-red-300">{menuOrderError}</p>
               ) : null}
               <nav
-                className={`flex min-h-0 flex-1 flex-col gap-3 text-sm ${
+                className={`flex min-h-0 flex-1 flex-col gap-[clamp(0.5rem,1.2vh,0.75rem)] text-sm ${
                   isSidebarExpanded ? "overflow-y-auto pr-2" : "overflow-visible items-center"
                 }`}
               >
@@ -1081,7 +1081,7 @@ export function AppLayout() {
                 <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
               ) : null}
             </div>
-            <div className="mt-auto flex w-full flex-col gap-3 pt-6">
+            <div className="SidebarPinned mt-auto flex w-full flex-col gap-3 pt-6">
               <div
                 className={`flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
                   isSidebarExpanded ? "px-3 py-2" : "px-2 py-1 justify-center"
@@ -1137,11 +1137,11 @@ export function AppLayout() {
             role="dialog"
             aria-modal="true"
             aria-label="Menu principal"
-            className="relative z-50 flex max-h-[calc(100dvh-1rem)] w-11/12 max-w-sm flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 text-slate-50 shadow-2xl sm:max-w-md"
+            className="Sidebar relative z-50 flex max-h-[calc(100dvh-1rem)] w-11/12 max-w-sm flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 text-slate-50 shadow-2xl sm:max-w-md"
             onClick={(event) => event.stopPropagation()}
             tabIndex={-1}
           >
-            <div className="flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
+            <div className="SidebarHeader flex items-center justify-between gap-2 border-b border-slate-800 px-4 py-3">
               <div className="flex items-center gap-2">
                 <Link to="/" className="block text-base font-semibold" title="Revenir à l'accueil">
                   <span aria-hidden>Gestion Stock Pro</span>
@@ -1162,7 +1162,7 @@ export function AppLayout() {
                 <span aria-hidden>✕</span>
               </button>
             </div>
-            <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+            <div className="SidebarModules flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -1190,7 +1190,7 @@ export function AppLayout() {
               {menuOrderError ? (
                 <p className="mb-2 text-xs text-red-300">{menuOrderError}</p>
               ) : null}
-              <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1 text-sm">
+              <nav className="flex min-h-0 flex-1 flex-col gap-[clamp(0.5rem,1.2vh,0.75rem)] overflow-y-auto pr-1 text-sm">
                 <DndContext
                   sensors={sensors}
                   collisionDetection={closestCenter}
@@ -1206,7 +1206,8 @@ export function AppLayout() {
                   })}
                 </DndContext>
               </nav>
-              <div className="mt-6 flex w-full flex-col gap-3">
+            </div>
+            <div className="SidebarPinned mt-6 flex w-full flex-col gap-3 px-4 pb-4">
                 <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
                   <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
                   <div className="leading-tight">
@@ -1235,7 +1236,6 @@ export function AppLayout() {
               </div>
             </div>
           </div>
-        </div>
       ) : null}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto bg-slate-950 p-6">
         <div className="flex items-center justify-end pb-4">
@@ -1314,17 +1314,14 @@ function SortableMenuItem({ id, isEditMode, children }: SortableMenuItemProps) {
 }
 
 function navClass(isActive: boolean, expanded: boolean) {
-  return `flex items-center gap-3 rounded-md font-medium transition-colors ${
+  return `MenuItem flex items-center gap-3 rounded-md font-medium transition-colors ${
     expanded ? "px-3 py-2" : "h-11 w-full justify-center"
   } ${isActive ? "bg-slate-800 text-white shadow-sm" : "text-slate-300 hover:bg-slate-800"}`;
 }
 
 function NavIcon({ symbol, label }: { symbol?: string; label: string }) {
   return (
-    <span
-      aria-hidden
-      className="flex h-9 w-9 items-center justify-center rounded-full border border-slate-800 bg-slate-800/60 text-lg"
-    >
+    <span aria-hidden className="MenuIcon flex items-center justify-center rounded-full border border-slate-800 bg-slate-800/60">
       {symbol ?? label.charAt(0)}
     </span>
   );
