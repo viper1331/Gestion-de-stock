@@ -25,6 +25,7 @@ LOG_DIR = Path(os.getenv("LOG_DIR", str(DEFAULT_LOG_DIR))).expanduser()
 LOG_MAX_BYTES = _get_env_int("LOG_MAX_BYTES", 3_072_000)
 LOG_BACKUP_COUNT = _get_env_int("LOG_BACKUP_COUNT", 10)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+ACCESS_LOG_LEVEL = os.getenv("ACCESS_LOG_LEVEL", "WARNING").upper()
 ACCESS_LOG_EXCLUDE_PATHS = os.getenv(
     "ACCESS_LOG_EXCLUDE_PATHS", "/logs/frontend,/logs/backend"
 )
@@ -203,7 +204,7 @@ def configure_logging() -> None:
             },
             "uvicorn.access": {
                 "handlers": ["console", "access_file"],
-                "level": LOG_LEVEL,
+                "level": ACCESS_LOG_LEVEL,
                 "propagate": False,
             },
             "frontend": {
@@ -229,6 +230,7 @@ __all__ = [
     "LOG_DIR",
     "LOG_LEVEL",
     "LOG_MAX_BYTES",
+    "ACCESS_LOG_LEVEL",
     "list_log_files",
     "purge_rotated_logs",
 ]

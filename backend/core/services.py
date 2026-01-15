@@ -1271,6 +1271,20 @@ def ensure_database_ready() -> None:
         _db_initialized = True
 
 
+def ensure_site_database_ready(site_key: str) -> None:
+    """Assure que la base d'un site est migrée, sans modifier l'état global."""
+
+    with _db_init_lock:
+        with _migration_lock():
+            db.init_databases()
+            _apply_schema_migrations_for_site(site_key)
+
+
+def is_missing_table_error(exc: sqlite3.OperationalError) -> bool:
+    message = str(exc).lower()
+    return "no such table" in message
+
+
 @contextmanager
 def _migration_lock() -> Iterator[None]:
     while True:
@@ -1777,6 +1791,7 @@ def _ensure_vehicle_item_qr_tokens(
 def apply_site_schema_migrations() -> None:
     for site_key in db.list_site_keys():
         _apply_schema_migrations_for_site(site_key)
+        logger.info("[DB] schema migrated/ok for site %s", site_key)
 
 
 def _apply_schema_migrations_for_site(site_key: str) -> None:

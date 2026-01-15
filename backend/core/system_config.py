@@ -16,6 +16,7 @@ from backend.core.pdf_config_models import PdfExportConfig
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:5151",
     "http://127.0.0.1:5151",
+    "http://80.9.171.118:5151",
 ]
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "system_config.json"
@@ -148,8 +149,19 @@ def save_config(config: SystemConfig) -> SystemConfig:
     return _SYSTEM_CONFIG
 
 
+def _is_dev_env() -> bool:
+    env_value = (os.getenv("APP_ENV") or os.getenv("ENV") or "").strip().lower()
+    return env_value == "dev"
+
+
+def _allow_all_cors() -> bool:
+    if _is_dev_env():
+        return True
+    return (os.getenv("CORS_ALLOW_ALL") or "").strip().lower() in {"1", "true", "yes"}
+
+
 def get_env_cors_origins() -> list[str]:
-    raw = os.getenv("BACKEND_CORS_ORIGINS", "")
+    raw = os.getenv("FRONTEND_ORIGINS") or os.getenv("BACKEND_CORS_ORIGINS", "")
     if not raw:
         return []
     origins = [origin.strip() for origin in raw.split(",")]
@@ -175,16 +187,17 @@ def rebuild_cors_middleware(app: FastAPI, allow_origins: list[str] | None = None
     """Réinstalle le middleware CORS avec les origines souhaitées."""
 
     origins = allow_origins or get_effective_cors_origins()
+    allow_origin_regex = ".*" if _allow_all_cors() else None
     app.user_middleware = [mw for mw in app.user_middleware if mw.cls is not CORSMiddleware]
-    app.user_middleware.insert(
-        0,
+    app.user_middleware.append(
         Middleware(
             CORSMiddleware,
             allow_origins=origins,
+            allow_origin_regex=allow_origin_regex,
             allow_credentials=True,
             allow_methods=["*"],
             allow_headers=["*"],
-        ),
+        )
     )
     # Rebuild the application middleware stack so the updated CORS settings take
     # effect immediately.

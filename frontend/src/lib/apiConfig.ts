@@ -77,7 +77,7 @@ function resolveFromConfig(
 async function fetchSystemConfig(): Promise<SystemConfigSnapshot | null> {
   const token = typeof window !== "undefined" ? localStorage.getItem("gsp/token") : null;
   try {
-    const response = await fetch(`${FALLBACK_BASE_URL}/system/config`, {
+    const response = await fetch(`${FALLBACK_BASE_URL}/system/public-config`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       credentials: "include"
     });
