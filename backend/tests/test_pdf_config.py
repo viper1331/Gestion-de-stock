@@ -5,7 +5,12 @@ from fastapi.testclient import TestClient
 from backend.app import app
 from backend.core import db, security, services
 from backend.core.system_config import get_config, save_config
-from backend.services.pdf_config import get_pdf_config_meta, get_pdf_export_config, resolve_pdf_config
+from backend.services.pdf_config import (
+    get_pdf_config_meta,
+    get_pdf_export_config,
+    resolve_pdf_config,
+    save_pdf_export_config,
+)
 from backend.core.pdf_config_models import (
     PdfConfig,
     PdfConfigMeta,
@@ -144,3 +149,31 @@ def test_pdf_config_meta_grouping_completeness() -> None:
         grouping_meta = meta.module_grouping.get(key)
         assert grouping_meta is not None
         assert module.columns or not grouping_meta.grouping_supported
+
+
+def test_pdf_studio_modules_endpoint_includes_new_modules() -> None:
+    headers = _login_headers("admin", "admin123")
+    response = client.get("/pdf-studio/modules", headers=headers)
+    assert response.status_code == 200
+    keys = {entry["key"] for entry in response.json()}
+    assert "inventory_pharmacy" in keys
+    assert "inventory_habillement" in keys
+
+
+def test_pdf_config_accepts_new_module_keys() -> None:
+    original = get_config().model_copy(deep=True)
+    try:
+        export_config = get_pdf_export_config()
+        export_config.modules["inventory_pharmacy"] = PdfModuleConfig(
+            override_global=True,
+            config=PdfConfig(),
+        )
+        export_config.modules["inventory_habillement"] = PdfModuleConfig(
+            override_global=True,
+            config=PdfConfig(),
+        )
+        saved = save_pdf_export_config(export_config)
+        assert "inventory_pharmacy" in saved.modules
+        assert "inventory_habillement" in saved.modules
+    finally:
+        save_config(original)

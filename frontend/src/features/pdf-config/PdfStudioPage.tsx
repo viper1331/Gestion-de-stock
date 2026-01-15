@@ -14,6 +14,7 @@ import {
   deepMerge,
   fetchPdfConfig,
   fetchPdfConfigMeta,
+  fetchPdfStudioModules,
   previewPdfConfig,
   normalizePdfExportConfig,
   updatePdfConfig
@@ -244,7 +245,16 @@ export function PdfStudioPage() {
     queryFn: fetchPdfConfigMeta,
     enabled: isAdmin
   });
-  const isLoading = isConfigLoading || isMetaLoading;
+  const {
+    data: pdfStudioModules,
+    isLoading: isModulesLoading,
+    isError: isModulesError
+  } = useQuery({
+    queryKey: ["pdf-studio-modules"],
+    queryFn: fetchPdfStudioModules,
+    enabled: isAdmin
+  });
+  const isLoading = isConfigLoading || isMetaLoading || isModulesLoading;
   const [draft, setDraft] = useState<PdfExportConfig | null>(null);
   const [initialConfig, setInitialConfig] = useState<PdfExportConfig | null>(null);
   const [selectedModule, setSelectedModule] = useState<string>("global");
@@ -260,7 +270,7 @@ export function PdfStudioPage() {
     const normalized = normalizePdfExportConfig(pdfConfig);
     setDraft(normalized);
     setInitialConfig(normalized);
-    const moduleKeys = Object.keys(pdfConfig.module_meta ?? {});
+    const moduleKeys = (pdfStudioModules ?? []).map((module) => module.key);
     if (moduleKeys.length > 0 && selectedModule && selectedModule !== "global") {
       if (!moduleKeys.includes(selectedModule)) {
         setSelectedModule(moduleKeys[0]);
@@ -270,7 +280,7 @@ export function PdfStudioPage() {
       const presets = Object.keys(pdfConfig.presets ?? {});
       setSelectedPreset(presets[0] ?? null);
     }
-  }, [pdfConfig, selectedModule, selectedPreset]);
+  }, [pdfConfig, pdfStudioModules, selectedModule, selectedPreset]);
 
   useEffect(() => {
     return () => {
@@ -281,7 +291,14 @@ export function PdfStudioPage() {
   }, [previewUrl]);
 
   const moduleMeta = draft?.module_meta ?? {};
-  const moduleOptions = useMemo(() => Object.values(moduleMeta), [moduleMeta]);
+  const moduleOptions = useMemo(
+    () => pdfStudioModules ?? [{ key: "global", label: "Global" }],
+    [pdfStudioModules]
+  );
+  const nonGlobalModules = useMemo(
+    () => moduleOptions.filter((module) => module.key !== "global"),
+    [moduleOptions]
+  );
   const presetOptions = useMemo(() => Object.keys(draft?.presets ?? {}), [draft]);
   const supportedFonts = configMeta?.supported_fonts ?? ["Helvetica"];
   const acceptedColorFormats = configMeta?.accepted_color_formats ?? [];
@@ -515,7 +532,7 @@ export function PdfStudioPage() {
     if (!draft) return;
     const previewModule =
       selectedModule === "global"
-        ? moduleOptions[0]?.key ?? "barcode"
+        ? nonGlobalModules[0]?.key ?? "barcodes"
         : selectedModule;
     const previewGroupingMeta = groupingMetaForModule(previewModule);
     const previewConfig =
@@ -547,7 +564,7 @@ export function PdfStudioPage() {
     } catch {
       setPreviewStatus("Impossible de générer l'aperçu.");
     }
-  }, [draft, moduleOptions, previewUrl, selectedModule, selectedPreset, groupingMetaForModule]);
+  }, [draft, nonGlobalModules, previewUrl, selectedModule, selectedPreset, groupingMetaForModule]);
 
   useEffect(() => {
     if (!autoPreview) return;
@@ -662,6 +679,11 @@ export function PdfStudioPage() {
         <p className="text-sm text-slate-400">
           Personnalisez vos exports PDF module par module et validez immédiatement via l'aperçu intégré.
         </p>
+        {isModulesError ? (
+          <p className="text-sm text-rose-300">
+            Impossible de charger la liste des modules. Veuillez réessayer. Le module global reste disponible.
+          </p>
+        ) : null}
       </header>
       {isFetching ? <p className="text-sm text-slate-400">Chargement des configurations...</p> : null}
       <div className="flex flex-wrap items-center gap-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
@@ -672,7 +694,6 @@ export function PdfStudioPage() {
             onChange={(event) => setSelectedModule(event.target.value)}
             className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100"
           >
-            <option value="global">Global</option>
             {moduleOptions.map((module) => (
               <option key={module.key} value={module.key}>
                 {module.label}

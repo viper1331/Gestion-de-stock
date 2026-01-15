@@ -177,6 +177,11 @@ export interface PdfConfigMeta {
   moduleGrouping: Record<string, PdfModuleGroupingMeta>;
 }
 
+export interface PdfStudioModuleOption {
+  key: string;
+  label: string;
+}
+
 export const DEFAULT_PDF_FORMAT: PdfFormatConfig = {
   size: "A4",
   orientation: "portrait",
@@ -362,5 +367,10 @@ export async function previewPdfConfig(payload: {
 
 export async function fetchPdfConfigMeta(): Promise<PdfConfigMeta> {
   const { data } = await api.get<PdfConfigMeta>("/admin/pdf-config/meta");
+  return data;
+}
+
+export async function fetchPdfStudioModules(): Promise<PdfStudioModuleOption[]> {
+  const { data } = await api.get<PdfStudioModuleOption[]>("/pdf-studio/modules");
   return data;
 }

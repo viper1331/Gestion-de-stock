@@ -34,6 +34,10 @@ from backend.core.pdf_config_models import (
     PdfWatermarkConfig,
 )
 from backend.core.system_config import get_config, save_config
+from backend.core.pdf_registry import (
+    normalize_pdf_module_key,
+    pdf_module_label,
+)
 from backend.services.pdf.theme import (
     apply_theme_reportlab,
     resolve_reportlab_theme,
@@ -263,9 +267,9 @@ def _build_presets() -> dict[str, PdfPresetConfig]:
 
 def _build_module_meta() -> dict[str, PdfModuleMeta]:
     return {
-        "vehicle_inventory": PdfModuleMeta(
-            key="vehicle_inventory",
-            label="Inventaire véhicules",
+        "inventory_vehicles": PdfModuleMeta(
+            key="inventory_vehicles",
+            label=pdf_module_label("inventory_vehicles"),
             variables=["module", "module_title", "date", "generated_at", "vehicle"],
             grouping_supported=False,
             columns=[
@@ -293,9 +297,9 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             group_options=["catégorie", "emplacement"],
             renderers=["html", "reportlab"],
         ),
-        "remise_inventory": PdfModuleMeta(
-            key="remise_inventory",
-            label="Inventaire remises",
+        "inventory_remises": PdfModuleMeta(
+            key="inventory_remises",
+            label=pdf_module_label("inventory_remises"),
             variables=["module", "module_title", "date", "generated_at"],
             grouping_supported=True,
             columns=[
@@ -323,9 +327,9 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             group_options=["catégorie"],
             renderers=["reportlab"],
         ),
-        "purchase_orders": PdfModuleMeta(
-            key="purchase_orders",
-            label="Bons de commande",
+        "orders": PdfModuleMeta(
+            key="orders",
+            label=pdf_module_label("orders"),
             variables=["module", "module_title", "date", "generated_at", "order_id"],
             grouping_supported=True,
             columns=[
@@ -349,9 +353,9 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             group_options=[],
             renderers=["reportlab"],
         ),
-        "remise_orders": PdfModuleMeta(
-            key="remise_orders",
-            label="Bons de commande remises",
+        "orders_remises": PdfModuleMeta(
+            key="orders_remises",
+            label=pdf_module_label("orders_remises"),
             variables=["module", "module_title", "date", "generated_at", "order_id"],
             grouping_supported=True,
             columns=[
@@ -375,9 +379,9 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             group_options=[],
             renderers=["reportlab"],
         ),
-        "pharmacy_orders": PdfModuleMeta(
-            key="pharmacy_orders",
-            label="Bons de commande pharmacie",
+        "orders_pharmacy": PdfModuleMeta(
+            key="orders_pharmacy",
+            label=pdf_module_label("orders_pharmacy"),
             variables=["module", "module_title", "date", "generated_at", "order_id"],
             grouping_supported=True,
             columns=[
@@ -401,14 +405,34 @@ def _build_module_meta() -> dict[str, PdfModuleMeta]:
             group_options=[],
             renderers=["reportlab"],
         ),
-        "barcode": PdfModuleMeta(
-            key="barcode",
-            label="Codes-barres",
+        "barcodes": PdfModuleMeta(
+            key="barcodes",
+            label=pdf_module_label("barcodes"),
             variables=["module", "module_title", "date", "generated_at"],
             grouping_supported=False,
             columns=[
                 PdfColumnMeta(key="barcode", label="Code-barres", default_visible=True, column_type="string"),
             ],
+            sort_options=[],
+            group_options=[],
+            renderers=["reportlab"],
+        ),
+        "inventory_pharmacy": PdfModuleMeta(
+            key="inventory_pharmacy",
+            label=pdf_module_label("inventory_pharmacy"),
+            variables=["module", "module_title", "date", "generated_at"],
+            grouping_supported=False,
+            columns=[],
+            sort_options=[],
+            group_options=[],
+            renderers=["reportlab"],
+        ),
+        "inventory_habillement": PdfModuleMeta(
+            key="inventory_habillement",
+            label=pdf_module_label("inventory_habillement"),
+            variables=["module", "module_title", "date", "generated_at"],
+            grouping_supported=False,
+            columns=[],
             sort_options=[],
             group_options=[],
             renderers=["reportlab"],
@@ -441,7 +465,10 @@ def _normalize_export_config_data(raw: dict[str, Any], defaults: PdfExportConfig
         preset_data["config"] = _normalize_config_data(preset_data.get("config"), defaults.global_config)
         presets[name] = preset_data
     modules: dict[str, Any] = {}
-    for key, module in (data.get("modules") or {}).items():
+    for raw_key, module in (data.get("modules") or {}).items():
+        key = normalize_pdf_module_key(raw_key)
+        if key in modules and raw_key != key:
+            continue
         module_data = dict(module or {})
         override_global = bool(module_data.get("override_global"))
         module_config = module_data.get("config")
@@ -549,7 +576,7 @@ def _validate_grouping_config(module_key: str, config: PdfConfig, module_meta: P
 
 
 def _ensure_module_columns(module_key: str, config: PdfConfig) -> PdfConfig:
-    meta = get_module_meta().get(module_key)
+    meta = get_module_meta().get(normalize_pdf_module_key(module_key))
     if not meta:
         return config
     if config.content.columns:
@@ -599,7 +626,8 @@ def save_pdf_export_config(payload: PdfExportConfig) -> PdfExportConfig:
     module_overrides: dict[str, PdfModuleConfig] = {}
     module_meta = get_module_meta()
 
-    for key, module_cfg in payload.modules.items():
+    for raw_key, module_cfg in payload.modules.items():
+        key = normalize_pdf_module_key(raw_key)
         if not module_cfg.override_global:
             if module_cfg.config:
                 module_overrides[key] = PdfModuleConfig(override_global=False, config=PdfConfigOverrides())
@@ -630,16 +658,17 @@ def save_pdf_export_config(payload: PdfExportConfig) -> PdfExportConfig:
 
 def resolve_pdf_config(module_name: str, preset_name: str | None = None, config: PdfExportConfig | None = None) -> PdfResolvedConfig:
     export_config = config or get_pdf_export_config()
-    meta = export_config.module_meta.get(module_name) or get_module_meta().get(module_name)
+    canonical_key = normalize_pdf_module_key(module_name)
+    meta = export_config.module_meta.get(canonical_key) or get_module_meta().get(canonical_key)
     if not meta:
-        meta = PdfModuleMeta(key=module_name, label=module_name, renderers=["reportlab"])
+        meta = PdfModuleMeta(key=canonical_key, label=pdf_module_label(module_name), renderers=["reportlab"])
     resolved = export_config.global_config.model_copy(deep=True)
 
     preset = export_config.presets.get(preset_name) if preset_name else None
     if preset:
         resolved = preset.config.model_copy(deep=True)
 
-    module_cfg = export_config.modules.get(module_name)
+    module_cfg = export_config.modules.get(canonical_key) or export_config.modules.get(module_name)
     if module_cfg and module_cfg.override_global:
         overrides = module_cfg.config
         if isinstance(overrides, PdfConfig):
