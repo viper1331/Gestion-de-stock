@@ -5,6 +5,7 @@ import { AppTextInput } from "components/AppTextInput";
 interface ColumnOption {
   key: string;
   label: string;
+  kind?: "native" | "custom";
 }
 
 interface ColumnManagerProps {
@@ -97,10 +98,31 @@ export function ColumnManager({
     setIsOpen((value) => !value);
   };
 
+  const isOptionVisible = (option: ColumnOption) => {
+    if (visibility[option.key] !== undefined) {
+      return visibility[option.key] !== false;
+    }
+    return option.kind === "custom" ? false : true;
+  };
+
   const visibleCount = options.reduce(
-    (count, option) => (visibility[option.key] !== false ? count + 1 : count),
+    (count, option) => (isOptionVisible(option) ? count + 1 : count),
     0
   );
+  const hasCustomOptions = options.some((option) => option.kind === "custom");
+  const hasNativeOptions = options.some((option) => option.kind !== "custom");
+  const groupedOptions = hasCustomOptions && hasNativeOptions
+    ? [
+        {
+          label: "Colonnes natives",
+          items: options.filter((option) => option.kind !== "custom")
+        },
+        {
+          label: "Colonnes personnalisées",
+          items: options.filter((option) => option.kind === "custom")
+        }
+      ]
+    : [{ label: null, items: options }];
 
   return (
     <div className="relative" ref={containerRef}>
@@ -126,28 +148,44 @@ export function ColumnManager({
                     <p className="mt-1 text-[11px] leading-snug text-slate-400">{description}</p>
                   ) : null}
                 </div>
-                <ul className="space-y-1 text-sm text-slate-200">
-                  {options.map((option) => {
-                    const checked = visibility[option.key] !== false;
-                    const disableCheckbox = checked && visibleCount <= minVisibleColumns;
-                    return (
-                      <li key={option.key} className="flex items-center justify-between gap-2">
-                        <label className="flex items-center gap-2">
-                          <AppTextInput
-                            type="checkbox"
-                            checked={checked}
-                            onChange={() => onToggle(option.key)}
-                            disabled={disableCheckbox}
-                            className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
-                          />
-                          <span className="text-xs font-medium uppercase tracking-wide text-slate-300">
-                            {option.label}
-                          </span>
-                        </label>
-                      </li>
-                    );
-                  })}
-                </ul>
+                <div className="space-y-2 text-sm text-slate-200">
+                  {groupedOptions.map((group) => (
+                    <div key={group.label ?? "columns"} className="space-y-1">
+                      {group.label ? (
+                        <p className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+                          {group.label}
+                        </p>
+                      ) : null}
+                      <ul className="space-y-1">
+                        {group.items.map((option) => {
+                          const checked = isOptionVisible(option);
+                          const disableCheckbox = checked && visibleCount <= minVisibleColumns;
+                          return (
+                            <li key={option.key} className="flex items-center justify-between gap-2">
+                              <label className="flex items-center gap-2">
+                                <AppTextInput
+                                  type="checkbox"
+                                  checked={checked}
+                                  onChange={() => onToggle(option.key)}
+                                  disabled={disableCheckbox}
+                                  className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                                />
+                                <span className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-slate-300">
+                                  {option.label}
+                                  {option.kind === "custom" ? (
+                                    <span className="rounded border border-indigo-500/40 bg-indigo-500/10 px-1.5 py-0.5 text-[9px] font-semibold uppercase tracking-wide text-indigo-200">
+                                      Personnalisé
+                                    </span>
+                                  ) : null}
+                                </span>
+                              </label>
+                            </li>
+                          );
+                        })}
+                      </ul>
+                    </div>
+                  ))}
+                </div>
                 {onReset ? (
                   <button
                     type="button"

@@ -4,7 +4,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
-import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
+import { buildCustomFieldDefaults, CustomFieldDefinition, sortCustomFields } from "../../lib/customFields";
 import { persistValue, readPersistedValue } from "../../lib/persist";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { useAuth } from "../auth/useAuth";
@@ -180,23 +180,26 @@ export function PharmacyPage() {
   const tableRef = useRef<HTMLTableElement>(null);
   const [tableMaxHeight, setTableMaxHeight] = useState<number | null>(null);
 
-  const [columnVisibility, setColumnVisibility] = useState<Record<PharmacyColumnKey, boolean>>(() => ({
-    ...readPersistedValue<Record<PharmacyColumnKey, boolean>>(
+  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => ({
+    ...DEFAULT_PHARMACY_COLUMN_VISIBILITY,
+    ...readPersistedValue<Record<string, boolean>>(
       PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY,
       DEFAULT_PHARMACY_COLUMN_VISIBILITY
     )
   }));
 
-  const toggleColumnVisibility = (key: PharmacyColumnKey) => {
+  const toggleColumnVisibility = (key: string, optionKeys: Set<string>) => {
     setColumnVisibility((previous) => {
       const isCurrentlyVisible = previous[key] !== false;
       if (isCurrentlyVisible) {
-        const visibleCount = Object.values(previous).filter(Boolean).length;
+        const visibleCount = Array.from(optionKeys).filter(
+          (optionKey) => previous[optionKey] !== false
+        ).length;
         if (visibleCount <= 1) {
           return previous;
         }
       }
-      const next = { ...previous, [key]: !isCurrentlyVisible } as Record<PharmacyColumnKey, boolean>;
+      const next = { ...previous, [key]: !isCurrentlyVisible };
       persistValue(PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY, next);
       return next;
     });
@@ -245,6 +248,60 @@ export function PharmacyPage() {
     () => customFieldDefinitions.filter((definition) => definition.is_active),
     [customFieldDefinitions]
   );
+  const customColumns = useMemo(
+    () =>
+      sortCustomFields(activeCustomFields).map((definition) => ({
+        key: `custom:${definition.id}`,
+        label: definition.label,
+        fieldKey: definition.key
+      })),
+    [activeCustomFields]
+  );
+  const columnOptions = useMemo(
+    () => [
+      ...PHARMACY_COLUMN_OPTIONS.map((option) => ({ ...option, kind: "native" as const })),
+      ...customColumns.map((column) => ({
+        key: column.key,
+        label: column.label,
+        kind: "custom" as const
+      }))
+    ],
+    [customColumns]
+  );
+  const columnOptionKeys = useMemo(() => new Set(columnOptions.map((option) => option.key)), [columnOptions]);
+  useEffect(() => {
+    setColumnVisibility((previous) => {
+      const next: Record<string, boolean> = {};
+      for (const option of columnOptions) {
+        if (previous[option.key] !== undefined) {
+          next[option.key] = previous[option.key];
+        } else if (option.key in DEFAULT_PHARMACY_COLUMN_VISIBILITY) {
+          next[option.key] = DEFAULT_PHARMACY_COLUMN_VISIBILITY[option.key as PharmacyColumnKey];
+        } else {
+          next[option.key] = false;
+        }
+      }
+      const hasChanges = Object.keys(previous).some((key) => !columnOptionKeys.has(key))
+        || Object.keys(next).some((key) => previous[key] !== next[key]);
+      if (hasChanges) {
+        persistValue(PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY, next);
+      }
+      return hasChanges ? next : previous;
+    });
+  }, [columnOptions, columnOptionKeys]);
+
+  const renderCustomValue = (value: unknown) => {
+    if (value === null || value === undefined || value === "") {
+      return <span className="text-slate-500">—</span>;
+    }
+    if (typeof value === "boolean") {
+      return value ? "Oui" : "Non";
+    }
+    if (Array.isArray(value)) {
+      return value.length ? value.join(", ") : "—";
+    }
+    return String(value);
+  };
 
   const existingBarcodes = useMemo<ExistingSkuEntry[]>(
     () =>
@@ -596,9 +653,9 @@ export function PharmacyPage() {
         </div>
         <div className="flex flex-wrap items-center gap-2">
           <ColumnManager
-            options={PHARMACY_COLUMN_OPTIONS}
+            options={columnOptions}
             visibility={columnVisibility}
-            onToggle={(key) => toggleColumnVisibility(key as PharmacyColumnKey)}
+            onToggle={(key) => toggleColumnVisibility(key, columnOptionKeys)}
             onReset={resetColumnVisibility}
             description="Personnalisez les colonnes visibles dans le tableau."
           />
@@ -691,6 +748,13 @@ export function PharmacyPage() {
               {columnVisibility.expiration !== false ? <th className="px-4 py-3 text-left">Expiration</th> : null}
               {columnVisibility.location !== false ? <th className="px-4 py-3 text-left">Localisation</th> : null}
               {columnVisibility.category !== false ? <th className="px-4 py-3 text-left">Catégorie</th> : null}
+              {customColumns.map((column) =>
+                columnVisibility[column.key] === true ? (
+                  <th key={column.key} className="px-4 py-3 text-left">
+                    {column.label}
+                  </th>
+                ) : null
+              )}
               {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
             </tr>
           </thead>
@@ -790,6 +854,13 @@ export function PharmacyPage() {
                       {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
                     </td>
                   ) : null}
+                  {customColumns.map((column) =>
+                    columnVisibility[column.key] === true ? (
+                      <td key={column.key} className="px-4 py-3 text-slate-300">
+                        {renderCustomValue(item.extra?.[column.fieldKey])}
+                      </td>
+                    ) : null
+                  )}
                   {canEdit ? (
                     <td className="px-4 py-3 text-xs text-slate-200">
                       <div className="flex flex-wrap gap-2">
