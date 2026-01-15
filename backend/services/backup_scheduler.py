@@ -136,7 +136,13 @@ class BackupScheduler:
                 self._run_site(site_key, stop_event, update_event)
             )
 
-    async def _apply_settings(self, site_key: str, settings: models.BackupSettings) -> None:
+    async def _apply_settings(
+        self,
+        site_key: str,
+        settings: models.BackupSettings,
+        *,
+        source: str | None = None,
+    ) -> None:
         try:
             await self._stop_site_task(site_key)
         except asyncio.CancelledError:
@@ -163,11 +169,13 @@ class BackupScheduler:
             if state.running and site_key in self._update_events:
                 self._update_events[site_key].set()
         if changed:
-            logger.info(
-                "Réglages de sauvegarde mis à jour pour %s via %s",
-                site_key,
-                source,
-            )
+            logger.info("Réglages de sauvegarde mis à jour pour %s", site_key)
+            if source:
+                logger.debug(
+                    "Source des réglages de sauvegarde pour %s: %s",
+                    site_key,
+                    source,
+                )
         if self._started:
             if settings.enabled:
                 await self._ensure_site_task(site_key)
