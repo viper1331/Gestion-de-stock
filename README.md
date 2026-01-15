@@ -56,6 +56,7 @@ gestion-stock-pro/
 - `src/components/` : layout principal, toggle de thème et composants transverses.
 - `src/lib/` : instance Axios (JWT-ready), helpers WebSocket et persistance.
 - Tests unitaires avec Vitest + Testing Library.
+- Préférences UI : l'ordre du menu latéral est persisté par utilisateur/site via l'API `/ui/menu-order` (table `ui_menu_prefs` dans `users.db`).
 
 ### Desktop (`desktop/tauri/`)
 - Configuration Tauri minimaliste (`src-tauri/tauri.conf.json`, `Cargo.toml`).

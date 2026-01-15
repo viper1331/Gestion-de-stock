@@ -30,7 +30,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
-from backend.core import db, models, security, sites
+from backend.core import db, menu_registry, models, security, sites
 from backend.core.pdf_config_models import PdfColumnConfig, PdfConfig
 from backend.core.storage import (
     MEDIA_ROOT,
@@ -76,7 +76,7 @@ MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
 _MESSAGE_RATE_LIMIT_DEFAULT_COUNT = 5
 _MESSAGE_RATE_LIMIT_DEFAULT_WINDOW_SECONDS = 60
 
-_MENU_ORDER_MAX_ITEMS = 100
+_MENU_ORDER_MAX_ITEMS = 200
 _MENU_ORDER_MAX_ID_LENGTH = 100
 
 
@@ -3781,58 +3781,110 @@ def get_user_by_id(user_id: int) -> Optional[models.User]:
         return _build_user_from_row(row)
 
 
-def _normalize_menu_order(order: Iterable[str]) -> list[str]:
-    normalized: list[str] = []
+def _normalize_menu_order_items(
+    items: Iterable[models.MenuOrderItem],
+) -> list[models.MenuOrderItem]:
+    normalized: list[models.MenuOrderItem] = []
     seen: set[str] = set()
-    for raw_id in order:
-        if not isinstance(raw_id, str):
+    for item in items:
+        if item.id in seen:
             continue
-        trimmed = raw_id.strip()
-        if not trimmed or len(trimmed) > _MENU_ORDER_MAX_ID_LENGTH:
-            continue
-        if trimmed in seen:
-            continue
-        seen.add(trimmed)
-        normalized.append(trimmed)
+        seen.add(item.id)
+        normalized.append(item)
         if len(normalized) >= _MENU_ORDER_MAX_ITEMS:
             break
     return normalized
 
 
-def get_menu_order(username: str, menu_key: str) -> list[str] | None:
+def _validate_menu_order_items(
+    items: Iterable[models.MenuOrderItem],
+) -> list[models.MenuOrderItem]:
+    normalized = _normalize_menu_order_items(items)
+    for item in normalized:
+        if item.id not in menu_registry.ALL_MENU_IDS:
+            raise ValueError(f"Identifiant de menu inconnu: {item.id}")
+        if item.id in menu_registry.PINNED_IDS:
+            raise ValueError(f"Identifiant de menu verrouillé: {item.id}")
+        if len(item.id) > _MENU_ORDER_MAX_ID_LENGTH:
+            raise ValueError(f"Identifiant de menu trop long: {item.id}")
+        parent_id = item.parent_id
+        if item.id in menu_registry.GROUP_IDS:
+            if parent_id is not None:
+                raise ValueError("Un groupe ne peut pas avoir de parent")
+            continue
+        if parent_id is None:
+            raise ValueError("Un item doit appartenir à un groupe")
+        if parent_id == item.id:
+            raise ValueError("Un item ne peut pas être son propre parent")
+        if parent_id in menu_registry.ITEM_IDS:
+            raise ValueError("Un item ne peut pas être enfant d'un item")
+        if parent_id not in menu_registry.GROUP_IDS:
+            raise ValueError(f"Groupe parent inconnu: {parent_id}")
+    return normalized
+
+
+def get_menu_order(
+    username: str, site_key: str, menu_key: str
+) -> dict[str, Any] | None:
     ensure_database_ready()
-    with db.get_stock_connection() as conn:
+    with db.get_users_connection() as conn:
         row = conn.execute(
-            "SELECT order_json FROM ui_menu_prefs WHERE username = ? AND menu_key = ?",
-            (username, menu_key),
+            """
+            SELECT version, payload_json
+            FROM ui_menu_prefs
+            WHERE site_key = ? AND username = ? AND menu_key = ?
+            """,
+            (site_key, username, menu_key),
         ).fetchone()
     if not row:
         return None
     try:
-        parsed = json.loads(row["order_json"])
+        parsed = json.loads(row["payload_json"])
     except json.JSONDecodeError:
-        return []
+        return None
     if not isinstance(parsed, list):
-        return []
-    return _normalize_menu_order([item for item in parsed if isinstance(item, str)])
+        return None
+    items: list[models.MenuOrderItem] = []
+    try:
+        for entry in parsed:
+            if not isinstance(entry, dict):
+                return None
+            items.append(models.MenuOrderItem(**entry))
+    except Exception:
+        return None
+    return {"version": int(row["version"] or 1), "items": items}
 
 
-def set_menu_order(username: str, menu_key: str, order: list[str]) -> list[str]:
+def set_menu_order(
+    username: str,
+    site_key: str,
+    menu_key: str,
+    payload: models.MenuOrderPayload,
+) -> dict[str, Any]:
     ensure_database_ready()
-    normalized = _normalize_menu_order(order)
-    payload = json.dumps(normalized, ensure_ascii=False)
-    with db.get_stock_connection() as conn:
+    normalized = _validate_menu_order_items(payload.items)
+    payload_json = json.dumps(
+        [
+            item.model_dump(by_alias=True, exclude_none=True)
+            for item in normalized
+        ],
+        ensure_ascii=False,
+    )
+    with db.get_users_connection() as conn:
         conn.execute(
             """
-            INSERT INTO ui_menu_prefs (username, menu_key, order_json, updated_at)
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(username, menu_key)
-            DO UPDATE SET order_json = excluded.order_json, updated_at = CURRENT_TIMESTAMP
+            INSERT INTO ui_menu_prefs (site_key, username, menu_key, version, payload_json, updated_at)
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(site_key, username, menu_key)
+            DO UPDATE SET
+                version = excluded.version,
+                payload_json = excluded.payload_json,
+                updated_at = CURRENT_TIMESTAMP
             """,
-            (username, menu_key, payload),
+            (site_key, username, menu_key, payload.version, payload_json),
         )
         conn.commit()
-    return normalized
+    return {"version": payload.version, "items": normalized}
 
 
 def list_users() -> list[models.User]:
