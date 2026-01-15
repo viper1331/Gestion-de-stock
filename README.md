@@ -121,6 +121,22 @@ disponibles à la racine du projet :
 Chaque script accepte des variables d'environnement (par ex. `HOST`, `PORT`, `RELOAD`, `SKIP_INSTALL`) pour ajuster le
 comportement, mais un simple appel suffit pour lancer les serveurs avec les paramètres par défaut.
 
+### Démarrage rapide (debug)
+Pour accélérer le démarrage du backend en développement, il est possible d'ignorer l'exécution de pytest :
+
+```bash
+python scripts/run_backend.py --skip-tests
+```
+
+ou via variable d'environnement :
+
+```bash
+set SKIP_TESTS=1
+python scripts/run_backend.py
+```
+
+⚠️ À utiliser uniquement en développement.
+
 ## Scripts utiles
 - `python scripts/dev.py` : lance simultanément le backend FastAPI (uvicorn) et le frontend Vite. Options : `--no-frontend` pour ne démarrer que l'API et `--port` pour changer le port du backend.
 - `python scripts/run_backend.py` : crée/active `.venv`, installe les dépendances, exécute `pytest` puis lance FastAPI (`--host`/`--port`, `--skip-install`, `--skip-tests`).

@@ -99,6 +99,8 @@ def ensure_playwright_ready() -> bool:
 
 def main() -> int:
     args = parse_args()
+    env_is_production = os.getenv("ENV", "").lower() == "production"
+    skip_tests_requested = args.skip_tests or os.getenv("SKIP_TESTS") == "1"
     if not VENV_DIR.exists():
         print("➡️  Création de l'environnement virtuel .venv")
         subprocess.run([sys.executable, "-m", "venv", str(VENV_DIR)], check=True)
@@ -120,8 +122,14 @@ def main() -> int:
             BACKEND_DIR,
         )
 
-    if not args.skip_tests:
+    if skip_tests_requested and env_is_production:
+        print("❌ Skip tests interdit en production")
+        skip_tests_requested = False
+
+    if not skip_tests_requested:
         run_step("Exécution des tests", [str(python_bin), "-m", "pytest"], BACKEND_DIR)
+    else:
+        print("⚠️  Mode debug : tests ignorés (--skip-tests)")
 
     ensure_playwright_ready()
 
