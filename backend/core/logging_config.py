@@ -25,6 +25,9 @@ LOG_DIR = Path(os.getenv("LOG_DIR", str(DEFAULT_LOG_DIR))).expanduser()
 LOG_MAX_BYTES = _get_env_int("LOG_MAX_BYTES", 3_072_000)
 LOG_BACKUP_COUNT = _get_env_int("LOG_BACKUP_COUNT", 10)
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO").upper()
+ACCESS_LOG_EXCLUDE_PATHS = os.getenv(
+    "ACCESS_LOG_EXCLUDE_PATHS", "/logs/frontend,/logs/backend"
+)
 
 LOG_DIR.mkdir(parents=True, exist_ok=True)
 
@@ -80,6 +83,56 @@ def purge_rotated_logs(
             except PermissionError:
                 logger.warning("Log file locked; skipping deletion: %s", path)
     return deleted
+
+
+def _parse_excluded_paths(raw_value: str) -> tuple[str, ...]:
+    paths = [entry.strip() for entry in raw_value.split(",")]
+    return tuple(path for path in paths if path)
+
+
+def _extract_access_path(record: logging.LogRecord) -> str | None:
+    if record.args:
+        if isinstance(record.args, tuple) and len(record.args) >= 3:
+            path = record.args[2]
+            if isinstance(path, str):
+                return path
+        if isinstance(record.args, dict):
+            path = record.args.get("path")
+            if isinstance(path, str):
+                return path
+    message = record.getMessage()
+    if '"' not in message:
+        return None
+    first_quote = message.find('"')
+    second_quote = message.find('"', first_quote + 1)
+    if second_quote == -1:
+        return None
+    request_line = message[first_quote + 1 : second_quote]
+    parts = request_line.split(" ")
+    if len(parts) < 2:
+        return None
+    return parts[1]
+
+
+def _normalize_access_path(path: str) -> str:
+    trimmed = path.strip()
+    base = trimmed.split("?", 1)[0]
+    return base
+
+
+class AccessPathExcludeFilter(logging.Filter):
+    def __init__(self, excluded_paths: list[str] | tuple[str, ...]) -> None:
+        super().__init__()
+        self._excluded_paths = tuple(
+            _normalize_access_path(path) for path in excluded_paths if path
+        )
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        path = _extract_access_path(record)
+        if not path:
+            return True
+        normalized = _normalize_access_path(path)
+        return normalized not in self._excluded_paths
 
 
 def configure_logging() -> None:
@@ -162,9 +215,15 @@ def configure_logging() -> None:
     }
 
     logging.config.dictConfig(logging_config)
+    excluded_paths = _parse_excluded_paths(ACCESS_LOG_EXCLUDE_PATHS)
+    access_logger = logging.getLogger("uvicorn.access")
+    for handler in access_logger.handlers:
+        handler.addFilter(AccessPathExcludeFilter(excluded_paths))
 
 
 __all__ = [
+    "ACCESS_LOG_EXCLUDE_PATHS",
+    "AccessPathExcludeFilter",
     "configure_logging",
     "LOG_BACKUP_COUNT",
     "LOG_DIR",
