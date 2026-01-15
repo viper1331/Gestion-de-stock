@@ -42,7 +42,17 @@ class BackupScheduler:
         """Recharge la configuration depuis les bases sites."""
         for site_key in db.list_site_keys():
             settings = load_backup_settings_from_db(site_key)
-            await self._apply_settings(site_key, settings)
+            try:
+                await self._apply_settings(site_key, settings)
+            except asyncio.CancelledError:
+                logger.debug(
+                    "Annulation ignorée lors du rechargement des réglages pour %s", site_key
+                )
+            except Exception:  # pragma: no cover - journalisation d'erreur
+                logger.exception(
+                    "Erreur lors du rechargement des réglages de sauvegarde pour %s",
+                    site_key,
+                )
 
     async def update_settings(self, site_key: str, settings: models.BackupSettings) -> None:
         """Enregistre et applique une nouvelle configuration."""
@@ -75,7 +85,14 @@ class BackupScheduler:
             return 0
 
     async def _apply_settings(self, site_key: str, settings: models.BackupSettings) -> None:
-        await self._stop_site_task(site_key)
+        try:
+            await self._stop_site_task(site_key)
+        except asyncio.CancelledError:
+            logger.debug(
+                "Annulation ignorée lors de l'arrêt de la tâche de %s", site_key
+            )
+        except Exception:  # pragma: no cover - journalisation d'erreur
+            logger.exception("Erreur lors de l'arrêt de la tâche de %s", site_key)
         async with self._lock:
             self._settings[site_key] = settings
             self._next_run[site_key] = None
@@ -90,7 +107,7 @@ class BackupScheduler:
             self._tasks[site_key] = asyncio.create_task(
                 self._run_site(site_key, stop_event, update_event)
             )
-        logger.info("Planificateur mis à jour pour le site %s", site_key)
+        logger.debug("Planificateur mis à jour pour le site %s", site_key)
 
     async def _stop_site_task(self, site_key: str) -> None:
         async with self._lock:
@@ -103,7 +120,24 @@ class BackupScheduler:
                 stop_event.set()
             if update_event:
                 update_event.set()
-        await task
+        should_await = False
+        try:
+            current_loop = asyncio.get_running_loop()
+            task_loop = task.get_loop()
+            if task_loop.is_closed() or task_loop is not current_loop:
+                task.cancel()
+            else:
+                task.cancel()
+                should_await = True
+        except RuntimeError:
+            task.cancel()
+        if should_await:
+            try:
+                await task
+            except asyncio.CancelledError:
+                logger.debug("Annulation absorbée pour la tâche %s", site_key)
+            except Exception:  # pragma: no cover - journalisation d'erreur
+                logger.debug("Erreur absorbée lors de l'arrêt de la tâche %s", site_key)
         async with self._lock:
             if self._tasks.get(site_key) is task:
                 self._tasks.pop(site_key, None)
@@ -114,49 +148,62 @@ class BackupScheduler:
     async def _run_site(
         self, site_key: str, stop_event: asyncio.Event, update_event: asyncio.Event
     ) -> None:
-        while True:
-            if stop_event.is_set():
-                break
-            async with self._lock:
-                settings = self._settings.get(site_key)
-                next_run = self._next_run.get(site_key)
-                last_run = self._last_run.get(site_key)
-            if settings is None or not settings.enabled:
-                await self._wait_for_update(stop_event, update_event)
-                continue
-
-            now = datetime.now()
-            if next_run is None or next_run <= now:
-                reference = last_run or now
-                next_run = reference + timedelta(minutes=settings.interval_minutes)
+        try:
+            while True:
+                if stop_event.is_set():
+                    break
                 async with self._lock:
-                    self._next_run[site_key] = next_run
+                    settings = self._settings.get(site_key)
+                    next_run = self._next_run.get(site_key)
+                    last_run = self._last_run.get(site_key)
+                if settings is None or not settings.enabled:
+                    await self._wait_for_update(stop_event, update_event)
+                    continue
 
-            delay = max(0.0, (next_run - datetime.now()).total_seconds())
-            sleep_task = asyncio.create_task(asyncio.sleep(delay))
-            update_task = asyncio.create_task(update_event.wait())
-            stop_task = asyncio.create_task(stop_event.wait())
+                now = datetime.now()
+                if next_run is None or next_run <= now:
+                    reference = last_run or now
+                    next_run = reference + timedelta(minutes=settings.interval_minutes)
+                    async with self._lock:
+                        self._next_run[site_key] = next_run
 
-            done, pending = await asyncio.wait(
-                {sleep_task, update_task, stop_task}, return_when=asyncio.FIRST_COMPLETED
+                delay = max(0.0, (next_run - datetime.now()).total_seconds())
+                sleep_task = asyncio.create_task(asyncio.sleep(delay))
+                update_task = asyncio.create_task(update_event.wait())
+                stop_task = asyncio.create_task(stop_event.wait())
+
+                try:
+                    done, pending = await asyncio.wait(
+                        {sleep_task, update_task, stop_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                    )
+                except asyncio.CancelledError:
+                    for task in (sleep_task, update_task, stop_task):
+                        task.cancel()
+                    raise
+                for task in pending:
+                    task.cancel()
+
+                if stop_task in done:
+                    break
+
+                if update_task in done:
+                    update_event.clear()
+                    continue
+
+                if sleep_task in done:
+                    await self._execute_backup(site_key)
+                    async with self._lock:
+                        self._last_run[site_key] = datetime.now()
+                        self._next_run[site_key] = None
+        except asyncio.CancelledError:
+            logger.debug("Annulation absorbée pour la tâche de %s", site_key)
+        finally:
+            stop_event.set()
+            update_event.set()
+            logger.debug(
+                "Fin de la tâche de planification des sauvegardes pour %s", site_key
             )
-            for task in pending:
-                task.cancel()
-
-            if stop_task in done:
-                break
-
-            if update_task in done:
-                update_event.clear()
-                continue
-
-            if sleep_task in done:
-                await self._execute_backup(site_key)
-                async with self._lock:
-                    self._last_run[site_key] = datetime.now()
-                    self._next_run[site_key] = None
-
-        logger.info("Fin de la tâche de planification des sauvegardes pour %s", site_key)
 
     async def _wait_for_update(
         self, stop_event: asyncio.Event, update_event: asyncio.Event
