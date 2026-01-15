@@ -1,4 +1,4 @@
-import { api } from "./api";
+import { api, setAdminSiteOverride } from "./api";
 
 export interface SiteInfo {
   site_key: string;
@@ -16,10 +16,12 @@ export interface SiteContext {
 
 export async function fetchSiteContext(): Promise<SiteContext> {
   const response = await api.get<SiteContext>("/sites/active");
+  setAdminSiteOverride(response.data.override_site_key ?? null);
   return response.data;
 }
 
 export async function updateActiveSite(siteKey: string | null): Promise<SiteContext> {
   const response = await api.put<SiteContext>("/sites/active", { site_key: siteKey });
+  setAdminSiteOverride(response.data.override_site_key ?? null);
   return response.data;
 }

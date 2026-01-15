@@ -285,6 +285,9 @@ export function AdminSettingsPage() {
     onSuccess: async (data) => {
       setSiteMessage("Base de données active mise à jour.");
       setSiteError(null);
+      if (data.active_site_key !== (siteContext?.active_site_key ?? null)) {
+        queryClient.clear();
+      }
       await queryClient.invalidateQueries({ queryKey: ["site-context"] });
       queryClient.setQueryData(["site-context"], data);
     },

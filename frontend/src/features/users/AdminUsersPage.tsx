@@ -9,23 +9,33 @@ import { EditableBlock } from "../../components/EditableBlock";
 
 type UserRole = "admin" | "user";
 
+const SITE_OPTIONS = [
+  { value: "JLL", label: "JLL" },
+  { value: "GSM", label: "GSM" },
+  { value: "ST_ELOIS", label: "St Elois" },
+  { value: "CENTRAL_ENTITY", label: "Central Entity" }
+];
+
 interface UserEntry {
   id: number;
   username: string;
   role: UserRole;
   is_active: boolean;
+  site_key: string;
 }
 
 interface CreateUserForm {
   username: string;
   password: string;
   role: UserRole;
+  site_key: string;
 }
 
 interface UserDraft {
   role: UserRole;
   password: string;
   is_active: boolean;
+  site_key: string;
 }
 
 export function AdminUsersPage() {
@@ -36,7 +46,8 @@ export function AdminUsersPage() {
   const [createForm, setCreateForm] = useState<CreateUserForm>({
     username: "",
     password: "",
-    role: "user"
+    role: "user",
+    site_key: "JLL"
   });
   const [drafts, setDrafts] = useState<Record<number, UserDraft>>({});
 
@@ -63,7 +74,7 @@ export function AdminUsersPage() {
     onSuccess: async () => {
       setMessage("Utilisateur créé.");
       setError(null);
-      setCreateForm({ username: "", password: "", role: "user" });
+      setCreateForm({ username: "", password: "", role: "user", site_key: "JLL" });
       setDrafts({});
       await queryClient.invalidateQueries({ queryKey: ["admin-users"] });
       clearMessageLater();
@@ -116,7 +127,8 @@ export function AdminUsersPage() {
       acc[entry.id] = drafts[entry.id] ?? {
         role: entry.role,
         password: "",
-        is_active: entry.is_active
+        is_active: entry.is_active,
+        site_key: entry.site_key
       };
       return acc;
     }, {});
@@ -153,7 +165,12 @@ export function AdminUsersPage() {
 
     setMessage(null);
     setError(null);
-    await createUser.mutateAsync({ username, password, role: createForm.role });
+    await createUser.mutateAsync({
+      username,
+      password,
+      role: createForm.role,
+      site_key: createForm.site_key
+    });
   };
 
   const handleDraftChange = (entry: UserEntry, partial: Partial<UserDraft>) => {
@@ -161,7 +178,8 @@ export function AdminUsersPage() {
       const base = prev[entry.id] ?? {
         role: entry.role,
         password: "",
-        is_active: entry.is_active
+        is_active: entry.is_active,
+        site_key: entry.site_key
       };
       return {
         ...prev,
@@ -175,7 +193,8 @@ export function AdminUsersPage() {
     return (
       draft.role !== entry.role ||
       draft.is_active !== entry.is_active ||
-      (draft.password?.length ?? 0) > 0
+      (draft.password?.length ?? 0) > 0 ||
+      draft.site_key !== entry.site_key
     );
   };
 
@@ -190,6 +209,9 @@ export function AdminUsersPage() {
     }
     if (draft.password) {
       payload.password = draft.password;
+    }
+    if (draft.site_key !== entry.site_key) {
+      payload.site_key = draft.site_key;
     }
     if (Object.keys(payload).length === 0) {
       setMessage("Aucune modification à enregistrer.");
@@ -271,6 +293,23 @@ export function AdminUsersPage() {
             <option value="admin">Administrateur</option>
           </select>
         </label>
+        <label className="flex flex-col text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Site
+          <select
+            className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={createForm.site_key}
+            onChange={(event) =>
+              setCreateForm((prev) => ({ ...prev, site_key: event.target.value }))
+            }
+            title="Choisissez le site associé au nouvel utilisateur"
+          >
+            {SITE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
         <button
           type="submit"
           disabled={createUser.isPending || isProcessing}
@@ -287,6 +326,7 @@ export function AdminUsersPage() {
             <tr>
               <th className="px-4 py-2 text-left">Identifiant</th>
               <th className="px-4 py-2 text-left">Rôle</th>
+              <th className="px-4 py-2 text-left">Site</th>
               <th className="px-4 py-2 text-left">Actif</th>
               <th className="px-4 py-2 text-left">Mot de passe</th>
               <th className="px-4 py-2 text-left">Actions</th>
@@ -309,6 +349,22 @@ export function AdminUsersPage() {
                     >
                       <option value="user">Utilisateur</option>
                       <option value="admin">Administrateur</option>
+                    </select>
+                  </td>
+                  <td className="px-4 py-3">
+                    <select
+                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm focus:border-indigo-500 focus:outline-none"
+                      value={draft.site_key}
+                      onChange={(event) =>
+                        handleDraftChange(entry, { site_key: event.target.value })
+                      }
+                      title="Modifier le site attribué à cet utilisateur"
+                    >
+                      {SITE_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
                     </select>
                   </td>
                   <td className="px-4 py-3">
@@ -369,7 +425,7 @@ export function AdminUsersPage() {
             })}
             {users.length === 0 ? (
               <tr>
-                <td colSpan={5} className="px-4 py-6 text-center text-sm text-slate-400">
+                <td colSpan={6} className="px-4 py-6 text-center text-sm text-slate-400">
                   Aucun utilisateur trouvé.
                 </td>
               </tr>

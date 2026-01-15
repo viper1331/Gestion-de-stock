@@ -3,7 +3,7 @@ import { createWithEqualityFn } from "zustand/traditional";
 import { shallow } from "zustand/shallow";
 import { useNavigate } from "react-router-dom";
 
-import { api, setAccessToken } from "../../lib/api";
+import { api, setAccessToken, setAdminSiteOverride } from "../../lib/api";
 
 interface LoginPayload {
   username: string;
@@ -16,6 +16,7 @@ interface UserProfile {
   username: string;
   role: string;
   is_active: boolean;
+  site_key: string;
 }
 
 interface AuthState {
@@ -112,6 +113,9 @@ export function useAuth() {
           token: data.access_token,
           refreshToken: remember ? data.refresh_token : null
         });
+        if (profile.role !== "admin") {
+          setAdminSiteOverride(null);
+        }
         if (remember) {
           localStorage.setItem("gsp/token", data.refresh_token);
         } else {
@@ -144,10 +148,14 @@ export function useAuth() {
       setAccessToken(data.access_token);
       const profile = await fetchProfile();
       setAuth({ user: profile, token: data.access_token, refreshToken: data.refresh_token });
+      if (profile.role !== "admin") {
+        setAdminSiteOverride(null);
+      }
       localStorage.setItem("gsp/token", data.refresh_token);
     } catch (error) {
       localStorage.removeItem("gsp/token");
       setAccessToken(null);
+      setAdminSiteOverride(null);
       clear();
     } finally {
       setChecking(false);
@@ -158,6 +166,7 @@ export function useAuth() {
   const logout = useCallback(() => {
     clear();
     setAccessToken(null);
+    setAdminSiteOverride(null);
     localStorage.removeItem("gsp/token");
     setReady(true);
     navigate("/login");

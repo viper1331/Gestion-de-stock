@@ -2,15 +2,18 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from backend.core import db, security, services, sites
+from fastapi.testclient import TestClient
+
+from backend.app import app
+from backend.core import db, models, security, services, sites
 
 
 def _create_user(username: str, role: str = "user") -> None:
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
         conn.execute(
-            "INSERT INTO users (username, password, role, is_active) VALUES (?, ?, ?, 1)",
-            (username, security.hash_password("pass"), role),
+            "INSERT INTO users (username, password, role, is_active, site_key) VALUES (?, ?, ?, 1, ?)",
+            (username, security.hash_password("pass"), role, db.DEFAULT_SITE_KEY),
         )
         conn.commit()
 
@@ -64,3 +67,85 @@ def test_non_admin_header_is_ignored(tmp_path, monkeypatch) -> None:
 
     resolved = sites.resolve_site_key(user, header_site_key="GSM")
     assert resolved == "JLL"
+
+
+def test_default_site_key_jll_when_missing(tmp_path, monkeypatch) -> None:
+    _init_test_dbs(tmp_path, monkeypatch)
+    created = services.create_user(
+        models.UserCreate(username="site-default", password="pass12345", role="user")
+    )
+    assert created.site_key == "JLL"
+    fetched = services.get_user("site-default")
+    assert fetched is not None
+    assert fetched.site_key == "JLL"
+
+
+def test_non_admin_site_forced_ignores_header(tmp_path, monkeypatch) -> None:
+    _init_test_dbs(tmp_path, monkeypatch)
+    _create_user("viewer", role="user")
+    sites.set_user_site_assignment("viewer", "GSM")
+    user = services.get_user("viewer")
+    assert user is not None
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(user_id=user.id, module="clothing", can_view=True, can_edit=False)
+    )
+
+    with db.get_stock_connection("GSM") as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute(
+            "INSERT INTO items (name, sku, quantity) VALUES (?, ?, ?)",
+            ("GSM Item", "GSM-ITEM", 1),
+        )
+        conn.commit()
+    with db.get_stock_connection("JLL") as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute(
+            "INSERT INTO items (name, sku, quantity) VALUES (?, ?, ?)",
+            ("JLL Item", "JLL-ITEM", 1),
+        )
+        conn.commit()
+
+    client = TestClient(app)
+    login = client.post("/auth/login", json={"username": "viewer", "password": "pass", "remember_me": False})
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    response = client.get("/items/", headers={"Authorization": f"Bearer {token}", "X-Site-Key": "JLL"})
+    assert response.status_code == 200
+    skus = {item["sku"] for item in response.json()}
+    assert "GSM-ITEM" in skus
+    assert "JLL-ITEM" not in skus
+
+
+def test_admin_can_switch_site(tmp_path, monkeypatch) -> None:
+    _init_test_dbs(tmp_path, monkeypatch)
+    _create_user("admin-switch", role="admin")
+    sites.set_user_site_assignment("admin-switch", "JLL")
+
+    with db.get_stock_connection("ST_ELOIS") as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute(
+            "INSERT INTO items (name, sku, quantity) VALUES (?, ?, ?)",
+            ("St Elois Item", "STE-ITEM", 1),
+        )
+        conn.commit()
+    with db.get_stock_connection("JLL") as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute(
+            "INSERT INTO items (name, sku, quantity) VALUES (?, ?, ?)",
+            ("JLL Item", "JLL-ITEM", 1),
+        )
+        conn.commit()
+
+    client = TestClient(app)
+    login = client.post("/auth/login", json={"username": "admin-switch", "password": "pass", "remember_me": False})
+    assert login.status_code == 200
+    token = login.json()["access_token"]
+    headers = {"Authorization": f"Bearer {token}"}
+
+    update = client.put("/sites/active", json={"site_key": "ST_ELOIS"}, headers=headers)
+    assert update.status_code == 200
+    list_items = client.get("/items/", headers=headers)
+    assert list_items.status_code == 200
+    skus = {item["sku"] for item in list_items.json()}
+    assert "STE-ITEM" in skus
+    assert "JLL-ITEM" not in skus
