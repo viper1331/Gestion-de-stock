@@ -28,7 +28,9 @@ from backend.services.pdf.vehicle_inventory.jobs import (
     ensure_not_cancelled,
     get_job,
     launch_job,
+    mark_error,
     request_cancel,
+    run_job_sync,
     update_progress,
 )
 from backend.services.pdf.vehicle_inventory.renderer import PlaywrightPdfError
@@ -171,6 +173,10 @@ def _vehicle_inventory_filename() -> str:
     return filename
 
 
+def is_testing() -> bool:
+    return os.getenv("APP_ENV") == "test" or "PYTEST_CURRENT_TEST" in os.environ
+
+
 def _start_vehicle_inventory_job(
     *, pointer_targets: dict[str, models.PointerTarget] | None, options: VehiclePdfOptions, user: models.User
 ) -> dict[str, str]:
@@ -182,7 +188,11 @@ def _start_vehicle_inventory_job(
         raise HTTPException(status_code=503, detail=build_playwright_error_message(diagnostics.status))
     filename = _vehicle_inventory_filename()
     job = create_job(filename=filename)
-    launch_job(job, _build_pdf_worker(job=job, pointer_targets=pointer_targets, options=resolved_options))
+    worker = _build_pdf_worker(job=job, pointer_targets=pointer_targets, options=resolved_options)
+    if is_testing():
+        run_job_sync(job, worker)
+    else:
+        launch_job(job, worker)
     return {"job_id": job.job_id, "status": job.status, "filename": filename}
 
 
@@ -227,6 +237,10 @@ async def get_vehicle_inventory_pdf_job_status(
     }
     if job.error:
         response["error"] = job.error
+    if job.status == "done" and not job.pdf_bytes and not job.result_path:
+        mark_error(job, "Export PDF terminé sans fichier généré.")
+        response["status"] = job.status
+        response["error"] = job.error
     if job.status == "done":
         response["download_url"] = f"/vehicle-inventory/export/pdf/jobs/{job.job_id}/download"
     return response
@@ -256,11 +270,22 @@ async def download_vehicle_inventory_pdf_job(
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Export PDF introuvable.")
-    if job.status != "done" or not job.result_path or not job.result_path.exists():
+    if job.status != "done":
         detail = "Export PDF en cours de génération."
         if job.status == "cancelled":
             detail = "Export PDF annulé."
         raise HTTPException(status_code=409, detail=detail)
+    if job.pdf_bytes:
+        filename = job.filename or f"{job.job_id}.pdf"
+        return StreamingResponse(
+            io.BytesIO(job.pdf_bytes),
+            media_type=job.content_type or "application/pdf",
+            headers={
+                "Content-Disposition": f"attachment; filename=\"{filename}\"",
+            },
+        )
+    if not job.result_path or not job.result_path.exists():
+        raise HTTPException(status_code=409, detail="Export PDF terminé sans fichier généré.")
     filename = job.filename or f"{job.job_id}.pdf"
     return StreamingResponse(
         io.BytesIO(job.result_path.read_bytes()),
