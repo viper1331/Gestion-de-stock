@@ -4,6 +4,8 @@ import { isAxiosError } from "axios";
 
 import { api } from "../../lib/api";
 import { AppTextInput } from "../../components/AppTextInput";
+import { FieldHelpTooltip } from "../../components/FieldHelpTooltip";
+import { LINK_CATEGORY_FIELD_HELP } from "../linkCategories/linkCategoryHelp";
 import { useAuth } from "../auth/useAuth";
 
 type LinkModule = "vehicle_qr" | "pharmacy";
@@ -180,9 +182,13 @@ export function LinkCategoriesPage() {
           </p>
         </div>
         <div className="flex w-full items-center gap-2 sm:w-auto">
-          <label className="text-sm font-semibold text-slate-700 dark:text-slate-200">
-            Module
-          </label>
+          <div className="flex items-center gap-2 text-sm font-semibold text-slate-700 dark:text-slate-200">
+            <span>Module</span>
+            <FieldHelpTooltip
+              text={LINK_CATEGORY_FIELD_HELP.module}
+              ariaLabel="Aide sur le module"
+            />
+          </div>
           <select
             value={module}
             onChange={(event) => setModule(event.target.value as LinkModule)}
@@ -197,62 +203,124 @@ export function LinkCategoriesPage() {
       <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm dark:border-slate-800 dark:bg-slate-900">
         <h2 className="text-base font-semibold text-slate-900 dark:text-white">Nouvelle catégorie</h2>
         <div className="mt-4 grid min-w-0 gap-3 lg:grid-cols-6">
-          <AppTextInput
-            value={newCategory.label}
-            onChange={(event) => setNewCategory((prev) => ({ ...prev, label: event.target.value }))}
-            placeholder="Libellé"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-          <AppTextInput
-            value={newCategory.key}
-            onChange={(event) => setNewCategory((prev) => ({ ...prev, key: event.target.value }))}
-            placeholder="Clé (slug)"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-          <AppTextInput
-            value={newCategory.placeholder}
-            onChange={(event) => setNewCategory((prev) => ({ ...prev, placeholder: event.target.value }))}
-            placeholder="Placeholder"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-          <AppTextInput
-            value={newCategory.help_text}
-            onChange={(event) => setNewCategory((prev) => ({ ...prev, help_text: event.target.value }))}
-            placeholder="Aide"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-          <AppTextInput
-            type="number"
-            value={newCategory.sort_order}
-            onChange={(event) =>
-              setNewCategory((prev) => ({ ...prev, sort_order: Number(event.target.value) }))
-            }
-            placeholder="Ordre"
-            className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
-          />
-          <div className="flex flex-wrap items-center gap-3">
-            <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
-              <AppTextInput
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
-                checked={newCategory.is_required}
-                onChange={(event) =>
-                  setNewCategory((prev) => ({ ...prev, is_required: event.target.checked }))
-                }
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+              <span>Libellé</span>
+              <FieldHelpTooltip
+                text={LINK_CATEGORY_FIELD_HELP.label}
+                ariaLabel="Aide sur le libellé"
               />
-              Requis
-            </label>
-            <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
-              <AppTextInput
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
-                checked={newCategory.is_active}
-                onChange={(event) =>
-                  setNewCategory((prev) => ({ ...prev, is_active: event.target.checked }))
-                }
+            </div>
+            <AppTextInput
+              value={newCategory.label}
+              onChange={(event) =>
+                setNewCategory((prev) => ({ ...prev, label: event.target.value }))
+              }
+              placeholder="Libellé"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+              <span>Clé</span>
+              <FieldHelpTooltip text={LINK_CATEGORY_FIELD_HELP.key} ariaLabel="Aide sur la clé" />
+            </div>
+            <AppTextInput
+              value={newCategory.key}
+              onChange={(event) => setNewCategory((prev) => ({ ...prev, key: event.target.value }))}
+              placeholder="Clé (slug)"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+              <span>Placeholder</span>
+              <FieldHelpTooltip
+                text={LINK_CATEGORY_FIELD_HELP.placeholder}
+                ariaLabel="Aide sur le placeholder"
               />
-              Actif
-            </label>
+            </div>
+            <AppTextInput
+              value={newCategory.placeholder}
+              onChange={(event) =>
+                setNewCategory((prev) => ({ ...prev, placeholder: event.target.value }))
+              }
+              placeholder="Placeholder"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+              <span>Aide</span>
+              <FieldHelpTooltip
+                text={LINK_CATEGORY_FIELD_HELP.help_text}
+                ariaLabel="Aide sur le texte d'aide"
+              />
+            </div>
+            <AppTextInput
+              value={newCategory.help_text}
+              onChange={(event) =>
+                setNewCategory((prev) => ({ ...prev, help_text: event.target.value }))
+              }
+              placeholder="Aide"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+          <div className="flex flex-col gap-1">
+            <div className="flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+              <span>Ordre</span>
+              <FieldHelpTooltip
+                text={LINK_CATEGORY_FIELD_HELP.sort_order}
+                ariaLabel="Aide sur l'ordre"
+              />
+            </div>
+            <AppTextInput
+              type="number"
+              value={newCategory.sort_order}
+              onChange={(event) =>
+                setNewCategory((prev) => ({ ...prev, sort_order: Number(event.target.value) }))
+              }
+              placeholder="Ordre"
+              className="w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100"
+            />
+          </div>
+          <div className="flex flex-col gap-2">
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                <AppTextInput
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                  checked={newCategory.is_required}
+                  onChange={(event) =>
+                    setNewCategory((prev) => ({ ...prev, is_required: event.target.checked }))
+                  }
+                />
+                <span className="inline-flex items-center gap-1">
+                  Requis
+                  <FieldHelpTooltip
+                    text={LINK_CATEGORY_FIELD_HELP.is_required}
+                    ariaLabel="Aide sur le caractère requis"
+                  />
+                </span>
+              </label>
+              <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
+                <AppTextInput
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-slate-400 text-indigo-600 focus:ring-indigo-500"
+                  checked={newCategory.is_active}
+                  onChange={(event) =>
+                    setNewCategory((prev) => ({ ...prev, is_active: event.target.checked }))
+                  }
+                />
+                <span className="inline-flex items-center gap-1">
+                  Actif
+                  <FieldHelpTooltip
+                    text={LINK_CATEGORY_FIELD_HELP.is_active}
+                    ariaLabel="Aide sur le statut actif"
+                  />
+                </span>
+              </label>
+            </div>
           </div>
         </div>
         <div className="mt-4 flex flex-wrap items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
@@ -274,11 +342,48 @@ export function LinkCategoriesPage() {
           <table className="min-w-full text-left text-sm">
             <thead className="bg-slate-50 text-xs uppercase text-slate-500 dark:bg-slate-950 dark:text-slate-400">
               <tr>
-                <th className="px-3 py-2">Libellé</th>
-                <th className="px-3 py-2">Clé</th>
-                <th className="px-3 py-2">Placeholder</th>
-                <th className="px-3 py-2">Aide</th>
-                <th className="px-3 py-2">Ordre</th>
+                <th className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span>Libellé</span>
+                    <FieldHelpTooltip
+                      text={LINK_CATEGORY_FIELD_HELP.label}
+                      ariaLabel="Aide sur le libellé"
+                    />
+                  </div>
+                </th>
+                <th className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span>Clé</span>
+                    <FieldHelpTooltip text={LINK_CATEGORY_FIELD_HELP.key} ariaLabel="Aide sur la clé" />
+                  </div>
+                </th>
+                <th className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span>Placeholder</span>
+                    <FieldHelpTooltip
+                      text={LINK_CATEGORY_FIELD_HELP.placeholder}
+                      ariaLabel="Aide sur le placeholder"
+                    />
+                  </div>
+                </th>
+                <th className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span>Aide</span>
+                    <FieldHelpTooltip
+                      text={LINK_CATEGORY_FIELD_HELP.help_text}
+                      ariaLabel="Aide sur le texte d'aide"
+                    />
+                  </div>
+                </th>
+                <th className="px-3 py-2">
+                  <div className="flex items-center gap-2">
+                    <span>Ordre</span>
+                    <FieldHelpTooltip
+                      text={LINK_CATEGORY_FIELD_HELP.sort_order}
+                      ariaLabel="Aide sur l'ordre"
+                    />
+                  </div>
+                </th>
                 <th className="px-3 py-2">Statut</th>
                 <th className="px-3 py-2">Actions</th>
               </tr>
@@ -365,7 +470,13 @@ export function LinkCategoriesPage() {
                                 })
                               }
                             />
-                            Requis
+                            <span className="inline-flex items-center gap-1">
+                              Requis
+                              <FieldHelpTooltip
+                                text={LINK_CATEGORY_FIELD_HELP.is_required}
+                                ariaLabel="Aide sur le caractère requis"
+                              />
+                            </span>
                           </label>
                           <label className="inline-flex items-center gap-2 text-xs font-semibold text-slate-700 dark:text-slate-200">
                             <AppTextInput
@@ -378,7 +489,13 @@ export function LinkCategoriesPage() {
                                 })
                               }
                             />
-                            Actif
+                            <span className="inline-flex items-center gap-1">
+                              Actif
+                              <FieldHelpTooltip
+                                text={LINK_CATEGORY_FIELD_HELP.is_active}
+                                ariaLabel="Aide sur le statut actif"
+                              />
+                            </span>
                           </label>
                         </div>
                       </td>
