@@ -1,21 +1,35 @@
 import { api } from "../lib/api";
 
-type MenuOrderResponse = {
-  menu_key: string;
-  order: string[];
+export type MenuOrderItem = {
+  id: string;
+  parentId: string | null;
+  order: number;
 };
 
-export async function getMenuOrder(menuKey = "main_modules"): Promise<string[]> {
-  const response = await api.get<MenuOrderResponse>("/ui/menu-order", {
+export type MenuOrderResponse = {
+  menu_key: string;
+  version: number;
+  items: MenuOrderItem[];
+};
+
+export type MenuOrderPayload = {
+  version: number;
+  items: MenuOrderItem[];
+};
+
+export async function getMenuOrder(menuKey = "main_menu"): Promise<MenuOrderResponse | null> {
+  const response = await api.get<MenuOrderResponse | null>("/ui/menu-order", {
     params: { menu_key: menuKey }
   });
-  return response.data.order;
+  return response.data ?? null;
 }
 
-export async function setMenuOrder(order: string[], menuKey = "main_modules"): Promise<string[]> {
-  const response = await api.put<MenuOrderResponse>("/ui/menu-order", {
-    menu_key: menuKey,
-    order
+export async function setMenuOrder(
+  payload: MenuOrderPayload,
+  menuKey = "main_menu"
+): Promise<MenuOrderResponse> {
+  const response = await api.put<MenuOrderResponse>("/ui/menu-order", payload, {
+    params: { menu_key: menuKey }
   });
-  return response.data.order;
+  return response.data;
 }

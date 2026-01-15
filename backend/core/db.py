@@ -260,6 +260,16 @@ def init_databases() -> None:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(username, page_key)
                 );
+                CREATE TABLE IF NOT EXISTS ui_menu_prefs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_key TEXT NOT NULL,
+                    username TEXT NOT NULL,
+                    menu_key TEXT NOT NULL,
+                    version INTEGER NOT NULL DEFAULT 1,
+                    payload_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(site_key, username, menu_key)
+                );
                 """
             )
             _ensure_user_site_columns(conn)

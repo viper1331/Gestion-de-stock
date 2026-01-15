@@ -124,35 +124,41 @@ class MessageSendResponse(BaseModel):
     recipients_count: int
 
 
-class MenuOrderPayload(BaseModel):
-    menu_key: str = Field(default="main_modules", min_length=1, max_length=64)
-    order: list[str] = Field(default_factory=list, max_length=100)
+class MenuOrderItem(BaseModel):
+    id: str = Field(min_length=1, max_length=100)
+    parent_id: str | None = Field(default=None, alias="parentId", max_length=100)
+    order: int = Field(ge=0)
 
-    @field_validator("menu_key")
+    model_config = ConfigDict(populate_by_name=True)
+
+    @field_validator("id")
     @classmethod
-    def _normalize_menu_key(cls, value: str) -> str:
+    def _normalize_id(cls, value: str) -> str:
         trimmed = value.strip()
         if not trimmed:
-            raise ValueError("menu_key vide")
+            raise ValueError("Identifiant de menu vide")
         return trimmed
 
-    @field_validator("order")
+    @field_validator("parent_id")
     @classmethod
-    def _validate_order(cls, value: list[str]) -> list[str]:
-        normalized: list[str] = []
-        for item in value:
-            trimmed = item.strip()
-            if not trimmed:
-                raise ValueError("Identifiant de menu vide")
-            if len(trimmed) > 100:
-                raise ValueError("Identifiant de menu trop long")
-            normalized.append(trimmed)
-        return normalized
+    def _normalize_parent_id(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        trimmed = value.strip()
+        if not trimmed:
+            return None
+        return trimmed
+
+
+class MenuOrderPayload(BaseModel):
+    version: int = Field(default=1, ge=1)
+    items: list[MenuOrderItem] = Field(default_factory=list, max_length=200)
 
 
 class MenuOrderResponse(BaseModel):
     menu_key: str
-    order: list[str]
+    version: int
+    items: list[MenuOrderItem]
 
 
 class InboxMessage(BaseModel):

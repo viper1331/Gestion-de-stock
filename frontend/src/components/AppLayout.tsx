@@ -3,10 +3,14 @@ import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode }
 import { useQuery } from "@tanstack/react-query";
 import {
   DndContext,
+  DragCancelEvent,
   DragEndEvent,
+  DragOverEvent,
+  DragStartEvent,
   MouseSensor,
   TouchSensor,
   closestCenter,
+  useDroppable,
   useSensor,
   useSensors
 } from "@dnd-kit/core";
@@ -20,48 +24,38 @@ import { ThemeToggle } from "./ThemeToggle";
 import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
-import { getMenuOrder, setMenuOrder } from "../api/uiMenu";
+import { getMenuOrder, setMenuOrder, type MenuOrderPayload } from "../api/uiMenu";
 import { fetchConfigEntries } from "../lib/config";
 import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
-import { applyOrder } from "../lib/menuOrder";
+import { mergeMenuOrder } from "../lib/menuOrder";
 
-type MenuItem =
-  | {
-      id: string;
-      type: "link";
-      label: string;
-      tooltip: string;
-      icon?: string;
-      to: string;
-      isPinned?: boolean;
-    }
-  | {
-      id: string;
-      type: "group";
-      label: string;
-      tooltip: string;
-      icon?: string;
-      group: {
-        id: string;
-        label: string;
-        tooltip: string;
-        icon?: string;
-        sections: {
-          id: string;
-          label: string;
-          tooltip: string;
-          links: {
-            to: string;
-            label: string;
-            tooltip: string;
-            icon?: string;
-          }[];
-        }[];
-      };
-      isPinned?: boolean;
-    };
+type MenuItem = {
+  id: string;
+  label: string;
+  tooltip: string;
+  icon?: string;
+  to: string;
+};
+
+type MenuItemDefinition = MenuItem & {
+  module?: string;
+  modules?: string[];
+  adminOnly?: boolean;
+};
+
+type MenuGroup = {
+  id: string;
+  label: string;
+  tooltip: string;
+  icon?: string;
+  items: MenuItem[];
+};
+
+type MenuGroupDefinition = Omit<MenuGroup, "items"> & {
+  items: MenuItemDefinition[];
+};
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
@@ -148,6 +142,12 @@ export function AppLayout() {
       setMobileDrawerOpen(false);
     }
   }, [isDesktop]);
+
+  useEffect(() => {
+    if (isReorderMode && isDesktop && !sidebarOpen) {
+      toggleSidebar();
+    }
+  }, [isDesktop, isReorderMode, sidebarOpen, toggleSidebar]);
 
   useEffect(() => {
     if (!isMobile) {
@@ -254,321 +254,264 @@ export function AppLayout() {
 
   const navigationGroups = useMemo(
     () => {
-      type NavLinkItem = {
-        to: string;
-        label: string;
-        tooltip: string;
-        icon?: string;
-        module?: string;
-        modules?: string[];
-        adminOnly?: boolean;
-      };
-
-      type NavSection = {
-        id: string;
-        label: string;
-        tooltip: string;
-        links: NavLinkItem[];
-      };
-
-      type NavGroup = {
-        id: string;
-        label: string;
-        tooltip: string;
-        icon?: string;
-        sections: NavSection[];
-      };
-
-      const groups: NavGroup[] = [
+      const groups: MenuGroupDefinition[] = [
         {
-          id: "code-barres",
+          id: "home_group",
+          label: "Accueil",
+          tooltip: "Accéder à la page d'accueil personnalisée",
+          icon: "🏠",
+          items: [
+            {
+              id: "home",
+              to: "/",
+              label: "Accueil",
+              tooltip: "Accéder à la page d'accueil personnalisée",
+              icon: "🏠"
+            }
+          ]
+        },
+        {
+          id: "barcode_group",
           label: moduleTitles.barcode,
           tooltip: "Accéder aux outils de codes-barres",
           icon: "🏷️",
-          sections: [
+          items: [
             {
-              id: "code-barres-operations",
-              label: "Opérations",
-              tooltip: "Outils de gestion des codes-barres",
-              links: [
-                {
-                  to: "/barcode",
-                  label: moduleTitles.barcode,
-                  tooltip: "Générer et scanner les codes-barres",
-                  icon: "📌",
-                  module: "barcode"
-                }
-              ]
+              id: "barcode",
+              to: "/barcode",
+              label: moduleTitles.barcode,
+              tooltip: "Générer et scanner les codes-barres",
+              icon: "📌",
+              module: "barcode"
             }
           ]
         },
         {
-          id: "habillement",
+          id: "clothing_group",
           label: moduleTitles.clothing,
           tooltip: "Accéder aux fonctionnalités d'habillement",
           icon: "🧥",
-          sections: [
+          items: [
             {
-              id: "habillement-operations",
-              label: "Opérations",
-              tooltip: "Outils de suivi du stock d'habillement",
-              links: [
-                {
-                  to: "/inventory",
-                  label: moduleTitles.clothing,
-                  tooltip: "Consulter le tableau de bord habillement",
-                  icon: "📦",
-                  module: "clothing"
-                },
-                {
-                  to: "/reports",
-                  label: "Rapports",
-                  tooltip: "Analyser les rapports d'habillement",
-                  icon: "📈",
-                  module: "clothing"
-                }
-              ]
+              id: "clothing_dashboard",
+              to: "/inventory",
+              label: moduleTitles.clothing,
+              tooltip: "Consulter le tableau de bord habillement",
+              icon: "📦",
+              module: "clothing"
             },
             {
-              id: "habillement-purchase-orders",
+              id: "clothing_reports",
+              to: "/reports",
+              label: "Rapports",
+              tooltip: "Analyser les rapports d'habillement",
+              icon: "📈",
+              module: "clothing"
+            },
+            {
+              id: "clothing_purchase_orders",
+              to: "/purchase-orders",
               label: "Bons de commande",
-              tooltip: "Créer et suivre les bons de commande",
-              links: [
-                {
-                  to: "/purchase-orders",
-                  label: "Bons de commande",
-                  tooltip: "Gérer les bons de commande d'habillement",
-                  icon: "🧾",
-                  module: "clothing"
-                }
-              ]
+              tooltip: "Gérer les bons de commande d'habillement",
+              icon: "🧾",
+              module: "clothing"
             },
             {
-              id: "habillement-ressources",
-              label: "Ressources",
-              tooltip: "Référentiels liés à l'habillement",
-              links: [
-                {
-                  to: "/suppliers",
-                  label: moduleTitles.suppliers,
-                  tooltip: "Gérer les fournisseurs d'habillement",
-                  icon: "🏭",
-                  module: "suppliers"
-                },
-                {
-                  to: "/collaborators",
-                  label: "Collaborateurs",
-                  tooltip: "Suivre les collaborateurs et leurs dotations",
-                  icon: "👥",
-                  module: "dotations"
-                },
-                {
-                  to: "/dotations",
-                  label: moduleTitles.dotations,
-                  tooltip: "Attribuer les dotations d'habillement",
-                  icon: "🎯",
-                  module: "dotations"
-                }
-              ]
+              id: "suppliers",
+              to: "/suppliers",
+              label: moduleTitles.suppliers,
+              tooltip: "Gérer les fournisseurs d'habillement",
+              icon: "🏭",
+              module: "suppliers"
+            },
+            {
+              id: "collaborators",
+              to: "/collaborators",
+              label: "Collaborateurs",
+              tooltip: "Suivre les collaborateurs et leurs dotations",
+              icon: "👥",
+              module: "dotations"
+            },
+            {
+              id: "dotations",
+              to: "/dotations",
+              label: moduleTitles.dotations,
+              tooltip: "Attribuer les dotations d'habillement",
+              icon: "🎯",
+              module: "dotations"
             }
           ]
         },
         {
-          id: "inventaires-specialises",
+          id: "specialized_group",
           label: "Inventaires spécialisés",
           tooltip: "Accéder aux inventaires véhicules et remises",
           icon: "🚚",
-          sections: [
+          items: [
             {
-              id: "inventaires-dedies",
-              label: "Inventaires dédiés",
-              tooltip: "Inventaires dédiés aux véhicules et remises",
-              links: [
-                {
-                  to: "/vehicle-inventory",
-                  label: moduleTitles.vehicle_inventory,
-                  tooltip: "Gérer le parc véhicules",
-                  icon: "🚗",
-                  module: "vehicle_inventory"
-                },
-                {
-                  to: "/vehicle-inventory/qr-codes",
-                  label: moduleTitles.vehicle_qrcodes,
-                  tooltip: "Partager les fiches matériel via QR codes",
-                  icon: "🔖",
-                  modules: ["vehicle_qrcodes", "vehicle_inventory"]
-                },
-                {
-                  to: "/remise-inventory",
-                  label: moduleTitles.inventory_remise,
-                  tooltip: "Suivre les stocks mis en remise",
-                  icon: "🏢",
-                  module: "inventory_remise"
-                }
-              ]
+              id: "vehicle_inventory",
+              to: "/vehicle-inventory",
+              label: moduleTitles.vehicle_inventory,
+              tooltip: "Gérer le parc véhicules",
+              icon: "🚗",
+              module: "vehicle_inventory"
+            },
+            {
+              id: "vehicle_qrcodes",
+              to: "/vehicle-inventory/qr-codes",
+              label: moduleTitles.vehicle_qrcodes,
+              tooltip: "Partager les fiches matériel via QR codes",
+              icon: "🔖",
+              modules: ["vehicle_qrcodes", "vehicle_inventory"]
+            },
+            {
+              id: "remise_inventory",
+              to: "/remise-inventory",
+              label: moduleTitles.inventory_remise,
+              tooltip: "Suivre les stocks mis en remise",
+              icon: "🏢",
+              module: "inventory_remise"
             }
           ]
         },
         {
-          id: "operations",
-          label: "Opérations",
-          tooltip: "Accéder aux opérations terrain",
-          icon: "🛠️",
-          sections: [
-            {
-              id: "operations-links",
-              label: "Liens personnalisés",
-              tooltip: "Gérer les liens partagés par module",
-              links: [
-                {
-                  to: "/operations/vehicle-qr",
-                  label: "QR codes véhicules",
-                  tooltip: "Gérer les liens et QR codes véhicules",
-                  icon: "🔖",
-                  modules: ["vehicle_qrcodes", "vehicle_inventory"]
-                },
-                {
-                  to: "/operations/pharmacy-links",
-                  label: "Liens Pharmacie",
-                  tooltip: "Gérer les liens associés aux articles pharmacie",
-                  icon: "💊",
-                  module: "pharmacy"
-                },
-                {
-                  to: "/operations/link-categories",
-                  label: "Configuration liens",
-                  tooltip: "Configurer les catégories de liens",
-                  icon: "⚙️",
-                  adminOnly: true
-                }
-              ]
-            }
-          ]
-        },
-        {
-          id: "pharmacie",
+          id: "pharmacy_group",
           label: moduleTitles.pharmacy,
           tooltip: "Accéder aux fonctionnalités de pharmacie",
           icon: "💊",
-          sections: [
+          items: [
             {
-              id: "pharmacie-operations",
-              label: "Opérations",
-              tooltip: "Outils de suivi du stock de pharmacie",
-              links: [
-                {
-                  to: "/pharmacy",
-                  label: moduleTitles.pharmacy,
-                  tooltip: "Consulter le tableau de bord pharmacie",
-                  icon: "🏥",
-                  module: "pharmacy"
-                }
-              ]
+              id: "pharmacy",
+              to: "/pharmacy",
+              label: moduleTitles.pharmacy,
+              tooltip: "Consulter le tableau de bord pharmacie",
+              icon: "🏥",
+              module: "pharmacy"
             }
           ]
         },
         {
-          id: "communication",
+          id: "communication_group",
           label: "Communication",
           tooltip: "Échanger des messages internes",
           icon: "💬",
-          sections: [
+          items: [
             {
-              id: "communication-messages",
+              id: "messages",
+              to: "/messages",
               label: "Messagerie",
-              tooltip: "Consulter et envoyer des messages internes",
-              links: [
-                {
-                  to: "/messages",
-                  label: "Messagerie",
-                  tooltip: "Ouvrir la messagerie interne",
-                  icon: "✉️"
-                }
-              ]
+              tooltip: "Ouvrir la messagerie interne",
+              icon: "✉️"
             }
           ]
         },
         {
-          id: "support",
-          label: "Support",
-          tooltip: "Consulter les informations du programme",
-          icon: "ℹ️",
-          sections: [
+          id: "operations_group",
+          label: "Opérations",
+          tooltip: "Accéder aux opérations terrain",
+          icon: "🛠️",
+          items: [
             {
-              id: "support-ressources",
-              label: "Ressources",
-              tooltip: "Informations légales et version logicielle",
-              links: [
-                {
-                  to: "/about",
-                  label: "À propos",
-                  tooltip: "Consulter la licence et la version en ligne",
-                  icon: "📘",
-                }
-              ]
+              id: "operations_vehicle_qr",
+              to: "/operations/vehicle-qr",
+              label: "QR codes véhicules",
+              tooltip: "Gérer les liens et QR codes véhicules",
+              icon: "🔖",
+              modules: ["vehicle_qrcodes", "vehicle_inventory"]
+            },
+            {
+              id: "operations_pharmacy_links",
+              to: "/operations/pharmacy-links",
+              label: "Liens Pharmacie",
+              tooltip: "Gérer les liens associés aux articles pharmacie",
+              icon: "💊",
+              module: "pharmacy"
+            },
+            {
+              id: "operations_link_categories",
+              to: "/operations/link-categories",
+              label: "Configuration liens",
+              tooltip: "Configurer les catégories de liens",
+              icon: "⚙️",
+              adminOnly: true
             }
           ]
         },
         {
-          id: "administration",
+          id: "admin_group",
           label: "Administration",
           tooltip: "Paramétrer votre environnement",
           icon: "🛠️",
-          sections: [
+          items: [
             {
-              id: "administration-parametres",
-              label: "Configuration",
-              tooltip: "Paramètres et gestion des accès",
-              links: [
-                {
-                  to: "/settings",
-                  label: "Paramètres",
-                  tooltip: "Configurer les paramètres généraux",
-                  icon: "⚙️",
-                },
-                {
-                  to: "/admin-settings",
-                  label: "Paramètres avancés",
-                  tooltip: "Configurer les types de véhicules et champs personnalisés",
-                  icon: "🧩",
-                  adminOnly: true
-                },
-                {
-                  to: "/system-config",
-                  label: "Configuration système",
-                  tooltip: "Ajuster les URLs publiques et les origines autorisées",
-                  icon: "🌐",
-                  adminOnly: true
-                },
-                {
-                  to: "/pdf-config",
-                  label: "Configuration PDF",
-                  tooltip: "Personnaliser les exports PDF",
-                  icon: "📄",
-                  adminOnly: true
-                },
-                {
-                  to: "/users",
-                  label: "Utilisateurs",
-                  tooltip: "Administrer les comptes utilisateurs",
-                  icon: "👤",
-                  adminOnly: true
-                },
-                {
-                  to: "/permissions",
-                  label: "Permissions",
-                  tooltip: "Gérer les droits d'accès",
-                  icon: "🔒",
-                  adminOnly: true
-                },
-                {
-                  to: "/updates",
-                  label: "Mises à jour",
-                  tooltip: "Gérer les mises à jour GitHub du serveur",
-                  icon: "⬆️",
-                  adminOnly: true
-                }
-              ]
+              id: "settings",
+              to: "/settings",
+              label: "Paramètres",
+              tooltip: "Configurer les paramètres généraux",
+              icon: "⚙️",
+            },
+            {
+              id: "admin_settings",
+              to: "/admin-settings",
+              label: "Paramètres avancés",
+              tooltip: "Configurer les types de véhicules et champs personnalisés",
+              icon: "🧩",
+              adminOnly: true
+            },
+            {
+              id: "system_config",
+              to: "/system-config",
+              label: "Configuration système",
+              tooltip: "Ajuster les URLs publiques et les origines autorisées",
+              icon: "🌐",
+              adminOnly: true
+            },
+            {
+              id: "pdf_config",
+              to: "/pdf-config",
+              label: "Configuration PDF",
+              tooltip: "Personnaliser les exports PDF",
+              icon: "📄",
+              adminOnly: true
+            },
+            {
+              id: "users",
+              to: "/users",
+              label: "Utilisateurs",
+              tooltip: "Administrer les comptes utilisateurs",
+              icon: "👤",
+              adminOnly: true
+            },
+            {
+              id: "permissions",
+              to: "/permissions",
+              label: "Permissions",
+              tooltip: "Gérer les droits d'accès",
+              icon: "🔒",
+              adminOnly: true
+            },
+            {
+              id: "updates",
+              to: "/updates",
+              label: "Mises à jour",
+              tooltip: "Gérer les mises à jour GitHub du serveur",
+              icon: "⬆️",
+              adminOnly: true
+            }
+          ]
+        },
+        {
+          id: "support_group",
+          label: "Support",
+          tooltip: "Consulter les informations du programme",
+          icon: "ℹ️",
+          items: [
+            {
+              id: "about",
+              to: "/about",
+              label: "À propos",
+              tooltip: "Consulter la licence et la version en ligne",
+              icon: "📘",
             }
           ]
         }
@@ -581,26 +524,28 @@ export function AppLayout() {
       return groups
         .map((group) => ({
           ...group,
-          sections: group.sections
-            .map((section) => ({
-              ...section,
-              links: section.links.filter((link) => {
-                if (link.adminOnly) {
-                  return user?.role === "admin";
-                }
-                const allowedModules = link.modules ?? (link.module ? [link.module] : []);
-                if (allowedModules.length === 0) {
-                  return true;
-                }
-                if (user.role === "admin") {
-                  return true;
-                }
-                return allowedModules.some((module) => modulePermissions.canAccess(module));
-              })
-            }))
-            .filter((section) => section.links.length > 0)
+          items: group.items.filter((item) => {
+            if (item.adminOnly) {
+              return user?.role === "admin";
+            }
+            const allowedModules = item.modules ?? (item.module ? [item.module] : []);
+            if (allowedModules.length === 0) {
+              return true;
+            }
+            if (user.role === "admin") {
+              return true;
+            }
+            return allowedModules.some((module) => modulePermissions.canAccess(module));
+          })
         }))
-        .filter((group) => group.sections.length > 0);
+        .filter((group) => group.items.length > 0)
+        .map((group) => ({
+          id: group.id,
+          label: group.label,
+          tooltip: group.tooltip,
+          icon: group.icon,
+          items: group.items.map(({ adminOnly, module, modules, ...item }) => item)
+        }));
     },
     [modulePermissions.canAccess, moduleTitles, user]
   );
@@ -615,59 +560,38 @@ export function AppLayout() {
     return user.site_key ?? "JLL";
   }, [siteContext?.override_site_key, user]);
 
-  const moduleItems = useMemo<MenuItem[]>(
-    () => [
-      {
-        id: "home",
-        type: "link",
-        label: "Accueil",
-        tooltip: "Accéder à la page d'accueil personnalisée",
-        icon: "🏠",
-        to: "/"
-      },
-      ...navigationGroups.map<MenuItem>((group) => ({
-        id: group.id,
-        type: "group",
-        label: group.label,
-        tooltip: group.tooltip,
-        icon: group.icon,
-        group
-      }))
-    ],
-    [navigationGroups]
-  );
-
-  const defaultModuleIds = useMemo(
-    () => moduleItems.map((item) => item.id),
-    [moduleItems]
-  );
+  const defaultMenuGroups = useMemo<MenuGroup[]>(() => navigationGroups, [navigationGroups]);
 
   const [isReorderMode, setIsReorderMode] = useState(false);
-  const [orderedIds, setOrderedIds] = useState<string[]>([]);
+  const [menuGroups, setMenuGroups] = useState<MenuGroup[]>([]);
+  const [savedMenuOrder, setSavedMenuOrder] = useState<MenuOrderPayload | null>(null);
   const [menuOrderError, setMenuOrderError] = useState<string | null>(null);
   const [isMenuOrderLoading, setIsMenuOrderLoading] = useState(false);
 
   useEffect(() => {
     if (!user) {
-      setOrderedIds([]);
+      setMenuGroups([]);
+      setSavedMenuOrder(null);
       return;
     }
     let isActive = true;
     setIsMenuOrderLoading(true);
     setMenuOrderError(null);
     getMenuOrder()
-      .then((savedIds) => {
+      .then((savedConfig) => {
         if (!isActive) {
           return;
         }
-        setOrderedIds(savedIds);
+        setSavedMenuOrder(
+          savedConfig ? { version: savedConfig.version, items: savedConfig.items } : null
+        );
       })
       .catch(() => {
         if (!isActive) {
           return;
         }
         setMenuOrderError("Impossible de charger l'ordre du menu.");
-        setOrderedIds([]);
+        setSavedMenuOrder(null);
       })
       .finally(() => {
         if (!isActive) {
@@ -680,69 +604,213 @@ export function AppLayout() {
     };
   }, [siteKey, user]);
 
-  const orderedModuleItems = useMemo(
-    () => applyOrder(moduleItems, orderedIds.length > 0 ? orderedIds : defaultModuleIds),
-    [defaultModuleIds, moduleItems, orderedIds]
-  );
-
-  const orderedModuleIds = useMemo(
-    () => orderedModuleItems.map((item) => item.id),
-    [orderedModuleItems]
-  );
+  useEffect(() => {
+    if (!user) {
+      return;
+    }
+    setMenuGroups(mergeMenuOrder(defaultMenuGroups, savedMenuOrder));
+  }, [defaultMenuGroups, savedMenuOrder, user]);
 
   const sensors = useSensors(
     useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
     useSensor(TouchSensor, { activationConstraint: { distance: 6 } })
   );
 
-  const persistMenuOrder = async (nextOrder: string[], previousOrder: string[]) => {
+  const menuGroupsRef = useRef(menuGroups);
+  const previousMenuGroupsRef = useRef<MenuGroup[] | null>(null);
+
+  useEffect(() => {
+    menuGroupsRef.current = menuGroups;
+  }, [menuGroups]);
+
+  const buildMenuOrderPayload = (groups: MenuGroup[]): MenuOrderPayload => ({
+    version: 1,
+    items: groups.flatMap((group, groupIndex) => [
+      { id: group.id, parentId: null, order: groupIndex },
+      ...group.items.map((item, itemIndex) => ({
+        id: item.id,
+        parentId: group.id,
+        order: itemIndex
+      }))
+    ])
+  });
+
+  const persistMenuOrder = async (nextGroups: MenuGroup[], previousGroups: MenuGroup[]) => {
     try {
-      const savedOrder = await setMenuOrder(nextOrder);
+      const savedOrder = await setMenuOrder(buildMenuOrderPayload(nextGroups));
       setMenuOrderError(null);
-      setOrderedIds(savedOrder);
+      setSavedMenuOrder({ version: savedOrder.version, items: savedOrder.items });
+      setMenuGroups(mergeMenuOrder(defaultMenuGroups, savedOrder));
     } catch (error) {
       console.error("Menu order update failed", error);
       setMenuOrderError("Impossible d'enregistrer l'ordre du menu.");
-      setOrderedIds(previousOrder);
+      setMenuGroups(previousGroups);
     }
   };
 
-  const handleDragEnd = (event: DragEndEvent) => {
+  const findGroupIdForItem = (groups: MenuGroup[], itemId: string) =>
+    groups.find((group) => group.items.some((item) => item.id === itemId))?.id;
+
+  const moveItemWithinGroup = (
+    groups: MenuGroup[],
+    groupId: string,
+    activeId: string,
+    overId: string
+  ) => {
+    const nextGroups = groups.map((group) => {
+      if (group.id !== groupId) {
+        return group;
+      }
+      const oldIndex = group.items.findIndex((item) => item.id === activeId);
+      const newIndexRaw = group.items.findIndex((item) => item.id === overId);
+      if (oldIndex === -1) {
+        return group;
+      }
+      const newIndex = newIndexRaw === -1 ? group.items.length - 1 : newIndexRaw;
+      return {
+        ...group,
+        items: arrayMove(group.items, oldIndex, newIndex)
+      };
+    });
+    return nextGroups;
+  };
+
+  const moveItemAcrossGroups = (
+    groups: MenuGroup[],
+    activeId: string,
+    sourceGroupId: string,
+    targetGroupId: string,
+    overId: string
+  ) => {
+    if (sourceGroupId === targetGroupId) {
+      return groups;
+    }
+    let movingItem: MenuItem | undefined;
+    const nextGroups = groups.map((group) => {
+      if (group.id === sourceGroupId) {
+        const nextItems = group.items.filter((item) => {
+          if (item.id === activeId) {
+            movingItem = item;
+            return false;
+          }
+          return true;
+        });
+        return { ...group, items: nextItems };
+      }
+      return group;
+    });
+
+    if (!movingItem) {
+      return groups;
+    }
+
+    return nextGroups.map((group) => {
+      if (group.id !== targetGroupId) {
+        return group;
+      }
+      const indexInTarget = group.items.findIndex((item) => item.id === overId);
+      const insertIndex = indexInTarget === -1 ? group.items.length : indexInTarget;
+      const nextItems = [...group.items];
+      nextItems.splice(insertIndex, 0, movingItem);
+      return { ...group, items: nextItems };
+    });
+  };
+
+  const handleDragStart = (event: DragStartEvent) => {
+    if (!isReorderMode) {
+      return;
+    }
+    previousMenuGroupsRef.current = menuGroupsRef.current;
+  };
+
+  const handleDragOver = (event: DragOverEvent) => {
+    if (!isReorderMode) {
+      return;
+    }
     const { active, over } = event;
-    if (!over || active.id === over.id) {
+    if (!over) {
       return;
     }
     const activeId = String(active.id);
     const overId = String(over.id);
-    const current = orderedModuleIds;
-    const oldIndex = current.indexOf(activeId);
-    const newIndex = current.indexOf(overId);
-    if (oldIndex === -1 || newIndex === -1) {
+    if (activeId === overId) {
       return;
     }
-    const next = arrayMove(current, oldIndex, newIndex);
-    setOrderedIds(next);
-    void persistMenuOrder(next, current);
+    const currentGroups = menuGroupsRef.current;
+    const activeGroupId = findGroupIdForItem(currentGroups, activeId);
+    const overGroupId =
+      findGroupIdForItem(currentGroups, overId) ??
+      (currentGroups.some((group) => group.id === overId) ? overId : undefined);
+    if (!activeGroupId || !overGroupId || activeGroupId === overGroupId) {
+      return;
+    }
+    setMenuGroups((prev) => moveItemAcrossGroups(prev, activeId, activeGroupId, overGroupId, overId));
+  };
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    if (!isReorderMode) {
+      return;
+    }
+    const { active, over } = event;
+    const previousGroups = previousMenuGroupsRef.current;
+    previousMenuGroupsRef.current = null;
+    if (!over || !previousGroups) {
+      return;
+    }
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    if (activeId === overId) {
+      return;
+    }
+    const currentGroups = menuGroupsRef.current;
+    const activeGroupId = findGroupIdForItem(currentGroups, activeId);
+    const overGroupId =
+      findGroupIdForItem(currentGroups, overId) ??
+      (currentGroups.some((group) => group.id === overId) ? overId : undefined);
+    if (!activeGroupId || !overGroupId) {
+      return;
+    }
+
+    let nextGroups = currentGroups;
+    if (activeGroupId === overGroupId) {
+      nextGroups = moveItemWithinGroup(currentGroups, activeGroupId, activeId, overId);
+    } else {
+      nextGroups = moveItemAcrossGroups(currentGroups, activeId, activeGroupId, overGroupId, overId);
+    }
+
+    if (nextGroups !== currentGroups) {
+      setMenuGroups(nextGroups);
+    }
+    void persistMenuOrder(nextGroups, previousGroups);
+  };
+
+  const handleDragCancel = (_event: DragCancelEvent) => {
+    const previousGroups = previousMenuGroupsRef.current;
+    previousMenuGroupsRef.current = null;
+    if (previousGroups) {
+      setMenuGroups(previousGroups);
+    }
   };
 
   const resetMenuOrder = () => {
-    const previousOrder = orderedModuleIds;
-    setOrderedIds(defaultModuleIds);
-    void persistMenuOrder(defaultModuleIds, previousOrder);
+    const previousGroups = menuGroupsRef.current;
+    setMenuGroups(defaultMenuGroups);
+    void persistMenuOrder(defaultMenuGroups, previousGroups);
   };
 
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
-    Object.fromEntries(navigationGroups.map((group) => [group.id, false]))
-  );
+  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({});
+  const previousOpenGroupsRef = useRef<Record<string, boolean> | null>(null);
 
   useEffect(() => {
     setOpenGroups((prev) => {
       const next: Record<string, boolean> = {};
       let hasChanges = false;
-      const groupIds = new Set(navigationGroups.map((group) => group.id));
+      const groupIds = new Set(menuGroups.map((group) => group.id));
 
-      navigationGroups.forEach((group) => {
-        const previousValue = prev[group.id] ?? false;
+      menuGroups.forEach((group) => {
+        const previousValue =
+          prev[group.id] ??
+          (group.id === "home_group" ? true : false);
         next[group.id] = previousValue;
         if (prev[group.id] === undefined) {
           hasChanges = true;
@@ -761,7 +829,21 @@ export function AppLayout() {
 
       return next;
     });
-  }, [navigationGroups]);
+  }, [menuGroups]);
+
+  useEffect(() => {
+    if (isReorderMode) {
+      if (!previousOpenGroupsRef.current) {
+        previousOpenGroupsRef.current = openGroups;
+      }
+      setOpenGroups(Object.fromEntries(menuGroups.map((group) => [group.id, true])));
+      return;
+    }
+    if (previousOpenGroupsRef.current) {
+      setOpenGroups(previousOpenGroupsRef.current);
+      previousOpenGroupsRef.current = null;
+    }
+  }, [isReorderMode, menuGroups]);
 
   const toggleGroup = (groupId: string) => {
     setOpenGroups((prev) => {
@@ -815,118 +897,80 @@ export function AppLayout() {
     toggleGroup(groupId);
   };
 
+  const handleReload = () => {
+    window.location.reload();
+  };
+
   const renderMenuItems = (options: {
     expanded: boolean;
     showPopover: boolean;
     onNavigate?: () => void;
   }) =>
-    orderedModuleItems.map((item) => {
-      if (item.type === "link") {
-        return (
-          <SortableMenuItem key={item.id} id={item.id} isEditMode={isReorderMode} isPinned={item.isPinned}>
-            <NavLink
-              to={item.to}
-              end
-              className={({ isActive }) => navClass(isActive, options.expanded)}
-              title={item.tooltip}
-              onClick={(event) => handleNavLinkClick(event, options.onNavigate)}
-            >
-              <NavIcon symbol={item.icon} label={item.label} />
-              <span className={options.expanded ? "block" : "sr-only"}>{item.label}</span>
-            </NavLink>
-          </SortableMenuItem>
-        );
-      }
-
-      const group = item.group;
+    menuGroups.map((group) => {
       const isOpen = openGroups[group.id] ?? false;
+      const shouldShowItems = isReorderMode || isOpen;
+
+      const renderItemsList = (isExpanded: boolean, closeOnNavigate: boolean) => (
+        <MenuGroupItems
+          key={`${group.id}-items-${isExpanded ? "expanded" : "compact"}`}
+          groupId={group.id}
+          isEditMode={isReorderMode}
+          isExpanded={isExpanded}
+        >
+          <SortableContext items={group.items.map((item) => item.id)} strategy={verticalListSortingStrategy}>
+            {group.items.map((link) => (
+              <SortableMenuItem key={link.id} id={link.id} isEditMode={isReorderMode}>
+                <NavLink
+                  to={link.to}
+                  end={link.to === "/" || link.to === "/inventory"}
+                  className={({ isActive }) => navClass(isActive, isExpanded)}
+                  title={link.tooltip}
+                  onClick={(event) => {
+                    handleNavLinkClick(event, options.onNavigate);
+                    if (!isReorderMode && closeOnNavigate) {
+                      toggleGroup(group.id);
+                    }
+                  }}
+                >
+                  <NavIcon symbol={link.icon} label={link.label} />
+                  <span>{link.label}</span>
+                </NavLink>
+              </SortableMenuItem>
+            ))}
+            {group.items.length === 0 ? (
+              <p className="px-3 py-2 text-xs text-slate-500">Aucun élément dans ce groupe.</p>
+            ) : null}
+          </SortableContext>
+        </MenuGroupItems>
+      );
 
       return (
-        <SortableMenuItem key={group.id} id={group.id} isEditMode={isReorderMode} isPinned={item.isPinned}>
-          <div className="relative w-full">
-            <button
-              type="button"
-              onClick={() => handleGroupClick(group.id)}
-              className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
-                options.expanded ? "justify-between px-3 py-2" : "h-11 justify-center"
-              }`}
-              aria-expanded={isOpen}
-              aria-disabled={isReorderMode}
-              title={group.tooltip}
-            >
-              <span className="flex items-center gap-3">
-                <NavIcon symbol={group.icon} label={group.label} />
-                <span className={options.expanded ? "block text-left" : "sr-only"}>{group.label}</span>
-              </span>
-              {options.expanded ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
-            </button>
-            {isOpen && options.expanded ? (
-              <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
-                {group.sections.map((section) => (
-                  <div key={section.id}>
-                    <p
-                      className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                      title={section.tooltip}
-                    >
-                      {section.label}
-                    </p>
-                    <div className="mt-2 flex flex-col gap-1">
-                      {section.links.map((link) => (
-                        <NavLink
-                          key={link.to}
-                          to={link.to}
-                          end={link.to === "/" || link.to === "/inventory"}
-                          className={({ isActive }) => navClass(isActive, options.expanded)}
-                          title={link.tooltip}
-                          onClick={(event) => handleNavLinkClick(event, options.onNavigate)}
-                        >
-                          <NavIcon symbol={link.icon} label={link.label} />
-                          <span>{link.label}</span>
-                        </NavLink>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-            {isOpen && options.showPopover ? (
-              <div className="fixed left-20 top-4 bottom-4 z-30 ml-3 w-72 max-w-[90vw] overflow-y-auto rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
-                {group.sections.map((section) => (
-                  <div key={section.id}>
-                    <p
-                      className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                      title={section.tooltip}
-                    >
-                      {section.label}
-                    </p>
-                    <div className="mt-2 flex flex-col gap-1">
-                      {section.links.map((link) => (
-                        <NavLink
-                          key={link.to}
-                          to={link.to}
-                          end={link.to === "/" || link.to === "/inventory"}
-                          className={({ isActive }) => navClass(isActive, true)}
-                          title={link.tooltip}
-                          onClick={(event) => {
-                            if (isReorderMode) {
-                              event.preventDefault();
-                              return;
-                            }
-                            toggleGroup(group.id);
-                            options.onNavigate?.();
-                          }}
-                        >
-                          <NavIcon symbol={link.icon} label={link.label} />
-                          <span>{link.label}</span>
-                        </NavLink>
-                      ))}
-                    </div>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </SortableMenuItem>
+        <div key={group.id} className="relative w-full">
+          <button
+            type="button"
+            onClick={() => handleGroupClick(group.id)}
+            className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
+              options.expanded ? "justify-between px-3 py-2" : "h-11 justify-center"
+            }`}
+            aria-expanded={shouldShowItems}
+            aria-disabled={isReorderMode}
+            title={group.tooltip}
+          >
+            <span className="flex items-center gap-3">
+              <NavIcon symbol={group.icon} label={group.label} />
+              <span className={options.expanded ? "block text-left" : "sr-only"}>{group.label}</span>
+            </span>
+            {options.expanded ? <span aria-hidden>{shouldShowItems ? "−" : "+"}</span> : null}
+          </button>
+          {shouldShowItems && options.expanded ? (
+            <div className="mt-3 border-l border-slate-800 pl-3">{renderItemsList(true, false)}</div>
+          ) : null}
+          {shouldShowItems && options.showPopover ? (
+            <div className="fixed left-20 top-4 bottom-4 z-30 ml-3 w-72 max-w-[90vw] overflow-y-auto rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
+              {renderItemsList(true, true)}
+            </div>
+          ) : null}
+        </div>
       );
     });
 
@@ -994,16 +1038,18 @@ export function AppLayout() {
                     {isReorderMode ? "Terminer" : "Réorganiser"}
                   </span>
                 </button>
-                <button
-                  type="button"
-                  onClick={resetMenuOrder}
-                  className={`rounded-md border border-slate-800 bg-slate-900 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800 ${
-                    isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
-                  }`}
-                >
-                  <span aria-hidden>↺</span>
-                  <span className={isSidebarExpanded ? "ml-2" : "sr-only"}>Réinitialiser</span>
-                </button>
+                {isReorderMode ? (
+                  <button
+                    type="button"
+                    onClick={resetMenuOrder}
+                    className={`rounded-md border border-slate-800 bg-slate-900 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800 ${
+                      isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
+                    }`}
+                  >
+                    <span aria-hidden>↺</span>
+                    <span className={isSidebarExpanded ? "ml-2" : "sr-only"}>Réinitialiser</span>
+                  </button>
+                ) : null}
               </div>
               {isMenuOrderLoading ? (
                 <p className="mb-2 text-xs text-slate-500">Chargement de l'ordre du menu...</p>
@@ -1016,14 +1062,19 @@ export function AppLayout() {
                   isSidebarExpanded ? "overflow-y-auto pr-2" : "overflow-visible items-center"
                 }`}
               >
-                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                  <SortableContext items={orderedModuleIds} strategy={verticalListSortingStrategy}>
-                    {renderMenuItems({
-                      expanded: isSidebarExpanded,
-                      showPopover: showPopoverMenu,
-                      onNavigate: navLinkHandler
-                    })}
-                  </SortableContext>
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
+                  onDragEnd={handleDragEnd}
+                  onDragCancel={handleDragCancel}
+                >
+                  {renderMenuItems({
+                    expanded: isSidebarExpanded,
+                    showPopover: showPopoverMenu && !isReorderMode,
+                    onNavigate: navLinkHandler
+                  })}
                 </DndContext>
               </nav>
               {modulePermissions.isLoading && user?.role !== "admin" ? (
@@ -1046,6 +1097,16 @@ export function AppLayout() {
               <MicToggle compact={!isSidebarExpanded} />
               <ThemeToggle compact={!isSidebarExpanded} />
               <button
+                onClick={handleReload}
+                className={`flex items-center justify-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-sm font-semibold text-slate-200 shadow hover:bg-slate-800 ${
+                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
+                }`}
+                title="Recharger l'application"
+              >
+                <span aria-hidden>⟳</span>
+                <span className={isSidebarExpanded ? "block" : "sr-only"}>Recharger</span>
+              </button>
+              <button
                 onClick={logout}
                 className={`flex items-center justify-center gap-2 rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
                   isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
@@ -1063,7 +1124,12 @@ export function AppLayout() {
         <div
           className="fixed inset-0 z-40 flex items-start justify-start p-2 sm:p-4 md:hidden"
           role="presentation"
-          onClick={() => setMobileDrawerOpen(false)}
+          onClick={() => {
+            if (isReorderMode) {
+              return;
+            }
+            setMobileDrawerOpen(false);
+          }}
         >
           <div className="absolute inset-0 bg-black/40 backdrop-blur-[1px]" />
           <div
@@ -1107,14 +1173,16 @@ export function AppLayout() {
                   <span aria-hidden>{isReorderMode ? "✓" : "↕"}</span>
                   <span className="ml-2">{isReorderMode ? "Terminer" : "Réorganiser"}</span>
                 </button>
-                <button
-                  type="button"
-                  onClick={resetMenuOrder}
-                  className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800"
-                >
-                  <span aria-hidden>↺</span>
-                  <span className="ml-2">Réinitialiser</span>
-                </button>
+                {isReorderMode ? (
+                  <button
+                    type="button"
+                    onClick={resetMenuOrder}
+                    className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800"
+                  >
+                    <span aria-hidden>↺</span>
+                    <span className="ml-2">Réinitialiser</span>
+                  </button>
+                ) : null}
               </div>
               {isMenuOrderLoading ? (
                 <p className="mb-2 text-xs text-slate-500">Chargement de l'ordre du menu...</p>
@@ -1123,14 +1191,19 @@ export function AppLayout() {
                 <p className="mb-2 text-xs text-red-300">{menuOrderError}</p>
               ) : null}
               <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1 text-sm">
-                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
-                  <SortableContext items={orderedModuleIds} strategy={verticalListSortingStrategy}>
-                    {renderMenuItems({
-                      expanded: true,
-                      showPopover: false,
-                      onNavigate: navLinkHandler
-                    })}
-                  </SortableContext>
+                <DndContext
+                  sensors={sensors}
+                  collisionDetection={closestCenter}
+                  onDragStart={handleDragStart}
+                  onDragOver={handleDragOver}
+                  onDragEnd={handleDragEnd}
+                  onDragCancel={handleDragCancel}
+                >
+                  {renderMenuItems({
+                    expanded: true,
+                    showPopover: false,
+                    onNavigate: navLinkHandler
+                  })}
                 </DndContext>
               </nav>
               <div className="mt-6 flex w-full flex-col gap-3">
@@ -1143,6 +1216,14 @@ export function AppLayout() {
                 </div>
                 <MicToggle compact />
                 <ThemeToggle compact />
+                <button
+                  onClick={handleReload}
+                  className="flex items-center justify-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-sm font-semibold text-slate-200 shadow hover:bg-slate-800"
+                  title="Recharger l'application"
+                >
+                  <span aria-hidden>⟳</span>
+                  <span>Recharger</span>
+                </button>
                 <button
                   onClick={logout}
                   className="flex items-center justify-center gap-2 rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-red-400"
@@ -1171,15 +1252,35 @@ export function AppLayout() {
 type SortableMenuItemProps = {
   id: string;
   isEditMode: boolean;
-  isPinned?: boolean;
   children: ReactNode;
 };
 
-function SortableMenuItem({ id, isEditMode, isPinned, children }: SortableMenuItemProps) {
+type MenuGroupItemsProps = {
+  groupId: string;
+  isEditMode: boolean;
+  isExpanded: boolean;
+  children: ReactNode;
+};
+
+function MenuGroupItems({ groupId, isEditMode, isExpanded, children }: MenuGroupItemsProps) {
+  const { setNodeRef, isOver } = useDroppable({ id: groupId });
+  return (
+    <div
+      ref={setNodeRef}
+      className={`flex flex-col gap-1 ${isExpanded ? "" : "items-center"} ${
+        isEditMode ? "min-h-[2.5rem]" : ""
+      } ${isOver ? "rounded-md bg-slate-800/40 p-1" : ""}`}
+    >
+      {children}
+    </div>
+  );
+}
+
+function SortableMenuItem({ id, isEditMode, children }: SortableMenuItemProps) {
   const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
     useSortable({
       id,
-      disabled: !isEditMode || isPinned
+      disabled: !isEditMode
     });
 
   const style = {
@@ -1199,9 +1300,7 @@ function SortableMenuItem({ id, isEditMode, isPinned, children }: SortableMenuIt
         <button
           type="button"
           ref={setActivatorNodeRef}
-          className={`flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-300 shadow transition hover:bg-slate-800 ${
-            isPinned ? "cursor-not-allowed opacity-40" : ""
-          }`}
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-300 shadow transition hover:bg-slate-800"
           aria-label="Réorganiser l'élément du menu"
           {...attributes}
           {...listeners}
