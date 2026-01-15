@@ -1115,81 +1115,91 @@ export function SettingsPage() {
             </div>
             <div className="border-t border-slate-800 pt-4">
               <h3 className="text-sm font-semibold text-white">Sauvegarde automatique</h3>
-              <p className="text-xs text-slate-400">Planifiez des sauvegardes régulières selon vos besoins.</p>
-              {isScheduleFetching && !scheduleStatus ? (
-                <p className="mt-3 text-xs text-slate-400">Chargement de la planification...</p>
+              <p className="text-xs text-slate-400">
+                Paramètre global (site). Planifiez des sauvegardes régulières selon vos besoins.
+              </p>
+              {isAdmin ? (
+                <>
+                  {isScheduleFetching && !scheduleStatus ? (
+                    <p className="mt-3 text-xs text-slate-400">Chargement de la planification...</p>
+                  ) : (
+                    <form onSubmit={handleScheduleSubmit} className="mt-3 space-y-4">
+                      <label className="flex items-center gap-2 text-sm text-slate-200">
+                        <AppTextInput
+                          type="checkbox"
+                          checked={scheduleForm.enabled}
+                          onChange={(event) =>
+                            setScheduleForm((prev) => ({ ...prev, enabled: event.target.checked }))
+                          }
+                          className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
+                        />
+                        Activer les sauvegardes automatiques
+                      </label>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Intervalle (minutes)
+                        </p>
+                        <div className="mt-2 max-w-xs">
+                          <AppTextInput
+                            type="number"
+                            min={1}
+                            value={scheduleForm.interval_minutes}
+                            onChange={(event) =>
+                              setScheduleForm((prev) => ({
+                                ...prev,
+                                interval_minutes: Number(event.target.value)
+                              }))
+                            }
+                            disabled={!scheduleForm.enabled}
+                            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <div>
+                        <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+                          Sauvegardes à conserver
+                        </p>
+                        <div className="mt-2 max-w-xs">
+                          <AppTextInput
+                            type="number"
+                            min={1}
+                            value={scheduleForm.retention_count}
+                            onChange={(event) =>
+                              setScheduleForm((prev) => ({
+                                ...prev,
+                                retention_count: Number(event.target.value)
+                              }))
+                            }
+                            disabled={!scheduleForm.enabled}
+                            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="submit"
+                        disabled={updateSchedule.isPending}
+                        className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                      >
+                        {updateSchedule.isPending ? "Enregistrement..." : "Sauvegarder la planification"}
+                      </button>
+                    </form>
+                  )}
+                  <div className="mt-4 space-y-1 text-xs text-slate-400">
+                    <p>
+                      Prochaine sauvegarde :
+                      {nextRunLabel ? ` ${nextRunLabel}` : " aucune sauvegarde planifiée."}
+                    </p>
+                    <p>
+                      Dernière sauvegarde automatique :
+                      {lastRunLabel ? ` ${lastRunLabel}` : " jamais exécutée."}
+                    </p>
+                  </div>
+                </>
               ) : (
-                <form onSubmit={handleScheduleSubmit} className="mt-3 space-y-4">
-                  <label className="flex items-center gap-2 text-sm text-slate-200">
-                    <AppTextInput
-                      type="checkbox"
-                      checked={scheduleForm.enabled}
-                      onChange={(event) =>
-                        setScheduleForm((prev) => ({ ...prev, enabled: event.target.checked }))
-                      }
-                      className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500"
-                    />
-                    Activer les sauvegardes automatiques
-                  </label>
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Intervalle (minutes)
-                    </p>
-                    <div className="mt-2 max-w-xs">
-                      <AppTextInput
-                        type="number"
-                        min={1}
-                        value={scheduleForm.interval_minutes}
-                        onChange={(event) =>
-                          setScheduleForm((prev) => ({
-                            ...prev,
-                            interval_minutes: Number(event.target.value)
-                          }))
-                        }
-                        disabled={!scheduleForm.enabled}
-                        className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Sauvegardes à conserver
-                    </p>
-                    <div className="mt-2 max-w-xs">
-                      <AppTextInput
-                        type="number"
-                        min={1}
-                        value={scheduleForm.retention_count}
-                        onChange={(event) =>
-                          setScheduleForm((prev) => ({
-                            ...prev,
-                            retention_count: Number(event.target.value)
-                          }))
-                        }
-                        disabled={!scheduleForm.enabled}
-                        className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                      />
-                    </div>
-                  </div>
-                  <button
-                    type="submit"
-                    disabled={updateSchedule.isPending}
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                  >
-                    {updateSchedule.isPending ? "Enregistrement..." : "Sauvegarder la planification"}
-                  </button>
-                </form>
+                <p className="mt-3 text-xs text-slate-500">
+                  Réservé aux administrateurs.
+                </p>
               )}
-              <div className="mt-4 space-y-1 text-xs text-slate-400">
-                <p>
-                  Prochaine sauvegarde :
-                  {nextRunLabel ? ` ${nextRunLabel}` : " aucune sauvegarde planifiée."}
-                </p>
-                <p>
-                  Dernière sauvegarde automatique :
-                  {lastRunLabel ? ` ${lastRunLabel}` : " jamais exécutée."}
-                </p>
-              </div>
             </div>
           </div>
         </div>

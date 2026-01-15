@@ -53,3 +53,11 @@ def save_backup_settings(site_key: str, settings: models.BackupSettings) -> None
                 updated_at,
             ),
         )
+
+
+def get_backup_settings(site_key: str) -> models.BackupSettings:
+    return load_backup_settings_from_db(site_key)
+
+
+def set_backup_settings(site_key: str, settings: models.BackupSettings) -> None:
+    save_backup_settings(site_key, settings)

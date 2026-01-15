@@ -3323,6 +3323,14 @@ def test_backup_settings_roundtrip_and_isolation() -> None:
         )
         assert response.status_code == 200, response.text
         assert asyncio.run(backup_scheduler.get_job_count("JLL")) == 1
+
+        response = client.put(
+            "/admin/backup/settings",
+            json={"enabled": False, "interval_minutes": 9, "retention_count": 3},
+            headers=headers,
+        )
+        assert response.status_code == 200, response.text
+        assert asyncio.run(backup_scheduler.get_job_count("JLL")) == 0
     finally:
         reset_payload = {"enabled": False, "interval_minutes": 60, "retention_count": 3}
         reset = client.put("/admin/backup/settings", json=reset_payload, headers=headers)
@@ -3337,6 +3345,42 @@ def test_backup_settings_requires_admin() -> None:
     headers = _login_headers(username, "Password123!")
     response = client.get("/admin/backup/settings", headers=headers)
     assert response.status_code == 403
+
+
+def test_backup_settings_update_requires_admin() -> None:
+    username = f"backup-update-user-{uuid4().hex[:6]}"
+    _create_user(username, "Password123!", role="user")
+    headers = _login_headers(username, "Password123!")
+    response = client.put(
+        "/admin/backup/settings",
+        json={"enabled": True, "interval_minutes": 8, "retention_count": 2},
+        headers=headers,
+    )
+    assert response.status_code == 403
+
+
+def test_backup_settings_persist_after_restart() -> None:
+    headers = _login_headers("admin", "admin123")
+    payload = {"enabled": True, "interval_minutes": 12, "retention_count": 2}
+    response = client.put("/admin/backup/settings", json=payload, headers=headers)
+    assert response.status_code == 200, response.text
+
+    from backend.services.backup_scheduler import BackupScheduler
+
+    scheduler = BackupScheduler()
+    try:
+        asyncio.run(scheduler.start())
+        assert asyncio.run(scheduler.get_job_count("JLL")) == 1
+        fetched = client.get("/admin/backup/settings", headers=headers)
+        assert fetched.status_code == 200, fetched.text
+        data = fetched.json()
+        assert data["enabled"] is True
+        assert data["interval_minutes"] == 12
+    finally:
+        asyncio.run(scheduler.stop())
+        reset_payload = {"enabled": False, "interval_minutes": 60, "retention_count": 3}
+        reset = client.put("/admin/backup/settings", json=reset_payload, headers=headers)
+        assert reset.status_code == 200, reset.text
 
 
 def test_backup_import_requires_admin() -> None:
