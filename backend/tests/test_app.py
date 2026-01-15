@@ -3339,6 +3339,28 @@ def test_backup_settings_roundtrip_and_isolation() -> None:
         assert reset_gsm.status_code == 200, reset_gsm.text
 
 
+def test_backup_settings_recovers_missing_table(monkeypatch: pytest.MonkeyPatch) -> None:
+    headers = _login_headers("admin", "admin123")
+    with db.get_stock_connection("JLL") as conn:
+        conn.execute("DROP TABLE IF EXISTS backup_settings")
+
+    monkeypatch.setattr(services, "_db_initialized", False)
+    services.ensure_database_ready()
+
+    response = client.put(
+        "/admin/backup/settings",
+        json={"enabled": True, "interval_minutes": 15, "retention_count": 2},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    fetched = client.get("/admin/backup/settings", headers=headers)
+    assert fetched.status_code == 200, fetched.text
+    data = fetched.json()
+    assert data["enabled"] is True
+    assert data["interval_minutes"] == 15
+
+
 def test_backup_settings_requires_admin() -> None:
     username = f"backup-user-{uuid4().hex[:6]}"
     _create_user(username, "Password123!", role="user")
