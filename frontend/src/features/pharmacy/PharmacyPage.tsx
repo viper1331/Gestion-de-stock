@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { ColumnManager } from "../../components/ColumnManager";
@@ -177,6 +177,8 @@ export function PharmacyPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
+  const tableRef = useRef<HTMLTableElement>(null);
+  const [tableMaxHeight, setTableMaxHeight] = useState<number | null>(null);
 
   const [columnVisibility, setColumnVisibility] = useState<Record<PharmacyColumnKey, boolean>>(() => ({
     ...readPersistedValue<Record<PharmacyColumnKey, boolean>>(
@@ -285,6 +287,39 @@ export function PharmacyPage() {
       return nameMatch || barcodeMatch;
     });
   }, [items, normalizedSearch]);
+
+  useLayoutEffect(() => {
+    const tableElement = tableRef.current;
+    if (!tableElement) {
+      return;
+    }
+
+    const measureTable = () => {
+      const headerRow = tableElement.querySelector("thead tr");
+      const bodyRow = tableElement.querySelector("tbody tr");
+      const headerHeight = headerRow?.getBoundingClientRect().height ?? 0;
+      const rowHeight = bodyRow?.getBoundingClientRect().height ?? 0;
+      const fallbackHeaderHeight = headerHeight || 44;
+      const fallbackRowHeight = rowHeight || 44;
+      const maxHeight = fallbackHeaderHeight + fallbackRowHeight * 10;
+      setTableMaxHeight(maxHeight);
+    };
+
+    measureTable();
+
+    if (typeof ResizeObserver === "undefined") {
+      return;
+    }
+
+    const observer = new ResizeObserver(() => {
+      measureTable();
+    });
+    observer.observe(tableElement);
+
+    return () => {
+      observer.disconnect();
+    };
+  }, [filteredItems.length, columnVisibility, canEdit]);
 
   const lowStockItems = useMemo(
     () =>
@@ -637,9 +672,12 @@ export function PharmacyPage() {
   );
 
   const itemsBlock = (
-    <section className="min-w-0 space-y-2">
-      <div className="min-w-0 overflow-auto rounded-lg border border-slate-800">
-        <table className="w-full divide-y divide-slate-800">
+    <section className="min-h-0 min-w-0 space-y-2">
+      <div
+        className="min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-slate-800"
+        style={tableMaxHeight ? { maxHeight: `${tableMaxHeight}px` } : undefined}
+      >
+        <table ref={tableRef} className="w-full divide-y divide-slate-800">
           <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
             <tr>
               {columnVisibility.name !== false ? <th className="px-4 py-3 text-left">Nom</th> : null}
