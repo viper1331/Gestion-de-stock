@@ -100,13 +100,51 @@ class BackupScheduler:
         )
 
     async def get_job_count(self, site_key: str) -> int:
+        await self._ensure_task(site_key)
         async with self._lock:
             state = self._states.get(site_key)
             return 1 if state and state.enabled else 0
 
-    async def _apply_settings(
-        self, site_key: str, settings: models.BackupSettings, source: str
-    ) -> None:
+    async def _ensure_task(self, site_key: str) -> None:
+        async with self._lock:
+            settings = self._settings.get(site_key)
+        if settings is None:
+            settings = load_backup_settings_from_db(site_key)
+            async with self._lock:
+                self._settings[site_key] = settings
+        if not settings.enabled:
+            return
+        async with self._lock:
+            task = self._tasks.get(site_key)
+        if task and not task.done():
+            try:
+                task_loop = task.get_loop()
+            except RuntimeError:
+                task_loop = None
+            if task_loop is not None and not task_loop.is_closed():
+                return
+        await self._stop_site_task(site_key)
+        async with self._lock:
+            if not settings.enabled:
+                return
+            stop_event = asyncio.Event()
+            update_event = asyncio.Event()
+            self._stop_events[site_key] = stop_event
+            self._update_events[site_key] = update_event
+            self._next_run[site_key] = None
+            self._tasks[site_key] = asyncio.create_task(
+                self._run_site(site_key, stop_event, update_event)
+            )
+
+    async def _apply_settings(self, site_key: str, settings: models.BackupSettings) -> None:
+        try:
+            await self._stop_site_task(site_key)
+        except asyncio.CancelledError:
+            logger.debug(
+                "Annulation ignorée lors de l'arrêt de la tâche de %s", site_key
+            )
+        except Exception:  # pragma: no cover - journalisation d'erreur
+            logger.exception("Erreur lors de l'arrêt de la tâche de %s", site_key)
         async with self._lock:
             state = self._states.get(site_key)
             if state is None:
