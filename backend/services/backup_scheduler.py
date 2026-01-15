@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from dataclasses import dataclass
 from datetime import datetime, timedelta
 
 from backend.core import db, models
@@ -12,30 +13,45 @@ from backend.services.backup_settings import load_backup_settings_from_db, save_
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class SiteBackupState:
+    enabled: bool = False
+    interval_minutes: int = 0
+    retention_count: int = 0
+    last_applied_at: datetime | None = None
+    running: bool = False
+    task: asyncio.Task[None] | None = None
+
+
 class BackupScheduler:
     """Gère la planification des sauvegardes automatiques par site."""
 
     def __init__(self) -> None:
         self._lock = asyncio.Lock()
         self._update_mutex = asyncio.Lock()
-        self._tasks: dict[str, asyncio.Task[None]] = {}
+        self._states: dict[str, SiteBackupState] = {}
         self._stop_events: dict[str, asyncio.Event] = {}
         self._update_events: dict[str, asyncio.Event] = {}
-        self._settings: dict[str, models.BackupSettings] = {}
         self._next_run: dict[str, datetime | None] = {}
         self._last_run: dict[str, datetime | None] = {}
+        self._started = False
+        self._runtime_loop: asyncio.AbstractEventLoop | None = None
 
     async def start(self) -> None:
         """Démarre les planificateurs pour chaque site."""
+        self._runtime_loop = asyncio.get_running_loop()
+        self._started = True
         await self.reload_from_db()
         logger.info("Planificateur de sauvegardes initialisé")
 
     async def stop(self) -> None:
         """Arrête toutes les planifications."""
         async with self._lock:
-            site_keys = list(self._tasks.keys())
+            site_keys = list(self._states.keys())
         for site_key in site_keys:
             await self._stop_site_task(site_key)
+        self._started = False
+        self._runtime_loop = None
         logger.info("Planificateur de sauvegardes arrêté")
 
     async def reload_from_db(self) -> None:
@@ -43,7 +59,7 @@ class BackupScheduler:
         for site_key in db.list_site_keys():
             settings = load_backup_settings_from_db(site_key)
             try:
-                await self._apply_settings(site_key, settings)
+                await self._apply_settings(site_key, settings, source="reload")
             except asyncio.CancelledError:
                 logger.debug(
                     "Annulation ignorée lors du rechargement des réglages pour %s", site_key
@@ -58,92 +74,138 @@ class BackupScheduler:
         """Enregistre et applique une nouvelle configuration."""
         async with self._update_mutex:
             save_backup_settings(site_key, settings)
-            await self._apply_settings(site_key, settings)
+            await self._apply_settings(site_key, settings, source="update")
 
     async def get_status(self, site_key: str) -> models.BackupSettingsStatus:
         """Retourne l'état courant de la planification."""
         async with self._lock:
-            settings = self._settings.get(site_key)
-            if settings is None:
+            state = self._states.get(site_key)
+            if state is None:
                 settings = load_backup_settings_from_db(site_key)
-                self._settings[site_key] = settings
+                state = SiteBackupState(
+                    enabled=settings.enabled,
+                    interval_minutes=settings.interval_minutes,
+                    retention_count=settings.retention_count,
+                    last_applied_at=datetime.now(),
+                )
+                self._states[site_key] = state
             next_run = self._next_run.get(site_key)
             last_run = self._last_run.get(site_key)
         return models.BackupSettingsStatus(
-            enabled=settings.enabled,
-            interval_minutes=settings.interval_minutes,
-            retention_count=settings.retention_count,
+            enabled=state.enabled,
+            interval_minutes=state.interval_minutes,
+            retention_count=state.retention_count,
             next_run=next_run,
             last_run=last_run,
         )
 
     async def get_job_count(self, site_key: str) -> int:
         async with self._lock:
-            task = self._tasks.get(site_key)
-            if task and not task.done():
-                return 1
-            return 0
+            state = self._states.get(site_key)
+            return 1 if state and state.enabled else 0
 
-    async def _apply_settings(self, site_key: str, settings: models.BackupSettings) -> None:
-        try:
-            await self._stop_site_task(site_key)
-        except asyncio.CancelledError:
-            logger.debug(
-                "Annulation ignorée lors de l'arrêt de la tâche de %s", site_key
-            )
-        except Exception:  # pragma: no cover - journalisation d'erreur
-            logger.exception("Erreur lors de l'arrêt de la tâche de %s", site_key)
+    async def _apply_settings(
+        self, site_key: str, settings: models.BackupSettings, source: str
+    ) -> None:
         async with self._lock:
-            self._settings[site_key] = settings
-            self._next_run[site_key] = None
-            if not settings.enabled:
-                self._update_events.pop(site_key, None)
-                self._stop_events.pop(site_key, None)
-                return
-            stop_event = asyncio.Event()
-            update_event = asyncio.Event()
-            self._stop_events[site_key] = stop_event
-            self._update_events[site_key] = update_event
-            self._tasks[site_key] = asyncio.create_task(
-                self._run_site(site_key, stop_event, update_event)
+            state = self._states.get(site_key)
+            if state is None:
+                state = SiteBackupState()
+                self._states[site_key] = state
+            changed = (
+                state.enabled != settings.enabled
+                or state.interval_minutes != settings.interval_minutes
+                or state.retention_count != settings.retention_count
             )
-        logger.debug("Planificateur mis à jour pour le site %s", site_key)
+            state.enabled = settings.enabled
+            state.interval_minutes = settings.interval_minutes
+            state.retention_count = settings.retention_count
+            state.last_applied_at = datetime.now()
+            self._next_run[site_key] = None
+            if state.running and site_key in self._update_events:
+                self._update_events[site_key].set()
+        if changed:
+            logger.info(
+                "Réglages de sauvegarde mis à jour pour %s via %s",
+                site_key,
+                source,
+            )
+        if self._started:
+            if settings.enabled:
+                await self._ensure_site_task(site_key)
+            else:
+                await self._stop_site_task(site_key)
 
     async def _stop_site_task(self, site_key: str) -> None:
         async with self._lock:
-            task = self._tasks.get(site_key)
+            state = self._states.get(site_key)
+            task = state.task if state else None
             stop_event = self._stop_events.get(site_key)
             update_event = self._update_events.get(site_key)
             if task is None:
                 return
+            task_loop = task.get_loop()
+        current_loop: asyncio.AbstractEventLoop | None = None
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            current_loop = None
+        if current_loop is not None and task_loop is current_loop:
             if stop_event:
                 stop_event.set()
             if update_event:
                 update_event.set()
-        should_await = False
-        try:
-            current_loop = asyncio.get_running_loop()
-            task_loop = task.get_loop()
-            if task_loop.is_closed() or task_loop is not current_loop:
-                task.cancel()
-            else:
-                task.cancel()
-                should_await = True
-        except RuntimeError:
             task.cancel()
-        if should_await:
             try:
                 await task
             except asyncio.CancelledError:
                 logger.debug("Annulation absorbée pour la tâche %s", site_key)
             except Exception:  # pragma: no cover - journalisation d'erreur
                 logger.debug("Erreur absorbée lors de l'arrêt de la tâche %s", site_key)
+        else:
+            task.cancel()
         async with self._lock:
-            if self._tasks.get(site_key) is task:
-                self._tasks.pop(site_key, None)
+            state = self._states.get(site_key)
+            if state and state.task is task:
+                state.task = None
+                state.running = False
             self._stop_events.pop(site_key, None)
             self._update_events.pop(site_key, None)
             self._next_run.pop(site_key, None)
+        logger.info("Tâche de sauvegarde arrêtée pour %s", site_key)
+
+    async def _ensure_site_task(self, site_key: str) -> None:
+        try:
+            current_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._runtime_loop is not None and current_loop is not self._runtime_loop:
+            logger.debug(
+                "Boucle différente détectée pour %s; création de tâche ignorée",
+                site_key,
+            )
+            return
+        async with self._lock:
+            state = self._states.get(site_key)
+            if state is None or not state.enabled:
+                return
+            task = state.task
+        if task is not None and not task.done():
+            if task.get_loop() is current_loop:
+                return
+        await self._stop_site_task(site_key)
+        stop_event = asyncio.Event()
+        update_event = asyncio.Event()
+        async with self._lock:
+            self._stop_events[site_key] = stop_event
+            self._update_events[site_key] = update_event
+            task = asyncio.create_task(
+                self._run_site(site_key, stop_event, update_event)
+            )
+            state = self._states.setdefault(site_key, SiteBackupState())
+            state.task = task
+            state.running = True
+        logger.info("Tâche de sauvegarde démarrée pour %s", site_key)
 
     async def _run_site(
         self, site_key: str, stop_event: asyncio.Event, update_event: asyncio.Event
@@ -153,17 +215,17 @@ class BackupScheduler:
                 if stop_event.is_set():
                     break
                 async with self._lock:
-                    settings = self._settings.get(site_key)
+                    state = self._states.get(site_key)
                     next_run = self._next_run.get(site_key)
                     last_run = self._last_run.get(site_key)
-                if settings is None or not settings.enabled:
+                if state is None or not state.enabled:
                     await self._wait_for_update(stop_event, update_event)
                     continue
 
                 now = datetime.now()
                 if next_run is None or next_run <= now:
                     reference = last_run or now
-                    next_run = reference + timedelta(minutes=settings.interval_minutes)
+                    next_run = reference + timedelta(minutes=state.interval_minutes)
                     async with self._lock:
                         self._next_run[site_key] = next_run
 
@@ -201,9 +263,11 @@ class BackupScheduler:
         finally:
             stop_event.set()
             update_event.set()
-            logger.debug(
-                "Fin de la tâche de planification des sauvegardes pour %s", site_key
-            )
+            async with self._lock:
+                state = self._states.get(site_key)
+                if state and state.task is asyncio.current_task():
+                    state.task = None
+                    state.running = False
 
     async def _wait_for_update(
         self, stop_event: asyncio.Event, update_event: asyncio.Event
@@ -220,12 +284,12 @@ class BackupScheduler:
 
     async def _execute_backup(self, site_key: str) -> None:
         async with self._lock:
-            settings = self._settings.get(site_key)
-        if settings is None:
+            state = self._states.get(site_key)
+        if state is None:
             return
         try:
             archive_path = create_backup_archive(
-                site_key=site_key, retention_count=settings.retention_count
+                site_key=site_key, retention_count=state.retention_count
             )
             logger.info("Sauvegarde automatique créée pour %s: %s", site_key, archive_path.name)
         except Exception:  # pragma: no cover - journalisation d'erreur
