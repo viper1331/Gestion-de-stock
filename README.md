@@ -214,4 +214,4 @@ Un administrateur `admin/admin123` est généré automatiquement au premier lanc
 - Mettre en place une CI GitHub Actions (lint + tests + build).
 
 ## Licence
-Projet livré sans licence explicite. Veuillez contacter l'auteur pour la redistribution.
+LICENCE RESTREINTE POUR GESTION DE STOCK.
