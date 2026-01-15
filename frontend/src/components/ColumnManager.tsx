@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { AppTextInput } from "components/AppTextInput";
 
 interface ColumnOption {
@@ -31,16 +31,32 @@ export function ColumnManager({
   useEffect(() => {
     if (!isOpen) return;
 
-    const handleClickOutside = (event: MouseEvent) => {
-      if (!containerRef.current) return;
-      if (!containerRef.current.contains(event.target as Node)) {
+    const handleClickOutside = (event: PointerEvent) => {
+      const container = containerRef.current;
+      if (!container) return;
+      if (!container.contains(event.target as Node)) {
         setIsOpen(false);
       }
     };
 
-    document.addEventListener("mousedown", handleClickOutside);
-    return () => document.removeEventListener("mousedown", handleClickOutside);
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsOpen(false);
+      }
+    };
+
+    document.addEventListener("pointerdown", handleClickOutside);
+    document.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.removeEventListener("pointerdown", handleClickOutside);
+      document.removeEventListener("keydown", handleKeyDown);
+    };
   }, [isOpen]);
+
+  const handleToggle = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    setIsOpen((value) => !value);
+  };
 
   const visibleCount = options.reduce(
     (count, option) => (visibility[option.key] !== false ? count + 1 : count),
@@ -51,7 +67,7 @@ export function ColumnManager({
     <div className="relative" ref={containerRef}>
       <button
         type="button"
-        onClick={() => setIsOpen((value) => !value)}
+        onClick={handleToggle}
         className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold uppercase tracking-wide text-slate-200 hover:bg-slate-800"
         title="Sélectionner les colonnes à afficher"
       >
