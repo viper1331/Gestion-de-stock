@@ -1,6 +1,17 @@
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
+import {
+  DndContext,
+  DragEndEvent,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import { SortableContext, arrayMove, useSortable, verticalListSortingStrategy } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import { shallow } from "zustand/shallow";
 
@@ -13,6 +24,43 @@ import { fetchConfigEntries } from "../lib/config";
 import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
+import { applyOrder, loadMenuOrder, saveMenuOrder } from "../lib/menuOrder";
+
+type MenuItem =
+  | {
+      id: string;
+      type: "link";
+      label: string;
+      tooltip: string;
+      icon?: string;
+      to: string;
+      isPinned?: boolean;
+    }
+  | {
+      id: string;
+      type: "group";
+      label: string;
+      tooltip: string;
+      icon?: string;
+      group: {
+        id: string;
+        label: string;
+        tooltip: string;
+        icon?: string;
+        sections: {
+          id: string;
+          label: string;
+          tooltip: string;
+          links: {
+            to: string;
+            label: string;
+            tooltip: string;
+            icon?: string;
+          }[];
+        }[];
+      };
+      isPinned?: boolean;
+    };
 
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
@@ -556,6 +604,104 @@ export function AppLayout() {
     [modulePermissions.canAccess, moduleTitles, user]
   );
 
+  const siteKey = useMemo(() => {
+    if (!user) {
+      return "JLL";
+    }
+    if (user.role === "admin") {
+      return siteContext?.override_site_key ?? user.site_key ?? "JLL";
+    }
+    return user.site_key ?? "JLL";
+  }, [siteContext?.override_site_key, user]);
+
+  const menuStorageKey = useMemo(() => {
+    if (!user) {
+      return null;
+    }
+    return `menu:order:${siteKey}:${user.username}`;
+  }, [siteKey, user]);
+
+  const defaultMenuItems = useMemo<MenuItem[]>(
+    () => [
+      {
+        id: "home",
+        type: "link",
+        label: "Accueil",
+        tooltip: "Accéder à la page d'accueil personnalisée",
+        icon: "🏠",
+        to: "/"
+      },
+      ...navigationGroups.map<MenuItem>((group) => ({
+        id: group.id,
+        type: "group",
+        label: group.label,
+        tooltip: group.tooltip,
+        icon: group.icon,
+        group
+      }))
+    ],
+    [navigationGroups]
+  );
+
+  const defaultMenuIds = useMemo(
+    () => defaultMenuItems.map((item) => item.id),
+    [defaultMenuItems]
+  );
+
+  const [isReorderMode, setIsReorderMode] = useState(false);
+  const [orderedIds, setOrderedIds] = useState<string[]>([]);
+
+  useEffect(() => {
+    if (!menuStorageKey) {
+      return;
+    }
+    setOrderedIds(loadMenuOrder(menuStorageKey, defaultMenuIds));
+  }, [defaultMenuIds, menuStorageKey]);
+
+  const orderedMenuItems = useMemo(
+    () => applyOrder(defaultMenuItems, orderedIds.length > 0 ? orderedIds : defaultMenuIds),
+    [defaultMenuItems, defaultMenuIds, orderedIds]
+  );
+
+  const orderedMenuIds = useMemo(
+    () => orderedMenuItems.map((item) => item.id),
+    [orderedMenuItems]
+  );
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { distance: 6 } })
+  );
+
+  const handleDragEnd = (event: DragEndEvent) => {
+    const { active, over } = event;
+    if (!over || active.id === over.id) {
+      return;
+    }
+    const activeId = String(active.id);
+    const overId = String(over.id);
+    setOrderedIds((prev) => {
+      const current = prev.length > 0 ? prev : defaultMenuIds;
+      const oldIndex = current.indexOf(activeId);
+      const newIndex = current.indexOf(overId);
+      if (oldIndex === -1 || newIndex === -1) {
+        return current;
+      }
+      const next = arrayMove(current, oldIndex, newIndex);
+      if (menuStorageKey) {
+        saveMenuOrder(menuStorageKey, next);
+      }
+      return next;
+    });
+  };
+
+  const resetMenuOrder = () => {
+    if (typeof window !== "undefined" && menuStorageKey) {
+      window.localStorage.removeItem(menuStorageKey);
+    }
+    setOrderedIds(defaultMenuIds);
+  };
+
   const [openGroups, setOpenGroups] = useState<Record<string, boolean>>(() =>
     Object.fromEntries(navigationGroups.map((group) => [group.id, false]))
   );
@@ -620,10 +766,140 @@ export function AppLayout() {
   const isSidebarExpanded = isDesktop && sidebarOpen;
   const showPopoverMenu = isDesktop && !sidebarOpen;
   const navLinkHandler = mobileDrawerOpen ? () => setMobileDrawerOpen(false) : undefined;
-  const activeSiteLabel =
-    user.role === "admin"
-      ? siteContext?.override_site_key ?? user.site_key ?? "JLL"
-      : user.site_key ?? "JLL";
+  const activeSiteLabel = siteKey;
+
+  const handleNavLinkClick = (
+    event: MouseEvent<HTMLAnchorElement>,
+    onNavigate?: () => void
+  ) => {
+    if (isReorderMode) {
+      event.preventDefault();
+      return;
+    }
+    onNavigate?.();
+  };
+
+  const handleGroupClick = (groupId: string) => {
+    if (isReorderMode) {
+      return;
+    }
+    toggleGroup(groupId);
+  };
+
+  const renderMenuItems = (options: {
+    expanded: boolean;
+    showPopover: boolean;
+    onNavigate?: () => void;
+  }) =>
+    orderedMenuItems.map((item) => {
+      if (item.type === "link") {
+        return (
+          <SortableMenuItem key={item.id} id={item.id} isEditMode={isReorderMode} isPinned={item.isPinned}>
+            <NavLink
+              to={item.to}
+              end
+              className={({ isActive }) => navClass(isActive, options.expanded)}
+              title={item.tooltip}
+              onClick={(event) => handleNavLinkClick(event, options.onNavigate)}
+            >
+              <NavIcon symbol={item.icon} label={item.label} />
+              <span className={options.expanded ? "block" : "sr-only"}>{item.label}</span>
+            </NavLink>
+          </SortableMenuItem>
+        );
+      }
+
+      const group = item.group;
+      const isOpen = openGroups[group.id] ?? false;
+
+      return (
+        <SortableMenuItem key={group.id} id={group.id} isEditMode={isReorderMode} isPinned={item.isPinned}>
+          <div className="relative w-full">
+            <button
+              type="button"
+              onClick={() => handleGroupClick(group.id)}
+              className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
+                options.expanded ? "justify-between px-3 py-2" : "h-11 justify-center"
+              }`}
+              aria-expanded={isOpen}
+              aria-disabled={isReorderMode}
+              title={group.tooltip}
+            >
+              <span className="flex items-center gap-3">
+                <NavIcon symbol={group.icon} label={group.label} />
+                <span className={options.expanded ? "block text-left" : "sr-only"}>{group.label}</span>
+              </span>
+              {options.expanded ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
+            </button>
+            {isOpen && options.expanded ? (
+              <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
+                {group.sections.map((section) => (
+                  <div key={section.id}>
+                    <p
+                      className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                      title={section.tooltip}
+                    >
+                      {section.label}
+                    </p>
+                    <div className="mt-2 flex flex-col gap-1">
+                      {section.links.map((link) => (
+                        <NavLink
+                          key={link.to}
+                          to={link.to}
+                          end={link.to === "/" || link.to === "/inventory"}
+                          className={({ isActive }) => navClass(isActive, options.expanded)}
+                          title={link.tooltip}
+                          onClick={(event) => handleNavLinkClick(event, options.onNavigate)}
+                        >
+                          <NavIcon symbol={link.icon} label={link.label} />
+                          <span>{link.label}</span>
+                        </NavLink>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+            {isOpen && options.showPopover ? (
+              <div className="fixed left-20 top-4 bottom-4 z-30 ml-3 w-72 max-w-[90vw] overflow-y-auto rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
+                {group.sections.map((section) => (
+                  <div key={section.id}>
+                    <p
+                      className="text-xs font-semibold uppercase tracking-wide text-slate-500"
+                      title={section.tooltip}
+                    >
+                      {section.label}
+                    </p>
+                    <div className="mt-2 flex flex-col gap-1">
+                      {section.links.map((link) => (
+                        <NavLink
+                          key={link.to}
+                          to={link.to}
+                          end={link.to === "/" || link.to === "/inventory"}
+                          className={({ isActive }) => navClass(isActive, true)}
+                          title={link.tooltip}
+                          onClick={(event) => {
+                            if (isReorderMode) {
+                              event.preventDefault();
+                              return;
+                            }
+                            toggleGroup(group.id);
+                            options.onNavigate?.();
+                          }}
+                        >
+                          <NavIcon symbol={link.icon} label={link.label} />
+                          <span>{link.label}</span>
+                        </NavLink>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : null}
+          </div>
+        </SortableMenuItem>
+      );
+    });
 
   return (
     <div className="flex h-screen min-h-0 overflow-hidden bg-slate-950 text-slate-50">
@@ -671,102 +947,49 @@ export function AppLayout() {
                 isSidebarExpanded ? "overflow-hidden" : "overflow-visible"
               }`}
             >
+              <div
+                className={`mb-4 flex flex-wrap items-center gap-2 ${
+                  isSidebarExpanded ? "" : "justify-center"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setIsReorderMode((prev) => !prev)}
+                  className={`rounded-md border border-slate-800 bg-slate-900 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800 ${
+                    isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
+                  }`}
+                  aria-pressed={isReorderMode}
+                >
+                  <span aria-hidden>{isReorderMode ? "✓" : "↕"}</span>
+                  <span className={isSidebarExpanded ? "ml-2" : "sr-only"}>
+                    {isReorderMode ? "Terminer" : "Réorganiser"}
+                  </span>
+                </button>
+                <button
+                  type="button"
+                  onClick={resetMenuOrder}
+                  className={`rounded-md border border-slate-800 bg-slate-900 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800 ${
+                    isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
+                  }`}
+                >
+                  <span aria-hidden>↺</span>
+                  <span className={isSidebarExpanded ? "ml-2" : "sr-only"}>Réinitialiser</span>
+                </button>
+              </div>
               <nav
                 className={`flex min-h-0 flex-1 flex-col gap-3 text-sm ${
                   isSidebarExpanded ? "overflow-y-auto pr-2" : "overflow-visible items-center"
                 }`}
               >
-                <NavLink
-                  to="/"
-                  end
-                  className={({ isActive }) => navClass(isActive, isSidebarExpanded)}
-                  title="Accéder à la page d'accueil personnalisée"
-                >
-                  <NavIcon symbol="🏠" label="Accueil" />
-                  <span className={isSidebarExpanded ? "block" : "sr-only"}>Accueil</span>
-                </NavLink>
-                {navigationGroups.map((group) => {
-                  const isOpen = openGroups[group.id] ?? false;
-
-                  return (
-                    <div key={group.id} className="relative w-full">
-                      <button
-                        type="button"
-                        onClick={() => toggleGroup(group.id)}
-                        className={`group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
-                          isSidebarExpanded ? "justify-between px-3 py-2" : "h-11 justify-center"
-                        }`}
-                        aria-expanded={isOpen}
-                        title={group.tooltip}
-                      >
-                        <span className="flex items-center gap-3">
-                          <NavIcon symbol={group.icon} label={group.label} />
-                          <span className={isSidebarExpanded ? "block text-left" : "sr-only"}>
-                            {group.label}
-                          </span>
-                        </span>
-                        {isSidebarExpanded ? <span aria-hidden>{isOpen ? "−" : "+"}</span> : null}
-                      </button>
-                      {isOpen && isSidebarExpanded ? (
-                        <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
-                          {group.sections.map((section) => (
-                            <div key={section.id}>
-                              <p
-                                className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                                title={section.tooltip}
-                              >
-                                {section.label}
-                              </p>
-                              <div className="mt-2 flex flex-col gap-1">
-                                {section.links.map((link) => (
-                                  <NavLink
-                                    key={link.to}
-                                    to={link.to}
-                                    end={link.to === "/" || link.to === "/inventory"}
-                                    className={({ isActive }) => navClass(isActive, isSidebarExpanded)}
-                                    title={link.tooltip}
-                                  >
-                                    <NavIcon symbol={link.icon} label={link.label} />
-                                    <span>{link.label}</span>
-                                  </NavLink>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                      {isOpen && showPopoverMenu ? (
-                        <div className="fixed left-20 top-4 bottom-4 z-30 ml-3 w-72 max-w-[90vw] overflow-y-auto rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
-                          {group.sections.map((section) => (
-                            <div key={section.id}>
-                              <p
-                                className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                                title={section.tooltip}
-                              >
-                                {section.label}
-                              </p>
-                              <div className="mt-2 flex flex-col gap-1">
-                                {section.links.map((link) => (
-                                  <NavLink
-                                    key={link.to}
-                                    to={link.to}
-                                    end={link.to === "/" || link.to === "/inventory"}
-                                    className={({ isActive }) => navClass(isActive, true)}
-                                    title={link.tooltip}
-                                    onClick={() => toggleGroup(group.id)}
-                                  >
-                                    <NavIcon symbol={link.icon} label={link.label} />
-                                    <span>{link.label}</span>
-                                  </NavLink>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <SortableContext items={orderedMenuIds} strategy={verticalListSortingStrategy}>
+                    {renderMenuItems({
+                      expanded: isSidebarExpanded,
+                      showPopover: showPopoverMenu,
+                      onNavigate: navLinkHandler
+                    })}
+                  </SortableContext>
+                </DndContext>
               </nav>
               {modulePermissions.isLoading && user?.role !== "admin" ? (
                 <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
@@ -839,66 +1062,35 @@ export function AppLayout() {
               </button>
             </div>
             <div className="flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
-              <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1 text-sm">
-                <NavLink
-                  to="/"
-                  end
-                  className={({ isActive }) => navClass(isActive, true)}
-                  title="Accéder à la page d'accueil personnalisée"
-                  onClick={navLinkHandler}
+              <div className="mb-4 flex flex-wrap items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setIsReorderMode((prev) => !prev)}
+                  className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800"
+                  aria-pressed={isReorderMode}
                 >
-                  <NavIcon symbol="🏠" label="Accueil" />
-                  <span>Accueil</span>
-                </NavLink>
-                {navigationGroups.map((group) => {
-                  const isOpen = openGroups[group.id] ?? false;
-                  return (
-                    <div key={group.id} className="w-full">
-                      <button
-                        type="button"
-                        onClick={() => toggleGroup(group.id)}
-                        className="group flex w-full items-center justify-between rounded-md px-3 py-2 font-semibold text-slate-200 transition-colors hover:bg-slate-800"
-                        aria-expanded={isOpen}
-                        title={group.tooltip}
-                      >
-                        <span className="flex items-center gap-3">
-                          <NavIcon symbol={group.icon} label={group.label} />
-                          <span className="text-left">{group.label}</span>
-                        </span>
-                        <span aria-hidden>{isOpen ? "−" : "+"}</span>
-                      </button>
-                      {isOpen ? (
-                        <div className="mt-3 space-y-4 border-l border-slate-800 pl-3">
-                          {group.sections.map((section) => (
-                            <div key={section.id}>
-                              <p
-                                className="text-xs font-semibold uppercase tracking-wide text-slate-500"
-                                title={section.tooltip}
-                              >
-                                {section.label}
-                              </p>
-                              <div className="mt-2 flex flex-col gap-1">
-                                {section.links.map((link) => (
-                                  <NavLink
-                                    key={link.to}
-                                    to={link.to}
-                                    end={link.to === "/" || link.to === "/inventory"}
-                                    className={({ isActive }) => navClass(isActive, true)}
-                                    title={link.tooltip}
-                                    onClick={navLinkHandler}
-                                  >
-                                    <NavIcon symbol={link.icon} label={link.label} />
-                                    <span>{link.label}</span>
-                                  </NavLink>
-                                ))}
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      ) : null}
-                    </div>
-                  );
-                })}
+                  <span aria-hidden>{isReorderMode ? "✓" : "↕"}</span>
+                  <span className="ml-2">{isReorderMode ? "Terminer" : "Réorganiser"}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={resetMenuOrder}
+                  className="rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs font-semibold text-slate-200 shadow hover:bg-slate-800"
+                >
+                  <span aria-hidden>↺</span>
+                  <span className="ml-2">Réinitialiser</span>
+                </button>
+              </div>
+              <nav className="flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto pr-1 text-sm">
+                <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+                  <SortableContext items={orderedMenuIds} strategy={verticalListSortingStrategy}>
+                    {renderMenuItems({
+                      expanded: true,
+                      showPopover: false,
+                      onNavigate: navLinkHandler
+                    })}
+                  </SortableContext>
+                </DndContext>
               </nav>
               <div className="mt-6 flex w-full flex-col gap-3">
                 <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
@@ -931,6 +1123,52 @@ export function AppLayout() {
         </div>
         <Outlet />
       </main>
+    </div>
+  );
+}
+
+type SortableMenuItemProps = {
+  id: string;
+  isEditMode: boolean;
+  isPinned?: boolean;
+  children: ReactNode;
+};
+
+function SortableMenuItem({ id, isEditMode, isPinned, children }: SortableMenuItemProps) {
+  const { attributes, listeners, setNodeRef, setActivatorNodeRef, transform, transition, isDragging } =
+    useSortable({
+      id,
+      disabled: !isEditMode || isPinned
+    });
+
+  const style = {
+    transform: CSS.Transform.toString(transform),
+    transition
+  };
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={`flex w-full items-start ${isEditMode ? "gap-2" : ""} ${
+        isDragging ? "opacity-60" : ""
+      }`}
+    >
+      {isEditMode ? (
+        <button
+          type="button"
+          ref={setActivatorNodeRef}
+          className={`flex h-8 w-8 items-center justify-center rounded-md border border-slate-800 bg-slate-900 text-slate-300 shadow transition hover:bg-slate-800 ${
+            isPinned ? "cursor-not-allowed opacity-40" : ""
+          }`}
+          aria-label="Réorganiser l'élément du menu"
+          {...attributes}
+          {...listeners}
+        >
+          <span aria-hidden>≡</span>
+        </button>
+      ) : null}
+      <div className="min-w-0 flex-1">{children}</div>
     </div>
   );
 }
