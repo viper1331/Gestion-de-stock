@@ -76,6 +76,7 @@ export function AppLayout() {
   const [isDesktop, setIsDesktop] = useState(() =>
     typeof window === "undefined" ? true : window.matchMedia("(min-width: 768px)").matches
   );
+  const [isReorderMode, setIsReorderMode] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
 
   const { data: configEntries = [] } = useQuery({
@@ -562,7 +563,6 @@ export function AppLayout() {
 
   const defaultMenuGroups = useMemo<MenuGroup[]>(() => navigationGroups, [navigationGroups]);
 
-  const [isReorderMode, setIsReorderMode] = useState(false);
   const [menuGroups, setMenuGroups] = useState<MenuGroup[]>([]);
   const [savedMenuOrder, setSavedMenuOrder] = useState<MenuOrderPayload | null>(null);
   const [menuOrderError, setMenuOrderError] = useState<string | null>(null);
