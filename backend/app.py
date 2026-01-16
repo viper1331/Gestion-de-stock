@@ -72,6 +72,9 @@ async def _lifespan(_: FastAPI):
     except sqlite3.IntegrityError:
         if logger:
             logger.warning("Vehicle pharmacy templates already exist; skipping seed.")
+    except Exception as exc:
+        logger.error("Database initialization failed during startup.", exc_info=exc)
+        raise
     diagnostics = maybe_install_chromium_on_startup()
     if diagnostics.status != PLAYWRIGHT_OK:
         logger.warning(
