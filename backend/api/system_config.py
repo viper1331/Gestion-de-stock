@@ -22,6 +22,7 @@ class PublicSystemConfig(BaseModel):
     backend_url_public: str | None = Field(default=None)
     frontend_url: str
     network_mode: str
+    idle_logout_minutes: int = Field(60, ge=0, le=1440)
 
 
 @router.get("/public-config", response_model=PublicSystemConfig)
@@ -33,6 +34,7 @@ async def read_public_config() -> PublicSystemConfig:
         backend_url_public=str(config.backend_url_public) if config.backend_url_public else None,
         frontend_url=str(config.frontend_url),
         network_mode=config.network_mode,
+        idle_logout_minutes=config.security.idle_logout_minutes,
     )
 
 

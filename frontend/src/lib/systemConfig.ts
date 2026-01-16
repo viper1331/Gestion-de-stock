@@ -18,6 +18,10 @@ export interface SystemConfig {
   backend_public_url?: string | null;
 }
 
+export interface PublicSystemConfig {
+  idle_logout_minutes: number;
+}
+
 function normalizeConfig(payload: SystemConfig): SystemConfig {
   const network_mode: NetworkMode =
     payload.network_mode === "lan" || payload.network_mode === "public" || payload.network_mode === "auto"
@@ -43,4 +47,9 @@ export async function updateSystemConfig(payload: SystemConfig): Promise<SystemC
   const response = await api.post<SystemConfig>("/system/config", payload);
   resetApiConfigCache();
   return normalizeConfig(response.data);
+}
+
+export async function fetchPublicSystemConfig(): Promise<PublicSystemConfig> {
+  const response = await api.get<PublicSystemConfig>("/system/public-config");
+  return response.data;
 }

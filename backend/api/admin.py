@@ -162,7 +162,10 @@ def purge_logs(user: models.User = Depends(require_admin)):
 @router.get("/security/settings", response_model=models.SecuritySettings)
 def get_security_settings(user: models.User = Depends(require_admin)) -> models.SecuritySettings:
     config = get_config()
-    return models.SecuritySettings(require_totp_for_login=config.security.require_totp_for_login)
+    return models.SecuritySettings(
+        require_totp_for_login=config.security.require_totp_for_login,
+        idle_logout_minutes=config.security.idle_logout_minutes,
+    )
 
 
 @router.put("/security/settings", response_model=models.SecuritySettings)
@@ -171,6 +174,7 @@ def update_security_settings(
 ) -> models.SecuritySettings:
     config = get_config()
     config.security.require_totp_for_login = payload.require_totp_for_login
+    config.security.idle_logout_minutes = payload.idle_logout_minutes
     save_config(config)
     return payload
 

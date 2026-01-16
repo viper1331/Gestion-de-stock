@@ -57,6 +57,7 @@ interface TwoFactorSetupConfirmResponse {
 
 interface SecuritySettings {
   require_totp_for_login: boolean;
+  idle_logout_minutes: number;
 }
 
 type HomepageFieldType = "text" | "textarea" | "url";
@@ -215,6 +216,7 @@ export function SettingsPage() {
   });
   const [securityMessage, setSecurityMessage] = useState<string | null>(null);
   const [securityError, setSecurityError] = useState<string | null>(null);
+  const [idleLogoutMinutes, setIdleLogoutMinutes] = useState<number>(60);
   const updateSecuritySettings = useMutation({
     mutationFn: async (payload: SecuritySettings) => {
       const response = await api.put<SecuritySettings>("/admin/security/settings", payload);
@@ -295,6 +297,12 @@ export function SettingsPage() {
       });
     }
   }, [scheduleStatus]);
+
+  useEffect(() => {
+    if (securitySettings) {
+      setIdleLogoutMinutes(securitySettings.idle_logout_minutes ?? 60);
+    }
+  }, [securitySettings]);
 
   useEffect(() => {
     if (!isAdmin) {
@@ -868,13 +876,50 @@ export function SettingsPage() {
                   checked={Boolean(securitySettings?.require_totp_for_login)}
                   onChange={(event) =>
                     updateSecuritySettings.mutate({
-                      require_totp_for_login: event.target.checked
+                      require_totp_for_login: event.target.checked,
+                      idle_logout_minutes: idleLogoutMinutes
                     })
                   }
                   disabled={updateSecuritySettings.isPending}
                   className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 disabled:cursor-not-allowed"
                 />
               </label>
+              <div className="flex flex-col gap-3 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-200">
+                <div className="space-y-1">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-300">
+                    Déconnexion pour inactivité
+                  </p>
+                  <p className="text-[11px] text-slate-500">
+                    Durée en minutes avant déconnexion automatique (0 pour désactiver).
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <input
+                    type="number"
+                    min={0}
+                    max={1440}
+                    value={Number.isFinite(idleLogoutMinutes) ? idleLogoutMinutes : 0}
+                    onChange={(event) => {
+                      const nextValue = Number(event.target.value);
+                      setIdleLogoutMinutes(Number.isNaN(nextValue) ? 0 : nextValue);
+                    }}
+                    className="w-28 rounded-md border border-slate-700 bg-slate-950 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  />
+                  <button
+                    type="button"
+                    onClick={() =>
+                      updateSecuritySettings.mutate({
+                        require_totp_for_login: Boolean(securitySettings?.require_totp_for_login),
+                        idle_logout_minutes: idleLogoutMinutes
+                      })
+                    }
+                    disabled={updateSecuritySettings.isPending}
+                    className="rounded-md bg-indigo-500 px-3 py-1 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    Enregistrer
+                  </button>
+                </div>
+              </div>
             </div>
           ) : null}
         </div>

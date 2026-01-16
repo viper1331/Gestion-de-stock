@@ -30,6 +30,7 @@ import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
 import { mergeMenuOrder } from "../lib/menuOrder";
+import { useIdleLogout } from "../hooks/useIdleLogout";
 
 type MenuItem = {
   id: string;
@@ -98,19 +99,7 @@ export function AppLayout() {
     isDebugEnabled("inventory_debug") ||
     isDebugEnabled("network_debug");
 
-  const inactivityCooldownMs = useMemo(() => {
-    const cooldownEntry = configEntries.find(
-      (entry) => entry.section === "general" && entry.key === "inactivity_timeout_minutes"
-    );
-    if (!cooldownEntry) {
-      return null;
-    }
-    const minutes = Number.parseInt(cooldownEntry.value, 10);
-    if (!Number.isFinite(minutes) || minutes <= 0) {
-      return null;
-    }
-    return minutes * 60_000;
-  }, [configEntries]);
+  useIdleLogout();
 
   useEffect(() => {
     initialize();
@@ -171,40 +160,6 @@ export function AppLayout() {
     }
   }, [isReady, navigate, user]);
 
-  useEffect(() => {
-    if (!user || !inactivityCooldownMs) {
-      return undefined;
-    }
-
-    let timeoutId: number | undefined;
-    const resetTimer = () => {
-      if (timeoutId) {
-        window.clearTimeout(timeoutId);
-      }
-      timeoutId = window.setTimeout(() => {
-        logout();
-      }, inactivityCooldownMs);
-    };
-
-    const handleVisibilityChange = () => {
-      if (document.visibilityState === "visible") {
-        resetTimer();
-      }
-    };
-
-    const activityEvents = ["mousemove", "keydown", "mousedown", "touchstart", "scroll", "focus"];
-    activityEvents.forEach((eventName) => window.addEventListener(eventName, resetTimer));
-    document.addEventListener("visibilitychange", handleVisibilityChange);
-    resetTimer();
-
-    return () => {
-      if (timeoutId) {
-        window.clearTimeout(timeoutId);
-      }
-      activityEvents.forEach((eventName) => window.removeEventListener(eventName, resetTimer));
-      document.removeEventListener("visibilitychange", handleVisibilityChange);
-    };
-  }, [inactivityCooldownMs, logout, user]);
 
   useEffect(() => {
     if (!mobileDrawerOpen) {
@@ -700,7 +655,8 @@ export function AppLayout() {
       return group;
     });
 
-    if (!movingItem) {
+    const movingItemResolved = movingItem;
+    if (!movingItemResolved) {
       return groups;
     }
 
@@ -711,7 +667,7 @@ export function AppLayout() {
       const indexInTarget = group.items.findIndex((item) => item.id === overId);
       const insertIndex = indexInTarget === -1 ? group.items.length : indexInTarget;
       const nextItems = [...group.items];
-      nextItems.splice(insertIndex, 0, movingItem);
+      nextItems.splice(insertIndex, 0, movingItemResolved);
       return { ...group, items: nextItems };
     });
   };
@@ -1107,7 +1063,7 @@ export function AppLayout() {
                 <span className={isSidebarExpanded ? "block" : "sr-only"}>Recharger</span>
               </button>
               <button
-                onClick={logout}
+                onClick={() => logout()}
                 className={`flex items-center justify-center gap-2 rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
                   isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
                 }`}
@@ -1226,7 +1182,7 @@ export function AppLayout() {
                   <span>Recharger</span>
                 </button>
                 <button
-                  onClick={logout}
+                  onClick={() => logout()}
                   className="flex items-center justify-center gap-2 rounded-md bg-red-500 px-3 py-2 text-sm font-semibold text-white shadow hover:bg-red-400"
                   title="Se déconnecter de votre session"
                 >

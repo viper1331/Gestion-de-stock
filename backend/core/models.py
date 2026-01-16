@@ -311,6 +311,7 @@ class TwoFactorStatus(BaseModel):
 
 class SecuritySettings(BaseModel):
     require_totp_for_login: bool = False
+    idle_logout_minutes: int = Field(60, ge=0, le=1440)
 
 
 class RefreshRequest(BaseModel):

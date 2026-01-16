@@ -1,11 +1,13 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { useAuth } from "./useAuth";
 import { AppTextInput } from "components/AppTextInput";
 import { api } from "../../lib/api";
+import { useLocation } from "react-router-dom";
 
 export function Login() {
   const { login, verifyTwoFactor, confirmTotpEnrollment, clearError, isLoading, error } = useAuth();
+  const location = useLocation();
   const [identifier, setIdentifier] = useState("admin");
   const [password, setPassword] = useState("admin123");
   const [remember, setRemember] = useState(true);
@@ -21,6 +23,14 @@ export function Login() {
   const [registerDisplayName, setRegisterDisplayName] = useState("");
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerLoading, setRegisterLoading] = useState(false);
+
+  const idleLogoutMessage = useMemo(() => {
+    const params = new URLSearchParams(location.search);
+    if (params.get("reason") === "idle") {
+      return "Session expirée pour inactivité. Veuillez vous reconnecter.";
+    }
+    return null;
+  }, [location.search]);
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
@@ -107,6 +117,11 @@ export function Login() {
               : "Entrez le code fourni par votre application Authenticator."}
           </p>
         </header>
+        {idleLogoutMessage ? (
+          <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+            {idleLogoutMessage}
+          </p>
+        ) : null}
         {step === "enroll" && otpauthUri ? (
           <div className="flex flex-col items-center gap-4 rounded-lg border border-slate-800 bg-slate-950 px-4 py-4">
             <QRCodeCanvas value={otpauthUri} size={180} />
@@ -245,6 +260,11 @@ export function Login() {
         <h1 className="text-2xl font-semibold">Connexion</h1>
         <p className="text-sm text-slate-400">Entrez vos identifiants pour accéder au stock.</p>
       </header>
+      {idleLogoutMessage ? (
+        <p className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-200">
+          {idleLogoutMessage}
+        </p>
+      ) : null}
       <div className="space-y-2">
         <label className="block text-sm font-medium text-slate-200" htmlFor="username">
           Email ou identifiant
