@@ -1751,6 +1751,26 @@ def _seed_default_link_categories(conn: sqlite3.Connection) -> None:
             for module, key, label, placeholder, help_text, _is_required, _sort_order, is_active in defaults
         ],
     )
+    modules_with_defaults = {module for module, *_rest in defaults}
+    for module in modules_with_defaults:
+        has_active = conn.execute(
+            "SELECT 1 FROM link_categories WHERE module = ? AND is_active = 1 LIMIT 1",
+            (module,),
+        ).fetchone()
+        if has_active is not None:
+            continue
+        module_keys = [key for entry_module, key, *_rest in defaults if entry_module == module]
+        if not module_keys:
+            continue
+        placeholders = ", ".join("?" for _ in module_keys)
+        conn.execute(
+            f"""
+            UPDATE link_categories
+            SET is_active = 1, updated_at = CURRENT_TIMESTAMP
+            WHERE module = ? AND key IN ({placeholders})
+            """,
+            (module, *module_keys),
+        )
 
 
 def _migrate_vehicle_link_legacy_fields(conn: sqlite3.Connection) -> None:
