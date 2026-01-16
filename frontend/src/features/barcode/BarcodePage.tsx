@@ -11,7 +11,6 @@ import { EditablePageLayout, type EditablePageBlock } from "../../components/Edi
 import { EditableBlock } from "../../components/EditableBlock";
 import { fetchConfigEntries } from "../../lib/config";
 
-const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
 const EXCLUDED_MODULE_KEYS = new Set([
   "vehicle_inventory",
   "vehicle-inventory",
@@ -32,7 +31,7 @@ export function BarcodePage() {
   });
   const moduleTitles = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
 
-  const [sku, setSku] = useState(DEFAULT_SKU_PLACEHOLDER);
+  const [sku, setSku] = useState("");
   const [moduleFilter, setModuleFilter] = useState("all");
   const [searchTerm, setSearchTerm] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
@@ -49,6 +48,7 @@ export function BarcodePage() {
   const [isCatalogLoading, setIsCatalogLoading] = useState(false);
   const [catalogError, setCatalogError] = useState<string | null>(null);
   const isMountedRef = useRef(true);
+  const lastModuleRef = useRef(moduleFilter);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -81,6 +81,7 @@ export function BarcodePage() {
 
       setIsCatalogLoading(true);
       setCatalogError(null);
+      const wasModuleChanged = lastModuleRef.current !== nextModule;
 
       try {
         const response = await api.get<BarcodeCatalogEntry[]>("/barcode/catalog", {
@@ -94,17 +95,8 @@ export function BarcodePage() {
         }
         const entries = response.data;
         setCatalogEntries(entries);
-        if (entries.length > 0) {
-          setSku((previous) => {
-            if (
-              previous &&
-              previous.trim().length > 0 &&
-              previous !== DEFAULT_SKU_PLACEHOLDER
-            ) {
-              return previous;
-            }
-            return entries[0].sku;
-          });
+        if (wasModuleChanged && sku && !entries.some((entry) => entry.sku === sku)) {
+          setSku("");
         }
       } catch (err) {
         if (!isMountedRef.current) {
@@ -114,11 +106,12 @@ export function BarcodePage() {
         setCatalogError("Impossible de charger la liste des articles.");
       } finally {
         if (isMountedRef.current) {
+          lastModuleRef.current = nextModule;
           setIsCatalogLoading(false);
         }
       }
     },
-    [canView]
+    [canView, sku]
   );
 
   const refreshGallery = useCallback(
@@ -467,6 +460,7 @@ export function BarcodePage() {
             <AppTextInput
               value={sku}
               onChange={(event) => setSku(event.target.value)}
+              placeholder="SKU"
               className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
               title="Identifiant de l'article pour générer le code-barres"
             />
