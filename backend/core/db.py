@@ -326,6 +326,13 @@ def _init_core_database() -> None:
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 UNIQUE(username, page_key)
             );
+            CREATE TABLE IF NOT EXISTS backup_settings (
+                site_key TEXT PRIMARY KEY,
+                enabled INTEGER NOT NULL DEFAULT 0,
+                interval_minutes INTEGER NOT NULL DEFAULT 60,
+                retention_count INTEGER NOT NULL DEFAULT 3,
+                updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
             """
         )
         default_paths = get_default_site_db_paths()

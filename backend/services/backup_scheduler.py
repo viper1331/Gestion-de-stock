@@ -6,8 +6,8 @@ import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 
-from backend.core import db, models
-from backend.services.backup_manager import create_backup_archive
+from backend.core import models
+from backend.services.backup_manager import run_backup_all
 from backend.services.backup_settings import get_backup_settings, set_backup_settings
 
 logger = logging.getLogger(__name__)
@@ -38,6 +38,10 @@ class BackupScheduler:
         self._last_run_by_site: dict[str, datetime | None] = {}
         self._started = False
         self._runtime_loop: asyncio.AbstractEventLoop | None = None
+        self._global_site_key = "GLOBAL"
+
+    def _normalize_site_key(self, site_key: str) -> str:
+        return self._global_site_key
 
     async def start(self) -> None:
         """Démarre les planificateurs pour chaque site."""
@@ -62,30 +66,32 @@ class BackupScheduler:
 
     async def reload_from_db(self) -> None:
         """Recharge la configuration depuis les bases sites."""
-        for site_key in db.SITE_KEYS:
-            settings = get_backup_settings(site_key)
-            async with self._lock:
-                self._settings_by_site[site_key] = settings
-            try:
-                await self._apply_settings(site_key, settings, source="reload")
-            except asyncio.CancelledError:
-                logger.debug(
-                    "Annulation ignorée lors du rechargement des réglages pour %s", site_key
-                )
-            except Exception:  # pragma: no cover - journalisation d'erreur
-                logger.exception(
-                    "Erreur lors du rechargement des réglages de sauvegarde pour %s",
-                    site_key,
-                )
+        site_key = self._global_site_key
+        settings = get_backup_settings(site_key)
+        async with self._lock:
+            self._settings_by_site[site_key] = settings
+        try:
+            await self._apply_settings(site_key, settings, source="reload")
+        except asyncio.CancelledError:
+            logger.debug(
+                "Annulation ignorée lors du rechargement des réglages pour %s", site_key
+            )
+        except Exception:  # pragma: no cover - journalisation d'erreur
+            logger.exception(
+                "Erreur lors du rechargement des réglages de sauvegarde pour %s",
+                site_key,
+            )
 
     async def update_settings(self, site_key: str, settings: models.BackupSettings) -> None:
         """Enregistre et applique une nouvelle configuration."""
+        site_key = self._normalize_site_key(site_key)
         async with self._update_lock:
             set_backup_settings(site_key, settings)
             await self._apply_settings(site_key, settings, source="update")
 
     async def get_status(self, site_key: str) -> models.BackupSettingsStatus:
         """Retourne l'état courant de la planification."""
+        site_key = self._normalize_site_key(site_key)
         async with self._lock:
             state = self._states_by_site.get(site_key)
             if state is None:
@@ -108,6 +114,7 @@ class BackupScheduler:
         )
 
     async def get_job_count(self, site_key: str) -> int:
+        site_key = self._normalize_site_key(site_key)
         await self._ensure_task(site_key)
         async with self._lock:
             task = self._tasks_by_site.get(site_key)
@@ -388,9 +395,7 @@ class BackupScheduler:
         if state is None:
             return
         try:
-            archive_path = create_backup_archive(
-                site_key=site_key, retention_count=state.retention_count
-            )
+            archive_path = run_backup_all(retention_count=state.retention_count)
             logger.info("Sauvegarde automatique créée pour %s: %s", site_key, archive_path.name)
         except Exception:  # pragma: no cover - journalisation d'erreur
             logger.exception("Échec de la sauvegarde automatique pour %s", site_key)
