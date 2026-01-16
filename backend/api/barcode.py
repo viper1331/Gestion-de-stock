@@ -1,7 +1,7 @@
 """Routes de génération de codes-barres."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.api.auth import get_current_user
@@ -65,6 +65,16 @@ async def list_existing_barcode_values(
 ) -> list[models.BarcodeValue]:
     _require_permission(user, action="view")
     return services.list_existing_barcodes(user)
+
+
+@router.get("/catalog", response_model=list[models.BarcodeCatalogEntry])
+async def list_barcode_catalog(
+    module: str = Query("all"),
+    q: str | None = Query(default=None),
+    user: models.User = Depends(get_current_user),
+) -> list[models.BarcodeCatalogEntry]:
+    _require_permission(user, action="view")
+    return services.list_barcode_catalog(user, module=module, q=q)
 
 
 @router.get("/assets/{filename}")

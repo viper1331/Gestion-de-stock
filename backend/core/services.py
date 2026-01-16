@@ -189,6 +189,13 @@ _BARCODE_MODULE_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("vehicle_inventory", "vehicle_items", "sku"),
 )
 
+_BARCODE_CATALOG_SOURCES: tuple[tuple[str, str, str, str], ...] = (
+    ("clothing", "items", "sku", "name"),
+    ("pharmacy", "pharmacy_items", "barcode", "name"),
+    ("inventory_remise", "remise_items", "sku", "name"),
+    ("vehicle_inventory", "vehicle_items", "sku", "name"),
+)
+
 DEFAULT_VEHICLE_VIEW_NAME = "VUE PRINCIPALE"
 
 _MEDIA_URL_PREFIX = "/media"
@@ -8680,6 +8687,98 @@ def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
         models.BarcodeValue(sku=value)
         for _, value in sorted(collected.items(), key=lambda item: item[1].casefold())
     ]
+
+
+def list_barcode_catalog(
+    user: models.User, module: str | None = None, q: str | None = None
+) -> list[models.BarcodeCatalogEntry]:
+    ensure_database_ready()
+
+    normalized_module = (module or "all").strip().lower()
+    search = (q or "").strip()
+
+    accessible_sources = [
+        source
+        for source in _BARCODE_CATALOG_SOURCES
+        if user.role == "admin" or has_module_access(user, source[0], action="view")
+    ]
+    if not accessible_sources:
+        return []
+
+    if normalized_module not in {"all", ""}:
+        accessible_sources = [
+            source for source in accessible_sources if source[0] == normalized_module
+        ]
+        if not accessible_sources:
+            return []
+
+    entries: list[models.BarcodeCatalogEntry] = []
+    like = f"%{search}%"
+
+    with db.get_stock_connection() as conn:
+        for module_key, table, sku_column, name_column in accessible_sources:
+            if module_key == "vehicle_inventory":
+                where_clauses = [
+                    f"vi.{sku_column} IS NOT NULL",
+                    f"TRIM(vi.{sku_column}) <> ''",
+                    "(vi.remise_item_id IS NULL OR base.id IS NOT NULL)",
+                ]
+                params: list[object] = []
+                if search:
+                    where_clauses.append(
+                        f"(vi.{name_column} LIKE ? OR vi.{sku_column} LIKE ?)"
+                    )
+                    params.extend([like, like])
+                where_clause = " AND ".join(where_clauses)
+                query = f"""
+                    SELECT vi.id AS item_id,
+                           vi.{name_column} AS name,
+                           vi.{sku_column} AS sku
+                    FROM {table} AS vi
+                    LEFT JOIN remise_items AS base ON base.id = vi.remise_item_id
+                    WHERE {where_clause}
+                    ORDER BY vi.{name_column} COLLATE NOCASE, vi.{sku_column} COLLATE NOCASE
+                """
+            else:
+                where_clauses = [
+                    f"{sku_column} IS NOT NULL",
+                    f"TRIM({sku_column}) <> ''",
+                ]
+                params = []
+                if search:
+                    where_clauses.append(f"({name_column} LIKE ? OR {sku_column} LIKE ?)")
+                    params.extend([like, like])
+                where_clause = " AND ".join(where_clauses)
+                query = f"""
+                    SELECT id AS item_id,
+                           {name_column} AS name,
+                           {sku_column} AS sku
+                    FROM {table}
+                    WHERE {where_clause}
+                    ORDER BY {name_column} COLLATE NOCASE, {sku_column} COLLATE NOCASE
+                """
+
+            rows = conn.execute(query, params).fetchall()
+            for row in rows:
+                sku_value = (row["sku"] or "").strip()
+                name_value = (row["name"] or "").strip()
+                if not sku_value or not name_value:
+                    continue
+                label = f"{name_value} ({sku_value})"
+                entries.append(
+                    models.BarcodeCatalogEntry(
+                        sku=sku_value,
+                        label=label,
+                        name=name_value,
+                        module=module_key,
+                        item_id=row["item_id"],
+                    )
+                )
+
+    return sorted(
+        entries,
+        key=lambda entry: (entry.name.casefold(), entry.sku.casefold(), entry.module),
+    )
 
 
 def _collect_normalized_barcode_values(

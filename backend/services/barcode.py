@@ -56,6 +56,7 @@ WRITER_OPTIONS = {
     "font_size": 12,
     "text_distance": 1,
     "quiet_zone": 1.0,
+    "write_text": False,
 }
 
 logger = logging.getLogger(__name__)
@@ -107,7 +108,9 @@ def generate_barcode_png(sku: str) -> Optional[Path]:
 
         filename = path.with_suffix("")
         generated_path = code.save(str(filename), options=WRITER_OPTIONS)
-        return Path(generated_path)
+        generated = Path(generated_path)
+        _append_barcode_caption(generated, sku)
+        return generated
     except Exception as exc:
         logger.exception(
             "Erreur lors de la génération du code-barres Code128 pour %s.", sku
@@ -117,6 +120,44 @@ def generate_barcode_png(sku: str) -> Optional[Path]:
         raise RuntimeError(
             "Échec de la génération du code-barres Code128."
         ) from exc
+
+
+def _append_barcode_caption(path: Path, sku: str) -> None:
+    try:
+        original = Image.open(path)
+    except OSError:
+        return
+
+    barcode_image: Image.Image | None = None
+    try:
+        barcode_image = original.convert("RGB")
+        original.close()
+
+        try:
+            font = ImageFont.truetype("DejaVuSansMono.ttf", size=16)
+        except OSError:
+            font = ImageFont.load_default()
+
+        draw = ImageDraw.Draw(barcode_image)
+        text_bbox = draw.textbbox((0, 0), sku, font=font)
+        text_width = text_bbox[2] - text_bbox[0]
+        text_height = text_bbox[3] - text_bbox[1]
+
+        padding_top = 8
+        padding_bottom = 10
+        new_height = barcode_image.height + padding_top + text_height + padding_bottom
+        canvas = Image.new("RGB", (barcode_image.width, new_height), color="white")
+        canvas.paste(barcode_image, (0, 0))
+
+        text_x = max((barcode_image.width - text_width) // 2, 0)
+        text_y = barcode_image.height + padding_top
+        caption_draw = ImageDraw.Draw(canvas)
+        caption_draw.text((text_x, text_y), sku, fill="black", font=font)
+
+        canvas.save(path)
+    finally:
+        if barcode_image is not None:
+            barcode_image.close()
 
 
 def _generate_placeholder_barcode(path: Path, sku: str) -> Optional[Path]:

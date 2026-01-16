@@ -1236,6 +1236,90 @@ def test_existing_barcodes_listing_respects_module_permissions(
     assert response.json() == [{"sku": "3400934058486"}]
 
 
+def test_barcode_catalog_listing_filters_and_search() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM remise_items")
+        conn.execute("DELETE FROM pharmacy_items")
+        conn.commit()
+
+    clothing = services.create_item(models.ItemCreate(name="Veste", sku="HAB-010"))
+    remise = services.create_remise_item(models.ItemCreate(name="Caisse", sku="REM-200"))
+    pharmacy = services.create_pharmacy_item(
+        models.PharmacyItemCreate(name="Doliprane", barcode="PHA-001", quantity=5)
+    )
+
+    response = client.get("/barcodes/catalog", headers=admin_headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    entry_map = {(entry["module"], entry["sku"]): entry for entry in payload}
+
+    assert entry_map[("clothing", "HAB-010")]["label"] == "Veste (HAB-010)"
+    assert entry_map[("clothing", "HAB-010")]["item_id"] == clothing.id
+    assert entry_map[("inventory_remise", "REM-200")]["name"] == "Caisse"
+    assert entry_map[("inventory_remise", "REM-200")]["item_id"] == remise.id
+    assert entry_map[("pharmacy", "PHA-001")]["label"] == "Doliprane (PHA-001)"
+    assert entry_map[("pharmacy", "PHA-001")]["item_id"] == pharmacy.id
+
+    module_filtered = client.get("/barcodes/catalog?module=pharmacy", headers=admin_headers)
+    assert module_filtered.status_code == 200, module_filtered.text
+    assert {entry["module"] for entry in module_filtered.json()} == {"pharmacy"}
+
+    search_by_name = client.get("/barcodes/catalog?q=Ves", headers=admin_headers)
+    assert search_by_name.status_code == 200, search_by_name.text
+    assert {entry["sku"] for entry in search_by_name.json()} == {"HAB-010"}
+
+    search_by_sku = client.get("/barcodes/catalog?q=REM-200", headers=admin_headers)
+    assert search_by_sku.status_code == 200, search_by_sku.text
+    assert {entry["sku"] for entry in search_by_sku.json()} == {"REM-200"}
+
+
+def test_barcode_catalog_respects_module_permissions() -> None:
+    services.ensure_database_ready()
+    user_id = _create_user("catalog-user", "catalog123", role="user")
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM pharmacy_items")
+        conn.commit()
+
+    services.create_item(models.ItemCreate(name="Gants", sku="HAB-999"))
+    services.create_pharmacy_item(
+        models.PharmacyItemCreate(name="Paracetamol", barcode="PHA-777", quantity=3)
+    )
+
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="barcode",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="clothing",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+
+    user_headers = _login_headers("catalog-user", "catalog123")
+
+    response = client.get("/barcodes/catalog", headers=user_headers)
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert {entry["module"] for entry in payload} == {"clothing"}
+
+    filtered = client.get("/barcodes/catalog?module=pharmacy", headers=user_headers)
+    assert filtered.status_code == 200, filtered.text
+    assert filtered.json() == []
+
+
 def test_existing_barcodes_listing_requires_permission() -> None:
     services.ensure_database_ready()
     user_id = _create_user("noviewexisting", "noview123", role="user")
