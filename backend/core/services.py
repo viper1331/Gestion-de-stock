@@ -173,6 +173,10 @@ _LINK_MODULE_CONFIG: dict[str, dict[str, Any]] = {
         "legacy_map": {},
     },
 }
+_LINK_MODULE_ALIASES: dict[str, str] = {
+    "pharmacy_links": "pharmacy",
+    "pharmacy_qr": "pharmacy",
+}
 
 _BARCODE_MODULE_SOURCES: tuple[tuple[str, str, str], ...] = (
     ("clothing", "items", "sku"),
@@ -1356,6 +1360,7 @@ def _dump_extra_json(payload: dict[str, Any]) -> str:
 
 
 def _validate_link_module(module: str) -> str:
+    module = _LINK_MODULE_ALIASES.get(module, module)
     if module not in _LINK_MODULE_CONFIG:
         raise ValueError("Module de lien invalide")
     return module
@@ -1641,6 +1646,13 @@ def _ensure_link_tables(
 
 
 def _seed_default_link_categories(conn: sqlite3.Connection) -> None:
+    for alias, canonical in _LINK_MODULE_ALIASES.items():
+        if alias == canonical:
+            continue
+        conn.execute(
+            "UPDATE link_categories SET module = ? WHERE module = ?",
+            (canonical, alias),
+        )
     defaults: list[tuple[str, str, str, str | None, str | None, int, int, int]] = [
         (
             "vehicle_qr",
@@ -1679,16 +1691,6 @@ def _seed_default_link_categories(conn: sqlite3.Connection) -> None:
             "https://...",
             None,
             0,
-            0,
-            1,
-        ),
-        (
-            "pharmacy",
-            "tutoriel",
-            "Tutoriel",
-            "https://...",
-            None,
-            0,
             10,
             1,
         ),
@@ -1700,6 +1702,16 @@ def _seed_default_link_categories(conn: sqlite3.Connection) -> None:
             "Lien vers la fiche fournisseur ou la notice.",
             0,
             20,
+            1,
+        ),
+        (
+            "pharmacy",
+            "tutoriel",
+            "Tutoriel",
+            "https://...",
+            None,
+            0,
+            30,
             1,
         ),
     ]
