@@ -1052,6 +1052,13 @@ def test_barcode_listing_and_assets(monkeypatch: Any, tmp_path: Path) -> None:
 
     assets_dir = _configure_barcode_assets(monkeypatch, tmp_path)
 
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM items")
+        conn.commit()
+
+    services.create_item(models.ItemCreate(name="Article Alpha", sku="SKU-ALPHA"))
+    services.create_item(models.ItemCreate(name="Article Beta", sku="SKU-BETA"))
+
     generated = barcode_service.generate_barcode_png("SKU-ALPHA", site_key=db.DEFAULT_SITE_KEY)
     assert generated is not None and generated.exists()
     assert generated.stat().st_size > 0
@@ -1066,6 +1073,8 @@ def test_barcode_listing_and_assets(monkeypatch: Any, tmp_path: Path) -> None:
     assert {entry["sku"] for entry in data} == {"SKU-ALPHA", "SKU-BETA"}
     assert all(entry["filename"].endswith(".png") for entry in data)
     assert all("modified_at" in entry for entry in data)
+    assert all(entry["module"] == "clothing" for entry in data)
+    assert all("asset_path" in entry for entry in data)
 
     first_filename = data[0]["filename"]
     asset = client.get(f"/barcode/assets/{first_filename}", headers=admin_headers)
@@ -1082,6 +1091,22 @@ def test_barcode_assets_scoped_by_site(monkeypatch: Any, tmp_path: Path) -> None
 
     assets_root = tmp_path / "assets"
     monkeypatch.setattr(barcode_service, "ASSETS_ROOT", assets_root)
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM items")
+        conn.commit()
+
+    services.create_item(models.ItemCreate(name="Article Partagé", sku="SKU-SHARED"))
+    services.create_item(models.ItemCreate(name="Article GSM", sku="SKU-GSM"))
+    gsm_token = db.set_current_site("GSM")
+    try:
+        with db.get_stock_connection() as conn:
+            conn.execute("DELETE FROM items")
+            conn.commit()
+        services.create_item(models.ItemCreate(name="Article Partagé", sku="SKU-SHARED"))
+        services.create_item(models.ItemCreate(name="Article GSM", sku="SKU-GSM"))
+    finally:
+        db.reset_current_site(gsm_token)
 
     jll_response = client.post("/barcode/generate/SKU-SHARED", headers=admin_headers)
     assert jll_response.status_code == 200, jll_response.text
@@ -1208,6 +1233,74 @@ def test_barcode_listing_respects_module_permissions(
     payload = listing.json()
 
     assert [entry["sku"] for entry in payload] == ["REM-200"]
+
+
+def test_generated_barcode_listing_filters_by_module_and_permissions(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+    user_id = _create_user("barcode-limited", "limited123", role="user")
+
+    _configure_barcode_assets(monkeypatch, tmp_path)
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM items")
+        conn.execute("DELETE FROM pharmacy_items")
+        conn.execute("DELETE FROM remise_items")
+        conn.commit()
+
+    services.create_item(models.ItemCreate(name="Veste", sku="HAB-100"))
+    services.create_pharmacy_item(
+        models.PharmacyItemCreate(name="Doliprane", barcode="PHA-100", quantity=5)
+    )
+    services.create_remise_item(models.ItemCreate(name="Caisse", sku="REM-100"))
+
+    assert (
+        barcode_service.generate_barcode_png("HAB-100", site_key=db.DEFAULT_SITE_KEY)
+        is not None
+    )
+    assert (
+        barcode_service.generate_barcode_png("PHA-100", site_key=db.DEFAULT_SITE_KEY)
+        is not None
+    )
+    assert (
+        barcode_service.generate_barcode_png("REM-100", site_key=db.DEFAULT_SITE_KEY)
+        is not None
+    )
+
+    filtered = client.get("/barcode?module=pharmacy", headers=admin_headers)
+    assert filtered.status_code == 200, filtered.text
+    payload = filtered.json()
+    assert [entry["sku"] for entry in payload] == ["PHA-100"]
+    assert all(entry["module"] == "pharmacy" for entry in payload)
+
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="barcode",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+    services.upsert_module_permission(
+        models.ModulePermissionUpsert(
+            user_id=user_id,
+            module="pharmacy",
+            can_view=True,
+            can_edit=False,
+        )
+    )
+
+    user_headers = _login_headers("barcode-limited", "limited123")
+
+    unauthorized = client.get("/barcode?module=clothing", headers=user_headers)
+    assert unauthorized.status_code == 403, unauthorized.text
+
+    allowed = client.get("/barcode", headers=user_headers)
+    assert allowed.status_code == 200, allowed.text
+    allowed_payload = allowed.json()
+    assert [entry["sku"] for entry in allowed_payload] == ["PHA-100"]
 
 
 def test_existing_barcodes_listing(monkeypatch: Any, tmp_path: Path) -> None:

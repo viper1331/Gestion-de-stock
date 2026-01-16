@@ -71,6 +71,7 @@ logger.debug(
 )
 
 ASSETS_ROOT = Path(__file__).resolve().parent.parent / "assets"
+ASSETS_DIR = ASSETS_ROOT / "barcodes"
 
 PDF_PAGE_WIDTH_CM = 21.0
 PDF_PAGE_HEIGHT_CM = 29.7
@@ -92,7 +93,7 @@ class BarcodeAsset:
 
 
 def _legacy_assets_dir() -> Path:
-    return ASSETS_ROOT / "barcodes"
+    return ASSETS_DIR
 
 
 def _site_assets_root() -> Path:
