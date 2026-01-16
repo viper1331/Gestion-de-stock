@@ -1721,6 +1721,36 @@ def _seed_default_link_categories(conn: sqlite3.Connection) -> None:
         """,
         defaults,
     )
+    conn.executemany(
+        """
+        UPDATE link_categories
+        SET label = CASE WHEN label IS NULL OR label = '' THEN ? ELSE label END,
+            placeholder = CASE
+                WHEN placeholder IS NULL OR placeholder = '' THEN ? ELSE placeholder END,
+            help_text = CASE WHEN help_text IS NULL OR help_text = '' THEN ? ELSE help_text END,
+            is_active = CASE WHEN is_active IS NULL THEN ? ELSE is_active END,
+            updated_at = CASE
+                WHEN label IS NULL OR label = ''
+                  OR placeholder IS NULL OR placeholder = ''
+                  OR help_text IS NULL OR help_text = ''
+                  OR is_active IS NULL
+                THEN CURRENT_TIMESTAMP
+                ELSE updated_at
+            END
+        WHERE module = ? AND key = ?
+        """,
+        [
+            (
+                label,
+                placeholder,
+                help_text,
+                is_active,
+                module,
+                key,
+            )
+            for module, key, label, placeholder, help_text, _is_required, _sort_order, is_active in defaults
+        ],
+    )
 
 
 def _migrate_vehicle_link_legacy_fields(conn: sqlite3.Connection) -> None:
