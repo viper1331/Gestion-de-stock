@@ -435,7 +435,7 @@ def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
         if "email_normalized" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN email_normalized TEXT")
         if status_added:
-            conn.execute("ALTER TABLE users ADD COLUMN status TEXT NOT NULL DEFAULT 'active'")
+            conn.execute("ALTER TABLE users ADD COLUMN status TEXT")
         if "created_at" not in columns:
             conn.execute("ALTER TABLE users ADD COLUMN created_at TIMESTAMP")
         if "approved_at" not in columns:
@@ -472,7 +472,7 @@ def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
               AND (email_normalized IS NULL OR TRIM(email_normalized) = '')
             """
         )
-        if status_added:
+        if status_added or "status" in columns:
             conn.execute(
                 """
                 UPDATE users
