@@ -38,18 +38,17 @@ async def delete_barcode(sku: str, user: models.User = Depends(get_current_user)
     barcode_service.delete_barcode_png(sku, site_key=site_key)
 
 
-@router.get("")
-async def list_barcodes(user: models.User = Depends(get_current_user)) -> list[dict[str, str]]:
+@router.get("", response_model=list[models.BarcodeGeneratedEntry])
+async def list_barcodes(
+    module: str | None = Query(default=None),
+    q: str | None = Query(default=None),
+    user: models.User = Depends(get_current_user),
+) -> list[models.BarcodeGeneratedEntry]:
     _require_permission(user, action="view")
-    assets = services.list_accessible_barcode_assets(user)
-    return [
-        {
-            "sku": asset.sku,
-            "filename": asset.filename,
-            "modified_at": asset.modified_at.isoformat(),
-        }
-        for asset in assets
-    ]
+    try:
+        return services.list_generated_barcodes(user, module=module, q=q)
+    except PermissionError as exc:
+        raise HTTPException(status_code=403, detail=str(exc)) from exc
 
 
 # Assure la rétrocompatibilité avec l'URL historique terminée par un slash

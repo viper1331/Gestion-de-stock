@@ -8782,6 +8782,114 @@ def list_barcode_catalog(
     )
 
 
+def _allowed_generated_barcode_sources(
+    user: models.User,
+) -> list[tuple[str, str, str, str]]:
+    sources: list[tuple[str, str, str, str]] = []
+    for module_key, table, sku_column, name_column in _BARCODE_CATALOG_SOURCES:
+        if module_key == "vehicle_inventory":
+            continue
+        if user.role == "admin" or has_module_access(user, module_key, action="view"):
+            sources.append((module_key, table, sku_column, name_column))
+    return sources
+
+
+def _resolve_generated_barcode_metadata(
+    conn: sqlite3.Connection,
+    skus: Iterable[str],
+    sources: list[tuple[str, str, str, str]],
+) -> dict[str, tuple[str, str]]:
+    normalized_skus = {
+        sku.strip().casefold(): sku.strip()
+        for sku in skus
+        if sku and sku.strip()
+    }
+    if not normalized_skus or not sources:
+        return {}
+
+    lower_skus = list(normalized_skus.keys())
+    placeholders = ",".join(["?"] * len(lower_skus))
+    resolved: dict[str, tuple[str, str]] = {}
+
+    for module_key, table, sku_column, name_column in sources:
+        query = f"""
+            SELECT {sku_column} AS sku,
+                   {name_column} AS name
+            FROM {table}
+            WHERE LOWER({sku_column}) IN ({placeholders})
+        """
+        rows = conn.execute(query, lower_skus).fetchall()
+        for row in rows:
+            sku_value = (row["sku"] or "").strip()
+            if not sku_value:
+                continue
+            key = sku_value.casefold()
+            if key in resolved:
+                continue
+            name_value = (row["name"] or "").strip()
+            label = f"{name_value} ({sku_value})" if name_value else sku_value
+            resolved[key] = (module_key, label)
+
+    return resolved
+
+
+def list_generated_barcodes(
+    user: models.User, module: str | None = None, q: str | None = None
+) -> list[models.BarcodeGeneratedEntry]:
+    ensure_database_ready()
+
+    normalized_module = (module or "").strip().lower()
+    search = (q or "").strip().casefold()
+
+    sources = _allowed_generated_barcode_sources(user)
+    allowed_modules = {source[0] for source in sources}
+    if not sources:
+        return []
+
+    if normalized_module and normalized_module not in {"all"}:
+        if normalized_module not in allowed_modules:
+            raise PermissionError("Module non autorisé")
+        sources = [source for source in sources if source[0] == normalized_module]
+
+    site_key = db.get_current_site_key()
+    assets = barcode_service.list_barcode_assets(site_key=site_key)
+    if not assets:
+        return []
+
+    with db.get_stock_connection() as conn:
+        resolved = _resolve_generated_barcode_metadata(
+            conn, (asset.sku for asset in assets), sources
+        )
+
+    entries: list[models.BarcodeGeneratedEntry] = []
+    for asset in assets:
+        sku_value = asset.sku.strip()
+        if not sku_value:
+            continue
+        resolved_key = sku_value.casefold()
+        meta = resolved.get(resolved_key)
+        if not meta:
+            continue
+        module_key, label = meta
+        if search:
+            haystack = f"{label} {sku_value}".casefold()
+            if search not in haystack:
+                continue
+        entries.append(
+            models.BarcodeGeneratedEntry(
+                sku=sku_value,
+                module=module_key,
+                label=label,
+                created_at=asset.modified_at,
+                modified_at=asset.modified_at,
+                filename=asset.filename,
+                asset_path=f"/barcode/assets/{asset.filename}",
+            )
+        )
+
+    return entries
+
+
 def _collect_normalized_barcode_values(
     conn: sqlite3.Connection, sources: Iterable[tuple[str, str, str]]
 ) -> set[str]:

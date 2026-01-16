@@ -1192,6 +1192,16 @@ class BarcodeCatalogEntry(BaseModel):
     item_id: Optional[int] = Field(default=None, gt=0)
 
 
+class BarcodeGeneratedEntry(BaseModel):
+    sku: str = Field(..., min_length=1, max_length=64)
+    module: str = Field(..., min_length=1, max_length=64)
+    label: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    created_at: datetime
+    filename: str = Field(..., min_length=1, max_length=256)
+    asset_path: str = Field(..., min_length=1, max_length=512)
+    modified_at: Optional[datetime] = None
+
+
 class PharmacyCategory(BaseModel):
     id: int
     name: str

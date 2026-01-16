@@ -121,7 +121,8 @@ export function BarcodePage() {
     [canView]
   );
 
-  const refreshGallery = useCallback(async () => {
+  const refreshGallery = useCallback(
+    async (nextModule: string, nextQuery: string) => {
     if (!canView || !isMountedRef.current) {
       return;
     }
@@ -130,12 +131,19 @@ export function BarcodePage() {
     setGalleryError(null);
 
     try {
-      const response = await api.get<BarcodeSummary[]>("/barcode");
+      const response = await api.get<BarcodeSummary[]>("/barcode", {
+        params: {
+          module: nextModule,
+          q: nextQuery.trim() ? nextQuery.trim() : undefined
+        }
+      });
       const entries = response.data;
       const visuals = await Promise.all(
         entries.map(async (entry) => {
           try {
-            const assetResponse = await api.get(`/barcode/assets/${encodeURIComponent(entry.filename)}`, {
+            const assetPath =
+              entry.asset_path ?? `/barcode/assets/${encodeURIComponent(entry.filename)}`;
+            const assetResponse = await api.get(assetPath, {
               responseType: "blob"
             });
             if (!isMountedRef.current) {
@@ -145,7 +153,7 @@ export function BarcodePage() {
             return {
               sku: entry.sku,
               filename: entry.filename,
-              modifiedAt: entry.modified_at,
+              modifiedAt: entry.created_at ?? entry.modified_at ?? "",
               imageUrl: objectUrl
             } as BarcodeVisual;
           } catch (assetError) {
@@ -180,13 +188,21 @@ export function BarcodePage() {
         setIsGalleryLoading(false);
       }
     }
-  }, [canView]);
+    },
+    [canView]
+  );
 
   useEffect(() => {
     if (canView) {
-      void refreshGallery();
+      const handle = window.setTimeout(() => {
+        void refreshGallery(moduleFilter, searchTerm);
+      }, 300);
+      return () => {
+        window.clearTimeout(handle);
+      };
     }
-  }, [canView, refreshGallery]);
+    return undefined;
+  }, [canView, moduleFilter, refreshGallery, searchTerm]);
 
   useEffect(() => {
     if (!canView) {
@@ -215,7 +231,7 @@ export function BarcodePage() {
       }
       setImageUrl(url);
       setMessage("Code-barres généré.");
-      void refreshGallery();
+      void refreshGallery(moduleFilter, searchTerm);
     } catch (err) {
       setError("Impossible de générer le code-barres.");
     } finally {
@@ -237,7 +253,7 @@ export function BarcodePage() {
       }
       setImageUrl(null);
       setMessage("Code-barres supprimé.");
-      void refreshGallery();
+      void refreshGallery(moduleFilter, searchTerm);
     } catch (err) {
       setError("Impossible de supprimer le fichier généré.");
     } finally {
@@ -261,17 +277,17 @@ export function BarcodePage() {
         if (sku === targetSku && imageUrl) {
           URL.revokeObjectURL(imageUrl);
           setImageUrl(null);
-        }
+      }
 
       setMessage("Code-barres supprimé.");
-      void refreshGallery();
+      void refreshGallery(moduleFilter, searchTerm);
     } catch (err) {
       setError("Impossible de supprimer le fichier généré.");
     } finally {
         setDeletingSku(null);
       }
     },
-    [canEdit, imageUrl, refreshGallery, sku]
+    [canEdit, imageUrl, moduleFilter, refreshGallery, searchTerm, sku]
   );
 
   const handleExportPdf = async () => {
@@ -609,7 +625,11 @@ export function BarcodePage() {
 type BarcodeSummary = {
   sku: string;
   filename: string;
-  modified_at: string;
+  module: string;
+  label?: string | null;
+  created_at?: string;
+  modified_at?: string;
+  asset_path?: string;
 };
 
 type BarcodeCatalogEntry = {
