@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sqlite3
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -149,6 +151,64 @@ def test_legacy_username_login_allows_access() -> None:
     payload = login.json()
     assert payload["status"] in {"totp_required", "totp_enroll_required"}
     assert payload.get("needs_email_upgrade") is True
+
+
+def test_register_on_legacy_users_db_migrates_columns(tmp_path, monkeypatch) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    users_path = data_dir / "users.db"
+    stock_path = data_dir / "stock.db"
+    snapshot_dir = data_dir / "inventory_snapshots"
+    snapshot_dir.mkdir()
+
+    with sqlite3.connect(users_path) as conn:
+        conn.executescript(
+            """
+            CREATE TABLE users (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                username TEXT UNIQUE NOT NULL,
+                password TEXT NOT NULL,
+                role TEXT NOT NULL DEFAULT 'user',
+                is_active INTEGER NOT NULL DEFAULT 1
+            );
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO users (username, password, role, is_active)
+            VALUES (?, ?, 'admin', 1)
+            """,
+            ("legacy-admin", security.hash_password("LegacyPass123")),
+        )
+        conn.commit()
+
+    monkeypatch.setattr(db, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db, "USERS_DB_PATH", users_path)
+    monkeypatch.setattr(db, "STOCK_DB_PATH", stock_path)
+    monkeypatch.setattr(db, "CORE_DB_PATH", data_dir / "core.db")
+    monkeypatch.setattr(services, "_MIGRATION_LOCK_PATH", data_dir / "schema_migration.lock")
+    monkeypatch.setattr(services, "_INVENTORY_SNAPSHOT_DIR", snapshot_dir)
+    monkeypatch.setattr(services, "_db_initialized", False)
+
+    with TestClient(app) as test_client:
+        login = test_client.post(
+            "/auth/login",
+            json={"username": "legacy-admin", "password": "LegacyPass123", "remember_me": False},
+        )
+        assert login.status_code == 200, login.text
+
+        response = test_client.post(
+            "/auth/register",
+            json={"email": "legacy.register@example.com", "password": "Password123!"},
+        )
+        assert response.status_code == 201, response.text
+
+    with db.get_users_connection() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        assert "email_normalized" in columns
+        assert "created_at" in columns
+        indices = {row["name"] for row in conn.execute("PRAGMA index_list(users)").fetchall()}
+        assert "idx_users_email_normalized" in indices
 
 
 @pytest.mark.parametrize("endpoint", ["approve", "reject"])

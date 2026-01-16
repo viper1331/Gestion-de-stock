@@ -86,6 +86,10 @@ class MessageRateLimitError(RuntimeError):
         self.window_seconds = window_seconds
         super().__init__("Trop de messages envoyés. Réessayez dans quelques secondes.")
 
+
+class UsersDbNotReadyError(RuntimeError):
+    pass
+
 _AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
     ("barcode", "Code-barres"),
     ("clothing", "Habillement"),
@@ -4549,6 +4553,9 @@ def register_user(payload: models.RegisterRequest) -> models.User:
         raise ValueError("L'email est requis")
     hashed = security.hash_password(payload.password)
     with db.get_users_connection() as conn:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+        if "email_normalized" not in columns:
+            raise UsersDbNotReadyError("DB users pas migrée")
         exists = conn.execute(
             "SELECT 1 FROM users WHERE email_normalized = ?",
             (normalized_email,),

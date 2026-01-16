@@ -175,10 +175,10 @@ def init_databases() -> None:
                     status TEXT NOT NULL DEFAULT 'active',
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     approved_at TIMESTAMP,
-                    approved_by TEXT,
+                    approved_by INTEGER,
                     rejected_at TIMESTAMP,
-                    rejected_by TEXT,
-                    notify_on_approval INTEGER NOT NULL DEFAULT 1,
+                    rejected_by INTEGER,
+                    notify_on_approval INTEGER NOT NULL DEFAULT 0,
                     otp_email_enabled INTEGER NOT NULL DEFAULT 0,
                     site_key TEXT NOT NULL DEFAULT 'JLL',
                     admin_active_site_key TEXT,
@@ -428,34 +428,26 @@ def _ensure_user_site_columns(conn: sqlite3.Connection) -> None:
 
 def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
     columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
-    status_added = "status" not in columns
+
+    def _add_column(column_name: str, ddl: str) -> None:
+        if column_name in columns:
+            return
+        logger.info("[DB] Ajout de la colonne users.%s", column_name)
+        conn.execute(f"ALTER TABLE users ADD COLUMN {ddl}")
+        columns.add(column_name)
+
     with conn:
-        if "email" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN email TEXT")
-        if "email_normalized" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN email_normalized TEXT")
-        if status_added:
-            conn.execute("ALTER TABLE users ADD COLUMN status TEXT")
-        if "created_at" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN created_at TIMESTAMP")
-        if "approved_at" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN approved_at TIMESTAMP")
-        if "approved_by" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN approved_by TEXT")
-        if "rejected_at" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN rejected_at TIMESTAMP")
-        if "rejected_by" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN rejected_by TEXT")
-        if "notify_on_approval" not in columns:
-            conn.execute(
-                "ALTER TABLE users ADD COLUMN notify_on_approval INTEGER NOT NULL DEFAULT 1"
-            )
-        if "otp_email_enabled" not in columns:
-            conn.execute(
-                "ALTER TABLE users ADD COLUMN otp_email_enabled INTEGER NOT NULL DEFAULT 0"
-            )
-        if "display_name" not in columns:
-            conn.execute("ALTER TABLE users ADD COLUMN display_name TEXT")
+        _add_column("email", "email TEXT")
+        _add_column("email_normalized", "email_normalized TEXT")
+        _add_column("status", "status TEXT")
+        _add_column("display_name", "display_name TEXT")
+        _add_column("created_at", "created_at TEXT")
+        _add_column("approved_at", "approved_at TEXT")
+        _add_column("approved_by", "approved_by INTEGER")
+        _add_column("rejected_at", "rejected_at TEXT")
+        _add_column("rejected_by", "rejected_by INTEGER")
+        _add_column("notify_on_approval", "notify_on_approval INTEGER NOT NULL DEFAULT 0")
+        _add_column("otp_email_enabled", "otp_email_enabled INTEGER NOT NULL DEFAULT 0")
 
         conn.execute(
             """
@@ -472,19 +464,39 @@ def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
               AND (email_normalized IS NULL OR TRIM(email_normalized) = '')
             """
         )
-        if status_added or "status" in columns:
-            conn.execute(
-                """
-                UPDATE users
-                SET status = 'active'
-                WHERE status IS NULL OR TRIM(status) = ''
-                """
-            )
         conn.execute(
             """
             UPDATE users
-            SET created_at = CURRENT_TIMESTAMP
-            WHERE created_at IS NULL
+            SET status = 'active'
+            WHERE status IS NULL OR TRIM(status) = ''
+            """
+        )
+        conn.execute(
+            """
+            UPDATE users
+            SET created_at = datetime('now')
+            WHERE created_at IS NULL OR TRIM(created_at) = ''
+            """
+        )
+        conn.execute(
+            """
+            UPDATE users
+            SET display_name = username
+            WHERE display_name IS NULL OR TRIM(display_name) = ''
+            """
+        )
+        conn.execute(
+            """
+            UPDATE users
+            SET notify_on_approval = 0
+            WHERE notify_on_approval IS NULL
+            """
+        )
+        conn.execute(
+            """
+            UPDATE users
+            SET otp_email_enabled = 0
+            WHERE otp_email_enabled IS NULL
             """
         )
         conn.execute(
@@ -502,7 +514,7 @@ def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
             """
         )
         conn.execute(
-            "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email_normalized ON users(email_normalized)"
+            "CREATE INDEX IF NOT EXISTS idx_users_email_normalized ON users(email_normalized)"
         )
 
 
