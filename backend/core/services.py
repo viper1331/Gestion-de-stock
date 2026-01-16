@@ -1935,8 +1935,13 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("DROP TABLE backup_settings")
             execute("ALTER TABLE backup_settings_new RENAME TO backup_settings")
         elif "updated_at" not in backup_settings_columns:
+            execute("ALTER TABLE backup_settings ADD COLUMN updated_at TEXT")
             execute(
-                "ALTER TABLE backup_settings ADD COLUMN updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                """
+                UPDATE backup_settings
+                SET updated_at = CURRENT_TIMESTAMP
+                WHERE updated_at IS NULL
+                """
             )
 
         po_info = execute("PRAGMA table_info(purchase_orders)").fetchall()
@@ -1946,8 +1951,13 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         if "note" not in po_columns:
             execute("ALTER TABLE purchase_orders ADD COLUMN note TEXT")
         if "created_at" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN created_at TIMESTAMP")
             execute(
-                "ALTER TABLE purchase_orders ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                """
+                UPDATE purchase_orders
+                SET created_at = CURRENT_TIMESTAMP
+                WHERE created_at IS NULL
+                """
             )
         if "status" not in po_columns:
             execute("ALTER TABLE purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")
@@ -1964,7 +1974,7 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         dotation_info = execute("PRAGMA table_info(dotations)").fetchall()
         dotation_columns = {row["name"] for row in dotation_info}
         if "perceived_at" not in dotation_columns:
-            execute("ALTER TABLE dotations ADD COLUMN perceived_at DATE DEFAULT CURRENT_DATE")
+            execute("ALTER TABLE dotations ADD COLUMN perceived_at DATE")
         if "is_lost" not in dotation_columns:
             execute("ALTER TABLE dotations ADD COLUMN is_lost INTEGER NOT NULL DEFAULT 0")
         if "is_degraded" not in dotation_columns:
@@ -2004,8 +2014,13 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 "ALTER TABLE pharmacy_purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'"
             )
         if "created_at" not in pharmacy_po_columns:
+            execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN created_at TIMESTAMP")
             execute(
-                "ALTER TABLE pharmacy_purchase_orders ADD COLUMN created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP"
+                """
+                UPDATE pharmacy_purchase_orders
+                SET created_at = CURRENT_TIMESTAMP
+                WHERE created_at IS NULL
+                """
             )
         if "note" not in pharmacy_po_columns:
             execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN note TEXT")
@@ -2333,8 +2348,8 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
     note = f"Commande automatique - {item['name']}"
     po_cur = conn.execute(
         """
-        INSERT INTO purchase_orders (supplier_id, status, note, auto_created)
-        VALUES (?, 'PENDING', ?, 1)
+        INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+        VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP)
         """,
         (supplier_id, note),
     )
@@ -3776,9 +3791,10 @@ def seed_default_admin() -> None:
                     role,
                     is_active,
                     status,
-                    site_key
+                    site_key,
+                    created_at
                 )
-                VALUES (?, ?, ?, ?, ?, 1, 'active', ?)
+                VALUES (?, ?, ?, ?, ?, 1, 'active', ?, CURRENT_TIMESTAMP)
                 """,
                 (
                     default_username,
@@ -4384,9 +4400,10 @@ def create_user(payload: models.UserCreate) -> models.User:
                     role,
                     is_active,
                     status,
-                    site_key
+                    site_key,
+                    created_at
                 )
-                VALUES (?, ?, ?, ?, ?, 1, 'active', ?)
+                VALUES (?, ?, ?, ?, ?, 1, 'active', ?, CURRENT_TIMESTAMP)
                 """,
                 (payload.username, email, normalized_email, hashed, payload.role, site_key),
             )
@@ -4502,9 +4519,10 @@ def register_user(payload: models.RegisterRequest) -> models.User:
                 is_active,
                 status,
                 site_key,
-                display_name
+                display_name,
+                created_at
             )
-            VALUES (?, ?, ?, ?, 'user', 0, 'pending', ?, ?)
+            VALUES (?, ?, ?, ?, 'user', 0, 'pending', ?, ?, CURRENT_TIMESTAMP)
             """,
             (email, email, normalized_email, hashed, db.DEFAULT_SITE_KEY, payload.display_name),
         )
@@ -6735,8 +6753,8 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
         try:
             cur = conn.execute(
                 """
-                INSERT INTO purchase_orders (supplier_id, status, note, auto_created)
-                VALUES (?, ?, ?, 0)
+                INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+                VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
                 """,
                 (payload.supplier_id, status, payload.note),
             )
@@ -9051,8 +9069,8 @@ def create_pharmacy_purchase_order(
         try:
             cur = conn.execute(
                 """
-                INSERT INTO pharmacy_purchase_orders (supplier_id, status, note)
-                VALUES (?, ?, ?)
+                INSERT INTO pharmacy_purchase_orders (supplier_id, status, note, created_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
                 """,
                 (payload.supplier_id, status, payload.note),
             )
