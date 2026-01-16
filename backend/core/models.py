@@ -199,9 +199,20 @@ class SentMessage(BaseModel):
 
 
 class LoginRequest(BaseModel):
-    username: str
+    model_config = ConfigDict(extra="forbid")
+    identifier: str | None = None
+    username: str | None = None
     password: str
     remember_me: bool = False
+
+    @model_validator(mode="after")
+    def _ensure_identifier(self) -> "LoginRequest":
+        identifier = self.identifier or self.username
+        if not identifier:
+            raise ValueError("Identifiant requis")
+        self.identifier = identifier
+        self.username = identifier
+        return self
 
 
 class RegisterRequest(BaseModel):
@@ -224,6 +235,7 @@ class TotpRequiredResponse(BaseModel):
     status: Literal["totp_required"] = "totp_required"
     challenge_token: str
     user: LoginUserSummary
+    needs_email_upgrade: bool | None = None
 
 
 class TotpEnrollRequiredResponse(BaseModel):
@@ -233,6 +245,7 @@ class TotpEnrollRequiredResponse(BaseModel):
     secret_masked: str
     secret_plain_if_allowed: str | None = None
     user: LoginUserSummary
+    needs_email_upgrade: bool | None = None
 
 
 class TwoFactorChallengeResponse(BaseModel):

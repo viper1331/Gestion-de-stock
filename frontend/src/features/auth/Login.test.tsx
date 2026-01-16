@@ -25,6 +25,6 @@ describe("Login", () => {
     );
 
     expect(screen.getByText("Connexion")).toBeInTheDocument();
-    expect(screen.getByLabelText("Email")).toBeInTheDocument();
+    expect(screen.getByLabelText("Identifiant ou email")).toBeInTheDocument();
   });
 });

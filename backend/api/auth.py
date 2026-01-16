@@ -99,7 +99,10 @@ def _allow_secret_plaintext() -> bool:
 async def login(
     credentials: models.LoginRequest,
 ) -> models.TotpRequiredResponse | models.TotpEnrollRequiredResponse:
-    user = services.authenticate(credentials.username, credentials.password)
+    user, needs_email_upgrade = services.authenticate_with_identifier(
+        credentials.identifier,
+        credentials.password,
+    )
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Identifiants invalides")
     _ensure_user_active(user)
@@ -109,6 +112,7 @@ async def login(
         return models.TotpRequiredResponse(
             challenge_token=challenge_token,
             user=_build_login_user_summary(user),
+            needs_email_upgrade=needs_email_upgrade or None,
         )
     secret = two_factor.generate_totp_secret()
     secret_enc = two_factor_crypto.encrypt_secret(secret)
@@ -123,6 +127,7 @@ async def login(
         secret_masked=two_factor.mask_secret(secret),
         secret_plain_if_allowed=secret if _allow_secret_plaintext() else None,
         user=_build_login_user_summary(user),
+        needs_email_upgrade=needs_email_upgrade or None,
     )
 
 
