@@ -136,6 +136,14 @@ def _login_headers(username: str, password: str) -> dict[str, str]:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _configure_barcode_assets(
+    monkeypatch: Any, tmp_path: Path, site_key: str | None = None
+) -> Path:
+    assets_root = tmp_path / "assets"
+    monkeypatch.setattr(barcode_service, "ASSETS_ROOT", assets_root)
+    return barcode_service.get_site_assets_dir(site_key or db.DEFAULT_SITE_KEY)
+
+
 _TRANSPARENT_PIXEL = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
     b"\x00\x00\x00\x01\x00\x00\x00\x01\x08\x06\x00\x00\x00\x1f\x15\xc4\x89"
@@ -1042,15 +1050,13 @@ def test_barcode_listing_and_assets(monkeypatch: Any, tmp_path: Path) -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
 
-    assets_dir = tmp_path / "barcodes"
-    assets_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+    assets_dir = _configure_barcode_assets(monkeypatch, tmp_path)
 
-    generated = barcode_service.generate_barcode_png("SKU-ALPHA")
+    generated = barcode_service.generate_barcode_png("SKU-ALPHA", site_key=db.DEFAULT_SITE_KEY)
     assert generated is not None and generated.exists()
     assert generated.stat().st_size > 0
 
-    generated_two = barcode_service.generate_barcode_png("SKU-BETA")
+    generated_two = barcode_service.generate_barcode_png("SKU-BETA", site_key=db.DEFAULT_SITE_KEY)
     assert generated_two is not None and generated_two.exists()
     assert generated_two.stat().st_size > 0
 
@@ -1070,36 +1076,72 @@ def test_barcode_listing_and_assets(monkeypatch: Any, tmp_path: Path) -> None:
     assert missing.status_code == 404
 
 
+def test_barcode_assets_scoped_by_site(monkeypatch: Any, tmp_path: Path) -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    assets_root = tmp_path / "assets"
+    monkeypatch.setattr(barcode_service, "ASSETS_ROOT", assets_root)
+
+    jll_response = client.post("/barcode/generate/SKU-SHARED", headers=admin_headers)
+    assert jll_response.status_code == 200, jll_response.text
+
+    gsm_headers = {**admin_headers, "X-Site-Key": "GSM"}
+    gsm_response = client.post("/barcode/generate/SKU-SHARED", headers=gsm_headers)
+    assert gsm_response.status_code == 200, gsm_response.text
+
+    gsm_unique = client.post("/barcode/generate/SKU-GSM", headers=gsm_headers)
+    assert gsm_unique.status_code == 200, gsm_unique.text
+
+    jll_dir = assets_root / "sites" / "JLL" / "barcodes"
+    gsm_dir = assets_root / "sites" / "GSM" / "barcodes"
+
+    assert (jll_dir / "SKU-SHARED.png").exists()
+    assert (gsm_dir / "SKU-SHARED.png").exists()
+    assert (gsm_dir / "SKU-GSM.png").exists()
+    assert not (jll_dir / "SKU-GSM.png").exists()
+
+    jll_listing = client.get("/barcode", headers=admin_headers)
+    assert jll_listing.status_code == 200, jll_listing.text
+    jll_skus = {entry["sku"] for entry in jll_listing.json()}
+    assert "SKU-GSM" not in jll_skus
+
+    gsm_listing = client.get("/barcode", headers=gsm_headers)
+    assert gsm_listing.status_code == 200, gsm_listing.text
+    gsm_skus = {entry["sku"] for entry in gsm_listing.json()}
+    assert "SKU-GSM" in gsm_skus
+
+
 def test_barcode_generation_requires_dependency(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     services.ensure_database_ready()
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", tmp_path)
+    assets_dir = _configure_barcode_assets(monkeypatch, tmp_path)
     monkeypatch.delenv("ALLOW_PLACEHOLDER_BARCODE", raising=False)
     monkeypatch.setattr(barcode_service, "_barcode_lib", None)
     monkeypatch.setattr(barcode_service, "ImageWriter", None)
 
     with pytest.raises(RuntimeError) as excinfo:
-        barcode_service.generate_barcode_png("SKU-MISSING")
+        barcode_service.generate_barcode_png("SKU-MISSING", site_key=db.DEFAULT_SITE_KEY)
 
     assert "python-barcode" in str(excinfo.value)
-    assert list(tmp_path.glob("*.png")) == []
+    assert list(assets_dir.glob("*.png")) == []
 
 
 def test_barcode_generation_does_not_fallback_to_placeholder(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
     services.ensure_database_ready()
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", tmp_path)
+    assets_dir = _configure_barcode_assets(monkeypatch, tmp_path)
     monkeypatch.setenv("ALLOW_PLACEHOLDER_BARCODE", "1")
     monkeypatch.setattr(barcode_service, "_barcode_lib", None)
     monkeypatch.setattr(barcode_service, "ImageWriter", None)
 
     with pytest.raises(RuntimeError) as excinfo:
-        barcode_service.generate_barcode_png("SKU-ABSENT")
+        barcode_service.generate_barcode_png("SKU-ABSENT", site_key=db.DEFAULT_SITE_KEY)
 
     assert "python-barcode" in str(excinfo.value)
-    assert list(tmp_path.glob("*.png")) == []
+    assert list(assets_dir.glob("*.png")) == []
 
 
 def test_barcode_listing_requires_permission() -> None:
@@ -1119,9 +1161,7 @@ def test_barcode_listing_respects_module_permissions(
     services.ensure_database_ready()
     user_id = _create_user("limited-visual", "limited123", role="user")
 
-    assets_dir = tmp_path / "barcodes"
-    assets_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+    _configure_barcode_assets(monkeypatch, tmp_path)
 
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM items")
@@ -1131,9 +1171,18 @@ def test_barcode_listing_respects_module_permissions(
     services.create_item(models.ItemCreate(name="Veste", sku="HAB-010"))
     services.create_remise_item(models.ItemCreate(name="Caisse", sku="REM-200"))
 
-    assert barcode_service.generate_barcode_png("HAB-010") is not None
-    assert barcode_service.generate_barcode_png("REM-200") is not None
-    assert barcode_service.generate_barcode_png("OTHER-999") is not None
+    assert (
+        barcode_service.generate_barcode_png("HAB-010", site_key=db.DEFAULT_SITE_KEY)
+        is not None
+    )
+    assert (
+        barcode_service.generate_barcode_png("REM-200", site_key=db.DEFAULT_SITE_KEY)
+        is not None
+    )
+    assert (
+        barcode_service.generate_barcode_png("OTHER-999", site_key=db.DEFAULT_SITE_KEY)
+        is not None
+    )
 
     services.upsert_module_permission(
         models.ModulePermissionUpsert(
@@ -1165,9 +1214,7 @@ def test_existing_barcodes_listing(monkeypatch: Any, tmp_path: Path) -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
 
-    assets_dir = tmp_path / "barcodes"
-    assets_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+    assets_dir = _configure_barcode_assets(monkeypatch, tmp_path)
 
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM pharmacy_items")
@@ -1198,9 +1245,7 @@ def test_existing_barcodes_listing_respects_module_permissions(
     services.ensure_database_ready()
     user_id = _create_user("limited-barcode", "limited123", role="user")
 
-    assets_dir = tmp_path / "barcodes"
-    assets_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+    _configure_barcode_assets(monkeypatch, tmp_path)
 
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM pharmacy_items")
@@ -1243,6 +1288,7 @@ def test_barcode_catalog_listing_filters_and_search() -> None:
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM items")
         conn.execute("DELETE FROM remise_items")
+        conn.execute("DELETE FROM vehicle_items")
         conn.execute("DELETE FROM pharmacy_items")
         conn.commit()
 
@@ -1340,9 +1386,7 @@ def test_barcode_pdf_export(monkeypatch: Any, tmp_path: Path) -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
 
-    assets_dir = tmp_path / "barcodes"
-    assets_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+    assets_dir = _configure_barcode_assets(monkeypatch, tmp_path)
 
     for index in range(5):
         image = Image.new("RGB", (400, 200), color="white")
@@ -1359,9 +1403,7 @@ def test_barcode_pdf_export_requires_permission(monkeypatch: Any, tmp_path: Path
     user_id = _create_user("noviewpdf", "noview123", role="user")
     assert user_id > 0
 
-    assets_dir = tmp_path / "barcodes"
-    assets_dir.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(barcode_service, "ASSETS_DIR", assets_dir)
+    assets_dir = _configure_barcode_assets(monkeypatch, tmp_path)
 
     image = Image.new("RGB", (400, 200), color="white")
     image.save(assets_dir / "SKU-ONLY.png")
