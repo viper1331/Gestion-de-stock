@@ -19,7 +19,7 @@ from backend.core import db
 from backend.core.storage import MEDIA_ROOT
 
 MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
-BARCODE_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "barcodes"
+BARCODE_ASSETS_ROOT = Path(__file__).resolve().parent.parent / "assets"
 
 logger = logging.getLogger(__name__)
 
@@ -80,8 +80,11 @@ def get_backup_targets() -> dict[str, object]:
     folders: list[tuple[str, Path]] = [
         ("media", MEDIA_ROOT),
         ("message_archive", MESSAGE_ARCHIVE_ROOT),
-        ("assets/barcodes", BARCODE_ASSETS_DIR),
+        ("assets/sites", BARCODE_ASSETS_ROOT / "sites"),
     ]
+    legacy_barcode_assets = BARCODE_ASSETS_ROOT / "barcodes"
+    if legacy_barcode_assets.exists():
+        folders.append(("assets/barcodes", legacy_barcode_assets))
     for label in ("archives", "exports", "imports"):
         candidate = db.DATA_DIR / label
         if candidate.exists():

@@ -5,7 +5,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import FileResponse, StreamingResponse
 
 from backend.api.auth import get_current_user
-from backend.core import models, services
+from backend.core import db, models, services
 from backend.services import barcode as barcode_service
 from backend.services.pdf_config import render_filename, resolve_pdf_config
 
@@ -24,7 +24,8 @@ async def generate_barcode(
     sku: str, user: models.User = Depends(get_current_user)
 ) -> FileResponse:
     _require_permission(user, action="edit")
-    path = barcode_service.generate_barcode_png(sku)
+    site_key = db.get_current_site_key()
+    path = barcode_service.generate_barcode_png(sku, site_key=site_key)
     if not path:
         raise HTTPException(status_code=500, detail="Échec de la génération du code-barres")
     return FileResponse(path, filename=f"{sku}.png", media_type="image/png")
@@ -33,7 +34,8 @@ async def generate_barcode(
 @router.delete("/generate/{sku}")
 async def delete_barcode(sku: str, user: models.User = Depends(get_current_user)) -> None:
     _require_permission(user, action="edit")
-    barcode_service.delete_barcode_png(sku)
+    site_key = db.get_current_site_key()
+    barcode_service.delete_barcode_png(sku, site_key=site_key)
 
 
 @router.get("")
@@ -82,7 +84,8 @@ async def get_barcode_asset(
     filename: str, user: models.User = Depends(get_current_user)
 ) -> FileResponse:
     _require_permission(user, action="view")
-    path = barcode_service.get_barcode_asset(filename)
+    site_key = db.get_current_site_key()
+    path = barcode_service.get_barcode_asset(filename, site_key=site_key)
     if not path:
         raise HTTPException(status_code=404, detail="Fichier de code-barres introuvable")
     return FileResponse(path, filename=path.name, media_type="image/png")
@@ -92,11 +95,14 @@ async def get_barcode_asset(
 async def export_barcode_pdf(user: models.User = Depends(get_current_user)) -> StreamingResponse:
     _require_permission(user, action="view")
     assets = services.list_accessible_barcode_assets(user)
+    site_key = db.get_current_site_key()
     try:
         resolved = resolve_pdf_config(MODULE_KEY)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    pdf_buffer = barcode_service.generate_barcode_pdf(assets=assets, config=resolved.config)
+    pdf_buffer = barcode_service.generate_barcode_pdf(
+        assets=assets, config=resolved.config, site_key=site_key
+    )
     if not pdf_buffer:
         raise HTTPException(status_code=404, detail="Aucun code-barres disponible pour l'export")
     filename = render_filename(

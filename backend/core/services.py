@@ -8658,6 +8658,7 @@ def _iter_module_barcode_values(
 
 def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
     ensure_database_ready()
+    site_key = db.get_current_site_key()
 
     accessible_sources = [
         (module, table, column)
@@ -8669,7 +8670,7 @@ def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
 
     existing_visual_keys = {
         asset.sku.strip().casefold()
-        for asset in barcode_service.list_barcode_assets()
+        for asset in barcode_service.list_barcode_assets(site_key=site_key)
         if asset.sku.strip()
     }
 
@@ -8804,7 +8805,8 @@ def list_accessible_barcode_assets(user: models.User) -> list[barcode_service.Ba
     automatiquement purgés pour éviter d'exposer des visuels obsolètes.
     """
 
-    assets = barcode_service.list_barcode_assets()
+    site_key = db.get_current_site_key()
+    assets = barcode_service.list_barcode_assets(site_key=site_key)
     if not assets:
         return []
 

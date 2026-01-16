@@ -7,6 +7,7 @@ explicite plutôt que de revenir silencieusement à un rendu factice.
 from __future__ import annotations
 
 import logging
+import shutil
 import sys
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -16,6 +17,7 @@ from typing import Iterable, List, Optional
 
 from PIL import Image, ImageDraw, ImageFont, ImageOps
 
+from backend.core import db
 from backend.core.pdf_config_models import PdfConfig
 
 try:  # pragma: no cover - dépendances requises pour la génération réelle
@@ -68,8 +70,7 @@ logger.debug(
     bool(ImageWriter),
 )
 
-ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "barcodes"
-ASSETS_DIR.mkdir(parents=True, exist_ok=True)
+ASSETS_ROOT = Path(__file__).resolve().parent.parent / "assets"
 
 PDF_PAGE_WIDTH_CM = 21.0
 PDF_PAGE_HEIGHT_CM = 29.7
@@ -90,13 +91,71 @@ class BarcodeAsset:
     modified_at: datetime
 
 
-def _barcode_path(sku: str) -> Path:
+def _legacy_assets_dir() -> Path:
+    return ASSETS_ROOT / "barcodes"
+
+
+def _site_assets_root() -> Path:
+    return ASSETS_ROOT / "sites"
+
+
+def _migrate_legacy_assets(site_key: str, site_dir: Path) -> None:
+    """Migre les fichiers historiques vers le site par défaut.
+
+    Stratégie : les anciens fichiers "globaux" ne sont déplacés automatiquement
+    que pour le site par défaut. Les autres sites ne lisent jamais ce répertoire
+    afin d'éviter tout partage involontaire entre sites.
+    """
+
+    if site_key != db.DEFAULT_SITE_KEY:
+        return
+
+    legacy_dir = _legacy_assets_dir()
+    if not legacy_dir.exists():
+        return
+
+    legacy_files = [path for path in legacy_dir.glob("*.png") if path.is_file()]
+    if not legacy_files:
+        return
+
+    moved = 0
+    for file_path in legacy_files:
+        target = site_dir / file_path.name
+        if target.exists():
+            continue
+        try:
+            shutil.move(str(file_path), str(target))
+            moved += 1
+        except OSError:
+            logger.warning(
+                "[BARCODE] Impossible de migrer %s vers %s.", file_path, target
+            )
+
+    if moved:
+        logger.info(
+            "[BARCODE] %s code(s)-barres migré(s) depuis %s vers %s pour le site %s.",
+            moved,
+            legacy_dir,
+            site_dir,
+            site_key,
+        )
+
+
+def get_site_assets_dir(site_key: str | None = None) -> Path:
+    resolved_key = (site_key or db.get_current_site_key()).upper()
+    site_dir = _site_assets_root() / resolved_key / "barcodes"
+    site_dir.mkdir(parents=True, exist_ok=True)
+    _migrate_legacy_assets(resolved_key, site_dir)
+    return site_dir
+
+
+def _barcode_path(sku: str, site_key: str | None = None) -> Path:
     safe = sku.replace("/", "-")
-    return ASSETS_DIR / f"{safe}.png"
+    return get_site_assets_dir(site_key) / f"{safe}.png"
 
 
-def generate_barcode_png(sku: str) -> Optional[Path]:
-    path = _barcode_path(sku)
+def generate_barcode_png(sku: str, site_key: str | None = None) -> Optional[Path]:
+    path = _barcode_path(sku, site_key)
 
     if not (_barcode_lib and ImageWriter):
         raise RuntimeError(
@@ -204,17 +263,15 @@ def _generate_placeholder_barcode(path: Path, sku: str) -> Optional[Path]:
     return path
 
 
-def delete_barcode_png(sku: str) -> None:
-    path = _barcode_path(sku)
+def delete_barcode_png(sku: str, site_key: str | None = None) -> None:
+    path = _barcode_path(sku, site_key)
     if path.exists():
         path.unlink()
 
 
-def list_barcode_assets() -> List[BarcodeAsset]:
-    """Retourne la liste des fichiers de codes-barres disponibles."""
-
+def _list_assets_in_dir(base_dir: Path) -> List[BarcodeAsset]:
     assets: List[BarcodeAsset] = []
-    base_dir = ASSETS_DIR.resolve()
+    base_dir = base_dir.resolve()
 
     candidates = sorted(
         (path for path in base_dir.glob("*.png") if path.is_file()),
@@ -239,7 +296,40 @@ def list_barcode_assets() -> List[BarcodeAsset]:
     return assets
 
 
-def get_barcode_asset(filename: str) -> Optional[Path]:
+def list_barcode_assets(site_key: str | None = None) -> List[BarcodeAsset]:
+    """Retourne la liste des fichiers de codes-barres disponibles."""
+
+    resolved_key = (site_key or db.get_current_site_key()).upper()
+    site_dir = get_site_assets_dir(resolved_key)
+    assets = _list_assets_in_dir(site_dir)
+
+    legacy_dir = _legacy_assets_dir()
+    if resolved_key == db.DEFAULT_SITE_KEY and legacy_dir.exists():
+        existing = {asset.filename for asset in assets}
+        for asset in _list_assets_in_dir(legacy_dir):
+            if asset.filename in existing:
+                continue
+            assets.append(asset)
+
+    return sorted(assets, key=lambda asset: asset.modified_at, reverse=True)
+
+
+def _resolve_asset_path(base_dir: Path, filename: str) -> Optional[Path]:
+    try:
+        resolved = (base_dir / filename).resolve(strict=False)
+    except FileNotFoundError:
+        return None
+
+    if resolved.parent != base_dir.resolve():
+        return None
+
+    if not resolved.exists() or not resolved.is_file():
+        return None
+
+    return resolved
+
+
+def get_barcode_asset(filename: str, site_key: str | None = None) -> Optional[Path]:
     """Récupère le chemin d'un fichier de code-barres en s'assurant qu'il est sûr."""
 
     if not filename.lower().endswith(".png"):
@@ -249,25 +339,25 @@ def get_barcode_asset(filename: str) -> Optional[Path]:
     if candidate.name != filename:
         return None
 
-    try:
-        resolved = (ASSETS_DIR / candidate.name).resolve(strict=False)
-    except FileNotFoundError:
-        return None
+    resolved_key = (site_key or db.get_current_site_key()).upper()
+    site_dir = get_site_assets_dir(resolved_key)
+    resolved = _resolve_asset_path(site_dir, candidate.name)
+    if resolved:
+        return resolved
 
-    base_dir = ASSETS_DIR.resolve()
-    if resolved.parent != base_dir:
-        return None
+    if resolved_key == db.DEFAULT_SITE_KEY:
+        legacy_dir = _legacy_assets_dir()
+        if legacy_dir.exists():
+            return _resolve_asset_path(legacy_dir, candidate.name)
 
-    if not resolved.exists() or not resolved.is_file():
-        return None
-
-    return resolved
+    return None
 
 
 def generate_barcode_pdf(
     assets: Optional[Iterable[BarcodeAsset]] = None,
     *,
     config: PdfConfig | None = None,
+    site_key: str | None = None,
 ) -> Optional[BytesIO]:
     """Crée un PDF A4 avec une grille de codes-barres.
 
@@ -277,7 +367,7 @@ def generate_barcode_pdf(
     """
 
     if assets is None:
-        assets_list = list_barcode_assets()
+        assets_list = list_barcode_assets(site_key=site_key)
     else:
         assets_list = list(assets)
 
@@ -351,6 +441,8 @@ def generate_barcode_pdf(
         for page in pages:
             page.close()
     return buffer
+
+
 def _resolve_page_size_cm(config: PdfConfig) -> tuple[float, float]:
     size_map = {
         "A3": (29.7, 42.0),
