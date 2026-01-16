@@ -247,7 +247,7 @@ export function Login() {
       </header>
       <div className="space-y-2">
         <label className="block text-sm font-medium text-slate-200" htmlFor="username">
-          Identifiant ou email
+          Email ou identifiant
         </label>
         <AppTextInput
           id="username"
@@ -255,8 +255,8 @@ export function Login() {
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
           value={identifier}
           onChange={(event) => setIdentifier(event.target.value)}
-          title="Entrez votre identifiant ou email"
-          inputMode="email"
+          title="Entrez votre email ou identifiant"
+          inputMode="text"
           autoComplete="username"
         />
       </div>
