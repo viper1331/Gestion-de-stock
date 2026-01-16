@@ -6,6 +6,8 @@ import sqlite3
 from backend.core import db, models
 from backend.services.backup_manager import MAX_BACKUP_FILES
 
+GLOBAL_BACKUP_KEY = "GLOBAL"
+
 DEFAULT_BACKUP_INTERVAL_MINUTES = 60
 DEFAULT_BACKUP_RETENTION_COUNT = MAX_BACKUP_FILES
 MAX_BACKUP_INTERVAL_MINUTES = 60 * 24 * 7
@@ -30,7 +32,8 @@ def _is_missing_table_error(exc: sqlite3.OperationalError) -> bool:
 
 
 def load_backup_settings_from_db(site_key: str) -> models.BackupSettings:
-    with db.get_stock_connection(site_key) as conn:
+    normalized_key = GLOBAL_BACKUP_KEY
+    with db.get_core_connection() as conn:
         try:
             row = conn.execute(
                 """
@@ -38,7 +41,7 @@ def load_backup_settings_from_db(site_key: str) -> models.BackupSettings:
                 FROM backup_settings
                 WHERE site_key = ?
                 """,
-                (site_key.upper(),),
+                (normalized_key,),
             ).fetchone()
         except sqlite3.OperationalError as exc:
             if not _is_missing_table_error(exc):
@@ -50,7 +53,7 @@ def load_backup_settings_from_db(site_key: str) -> models.BackupSettings:
                 FROM backup_settings
                 WHERE site_key = ?
                 """,
-                (site_key.upper(),),
+                (normalized_key,),
             ).fetchone()
     if row is None:
         return models.BackupSettings(
@@ -66,8 +69,8 @@ def load_backup_settings_from_db(site_key: str) -> models.BackupSettings:
 
 
 def save_backup_settings(site_key: str, settings: models.BackupSettings) -> None:
-    normalized_key = site_key.upper()
-    with db.get_stock_connection(site_key) as conn:
+    normalized_key = GLOBAL_BACKUP_KEY
+    with db.get_core_connection() as conn:
         try:
             conn.execute(
                 """

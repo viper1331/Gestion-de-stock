@@ -67,13 +67,32 @@ def test_site_migrations_create_required_tables(
     conn = sqlite3.connect(site_db_path)
     try:
         cursor = conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('backup_settings', 'link_categories')"
+            "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('link_categories')"
         )
         names = {row[0] for row in cursor.fetchall()}
     finally:
         conn.close()
 
-    assert {"backup_settings", "link_categories"} <= names
+    assert {"link_categories"} <= names
+
+
+def test_core_init_creates_backup_settings_table(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    data_dir = tmp_path / "data"
+    data_dir.mkdir()
+    monkeypatch.setattr(db, "DATA_DIR", data_dir)
+    monkeypatch.setattr(db, "USERS_DB_PATH", data_dir / "users.db")
+    monkeypatch.setattr(db, "CORE_DB_PATH", data_dir / "core.db")
+    services._db_initialized = False
+
+    services.ensure_database_ready()
+
+    with db.get_core_connection() as conn:
+        cursor = conn.execute(
+            "SELECT name FROM sqlite_master WHERE type='table' AND name='backup_settings'"
+        )
+        assert cursor.fetchone() is not None
 
 
 def test_backup_settings_and_link_categories_endpoints(client: TestClient) -> None:
