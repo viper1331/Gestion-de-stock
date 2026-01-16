@@ -1268,6 +1268,12 @@ def test_barcode_catalog_listing_filters_and_search() -> None:
     assert module_filtered.status_code == 200, module_filtered.text
     assert {entry["module"] for entry in module_filtered.json()} == {"pharmacy"}
 
+    unknown_module = client.get(
+        "/barcodes/catalog?module=unknown-module", headers=admin_headers
+    )
+    assert unknown_module.status_code == 200, unknown_module.text
+    assert unknown_module.json() == []
+
     search_by_name = client.get("/barcodes/catalog?q=Ves", headers=admin_headers)
     assert search_by_name.status_code == 200, search_by_name.text
     assert {entry["sku"] for entry in search_by_name.json()} == {"HAB-010"}

@@ -12,6 +12,11 @@ import { EditableBlock } from "../../components/EditableBlock";
 import { fetchConfigEntries } from "../../lib/config";
 
 const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
+const EXCLUDED_MODULE_KEYS = new Set([
+  "vehicle_inventory",
+  "vehicle-inventory",
+  "vehicleInventory"
+]);
 
 export function BarcodePage() {
   const { user } = useAuth();
@@ -300,22 +305,53 @@ export function BarcodePage() {
     }
   };
 
-  const moduleFilterOptions = useMemo(() => {
-    const options = [
+  const moduleFilterOptions = useMemo(
+    () => [
       { value: "all", label: "Tous" },
       { value: "vehicle_inventory", label: moduleTitles.vehicle_inventory ?? "Inventaire véhicules" },
       { value: "pharmacy", label: moduleTitles.pharmacy ?? "Pharmacie" },
       { value: "clothing", label: moduleTitles.clothing ?? "Inventaire habillement" },
       { value: "inventory_remise", label: moduleTitles.inventory_remise ?? "Inventaire remises" }
-    ];
+    ],
+    [moduleTitles]
+  );
+
+  const permittedModuleOptions = useMemo(() => {
     if (user?.role === "admin") {
-      return options;
+      return moduleFilterOptions;
     }
-    return options.filter(
-      (option) =>
-        option.value === "all" || modulePermissions.canAccess(option.value)
+    return moduleFilterOptions.filter(
+      (option) => option.value === "all" || modulePermissions.canAccess(option.value)
     );
-  }, [modulePermissions, moduleTitles, user]);
+  }, [moduleFilterOptions, modulePermissions, user]);
+
+  const visibleModuleOptions = useMemo(
+    () =>
+      permittedModuleOptions.filter((option) => {
+        const key = option.value ?? (option as { key?: string }).key ?? (option as { id?: string }).id;
+        return key ? !EXCLUDED_MODULE_KEYS.has(key) : true;
+      }),
+    [permittedModuleOptions]
+  );
+
+  useEffect(() => {
+    if (!visibleModuleOptions.length) {
+      return;
+    }
+    const visibleValues = new Set(
+      visibleModuleOptions.map(
+        (option) =>
+          option.value ?? (option as { key?: string }).key ?? (option as { id?: string }).id ?? ""
+      )
+    );
+    if (!visibleValues.has(moduleFilter)) {
+      const fallback =
+        visibleModuleOptions.find((option) => option.value === "all") ?? visibleModuleOptions[0];
+      if (fallback?.value && fallback.value !== moduleFilter) {
+        setModuleFilter(fallback.value);
+      }
+    }
+  }, [moduleFilter, visibleModuleOptions]);
 
   const selectedCatalogEntry = useMemo(
     () => catalogEntries.find((entry) => entry.sku === sku) ?? null,
@@ -362,21 +398,23 @@ export function BarcodePage() {
       </header>
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
         <div className="flex flex-wrap items-end gap-4">
-          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Module
-            <select
-              className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-              value={moduleFilter}
-              onChange={(event) => setModuleFilter(event.target.value)}
-              title="Filtrer les articles par module"
-            >
-              {moduleFilterOptions.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+          {visibleModuleOptions.length > 1 ? (
+            <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+              Module
+              <select
+                className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                value={moduleFilter}
+                onChange={(event) => setModuleFilter(event.target.value)}
+                title="Filtrer les articles par module"
+              >
+                {visibleModuleOptions.map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
           <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
             Recherche
             <AppTextInput
