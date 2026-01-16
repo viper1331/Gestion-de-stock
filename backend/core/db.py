@@ -167,8 +167,8 @@ def init_databases() -> None:
                 CREATE TABLE IF NOT EXISTS users (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     username TEXT UNIQUE NOT NULL,
-                    email TEXT NOT NULL,
-                    email_normalized TEXT NOT NULL UNIQUE,
+                    email TEXT,
+                    email_normalized TEXT UNIQUE,
                     password TEXT NOT NULL,
                     role TEXT NOT NULL DEFAULT 'user',
                     is_active INTEGER NOT NULL DEFAULT 1,
@@ -460,15 +460,16 @@ def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             """
             UPDATE users
-            SET email = COALESCE(NULLIF(TRIM(email), ''), username)
-            WHERE email IS NULL OR TRIM(email) = ''
+            SET email = NULL
+            WHERE email IS NOT NULL AND TRIM(email) = ''
             """
         )
         conn.execute(
             """
             UPDATE users
             SET email_normalized = LOWER(TRIM(email))
-            WHERE email_normalized IS NULL OR TRIM(email_normalized) = ''
+            WHERE email IS NOT NULL AND TRIM(email) != ''
+              AND (email_normalized IS NULL OR TRIM(email_normalized) = '')
             """
         )
         if status_added:

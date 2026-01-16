@@ -33,6 +33,20 @@ def _create_active_user(username: str, password: str, role: str = "user") -> Non
         conn.commit()
 
 
+def _create_legacy_user(username: str, password: str, role: str = "user") -> None:
+    services.ensure_database_ready()
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.execute(
+            """
+            INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
+            VALUES (?, NULL, NULL, ?, ?, 1, 'active')
+            """,
+            (username, security.hash_password(password), role),
+        )
+        conn.commit()
+
+
 def _user_id_for_email(email: str) -> int:
     with db.get_users_connection() as conn:
         row = conn.execute(
@@ -121,6 +135,20 @@ def test_reject_blocks_login() -> None:
     )
     assert login.status_code == 403
     assert login.json()["detail"] == "Compte refusé. Contactez un administrateur."
+
+
+def test_legacy_username_login_allows_access() -> None:
+    services.ensure_database_ready()
+    _create_legacy_user("legacy-admin", "LegacyPass123", role="admin")
+
+    login = client.post(
+        "/auth/login",
+        json={"username": "legacy-admin", "password": "LegacyPass123", "remember_me": False},
+    )
+    assert login.status_code == 200, login.text
+    payload = login.json()
+    assert payload["status"] in {"totp_required", "totp_enroll_required"}
+    assert payload.get("needs_email_upgrade") is True
 
 
 @pytest.mark.parametrize("endpoint", ["approve", "reject"])

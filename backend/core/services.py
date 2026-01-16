@@ -3768,11 +3768,13 @@ def _normalize_email(value: str) -> str:
 def seed_default_admin() -> None:
     default_username = "admin"
     default_password = "admin123"
-    normalized_email = _normalize_email(default_username)
+    has_email = "@" in default_username
+    normalized_email = _normalize_email(default_username) if has_email else None
+    seed_email = default_username if has_email else None
     with db.get_users_connection() as conn:
         cur = conn.execute(
             """
-            SELECT id, password, role, is_active, site_key, status, email_normalized
+            SELECT id, password, role, is_active, site_key, status, email, email_normalized
             FROM users
             WHERE username = ?
             """,
@@ -3798,7 +3800,7 @@ def seed_default_admin() -> None:
                 """,
                 (
                     default_username,
-                    default_username,
+                    seed_email,
                     normalized_email,
                     hashed_password,
                     "admin",
@@ -3815,7 +3817,7 @@ def seed_default_admin() -> None:
             needs_update = True
         if row["site_key"] != db.DEFAULT_SITE_KEY:
             needs_update = True
-        if row["email_normalized"] != normalized_email:
+        if has_email and row["email_normalized"] != normalized_email:
             needs_update = True
 
         if needs_update:
@@ -3835,8 +3837,8 @@ def seed_default_admin() -> None:
                     hashed_password,
                     "admin",
                     db.DEFAULT_SITE_KEY,
-                    default_username,
-                    normalized_email,
+                    seed_email if has_email else row["email"],
+                    normalized_email if has_email else row["email_normalized"],
                     row["id"],
                 ),
             )
@@ -4478,20 +4480,33 @@ def delete_user(user_id: int) -> None:
         conn.commit()
 
 
-def authenticate(username: str, password: str) -> Optional[models.User]:
+def authenticate_with_identifier(identifier: str, password: str) -> tuple[models.User | None, bool]:
     ensure_database_ready()
-    normalized_email = _normalize_email(username)
+    normalized_identifier = identifier.strip()
     with db.get_users_connection() as conn:
-        cur = conn.execute(
-            "SELECT * FROM users WHERE email_normalized = ?",
-            (normalized_email,),
-        )
-        row = cur.fetchone()
+        if "@" in normalized_identifier:
+            normalized_email = _normalize_email(normalized_identifier)
+            row = conn.execute(
+                "SELECT * FROM users WHERE email_normalized = ?",
+                (normalized_email,),
+            ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM users WHERE username = ?",
+                (normalized_identifier,),
+            ).fetchone()
         if not row:
-            return None
+            return None, False
         if not security.verify_password(password, row["password"]):
-            return None
-        return _build_user_from_row(row)
+            return None, False
+        email = row["email"] if "email" in row.keys() else None
+        needs_email_upgrade = not email or not str(email).strip() or "@" not in str(email)
+        return _build_user_from_row(row), needs_email_upgrade
+
+
+def authenticate(username: str, password: str) -> Optional[models.User]:
+    user, _ = authenticate_with_identifier(username, password)
+    return user
 
 
 def register_user(payload: models.RegisterRequest) -> models.User:

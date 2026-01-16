@@ -6,7 +6,7 @@ import { api } from "../../lib/api";
 
 export function Login() {
   const { login, verifyTwoFactor, confirmTotpEnrollment, clearError, isLoading, error } = useAuth();
-  const [username, setUsername] = useState("admin");
+  const [identifier, setIdentifier] = useState("admin");
   const [password, setPassword] = useState("admin123");
   const [remember, setRemember] = useState(true);
   const [challengeId, setChallengeId] = useState<string | null>(null);
@@ -24,7 +24,11 @@ export function Login() {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    const result = await login({ username, password, remember });
+    const normalizedIdentifier = identifier.trim();
+    const loginIdentifier = normalizedIdentifier.includes("@")
+      ? normalizedIdentifier.toLowerCase()
+      : normalizedIdentifier;
+    const result = await login({ username: loginIdentifier, password, remember });
     if (result.status === "requires_2fa") {
       setChallengeId(result.challenge.challenge_token);
       setOtpauthUri(null);
@@ -243,15 +247,17 @@ export function Login() {
       </header>
       <div className="space-y-2">
         <label className="block text-sm font-medium text-slate-200" htmlFor="username">
-          Email
+          Identifiant ou email
         </label>
         <AppTextInput
           id="username"
-          type="email"
+          type="text"
           className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
-          value={username}
-          onChange={(event) => setUsername(event.target.value)}
-          title="Entrez votre email"
+          value={identifier}
+          onChange={(event) => setIdentifier(event.target.value)}
+          title="Entrez votre identifiant ou email"
+          inputMode="email"
+          autoComplete="username"
         />
       </div>
       <div className="space-y-2">
