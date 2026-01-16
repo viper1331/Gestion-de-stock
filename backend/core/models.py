@@ -1184,6 +1184,14 @@ class BarcodeValue(BaseModel):
     sku: str = Field(..., min_length=1, max_length=64)
 
 
+class BarcodeCatalogEntry(BaseModel):
+    sku: str = Field(..., min_length=1, max_length=64)
+    label: str = Field(..., min_length=1, max_length=256)
+    name: str = Field(..., min_length=1, max_length=256)
+    module: str = Field(..., min_length=1, max_length=64)
+    item_id: Optional[int] = Field(default=None, gt=0)
+
+
 class PharmacyCategory(BaseModel):
     id: int
     name: str

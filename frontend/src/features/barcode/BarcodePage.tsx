@@ -1,13 +1,15 @@
 import axios from "axios";
-import { FormEvent, useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
-import { useModuleTitle } from "../../lib/moduleTitles";
+import { buildModuleTitleMap, useModuleTitle } from "../../lib/moduleTitles";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
+import { fetchConfigEntries } from "../../lib/config";
 
 const DEFAULT_SKU_PLACEHOLDER = "SKU-001";
 
@@ -18,8 +20,16 @@ export function BarcodePage() {
   const canEdit =
     user?.role === "admin" || modulePermissions.canAccess("barcode", "edit");
   const moduleTitle = useModuleTitle("barcode");
+  const { data: configEntries = [] } = useQuery({
+    queryKey: ["config", "global"],
+    queryFn: fetchConfigEntries,
+    enabled: Boolean(user)
+  });
+  const moduleTitles = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
 
   const [sku, setSku] = useState(DEFAULT_SKU_PLACEHOLDER);
+  const [moduleFilter, setModuleFilter] = useState("all");
+  const [searchTerm, setSearchTerm] = useState("");
   const [imageUrl, setImageUrl] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
   const [isDeleting, setIsDeleting] = useState(false);
@@ -30,9 +40,9 @@ export function BarcodePage() {
   const [gallery, setGallery] = useState<BarcodeVisual[]>([]);
   const [isGalleryLoading, setIsGalleryLoading] = useState(false);
   const [galleryError, setGalleryError] = useState<string | null>(null);
-  const [knownBarcodes, setKnownBarcodes] = useState<ExistingBarcodeValue[]>([]);
-  const [isKnownBarcodesLoading, setIsKnownBarcodesLoading] = useState(false);
-  const [knownBarcodesError, setKnownBarcodesError] = useState<string | null>(null);
+  const [catalogEntries, setCatalogEntries] = useState<BarcodeCatalogEntry[]>([]);
+  const [isCatalogLoading, setIsCatalogLoading] = useState(false);
+  const [catalogError, setCatalogError] = useState<string | null>(null);
   const isMountedRef = useRef(true);
 
   useEffect(() => {
@@ -58,45 +68,53 @@ export function BarcodePage() {
     };
   }, [imageUrl]);
 
-  const refreshKnownBarcodes = useCallback(async () => {
-    if (!canView || !isMountedRef.current) {
-      return;
-    }
-
-    setIsKnownBarcodesLoading(true);
-    setKnownBarcodesError(null);
-
-    try {
-      const response = await api.get<ExistingBarcodeValue[]>("/barcode/existing");
-      if (!isMountedRef.current) {
+  const refreshCatalog = useCallback(
+    async (nextModule: string, nextQuery: string) => {
+      if (!canView || !isMountedRef.current) {
         return;
       }
-      const entries = response.data;
-      setKnownBarcodes(entries);
-      if (entries.length > 0) {
-        setSku((previous) => {
-          if (
-            previous &&
-            previous.trim().length > 0 &&
-            previous !== DEFAULT_SKU_PLACEHOLDER
-          ) {
-            return previous;
+
+      setIsCatalogLoading(true);
+      setCatalogError(null);
+
+      try {
+        const response = await api.get<BarcodeCatalogEntry[]>("/barcode/catalog", {
+          params: {
+            module: nextModule,
+            q: nextQuery.trim() ? nextQuery.trim() : undefined
           }
-          return entries[0].sku;
         });
+        if (!isMountedRef.current) {
+          return;
+        }
+        const entries = response.data;
+        setCatalogEntries(entries);
+        if (entries.length > 0) {
+          setSku((previous) => {
+            if (
+              previous &&
+              previous.trim().length > 0 &&
+              previous !== DEFAULT_SKU_PLACEHOLDER
+            ) {
+              return previous;
+            }
+            return entries[0].sku;
+          });
+        }
+      } catch (err) {
+        if (!isMountedRef.current) {
+          return;
+        }
+        setCatalogEntries([]);
+        setCatalogError("Impossible de charger la liste des articles.");
+      } finally {
+        if (isMountedRef.current) {
+          setIsCatalogLoading(false);
+        }
       }
-    } catch (err) {
-      if (!isMountedRef.current) {
-        return;
-      }
-      setKnownBarcodes([]);
-      setKnownBarcodesError("Impossible de charger les codes-barres existants.");
-    } finally {
-      if (isMountedRef.current) {
-        setIsKnownBarcodesLoading(false);
-      }
-    }
-  }, [canView]);
+    },
+    [canView]
+  );
 
   const refreshGallery = useCallback(async () => {
     if (!canView || !isMountedRef.current) {
@@ -161,13 +179,23 @@ export function BarcodePage() {
 
   useEffect(() => {
     if (canView) {
-      void refreshKnownBarcodes();
       void refreshGallery();
     }
-  }, [canView, refreshGallery, refreshKnownBarcodes]);
+  }, [canView, refreshGallery]);
 
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
+  useEffect(() => {
+    if (!canView) {
+      return;
+    }
+    const handle = window.setTimeout(() => {
+      void refreshCatalog(moduleFilter, searchTerm);
+    }, 300);
+    return () => {
+      window.clearTimeout(handle);
+    };
+  }, [canView, moduleFilter, refreshCatalog, searchTerm]);
+
+  const handleGenerate = async () => {
     if (!canEdit) {
       return;
     }
@@ -183,7 +211,6 @@ export function BarcodePage() {
       setImageUrl(url);
       setMessage("Code-barres généré.");
       void refreshGallery();
-      void refreshKnownBarcodes();
     } catch (err) {
       setError("Impossible de générer le code-barres.");
     } finally {
@@ -206,7 +233,6 @@ export function BarcodePage() {
       setImageUrl(null);
       setMessage("Code-barres supprimé.");
       void refreshGallery();
-      void refreshKnownBarcodes();
     } catch (err) {
       setError("Impossible de supprimer le fichier généré.");
     } finally {
@@ -232,16 +258,15 @@ export function BarcodePage() {
           setImageUrl(null);
         }
 
-        setMessage("Code-barres supprimé.");
-        void refreshGallery();
-        void refreshKnownBarcodes();
-      } catch (err) {
-        setError("Impossible de supprimer le fichier généré.");
-      } finally {
+      setMessage("Code-barres supprimé.");
+      void refreshGallery();
+    } catch (err) {
+      setError("Impossible de supprimer le fichier généré.");
+    } finally {
         setDeletingSku(null);
       }
     },
-    [canEdit, imageUrl, refreshGallery, refreshKnownBarcodes, sku]
+    [canEdit, imageUrl, refreshGallery, sku]
   );
 
   const handleExportPdf = async () => {
@@ -274,6 +299,32 @@ export function BarcodePage() {
       setIsExportingPdf(false);
     }
   };
+
+  const moduleFilterOptions = useMemo(() => {
+    const options = [
+      { value: "all", label: "Tous" },
+      { value: "vehicle_inventory", label: moduleTitles.vehicle_inventory ?? "Inventaire véhicules" },
+      { value: "pharmacy", label: moduleTitles.pharmacy ?? "Pharmacie" },
+      { value: "clothing", label: moduleTitles.clothing ?? "Inventaire habillement" },
+      { value: "inventory_remise", label: moduleTitles.inventory_remise ?? "Inventaire remises" }
+    ];
+    if (user?.role === "admin") {
+      return options;
+    }
+    return options.filter(
+      (option) =>
+        option.value === "all" || modulePermissions.canAccess(option.value)
+    );
+  }, [modulePermissions, moduleTitles, user]);
+
+  const selectedCatalogEntry = useMemo(
+    () => catalogEntries.find((entry) => entry.sku === sku) ?? null,
+    [catalogEntries, sku]
+  );
+
+  const selectedCatalogValue = selectedCatalogEntry
+    ? `${selectedCatalogEntry.module}::${selectedCatalogEntry.sku}`
+    : "";
 
   const gateContent = (() => {
     if (modulePermissions.isLoading && user?.role !== "admin") {
@@ -309,55 +360,96 @@ export function BarcodePage() {
         <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
         <p className="text-sm text-slate-400">Générez ou scannez les codes-barres des articles.</p>
       </header>
-      <form onSubmit={handleSubmit} className="flex flex-wrap items-end gap-4">
-        <label className="flex flex-col text-sm text-slate-300">
-          SKU
-          <AppTextInput
-            value={sku}
-            onChange={(event) => setSku(event.target.value)}
-            list="known-barcode-options"
-            className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
-            title="Identifiant de l'article pour générer le code-barres"
-          />
-        </label>
-        <button
-          type="submit"
-          disabled={isGenerating || !canEdit}
-          className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-          title="Lancer la génération du code-barres"
-        >
-          {isGenerating ? "Génération..." : "Générer"}
-        </button>
-        {imageUrl ? (
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Module
+            <select
+              className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              value={moduleFilter}
+              onChange={(event) => setModuleFilter(event.target.value)}
+              title="Filtrer les articles par module"
+            >
+              {moduleFilterOptions.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Recherche
+            <AppTextInput
+              value={searchTerm}
+              onChange={(event) => setSearchTerm(event.target.value)}
+              placeholder="Nom ou SKU"
+              className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              title="Rechercher un article par nom ou SKU"
+            />
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Article
+            <select
+              className="mt-1 min-w-[220px] rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              value={selectedCatalogValue}
+              onChange={(event) => {
+                const [, selectedSku] = event.target.value.split("::");
+                if (selectedSku) {
+                  setSku(selectedSku);
+                }
+              }}
+              title="Sélectionner un article"
+            >
+              <option value="">Sélectionner un article...</option>
+              {catalogEntries.map((entry) => (
+                <option key={`${entry.module}-${entry.sku}`} value={`${entry.module}::${entry.sku}`}>
+                  {entry.label}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            SKU
+            <AppTextInput
+              value={sku}
+              onChange={(event) => setSku(event.target.value)}
+              className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              title="Identifiant de l'article pour générer le code-barres"
+            />
+          </label>
           <button
             type="button"
-            onClick={handleDelete}
-            disabled={isDeleting || !canEdit}
-            className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-70"
-            title="Supprimer le fichier généré sur le serveur"
+            onClick={handleGenerate}
+            disabled={isGenerating || !canEdit}
+            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+            title="Lancer la génération du code-barres"
           >
-            {isDeleting ? "Suppression..." : "Supprimer"}
+            {isGenerating ? "Génération..." : "Générer"}
           </button>
+          {imageUrl ? (
+            <button
+              type="button"
+              onClick={handleDelete}
+              disabled={isDeleting || !canEdit}
+              className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-70"
+              title="Supprimer le fichier généré sur le serveur"
+            >
+              {isDeleting ? "Suppression..." : "Supprimer"}
+            </button>
+          ) : null}
+        </div>
+        {isCatalogLoading ? (
+          <p className="mt-3 text-xs text-slate-400">Chargement de la liste des articles...</p>
         ) : null}
-      </form>
+        {catalogError ? <p className="mt-3 text-xs text-yellow-300">{catalogError}</p> : null}
+        {!isCatalogLoading && catalogEntries.length ? (
+          <p className="mt-2 text-xs text-slate-400">
+            Sélectionnez un article pour préremplir le SKU ou saisissez-le manuellement.
+          </p>
+        ) : null}
+      </div>
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
-      {isKnownBarcodesLoading ? (
-        <p className="text-sm text-slate-400">Chargement des codes-barres existants...</p>
-      ) : null}
-      {knownBarcodesError ? (
-        <p className="text-sm text-yellow-300">{knownBarcodesError}</p>
-      ) : null}
-      {knownBarcodes.length ? (
-        <p className="text-xs text-slate-400">
-          Sélectionnez un code-barres existant dans la liste ou saisissez-en un nouveau.
-        </p>
-      ) : null}
-      <datalist id="known-barcode-options">
-        {knownBarcodes.map((entry) => (
-          <option key={entry.sku} value={entry.sku} />
-        ))}
-      </datalist>
       <div className="flex flex-wrap gap-3">
         <button
           type="button"
@@ -476,14 +568,18 @@ export function BarcodePage() {
   );
 }
 
-type ExistingBarcodeValue = {
-  sku: string;
-};
-
 type BarcodeSummary = {
   sku: string;
   filename: string;
   modified_at: string;
+};
+
+type BarcodeCatalogEntry = {
+  sku: string;
+  label: string;
+  name: string;
+  module: string;
+  item_id: number | null;
 };
 
 type BarcodeVisual = {
