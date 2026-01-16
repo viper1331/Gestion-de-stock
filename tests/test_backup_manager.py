@@ -111,3 +111,64 @@ def test_backup_archive_includes_users_db_and_media(monkeypatch, tmp_path):
         names = set(archive.namelist())
     assert "global/users.db" in names
     assert "media/sample.txt" in names
+
+
+def test_backup_restore_includes_barcodes(monkeypatch, tmp_path):
+    backup_root = tmp_path / "backups"
+    backup_root.mkdir()
+    source_data = tmp_path / "source_data"
+    source_data.mkdir()
+    source_media = tmp_path / "source_media"
+    source_media.mkdir()
+    source_barcodes = tmp_path / "source_assets" / "barcodes"
+    source_barcodes.mkdir(parents=True)
+
+    users_db = source_data / "users.db"
+    core_db = source_data / "core.db"
+    stock_db = source_data / "JLL.db"
+    for path in (users_db, core_db, stock_db):
+        with sqlite3.connect(path) as conn:
+            conn.execute("CREATE TABLE demo (id INTEGER PRIMARY KEY)")
+
+    barcode_file = source_barcodes / "test.png"
+    barcode_file.write_bytes(b"barcode-content")
+
+    monkeypatch.setattr(backup_manager, "BACKUP_ROOT", backup_root, raising=False)
+    monkeypatch.setattr(backup_manager.db, "DATA_DIR", source_data)
+    monkeypatch.setattr(backup_manager.db, "USERS_DB_PATH", users_db)
+    monkeypatch.setattr(backup_manager.db, "CORE_DB_PATH", core_db)
+    monkeypatch.setattr(backup_manager, "MEDIA_ROOT", source_media)
+    monkeypatch.setattr(backup_manager, "BARCODE_ASSETS_DIR", source_barcodes)
+    monkeypatch.setattr(backup_manager, "discover_site_keys", lambda: ["JLL"])
+    monkeypatch.setattr(backup_manager.db, "get_site_db_path", lambda site_key: stock_db)
+
+    archive_path = backup_manager.create_backup_archive()
+
+    with ZipFile(archive_path) as archive:
+        names = set(archive.namelist())
+    assert "assets/barcodes/test.png" in names
+
+    restore_data = tmp_path / "restore_data"
+    restore_data.mkdir()
+    restore_media = tmp_path / "restore_media"
+    restore_media.mkdir()
+    restore_barcodes = tmp_path / "restore_assets" / "barcodes"
+    restore_barcodes.parent.mkdir(parents=True)
+
+    monkeypatch.setattr(backup_manager.db, "DATA_DIR", restore_data)
+    monkeypatch.setattr(backup_manager.db, "USERS_DB_PATH", restore_data / "users.db")
+    monkeypatch.setattr(backup_manager.db, "CORE_DB_PATH", restore_data / "core.db")
+    monkeypatch.setattr(
+        backup_manager.db,
+        "get_site_db_path",
+        lambda site_key: restore_data / f"{site_key}.db",
+    )
+    monkeypatch.setattr(backup_manager, "MEDIA_ROOT", restore_media)
+    monkeypatch.setattr(backup_manager, "BARCODE_ASSETS_DIR", restore_barcodes)
+    monkeypatch.setattr(backup_manager.db, "init_databases", lambda: None)
+
+    backup_manager.restore_backup_from_zip(archive_path)
+
+    restored_file = restore_barcodes / "test.png"
+    assert restored_file.exists()
+    assert restored_file.read_bytes() == b"barcode-content"

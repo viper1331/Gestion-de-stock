@@ -19,6 +19,7 @@ from backend.core import db
 from backend.core.storage import MEDIA_ROOT
 
 MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
+BARCODE_ASSETS_DIR = Path(__file__).resolve().parent.parent / "assets" / "barcodes"
 
 logger = logging.getLogger(__name__)
 
@@ -79,6 +80,7 @@ def get_backup_targets() -> dict[str, object]:
     folders: list[tuple[str, Path]] = [
         ("media", MEDIA_ROOT),
         ("message_archive", MESSAGE_ARCHIVE_ROOT),
+        ("assets/barcodes", BARCODE_ASSETS_DIR),
     ]
     for label in ("archives", "exports", "imports"):
         candidate = db.DATA_DIR / label
@@ -95,7 +97,7 @@ def _get_app_version() -> str:
         return "unknown"
 
 
-def _write_manifest(root: Path) -> None:
+def _write_manifest(root: Path, targets: dict[str, object]) -> None:
     entries: list[dict[str, object]] = []
     for file_path in sorted(root.rglob("*")):
         if not file_path.is_file():
@@ -109,9 +111,26 @@ def _write_manifest(root: Path) -> None:
                 "sha256": hashlib.sha256(data).hexdigest(),
             }
         )
+    targets_payload: list[dict[str, str]] = []
+    for db_path in targets.get("global_dbs", []):
+        targets_payload.append(
+            {"type": "database", "path": f"global/{Path(db_path).name}"}
+        )
+    for site_key, db_paths in targets.get("site_dbs", {}).items():
+        for db_path in db_paths:
+            targets_payload.append(
+                {
+                    "type": "database",
+                    "path": f"sites/{site_key}/{Path(db_path).name}",
+                }
+            )
+    for label, _folder in targets.get("folders", []):
+        targets_payload.append({"type": "folder", "path": str(label)})
+
     payload = {
         "created_at": datetime.now().isoformat(),
         "app_version": _get_app_version(),
+        "targets": targets_payload,
         "files": entries,
     }
     (root / "manifest.json").write_text(
@@ -170,7 +189,7 @@ def run_backup_all(retention_count: int | None = None) -> Path:
             else:
                 target.mkdir(parents=True, exist_ok=True)
 
-        _write_manifest(temp_dir)
+        _write_manifest(temp_dir, targets)
         base_name = BACKUP_ROOT / f"backup-{timestamp}"
         archive_path = Path(make_archive(str(base_name), "zip", tmpdir))
 
@@ -329,6 +348,7 @@ def restore_backup_from_zip(archive_path: Path) -> None:
         for label, destination in get_backup_targets()["folders"]:
             source = temp_dir / label
             if source.exists():
+                destination.parent.mkdir(parents=True, exist_ok=True)
                 try:
                     rmtree(destination)
                 except FileNotFoundError:
