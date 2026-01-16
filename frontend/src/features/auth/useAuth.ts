@@ -316,12 +316,23 @@ export function useAuth() {
     }
   }, [clear, setAuth, setChecking, setReady]);
 
-  const logout = useCallback(() => {
+  const logout = useCallback((options?: { reason?: "idle" }) => {
+    if (typeof window !== "undefined") {
+      const payload = {
+        ts: Date.now(),
+        reason: options?.reason ?? null
+      };
+      window.localStorage.setItem("gsp_auth_logout_at", JSON.stringify(payload));
+    }
     clear();
     setAccessToken(null);
     setAdminSiteOverride(null);
     localStorage.removeItem("gsp/token");
     setReady(true);
+    if (options?.reason) {
+      navigate(`/login?reason=${options.reason}`);
+      return;
+    }
     navigate("/login");
   }, [clear, navigate, setReady]);
 

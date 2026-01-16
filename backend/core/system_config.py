@@ -26,6 +26,12 @@ class SecurityConfig(BaseModel):
     require_totp_for_login: bool = Field(
         False, description="Impose un code TOTP à chaque connexion"
     )
+    idle_logout_minutes: int = Field(
+        60,
+        ge=0,
+        le=1440,
+        description="Durée d'inactivité (minutes) avant déconnexion automatique (0 pour désactiver)",
+    )
 
 
 class SystemConfig(BaseModel):
