@@ -124,28 +124,28 @@ html:not(.dark) .text-slate-500 {
   overflow-y: auto;
   overflow-x: hidden;
   min-height: 0;
-  padding-top: clamp(8px, 1.2vh, 16px);
-  padding-bottom: clamp(8px, 1.2vh, 16px);
+  padding-top: clamp(6px, 1vh, 12px);
+  padding-bottom: clamp(6px, 1vh, 12px);
 }
 
 .SidebarPinned {
   flex: 0 0 auto;
   position: sticky;
   bottom: 0;
-  padding-top: clamp(8px, 1.5vh, 24px);
-  padding-bottom: calc(clamp(8px, 1.5vh, 24px) + env(safe-area-inset-bottom));
+  padding-top: clamp(6px, 1.2vh, 16px);
+  padding-bottom: calc(clamp(6px, 1.2vh, 16px) + env(safe-area-inset-bottom));
   background: inherit;
   backdrop-filter: blur(8px);
 }
 
 .Sidebar .MenuIcon {
-  width: clamp(38px, 5vh, 52px);
-  height: clamp(38px, 5vh, 52px);
-  font-size: clamp(1rem, 2.2vh, 1.25rem);
+  width: clamp(40px, 4.5vh, 48px);
+  height: clamp(40px, 4.5vh, 48px);
+  font-size: clamp(0.95rem, 2vh, 1.1rem);
 }
 
 .Sidebar .MenuItem {
-  margin-block: clamp(6px, 1.2vh, 12px);
+  margin-block: clamp(4px, 0.9vh, 8px);
 }
 
 /* Editable page layout hardening */

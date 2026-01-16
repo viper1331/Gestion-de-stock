@@ -906,20 +906,27 @@ export function AppLayout() {
             type="button"
             onClick={() => handleGroupClick(group.id)}
             className={`MenuItem group flex w-full items-center rounded-md font-semibold text-slate-200 transition-colors hover:bg-slate-800 ${
-              options.expanded ? "justify-between px-3 py-2" : "h-11 justify-center"
+              options.expanded ? "min-h-[48px] justify-between px-3 py-2" : "h-11 justify-center"
             }`}
             aria-expanded={shouldShowItems}
             aria-disabled={isReorderMode}
             title={group.tooltip}
           >
-            <span className="flex items-center gap-3">
+            <span className="flex items-center gap-2">
               <NavIcon symbol={group.icon} label={group.label} />
               <span className={options.expanded ? "block text-left" : "sr-only"}>{group.label}</span>
             </span>
-            {options.expanded ? <span aria-hidden>{shouldShowItems ? "−" : "+"}</span> : null}
+            {options.expanded ? (
+              <span
+                aria-hidden
+                className="flex h-8 w-8 items-center justify-center rounded-md text-base text-slate-300"
+              >
+                {shouldShowItems ? "−" : "+"}
+              </span>
+            ) : null}
           </button>
           {shouldShowItems && options.expanded ? (
-            <div className="mt-3 border-l border-slate-800 pl-3">{renderItemsList(true, false)}</div>
+            <div className="mt-2 border-l border-slate-800 pl-3">{renderItemsList(true, false)}</div>
           ) : null}
           {shouldShowItems && options.showPopover ? (
             <div className="fixed left-20 top-4 bottom-4 z-30 ml-3 w-72 max-w-[90vw] overflow-y-auto rounded-lg border border-slate-800 bg-slate-900 p-3 text-left shadow-2xl">
@@ -934,7 +941,7 @@ export function AppLayout() {
     <div className="flex h-screen min-h-0 overflow-hidden bg-slate-950 text-slate-50">
       <aside
         className={`Sidebar relative shrink-0 border-r border-slate-800 bg-slate-900 transition-all duration-200 ${
-          isDesktop ? (sidebarOpen ? "w-64 p-6" : "w-20 p-4") : "w-14 p-3"
+          isDesktop ? (sidebarOpen ? "w-64 px-4 py-3" : "w-20 p-3") : "w-14 p-3"
         }`}
       >
         <div className="SidebarHeader flex items-center justify-between gap-2">
@@ -972,7 +979,7 @@ export function AppLayout() {
         {isDesktop ? (
           <>
             <div
-              className={`SidebarModules mt-8 flex min-h-0 flex-1 flex-col ${
+              className={`SidebarModules mt-4 flex min-h-0 flex-1 flex-col ${
                 isSidebarExpanded ? "overflow-hidden" : "overflow-visible"
               }`}
             >
@@ -1014,7 +1021,7 @@ export function AppLayout() {
                 <p className="mb-2 text-xs text-red-300">{menuOrderError}</p>
               ) : null}
               <nav
-                className={`flex min-h-0 flex-1 flex-col gap-[clamp(0.5rem,1.2vh,0.75rem)] text-sm ${
+                className={`flex min-h-0 flex-1 flex-col gap-2 text-sm ${
                   isSidebarExpanded ? "overflow-y-auto pr-2" : "overflow-visible items-center"
                 }`}
               >
@@ -1037,10 +1044,10 @@ export function AppLayout() {
                 <p className="mt-3 text-xs text-slate-500">Chargement des modules autorisés...</p>
               ) : null}
             </div>
-            <div className="SidebarPinned mt-auto flex w-full flex-col gap-3 pt-6">
+            <div className="SidebarPinned mt-auto flex w-full flex-col gap-2 pt-3">
               <div
                 className={`flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-xs text-slate-300 ${
-                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-1 justify-center"
+                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-1.5 justify-center"
                 }`}
               >
                 <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
@@ -1055,7 +1062,7 @@ export function AppLayout() {
               <button
                 onClick={handleReload}
                 className={`flex items-center justify-center gap-2 rounded-md border border-slate-800 bg-slate-900 text-sm font-semibold text-slate-200 shadow hover:bg-slate-800 ${
-                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
+                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-1.5"
                 }`}
                 title="Recharger l'application"
               >
@@ -1065,7 +1072,7 @@ export function AppLayout() {
               <button
                 onClick={() => logout()}
                 className={`flex items-center justify-center gap-2 rounded-md bg-red-500 text-sm font-semibold text-white shadow hover:bg-red-400 ${
-                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-2"
+                  isSidebarExpanded ? "px-3 py-2" : "px-2 py-1.5"
                 }`}
                 title="Se déconnecter de votre session"
               >
@@ -1118,7 +1125,7 @@ export function AppLayout() {
                 <span aria-hidden>✕</span>
               </button>
             </div>
-            <div className="SidebarModules flex min-h-0 flex-1 flex-col px-4 pb-4 pt-3">
+            <div className="SidebarModules flex min-h-0 flex-1 flex-col px-4 pb-3 pt-2">
               <div className="mb-4 flex flex-wrap items-center gap-2">
                 <button
                   type="button"
@@ -1146,7 +1153,7 @@ export function AppLayout() {
               {menuOrderError ? (
                 <p className="mb-2 text-xs text-red-300">{menuOrderError}</p>
               ) : null}
-              <nav className="flex min-h-0 flex-1 flex-col gap-[clamp(0.5rem,1.2vh,0.75rem)] overflow-y-auto pr-1 text-sm">
+              <nav className="flex min-h-0 flex-1 flex-col gap-2 overflow-y-auto pr-1 text-sm">
                 <DndContext
                   sensors={sensors}
                   collisionDetection={closestCenter}
@@ -1163,7 +1170,7 @@ export function AppLayout() {
                 </DndContext>
               </nav>
             </div>
-            <div className="SidebarPinned mt-6 flex w-full flex-col gap-3 px-4 pb-4">
+            <div className="SidebarPinned mt-4 flex w-full flex-col gap-2 px-4 pb-3">
                 <div className="flex items-center gap-2 rounded-md border border-slate-800 bg-slate-900 px-3 py-2 text-xs text-slate-300">
                   <NavIcon symbol={user.username.charAt(0).toUpperCase()} label={user.username} />
                   <div className="leading-tight">
@@ -1270,8 +1277,8 @@ function SortableMenuItem({ id, isEditMode, children }: SortableMenuItemProps) {
 }
 
 function navClass(isActive: boolean, expanded: boolean) {
-  return `MenuItem flex items-center gap-3 rounded-md font-medium transition-colors ${
-    expanded ? "px-3 py-2" : "h-11 w-full justify-center"
+  return `MenuItem flex items-center gap-2 rounded-md font-medium transition-colors ${
+    expanded ? "min-h-[48px] px-3 py-2" : "h-11 w-full justify-center"
   } ${isActive ? "bg-slate-800 text-white shadow-sm" : "text-slate-300 hover:bg-slate-800"}`;
 }
 
