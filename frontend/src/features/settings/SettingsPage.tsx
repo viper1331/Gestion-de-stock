@@ -58,6 +58,7 @@ interface TwoFactorSetupConfirmResponse {
 interface SecuritySettings {
   require_totp_for_login: boolean;
   idle_logout_minutes: number;
+  logout_on_close: boolean;
 }
 
 type HomepageFieldType = "text" | "textarea" | "url";
@@ -217,6 +218,7 @@ export function SettingsPage() {
   const [securityMessage, setSecurityMessage] = useState<string | null>(null);
   const [securityError, setSecurityError] = useState<string | null>(null);
   const [idleLogoutMinutes, setIdleLogoutMinutes] = useState<number>(60);
+  const [logoutOnClose, setLogoutOnClose] = useState<boolean>(false);
   const updateSecuritySettings = useMutation({
     mutationFn: async (payload: SecuritySettings) => {
       const response = await api.put<SecuritySettings>("/admin/security/settings", payload);
@@ -301,6 +303,7 @@ export function SettingsPage() {
   useEffect(() => {
     if (securitySettings) {
       setIdleLogoutMinutes(securitySettings.idle_logout_minutes ?? 60);
+      setLogoutOnClose(Boolean(securitySettings.logout_on_close));
     }
   }, [securitySettings]);
 
@@ -877,7 +880,8 @@ export function SettingsPage() {
                   onChange={(event) =>
                     updateSecuritySettings.mutate({
                       require_totp_for_login: event.target.checked,
-                      idle_logout_minutes: idleLogoutMinutes
+                      idle_logout_minutes: idleLogoutMinutes,
+                      logout_on_close: logoutOnClose
                     })
                   }
                   disabled={updateSecuritySettings.isPending}
@@ -910,7 +914,8 @@ export function SettingsPage() {
                     onClick={() =>
                       updateSecuritySettings.mutate({
                         require_totp_for_login: Boolean(securitySettings?.require_totp_for_login),
-                        idle_logout_minutes: idleLogoutMinutes
+                        idle_logout_minutes: idleLogoutMinutes,
+                        logout_on_close: logoutOnClose
                       })
                     }
                     disabled={updateSecuritySettings.isPending}
@@ -919,6 +924,16 @@ export function SettingsPage() {
                     Enregistrer
                   </button>
                 </div>
+                <label className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs font-semibold text-slate-200">
+                  <span>Déconnexion quand l'onglet est fermé (fallback si onglet masqué)</span>
+                  <input
+                    type="checkbox"
+                    checked={logoutOnClose}
+                    onChange={(event) => setLogoutOnClose(event.target.checked)}
+                    disabled={updateSecuritySettings.isPending}
+                    className="h-4 w-4 rounded border-slate-700 bg-slate-900 text-indigo-500 focus:ring-indigo-500 disabled:cursor-not-allowed"
+                  />
+                </label>
               </div>
             </div>
           ) : null}
