@@ -165,6 +165,7 @@ def get_security_settings(user: models.User = Depends(require_admin)) -> models.
     return models.SecuritySettings(
         require_totp_for_login=config.security.require_totp_for_login,
         idle_logout_minutes=config.security.idle_logout_minutes,
+        logout_on_close=config.security.logout_on_close,
     )
 
 
@@ -175,6 +176,7 @@ def update_security_settings(
     config = get_config()
     config.security.require_totp_for_login = payload.require_totp_for_login
     config.security.idle_logout_minutes = payload.idle_logout_minutes
+    config.security.logout_on_close = payload.logout_on_close
     save_config(config)
     return payload
 

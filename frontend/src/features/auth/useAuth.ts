@@ -1,9 +1,17 @@
 import { useCallback, useMemo } from "react";
-import { createWithEqualityFn } from "zustand/traditional";
 import { shallow } from "zustand/shallow";
 import { useNavigate } from "react-router-dom";
 
 import { api, setAccessToken, setAdminSiteOverride } from "../../lib/api";
+import { queryClient } from "../../lib/queryClient";
+import {
+  clearStoredRefreshToken,
+  emitLogoutSignal,
+  getRefreshTokenStorage,
+  getStoredRefreshToken,
+  storeRefreshToken
+} from "./authStorage";
+import { useAuthStore, type UserProfile } from "./authStore";
 
 interface LoginPayload {
   username: string;
@@ -39,51 +47,6 @@ type LoginResult =
   | { status: "requires_2fa"; challenge: TwoFactorChallenge }
   | { status: "enroll_required"; challenge: TwoFactorEnrollChallenge }
   | { status: "error" };
-
-interface UserProfile {
-  id: number;
-  username: string;
-  role: string;
-  is_active: boolean;
-  site_key: string;
-  status: "active" | "pending" | "rejected" | "disabled";
-}
-
-interface AuthState {
-  user: UserProfile | null;
-  token: string | null;
-  refreshToken: string | null;
-  isLoading: boolean;
-  isCheckingSession: boolean;
-  isReady: boolean;
-  error: string | null;
-  setAuth: (params: { user: UserProfile; token: string; refreshToken: string | null }) => void;
-  setLoading: (value: boolean) => void;
-  setChecking: (value: boolean) => void;
-  setReady: (value: boolean) => void;
-  setError: (value: string | null) => void;
-  clear: () => void;
-}
-
-export const useAuthStore = createWithEqualityFn<AuthState>()(
-  (set) => ({
-    user: null,
-    token: null,
-    refreshToken: null,
-    isLoading: false,
-    isCheckingSession: false,
-    isReady: false,
-    error: null,
-    setAuth: ({ user, token, refreshToken }) =>
-      set({ user, token, refreshToken, error: null }),
-    setLoading: (value) => set({ isLoading: value }),
-    setChecking: (value) => set({ isCheckingSession: value }),
-    setReady: (value) => set({ isReady: value }),
-    setError: (value) => set({ error: value }),
-    clear: () => set({ user: null, token: null, refreshToken: null, error: null })
-  }),
-  shallow
-);
 
 const useAuthState = () =>
   useAuthStore(
@@ -149,11 +112,7 @@ export function useAuth() {
       if (profile.role !== "admin") {
         setAdminSiteOverride(null);
       }
-      if (remember) {
-        localStorage.setItem("gsp/token", data.refresh_token);
-      } else {
-        localStorage.removeItem("gsp/token");
-      }
+      storeRefreshToken(data.refresh_token, remember ? "local" : "session");
       navigate("/");
     },
     [navigate, setAuth]
@@ -292,7 +251,8 @@ export function useAuth() {
     }
     setChecking(true);
     try {
-      const storedRefresh = localStorage.getItem("gsp/token");
+      const storedRefresh = getStoredRefreshToken();
+      const refreshStorage = getRefreshTokenStorage();
       if (!storedRefresh) {
         setReady(true);
         return;
@@ -304,9 +264,11 @@ export function useAuth() {
       if (profile.role !== "admin") {
         setAdminSiteOverride(null);
       }
-      localStorage.setItem("gsp/token", data.refresh_token);
+      if (refreshStorage) {
+        storeRefreshToken(data.refresh_token, refreshStorage);
+      }
     } catch (error) {
-      localStorage.removeItem("gsp/token");
+      clearStoredRefreshToken();
       setAccessToken(null);
       setAdminSiteOverride(null);
       clear();
@@ -316,25 +278,45 @@ export function useAuth() {
     }
   }, [clear, setAuth, setChecking, setReady]);
 
-  const logout = useCallback((options?: { reason?: "idle" }) => {
-    if (typeof window !== "undefined") {
-      const payload = {
-        ts: Date.now(),
-        reason: options?.reason ?? null
-      };
-      window.localStorage.setItem("gsp_auth_logout_at", JSON.stringify(payload));
-    }
-    clear();
-    setAccessToken(null);
-    setAdminSiteOverride(null);
-    localStorage.removeItem("gsp/token");
-    setReady(true);
-    if (options?.reason) {
-      navigate(`/login?reason=${options.reason}`);
-      return;
-    }
-    navigate("/login");
-  }, [clear, navigate, setReady]);
+  const performLogout = useCallback(
+    (options?: { reason?: "idle"; redirect?: boolean; emitSignal?: boolean }) => {
+      if (options?.emitSignal !== false) {
+        emitLogoutSignal(options?.reason ?? null);
+      }
+      clear();
+      setAccessToken(null);
+      setAdminSiteOverride(null);
+      clearStoredRefreshToken();
+      queryClient.clear();
+      setReady(true);
+      const shouldRedirect =
+        (options?.redirect ?? true) &&
+        (typeof window === "undefined" || window.location.pathname !== "/login");
+      if (!shouldRedirect) {
+        return;
+      }
+      if (options?.reason) {
+        navigate(`/login?reason=${options.reason}`);
+        return;
+      }
+      navigate("/login");
+    },
+    [clear, navigate, setReady]
+  );
+
+  const logout = useCallback(
+    (options?: { reason?: "idle" }) => {
+      performLogout({ reason: options?.reason, emitSignal: true });
+    },
+    [performLogout]
+  );
+
+  const logoutSilent = useCallback(
+    (options?: { redirect?: boolean }) => {
+      performLogout({ redirect: options?.redirect, emitSignal: false });
+    },
+    [performLogout]
+  );
 
   return useMemo(
     () => ({
@@ -349,6 +331,7 @@ export function useAuth() {
       confirmTotpEnrollment,
       clearError,
       logout,
+      logoutSilent,
       initialize
     }),
     [
@@ -359,6 +342,7 @@ export function useAuth() {
       isReady,
       login,
       logout,
+      logoutSilent,
       token,
       user,
       verifyTwoFactor,

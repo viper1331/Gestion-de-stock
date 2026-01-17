@@ -20,6 +20,7 @@ export interface SystemConfig {
 
 export interface PublicSystemConfig {
   idle_logout_minutes: number;
+  logout_on_close: boolean;
 }
 
 function normalizeConfig(payload: SystemConfig): SystemConfig {

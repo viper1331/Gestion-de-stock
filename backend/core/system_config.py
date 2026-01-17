@@ -32,6 +32,10 @@ class SecurityConfig(BaseModel):
         le=1440,
         description="Durée d'inactivité (minutes) avant déconnexion automatique (0 pour désactiver)",
     )
+    logout_on_close: bool = Field(
+        False,
+        description="Déconnecte immédiatement à la fermeture d'un onglet ou en arrière-plan",
+    )
 
 
 class SystemConfig(BaseModel):
