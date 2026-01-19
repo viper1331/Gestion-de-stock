@@ -1,6 +1,7 @@
 """Services métier pour Gestion Stock Pro."""
 from __future__ import annotations
 
+import hashlib
 import html
 import io
 import json
@@ -9,6 +10,7 @@ import math
 import os
 import random
 import re
+import secrets
 import shutil
 import threading
 import time
@@ -42,6 +44,7 @@ from backend.core.storage import (
     relative_to_media,
 )
 from backend.services import barcode as barcode_service
+from backend.services import notifications
 from backend.services.pdf_config import (
     draw_watermark,
     effective_density_scale,
@@ -75,6 +78,9 @@ MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
 
 _MESSAGE_RATE_LIMIT_DEFAULT_COUNT = 5
 _MESSAGE_RATE_LIMIT_DEFAULT_WINDOW_SECONDS = 60
+_PASSWORD_RESET_RATE_LIMIT_COUNT = 5
+_PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS = 3600
+_PASSWORD_RESET_MIN_LENGTH = 10
 
 _MENU_ORDER_MAX_ITEMS = 200
 _MENU_ORDER_MAX_ID_LENGTH = 100
@@ -85,6 +91,13 @@ class MessageRateLimitError(RuntimeError):
         self.count = count
         self.window_seconds = window_seconds
         super().__init__("Trop de messages envoyés. Réessayez dans quelques secondes.")
+
+
+class PasswordResetRateLimitError(RuntimeError):
+    def __init__(self, *, count: int, window_seconds: int) -> None:
+        self.count = count
+        self.window_seconds = window_seconds
+        super().__init__("Trop de demandes de réinitialisation. Réessayez plus tard.")
 
 
 class UsersDbNotReadyError(RuntimeError):
@@ -3808,6 +3821,231 @@ def _normalize_email(value: str) -> str:
     return value.strip().lower()
 
 
+_RESET_TOKEN_PEPPER_CACHE: str | None = None
+
+
+def _allow_insecure_reset_dev() -> bool:
+    return os.environ.get("ALLOW_INSECURE_RESET_DEV") == "1"
+
+
+def _get_reset_token_pepper() -> str:
+    global _RESET_TOKEN_PEPPER_CACHE
+    if _RESET_TOKEN_PEPPER_CACHE is not None:
+        return _RESET_TOKEN_PEPPER_CACHE
+    pepper = os.environ.get("RESET_TOKEN_PEPPER")
+    if pepper:
+        _RESET_TOKEN_PEPPER_CACHE = pepper
+        return pepper
+    if _allow_insecure_reset_dev():
+        _RESET_TOKEN_PEPPER_CACHE = "dev-reset-pepper"
+        return _RESET_TOKEN_PEPPER_CACHE
+    raise RuntimeError(
+        "RESET_TOKEN_PEPPER manquant (définissez ALLOW_INSECURE_RESET_DEV=1 pour un mode dev)."
+    )
+
+
+def ensure_password_reset_configured() -> None:
+    _get_reset_token_pepper()
+
+
+def _get_reset_token_ttl_minutes() -> int:
+    raw_ttl = os.environ.get("RESET_TOKEN_TTL_MINUTES")
+    if raw_ttl is None:
+        return 30
+    try:
+        return max(1, int(raw_ttl))
+    except ValueError:
+        return 30
+
+
+def _get_password_reset_rate_limit_config() -> tuple[int, int]:
+    raw_count = os.environ.get("RESET_RATE_LIMIT_COUNT")
+    raw_window = os.environ.get("RESET_RATE_LIMIT_WINDOW_SECONDS")
+    try:
+        max_count = int(raw_count) if raw_count else _PASSWORD_RESET_RATE_LIMIT_COUNT
+    except ValueError:
+        max_count = _PASSWORD_RESET_RATE_LIMIT_COUNT
+    try:
+        window_seconds = (
+            int(raw_window) if raw_window else _PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS
+        )
+    except ValueError:
+        window_seconds = _PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS
+    return max(1, max_count), max(60, window_seconds)
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _utc_now_iso() -> str:
+    return _utc_now().isoformat().replace("+00:00", "Z")
+
+
+def _hash_reset_token(token: str) -> str:
+    payload = f"{token}{_get_reset_token_pepper()}".encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _validate_reset_password(password: str) -> None:
+    if len(password) < _PASSWORD_RESET_MIN_LENGTH:
+        raise ValueError("Mot de passe trop court")
+    if not re.search(r"[A-Za-z]", password) or not re.search(r"\d", password):
+        raise ValueError("Mot de passe insuffisamment complexe")
+
+
+def _check_password_reset_rate_limit(email_normalized: str, ip_address: str | None) -> None:
+    max_count, window_seconds = _get_password_reset_rate_limit_config()
+    email_key = email_normalized or "unknown"
+    ip_key = ip_address or "unknown"
+    now = int(time.time())
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT window_start_ts, count
+            FROM password_reset_rate_limits
+            WHERE email_normalized = ? AND ip_address = ?
+            """,
+            (email_key, ip_key),
+        ).fetchone()
+        if not row:
+            conn.execute(
+                """
+                INSERT INTO password_reset_rate_limits (email_normalized, ip_address, window_start_ts, count)
+                VALUES (?, ?, ?, 1)
+                """,
+                (email_key, ip_key, now),
+            )
+            return
+        window_start = int(row["window_start_ts"])
+        count = int(row["count"])
+        if now - window_start >= window_seconds:
+            conn.execute(
+                """
+                UPDATE password_reset_rate_limits
+                SET window_start_ts = ?, count = 1
+                WHERE email_normalized = ? AND ip_address = ?
+                """,
+                (now, email_key, ip_key),
+            )
+            return
+        if count >= max_count:
+            raise PasswordResetRateLimitError(count=max_count, window_seconds=window_seconds)
+        conn.execute(
+            """
+            UPDATE password_reset_rate_limits
+            SET count = ?
+            WHERE email_normalized = ? AND ip_address = ?
+            """,
+            (count + 1, email_key, ip_key),
+        )
+
+
+def request_password_reset(
+    email: str,
+    request_ip: str | None = None,
+    user_agent: str | None = None,
+) -> str | None:
+    ensure_database_ready()
+    normalized_email = _normalize_email(email) if email else ""
+    _check_password_reset_rate_limit(normalized_email, request_ip)
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, email, status
+            FROM users
+            WHERE email_normalized = ?
+            """,
+            (normalized_email,),
+        ).fetchone()
+        if not row or row["status"] != "active":
+            return None
+        now_iso = _utc_now_iso()
+        ttl_minutes = _get_reset_token_ttl_minutes()
+        expires_at = (_utc_now() + timedelta(minutes=ttl_minutes)).isoformat().replace("+00:00", "Z")
+        conn.execute(
+            """
+            UPDATE password_reset_tokens
+            SET used_at = ?
+            WHERE user_id = ? AND used_at IS NULL
+            """,
+            (now_iso, row["id"]),
+        )
+        raw_token = secrets.token_urlsafe(32)
+        token_hash = _hash_reset_token(raw_token)
+        conn.execute(
+            """
+            INSERT INTO password_reset_tokens (
+                user_id,
+                token_hash,
+                created_at,
+                expires_at,
+                used_at,
+                request_ip,
+                user_agent
+            )
+            VALUES (?, ?, ?, ?, NULL, ?, ?)
+            """,
+            (row["id"], token_hash, now_iso, expires_at, request_ip, user_agent),
+        )
+    notifications.enqueue_password_reset(
+        str(row["email"] or email),
+        raw_token,
+        {"expires_at": expires_at},
+    )
+    if _allow_insecure_reset_dev():
+        return raw_token
+    return None
+
+
+def confirm_password_reset(
+    token: str,
+    new_password: str,
+    request_ip: str | None = None,
+) -> None:
+    ensure_database_ready()
+    _validate_reset_password(new_password)
+    token_hash = _hash_reset_token(token)
+    now = _utc_now()
+    now_iso = now.isoformat().replace("+00:00", "Z")
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, user_id, expires_at, used_at
+            FROM password_reset_tokens
+            WHERE token_hash = ?
+            """,
+            (token_hash,),
+        ).fetchone()
+        if not row or row["used_at"]:
+            raise ValueError("Token invalide ou expiré")
+        expires_at_raw = row["expires_at"]
+        try:
+            expires_at = datetime.fromisoformat(str(expires_at_raw).replace("Z", "+00:00"))
+        except ValueError:
+            raise ValueError("Token invalide ou expiré") from None
+        if expires_at <= now:
+            raise ValueError("Token invalide ou expiré")
+        updated = conn.execute(
+            """
+            UPDATE password_reset_tokens
+            SET used_at = ?
+            WHERE id = ? AND used_at IS NULL
+            """,
+            (now_iso, row["id"]),
+        )
+        if updated.rowcount == 0:
+            raise ValueError("Token invalide ou expiré")
+        conn.execute(
+            """
+            UPDATE users
+            SET password = ?, session_version = session_version + 1
+            WHERE id = ?
+            """,
+            (security.hash_password(new_password), row["user_id"]),
+        )
+    logger.info("[AUTH] password_reset user_id=%s ip=%s", row["user_id"], request_ip or "unknown")
+
 def seed_default_admin() -> None:
     default_username = "admin"
     default_password = "admin123"
@@ -3903,6 +4141,7 @@ def _build_user_from_row(row: sqlite3.Row) -> models.User:
         site_key=site_key,
         email=email,
         status=status,
+        session_version=row["session_version"] if "session_version" in row.keys() else 1,
         created_at=row["created_at"] if "created_at" in row.keys() else None,
         approved_at=row["approved_at"] if "approved_at" in row.keys() else None,
         approved_by=row["approved_by"] if "approved_by" in row.keys() else None,
