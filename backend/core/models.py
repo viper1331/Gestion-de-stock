@@ -83,6 +83,7 @@ class User(UserBase):
     site_key: str
     email: str
     status: UserStatus = "active"
+    session_version: int = 1
     created_at: str | None = None
     approved_at: str | None = None
     approved_by: str | None = None
@@ -233,6 +234,24 @@ class RegisterRequest(BaseModel):
 
 class RegisterResponse(BaseModel):
     message: str
+
+
+class PasswordResetRequest(BaseModel):
+    email: str
+
+
+class PasswordResetRequestResponse(BaseModel):
+    ok: bool = True
+    dev_reset_token: str | None = None
+
+
+class PasswordResetConfirmRequest(BaseModel):
+    token: str
+    new_password: str
+
+
+class PasswordResetConfirmResponse(BaseModel):
+    ok: bool = True
 
 
 class LoginUserSummary(BaseModel):

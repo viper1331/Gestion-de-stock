@@ -15,3 +15,15 @@ def on_user_approved(user: models.User, modules: list[str] | None = None) -> Non
         user.email,
         modules,
     )
+
+
+def enqueue_password_reset(
+    email: str,
+    reset_token: str,
+    metadata: dict[str, object] | None = None,
+) -> None:
+    logger.info(
+        "[NOTIFY] password_reset queued (noop) email=%s metadata=%s",
+        email,
+        metadata,
+    )

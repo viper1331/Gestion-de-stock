@@ -11,3 +11,4 @@ if str(REPO_ROOT) not in sys.path:
 
 _DEFAULT_KEY = base64.urlsafe_b64encode(b"0" * 32).decode("utf-8")
 os.environ.setdefault("TWO_FACTOR_ENCRYPTION_KEY", _DEFAULT_KEY)
+os.environ.setdefault("ALLOW_INSECURE_RESET_DEV", "1")

@@ -173,6 +173,7 @@ def init_databases() -> None:
                     role TEXT NOT NULL DEFAULT 'user',
                     is_active INTEGER NOT NULL DEFAULT 1,
                     status TEXT NOT NULL DEFAULT 'active',
+                    session_version INTEGER NOT NULL DEFAULT 1,
                     created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
                     approved_at TIMESTAMP,
                     approved_by INTEGER,
@@ -221,6 +222,29 @@ def init_databases() -> None:
                     category TEXT NOT NULL,
                     content TEXT NOT NULL,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE TABLE IF NOT EXISTS password_reset_tokens (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    token_hash TEXT NOT NULL,
+                    created_at TEXT NOT NULL,
+                    expires_at TEXT NOT NULL,
+                    used_at TEXT NULL,
+                    request_ip TEXT NULL,
+                    user_agent TEXT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_prt_user_id
+                ON password_reset_tokens(user_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_prt_token_hash
+                ON password_reset_tokens(token_hash);
+                CREATE INDEX IF NOT EXISTS idx_prt_expires_at
+                ON password_reset_tokens(expires_at);
+                CREATE TABLE IF NOT EXISTS password_reset_rate_limits (
+                    email_normalized TEXT NOT NULL,
+                    ip_address TEXT NOT NULL,
+                    window_start_ts INTEGER NOT NULL,
+                    count INTEGER NOT NULL,
+                    PRIMARY KEY (email_normalized, ip_address)
                 );
                 CREATE TABLE IF NOT EXISTS message_recipients (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -287,6 +311,7 @@ def init_databases() -> None:
             )
             _ensure_user_site_columns(conn)
             _ensure_user_account_columns(conn)
+            _ensure_user_session_columns(conn)
             _ensure_two_factor_columns(conn)
             _ensure_two_factor_challenge_columns(conn)
         _init_core_database()
@@ -523,6 +548,19 @@ def _ensure_user_account_columns(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE INDEX IF NOT EXISTS idx_users_email_normalized ON users(email_normalized)"
         )
+
+
+def _ensure_user_session_columns(conn: sqlite3.Connection) -> None:
+    columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
+    if "session_version" not in columns:
+        conn.execute("ALTER TABLE users ADD COLUMN session_version INTEGER NOT NULL DEFAULT 1")
+    conn.execute(
+        """
+        UPDATE users
+        SET session_version = 1
+        WHERE session_version IS NULL
+        """
+    )
 
 
 def _ensure_two_factor_columns(conn: sqlite3.Connection) -> None:

@@ -11,13 +11,28 @@ from backend.core import db, security, services
 client = TestClient(app)
 
 
+def _session_version(username: str) -> int:
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            "SELECT session_version FROM users WHERE username = ?",
+            (username,),
+        ).fetchone()
+    return int(row["session_version"]) if row else 1
+
+
 def _admin_headers() -> dict[str, str]:
-    token = security.create_access_token("admin", {"role": "admin"})
+    token = security.create_access_token(
+        "admin",
+        {"role": "admin", "session_version": _session_version("admin")},
+    )
     return {"Authorization": f"Bearer {token}"}
 
 
 def _user_headers(username: str) -> dict[str, str]:
-    token = security.create_access_token(username, {"role": "user"})
+    token = security.create_access_token(
+        username,
+        {"role": "user", "session_version": _session_version(username)},
+    )
     return {"Authorization": f"Bearer {token}"}
 
 

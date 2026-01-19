@@ -17,13 +17,23 @@ export function Login() {
   const [secretPlain, setSecretPlain] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState("");
   const [step, setStep] = useState<"credentials" | "totp" | "enroll">("credentials");
-  const [mode, setMode] = useState<"login" | "register" | "register-success">("login");
+  const [mode, setMode] = useState<
+    "login" | "register" | "register-success" | "reset-request" | "reset-confirm"
+  >("login");
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerDisplayName, setRegisterDisplayName] = useState("");
   const [registerOtpMethod, setRegisterOtpMethod] = useState<"totp" | "email">("totp");
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerLoading, setRegisterLoading] = useState(false);
+  const [resetEmail, setResetEmail] = useState("");
+  const [resetToken, setResetToken] = useState("");
+  const [resetPassword, setResetPassword] = useState("");
+  const [resetPasswordConfirm, setResetPasswordConfirm] = useState("");
+  const [resetMessage, setResetMessage] = useState<string | null>(null);
+  const [resetError, setResetError] = useState<string | null>(null);
+  const [resetLoading, setResetLoading] = useState(false);
+  const [devResetToken, setDevResetToken] = useState<string | null>(null);
 
   useEffect(() => {
     setPassword("");
@@ -126,6 +136,63 @@ export function Login() {
     });
   };
 
+  const handleResetRequest = async (event: FormEvent) => {
+    event.preventDefault();
+    setResetError(null);
+    setResetMessage(null);
+    setResetLoading(true);
+    setDevResetToken(null);
+    try {
+      const response = await api.post("/auth/password-reset/request", { email: resetEmail });
+      const token = response.data?.dev_reset_token ?? null;
+      setDevResetToken(token);
+      setResetMessage("Si un compte existe, vous recevrez des instructions.");
+      setMode("reset-confirm");
+      if (token) {
+        setResetToken(token);
+      }
+    } catch (err) {
+      const detail =
+        typeof err === "object" && err && "response" in err
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null;
+      setResetError(detail ?? "Impossible de traiter la demande.");
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
+  const handleResetConfirm = async (event: FormEvent) => {
+    event.preventDefault();
+    setResetError(null);
+    setResetMessage(null);
+    if (resetPassword !== resetPasswordConfirm) {
+      setResetError("Les mots de passe ne correspondent pas.");
+      return;
+    }
+    setResetLoading(true);
+    try {
+      await api.post("/auth/password-reset/confirm", {
+        token: resetToken,
+        new_password: resetPassword
+      });
+      setResetMessage("Votre mot de passe a été mis à jour.");
+      setMode("login");
+      setResetToken("");
+      setResetPassword("");
+      setResetPasswordConfirm("");
+      setDevResetToken(null);
+    } catch (err) {
+      const detail =
+        typeof err === "object" && err && "response" in err
+          ? (err as { response?: { data?: { detail?: string } } }).response?.data?.detail
+          : null;
+      setResetError(detail ?? "Impossible de réinitialiser le mot de passe.");
+    } finally {
+      setResetLoading(false);
+    }
+  };
+
   if (step !== "credentials") {
     return (
       <form className="space-y-6" onSubmit={step === "enroll" ? handleEnrollConfirm : handleVerify}>
@@ -190,6 +257,148 @@ export function Login() {
           title="Valider le code 2FA"
         >
           {isLoading ? "Vérification..." : "Valider"}
+        </button>
+      </form>
+    );
+  }
+
+  if (mode === "reset-request") {
+    return (
+      <form className="space-y-6" onSubmit={handleResetRequest}>
+        <header className="space-y-1 text-center">
+          <h1 className="text-2xl font-semibold">Mot de passe oublié</h1>
+          <p className="text-sm text-slate-400">
+            Entrez votre email pour recevoir les instructions de réinitialisation.
+          </p>
+        </header>
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-slate-200" htmlFor="resetEmail">
+            Email
+          </label>
+          <AppTextInput
+            id="resetEmail"
+            type="email"
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={resetEmail}
+            onChange={(event) => setResetEmail(event.target.value)}
+            title="Entrez votre email"
+            autoComplete="email"
+          />
+        </div>
+        {resetMessage ? (
+          <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            {resetMessage}
+          </p>
+        ) : null}
+        {resetError ? <p className="text-sm text-red-400">{resetError}</p> : null}
+        <button
+          type="submit"
+          disabled={resetLoading}
+          className="w-full rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          title="Demander une réinitialisation"
+        >
+          {resetLoading ? "Envoi..." : "Envoyer"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setMode("login");
+            setResetError(null);
+            setResetMessage(null);
+            setDevResetToken(null);
+          }}
+          className="text-sm text-slate-400 hover:text-slate-200"
+        >
+          Retour à la connexion
+        </button>
+      </form>
+    );
+  }
+
+  if (mode === "reset-confirm") {
+    return (
+      <form className="space-y-6" onSubmit={handleResetConfirm}>
+        <header className="space-y-1 text-center">
+          <h1 className="text-2xl font-semibold">Réinitialiser le mot de passe</h1>
+          <p className="text-sm text-slate-400">
+            Saisissez le code de réinitialisation et votre nouveau mot de passe.
+          </p>
+        </header>
+        {resetMessage ? (
+          <p className="rounded-lg border border-emerald-500/40 bg-emerald-500/10 px-4 py-3 text-sm text-emerald-200">
+            {resetMessage}
+          </p>
+        ) : null}
+        {devResetToken ? (
+          <div className="rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-xs text-amber-200">
+            <p className="font-semibold text-amber-100">DEV uniquement</p>
+            <p className="break-all">Code de réinitialisation : {devResetToken}</p>
+          </div>
+        ) : null}
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-slate-200" htmlFor="resetToken">
+            Code de réinitialisation
+          </label>
+          <AppTextInput
+            id="resetToken"
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={resetToken}
+            onChange={(event) => setResetToken(event.target.value)}
+            title="Entrez le code de réinitialisation"
+            autoComplete="one-time-code"
+          />
+        </div>
+        <div className="space-y-2">
+          <label className="block text-sm font-medium text-slate-200" htmlFor="resetPassword">
+            Nouveau mot de passe
+          </label>
+          <AppTextInput
+            id="resetPassword"
+            type="password"
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={resetPassword}
+            onChange={(event) => setResetPassword(event.target.value)}
+            title="Nouveau mot de passe"
+            autoComplete="new-password"
+          />
+        </div>
+        <div className="space-y-2">
+          <label
+            className="block text-sm font-medium text-slate-200"
+            htmlFor="resetPasswordConfirm"
+          >
+            Confirmer le mot de passe
+          </label>
+          <AppTextInput
+            id="resetPasswordConfirm"
+            type="password"
+            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={resetPasswordConfirm}
+            onChange={(event) => setResetPasswordConfirm(event.target.value)}
+            title="Confirmez le mot de passe"
+            autoComplete="new-password"
+          />
+        </div>
+        {resetError ? <p className="text-sm text-red-400">{resetError}</p> : null}
+        <button
+          type="submit"
+          disabled={resetLoading}
+          className="w-full rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+          title="Valider la réinitialisation"
+        >
+          {resetLoading ? "Mise à jour..." : "Réinitialiser"}
+        </button>
+        <button
+          type="button"
+          onClick={() => {
+            setMode("login");
+            setResetError(null);
+            setResetMessage(null);
+            setDevResetToken(null);
+          }}
+          className="text-sm text-slate-400 hover:text-slate-200"
+        >
+          Retour à la connexion
         </button>
       </form>
     );
@@ -382,6 +591,19 @@ export function Login() {
         title="Valider mes identifiants"
       >
         {isLoading ? "Connexion..." : "Se connecter"}
+      </button>
+      <button
+        type="button"
+        onClick={() => {
+          setMode("reset-request");
+          setResetError(null);
+          setResetMessage(null);
+          setDevResetToken(null);
+          clearError();
+        }}
+        className="w-full text-sm text-slate-400 hover:text-slate-200"
+      >
+        Mot de passe oublié ?
       </button>
       <button
         type="button"
