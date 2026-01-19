@@ -74,10 +74,12 @@ def enqueue_email(
     body_html: str | None = None,
     *,
     priority: int = 5,
-) -> None:
+    purpose: str | None = None,
+    meta: dict[str, Any] | None = None,
+) -> int:
     services.ensure_database_ready()
     with db.get_core_connection() as conn:
-        conn.execute(
+        cursor = conn.execute(
             """
             INSERT INTO email_outbox (
                 to_email,
@@ -102,6 +104,16 @@ def enqueue_email(
             ),
         )
         conn.commit()
+    email_id = int(cursor.lastrowid)
+    logger.info(
+        "[EMAIL] queued id=%s to=%s subject=%s purpose=%s meta=%s",
+        email_id,
+        to_email,
+        subject,
+        purpose,
+        meta,
+    )
+    return email_id
 
 
 def build_login_otp_email(
@@ -176,7 +188,13 @@ def run_outbox_once(max_batch: int | None = None) -> OutboxRunResult:
                     """,
                     (attempts, str(exc), row["id"]),
                 )
-                logger.warning("[EMAIL] send failed id=%s attempts=%s", row["id"], attempts)
+                logger.warning(
+                    "[EMAIL] failed id=%s to=%s attempts=%s error=%s",
+                    row["id"],
+                    row["to_email"],
+                    attempts,
+                    str(exc),
+                )
                 continue
             sent += 1
             conn.execute(
@@ -187,6 +205,7 @@ def run_outbox_once(max_batch: int | None = None) -> OutboxRunResult:
                 """,
                 (_utc_now_iso(), row["id"]),
             )
+            logger.info("[EMAIL] sent id=%s to=%s", row["id"], row["to_email"])
     return OutboxRunResult(sent=sent, failed=failed)
 
 
@@ -249,14 +268,34 @@ async def shutdown_outbox_worker(app: Any) -> None:
         return
     stop_event.set()
     await task
+    logger.info("[EMAIL] outbox worker stopped")
 
 
 def on_user_approved(user: models.User, modules: list[str] | None = None) -> None:
-    logger.info(
-        "[NOTIFY] user_approved queued user=%s email=%s modules=%s",
-        user.username,
-        user.email,
-        modules,
+    if not user.email:
+        logger.warning(
+            "[EMAIL] user_approved missing email user=%s",
+            user.username,
+        )
+        return
+    name = user.display_name or user.username
+    modules_line = ""
+    if modules:
+        modules_list = "\n".join(f"- {module}" for module in modules)
+        modules_line = f"\nModules accessibles :\n{modules_list}\n"
+    subject = "Compte validé – Gestion Stock Pro"
+    body_text = (
+        f"Bonjour {name},\n\n"
+        "Votre compte a été validé par un administrateur.\n"
+        f"{modules_line}\n"
+        "L'authentification à deux facteurs pourra être activée selon la politique du site.\n"
+    )
+    enqueue_email(
+        to_email=user.email,
+        subject=subject,
+        body_text=body_text,
+        purpose="user_approved",
+        meta={"user_id": user.id, "username": user.username, "modules": modules or []},
     )
 
 
@@ -265,8 +304,35 @@ def enqueue_password_reset(
     reset_token: str,
     metadata: dict[str, object] | None = None,
 ) -> None:
-    logger.info(
-        "[NOTIFY] password_reset queued (noop) email=%s metadata=%s",
-        email,
-        metadata,
+    ttl_minutes: int | None = None
+    metadata = metadata or {}
+    raw_ttl = metadata.get("ttl_minutes")
+    if isinstance(raw_ttl, int):
+        ttl_minutes = raw_ttl
+    expires_at = metadata.get("expires_at")
+    if ttl_minutes is None and isinstance(expires_at, str):
+        try:
+            expires = datetime.fromisoformat(expires_at.replace("Z", "+00:00"))
+            ttl_minutes = max(1, int((expires - _utc_now()).total_seconds() / 60))
+        except ValueError:
+            ttl_minutes = None
+    ttl_line = f"Ce code expire dans {ttl_minutes} minutes.\n" if ttl_minutes else ""
+    subject = "Code de vérification – Réinitialisation du mot de passe"
+    body_text = (
+        "Bonjour,\n\n"
+        "Voici votre code de vérification pour réinitialiser votre mot de passe :\n\n"
+        f"{reset_token}\n\n"
+        f"{ttl_line}"
+        "Si vous n'êtes pas à l'origine de cette demande, ignorez cet e-mail et contactez un administrateur."
+    )
+    enqueue_email(
+        to_email=email,
+        subject=subject,
+        body_text=body_text,
+        purpose="password_reset",
+        meta={
+            "email": email,
+            "ttl_minutes": ttl_minutes,
+            "kind": "otp",
+        },
     )

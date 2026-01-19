@@ -224,23 +224,52 @@ def test_put_otp_settings_validation() -> None:
     assert response.status_code == 400
 
 
-def test_smtp_test_endpoint_uses_sender_mock(monkeypatch) -> None:
+def test_smtp_test_endpoint_enqueues_email() -> None:
     headers = _login_admin_headers()
-    _configure_smtp_settings(dev_sink=False)
-    called: dict[str, str] = {}
-
-    def _fake_send(to_email: str, subject: str, body_text: str, body_html: str | None = None, *, sensitive: bool = False) -> None:
-        called["to_email"] = to_email
-        called["subject"] = subject
-
-    monkeypatch.setattr("backend.api.admin.send_email_smtp", _fake_send)
+    _configure_smtp_settings(dev_sink=True)
+    with db.get_core_connection() as conn:
+        conn.execute("DELETE FROM email_outbox")
+        conn.commit()
     response = client.post(
         "/admin/email/smtp-test",
         json={"to_email": "dest@example.com"},
         headers=headers,
     )
     assert response.status_code == 200, response.text
-    assert called["to_email"] == "dest@example.com"
+    payload = response.json()
+    assert payload["status"] == "skipped"
+    with db.get_core_connection() as conn:
+        row = conn.execute(
+            "SELECT to_email, subject FROM email_outbox ORDER BY id DESC LIMIT 1"
+        ).fetchone()
+    assert row is not None
+    assert row["to_email"] == "dest@example.com"
+
+
+def test_admin_email_test_endpoint_send_now() -> None:
+    headers = _login_admin_headers()
+    _configure_smtp_settings(dev_sink=True)
+    with db.get_core_connection() as conn:
+        conn.execute("DELETE FROM email_outbox")
+        conn.commit()
+    response = client.post(
+        "/admin/email/test?send_now=1",
+        json={
+            "to_email": "dest@example.com",
+            "subject": "Test SMTP",
+            "body": "Ceci est un e-mail de test.",
+        },
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "sent"
+    with db.get_core_connection() as conn:
+        row = conn.execute(
+            "SELECT sent_at FROM email_outbox WHERE to_email = ?",
+            ("dest@example.com",),
+        ).fetchone()
+    assert row and row["sent_at"]
 
 
 def test_otp_email_flow_uses_db_settings() -> None:
