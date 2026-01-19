@@ -3648,6 +3648,14 @@ def test_backup_settings_persist_after_restart() -> None:
         assert reset.status_code == 200, reset.text
 
 
+def test_backup_export_requires_admin() -> None:
+    username = f"backup-export-user-{uuid4().hex[:6]}"
+    _create_user(username, "Password123!", role="user")
+    headers = _login_headers(username, "Password123!")
+    response = client.get("/backup/", headers=headers)
+    assert response.status_code == 403
+
+
 def test_backup_import_requires_admin() -> None:
     username = f"import-user-{uuid4().hex[:6]}"
     _create_user(username, "Password123!", role="user")
