@@ -7,7 +7,7 @@ from tempfile import TemporaryDirectory
 from fastapi import APIRouter, Depends, File, HTTPException, UploadFile, status
 from fastapi.responses import FileResponse
 
-from backend.api.auth import get_current_user
+from backend.api.admin import require_admin
 from backend.core import models
 from backend.services.backup_manager import (
     BackupImportError,
@@ -19,7 +19,7 @@ router = APIRouter()
 
 
 @router.get("/", response_class=FileResponse)
-async def backup_databases(_: models.User = Depends(get_current_user)) -> FileResponse:
+async def backup_databases(_: models.User = Depends(require_admin)) -> FileResponse:
     archive_path = create_backup_archive()
     return FileResponse(archive_path, filename=archive_path.name)
 
@@ -27,11 +27,8 @@ async def backup_databases(_: models.User = Depends(get_current_user)) -> FileRe
 @router.post("/import", status_code=204)
 async def import_backup(
     file: UploadFile = File(...),
-    user: models.User = Depends(get_current_user),
+    _: models.User = Depends(require_admin),
 ) -> None:
-    if user.role != "admin":
-        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
-
     with TemporaryDirectory() as tmpdir:
         target = Path(tmpdir) / "import.zip"
         with target.open("wb") as buffer:
@@ -57,4 +54,3 @@ async def import_backup(
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Impossible d'importer la sauvegarde",
             ) from exc
-

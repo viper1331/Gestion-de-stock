@@ -1198,45 +1198,49 @@ export function SettingsPage() {
             className="space-y-6"
             hidden={isSectionCollapsed(backupsSectionKey)}
           >
-            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-              <div>
-                <h3 className="text-sm font-semibold text-white">Sauvegarde manuelle</h3>
-                <p className="text-xs text-slate-400">
-                  Téléchargez un export ZIP des bases utilisateurs et stock.
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={handleBackup}
-                disabled={isBackingUp}
-                className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                title="Télécharger une sauvegarde complète des données"
-              >
-                {isBackingUp ? "Sauvegarde..." : "Exporter"}
-              </button>
-            </div>
-            <div className="border-t border-slate-800 pt-4">
-              <h3 className="text-sm font-semibold text-white">Importer une sauvegarde</h3>
-              <p className="text-xs text-slate-400">Restaurez une archive créée précédemment.</p>
-              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
-                <AppTextInput
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".zip"
-                  onChange={(event) => setSelectedFile(event.target.files ? event.target.files[0] : null)}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                />
-                <button
-                  type="button"
-                  onClick={handleImport}
-                  disabled={isImporting || !selectedFile}
-                  className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-                >
-                  {isImporting ? "Importation..." : "Importer"}
-                </button>
-              </div>
-            </div>
-            <div className="border-t border-slate-800 pt-4">
+            {isAdmin ? (
+              <>
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <h3 className="text-sm font-semibold text-white">Sauvegarde manuelle</h3>
+                    <p className="text-xs text-slate-400">
+                      Téléchargez un export ZIP des bases utilisateurs et stock.
+                    </p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleBackup}
+                    disabled={isBackingUp}
+                    className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    title="Télécharger une sauvegarde complète des données"
+                  >
+                    {isBackingUp ? "Sauvegarde..." : "Exporter"}
+                  </button>
+                </div>
+                <div className="border-t border-slate-800 pt-4">
+                  <h3 className="text-sm font-semibold text-white">Importer une sauvegarde</h3>
+                  <p className="text-xs text-slate-400">Restaurez une archive créée précédemment.</p>
+                  <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-center">
+                    <AppTextInput
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".zip"
+                      onChange={(event) => setSelectedFile(event.target.files ? event.target.files[0] : null)}
+                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                    <button
+                      type="button"
+                      onClick={handleImport}
+                      disabled={isImporting || !selectedFile}
+                      className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    >
+                      {isImporting ? "Importation..." : "Importer"}
+                    </button>
+                  </div>
+                </div>
+              </>
+            ) : null}
+            <div className={`pt-4 ${isAdmin ? "border-t border-slate-800" : ""}`}>
               <h3 className="text-sm font-semibold text-white">Sauvegarde automatique</h3>
               <p className="text-xs text-slate-400">
                 Paramètre global (site). Planifiez des sauvegardes régulières selon vos besoins.
