@@ -22,10 +22,14 @@ def _reset_tables() -> None:
     services.ensure_database_ready()
     with db.get_core_connection() as conn:
         conn.execute("DELETE FROM purchase_order_email_log")
+        conn.execute("DELETE FROM purchase_order_audit_log")
         conn.commit()
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM purchase_order_items")
         conn.execute("DELETE FROM purchase_orders")
+        conn.execute("DELETE FROM pharmacy_purchase_order_items")
+        conn.execute("DELETE FROM pharmacy_purchase_orders")
+        conn.execute("DELETE FROM pharmacy_items")
         conn.execute("DELETE FROM items")
         conn.execute("DELETE FROM suppliers")
         conn.commit()
@@ -110,6 +114,39 @@ def _create_purchase_order(*, supplier_email: str | None) -> int:
         conn.execute(
             """
             INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered, quantity_received)
+            VALUES (?, ?, 2, 0)
+            """,
+            (order_id, item_id),
+        )
+        conn.commit()
+        return int(order_id)
+
+
+def _create_pharmacy_purchase_order(*, supplier_email: str | None) -> int:
+    with db.get_stock_connection() as conn:
+        supplier_id = conn.execute(
+            "INSERT INTO suppliers (name, email) VALUES (?, ?)",
+            ("Fournisseur Pharmacie", supplier_email),
+        ).lastrowid
+        item_id = conn.execute(
+            "INSERT INTO pharmacy_items (name, quantity) VALUES (?, ?)",
+            ("Test item pharmacy", 5),
+        ).lastrowid
+        order_id = conn.execute(
+            """
+            INSERT INTO pharmacy_purchase_orders (supplier_id, status, created_at)
+            VALUES (?, 'PENDING', CURRENT_TIMESTAMP)
+            """,
+            (supplier_id,),
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO pharmacy_purchase_order_items (
+                purchase_order_id,
+                pharmacy_item_id,
+                quantity_ordered,
+                quantity_received
+            )
             VALUES (?, ?, 2, 0)
             """,
             (order_id, item_id),
@@ -230,3 +267,43 @@ def test_send_purchase_order_missing_supplier_email() -> None:
         row = conn.execute("SELECT COUNT(*) AS count FROM purchase_order_email_log").fetchone()
     assert row is not None
     assert row["count"] == 0
+
+
+def test_send_pharmacy_purchase_order_to_supplier_success() -> None:
+    _reset_tables()
+    _create_user("po_admin", "password", role="admin", email="admin@example.com")
+    headers = _login_headers("po_admin", "password")
+    order_id = _create_pharmacy_purchase_order(supplier_email="supplier@example.com")
+
+    with patch("backend.core.services.email_sender.send_email") as send_email:
+        send_email.return_value = "msg-456"
+        response = client.post(
+            f"/pharmacy/orders/{order_id}/send-to-supplier",
+            headers=headers,
+        )
+
+    assert response.status_code == 200, response.text
+    payload = response.json()
+    assert payload["status"] == "sent"
+    assert payload["sent_to"] == "supplier@example.com"
+
+    send_email.assert_called_once()
+    kwargs = send_email.call_args.kwargs
+    assert kwargs["reply_to"] == "admin@example.com"
+    attachments = kwargs["attachments"]
+    assert attachments and attachments[0][2] == "application/pdf"
+
+    with db.get_core_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT action, status, recipient_email, module_key
+            FROM purchase_order_audit_log
+            WHERE module_key = 'pharmacy_orders'
+            ORDER BY id DESC
+            LIMIT 1
+            """
+        ).fetchone()
+    assert row is not None
+    assert row["action"] == "send_to_supplier"
+    assert row["status"] == "ok"
+    assert row["recipient_email"] == "supplier@example.com"

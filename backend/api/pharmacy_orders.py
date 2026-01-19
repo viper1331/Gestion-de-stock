@@ -6,8 +6,10 @@ import io
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
+from backend.api.admin import require_admin
 from backend.api.auth import get_current_user
-from backend.core import models, services
+from backend.core import db, models, services
+from backend.services.email_sender import EmailSendError
 from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 router = APIRouter()
@@ -109,4 +111,38 @@ async def receive_order(
     except ValueError as exc:
         message = str(exc)
         status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post("/{order_id}/send-to-supplier", response_model=models.PurchaseOrderSendResponse)
+async def send_to_supplier(
+    order_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.PurchaseOrderSendResponse:
+    _require_permission(user, action="edit")
+    try:
+        return services.send_pharmacy_purchase_order_to_supplier(
+            db.get_current_site_key(),
+            order_id,
+            user,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EmailSendError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.delete("/{order_id}", status_code=204)
+async def delete_order(
+    order_id: int,
+    user: models.User = Depends(require_admin),
+) -> None:
+    try:
+        services.delete_pharmacy_purchase_order(db.get_current_site_key(), order_id, user)
+    except ValueError as exc:
+        message = str(exc)
+        lowered = message.lower()
+        if "reçu" in lowered:
+            raise HTTPException(status_code=409, detail=message) from exc
+        status = 404 if "introuvable" in lowered else 400
         raise HTTPException(status_code=status, detail=message) from exc

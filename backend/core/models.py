@@ -1407,6 +1407,7 @@ class PharmacyPurchaseOrder(BaseModel):
 
 class PharmacyPurchaseOrderDetail(PharmacyPurchaseOrder):
     supplier_name: str | None = None
+    supplier_email: str | None = None
     items: list[PharmacyPurchaseOrderItem] = Field(default_factory=list)
 
 

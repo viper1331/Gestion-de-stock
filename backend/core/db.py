@@ -418,6 +418,22 @@ def _init_core_database() -> None:
                 message_id TEXT,
                 error_message TEXT
             );
+            CREATE TABLE IF NOT EXISTS purchase_order_audit_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                site_key TEXT NOT NULL,
+                module_key TEXT NOT NULL,
+                action TEXT NOT NULL,
+                purchase_order_id INTEGER NOT NULL,
+                supplier_id INTEGER,
+                supplier_name TEXT,
+                supplier_email TEXT,
+                recipient_email TEXT,
+                user_id INTEGER,
+                user_email TEXT,
+                status TEXT NOT NULL CHECK(status IN ('ok','error')),
+                message TEXT
+            );
             """
         )
         default_paths = get_default_site_db_paths()
