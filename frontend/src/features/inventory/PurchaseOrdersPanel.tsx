@@ -1,8 +1,10 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
+import { useAuth } from "../auth/useAuth";
+import { useModulePermissions } from "../permissions/useModulePermissions";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 
@@ -32,10 +34,14 @@ interface PurchaseOrderDetail {
   id: number;
   supplier_id: number | null;
   supplier_name: string | null;
+  supplier_email: string | null;
   status: string;
   created_at: string;
   note: string | null;
   auto_created: boolean;
+  last_sent_at: string | null;
+  last_sent_to: string | null;
+  last_sent_by: string | null;
   items: PurchaseOrderItem[];
 }
 
@@ -57,6 +63,16 @@ interface UpdateOrderPayload {
   status?: string;
   note?: string | null;
   successMessage?: string;
+}
+
+interface PurchaseOrderEmailLogEntry {
+  id: number;
+  created_at: string;
+  supplier_email: string;
+  user_email?: string | null;
+  status: "sent" | "failed";
+  message_id?: string | null;
+  error_message?: string | null;
 }
 
 type ApiErrorResponse = { detail?: string };
@@ -97,6 +113,12 @@ export function PurchaseOrdersPanel({
   downloadPrefix = "bon_commande",
   itemIdField = "item_id"
 }: PurchaseOrdersPanelProps) {
+  const { user } = useAuth();
+  const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
+  const canSendEmail = useMemo(
+    () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess("clothing", "edit"))),
+    [modulePermissions, user]
+  );
   const queryClient = useQueryClient();
   const [draftSupplier, setDraftSupplier] = useState<number | "">("");
   const [draftStatus, setDraftStatus] = useState<string>("ORDERED");
@@ -109,6 +131,8 @@ export function PurchaseOrdersPanel({
   const [editStatus, setEditStatus] = useState<string>("ORDERED");
   const [editNote, setEditNote] = useState<string>("");
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [sendModalOrder, setSendModalOrder] = useState<PurchaseOrderDetail | null>(null);
+  const [overrideEmail, setOverrideEmail] = useState<string>("");
 
   const resolveItemId = (item: PurchaseOrderItem) => {
     const candidate = item[itemIdField];
@@ -193,6 +217,44 @@ export function PurchaseOrdersPanel({
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
     onError: () => setError("Impossible d'enregistrer la réception."),
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const emailLogQuery = useQuery({
+    queryKey: ["purchase-order-email-log", sendModalOrder?.id],
+    queryFn: async () => {
+      if (!sendModalOrder) {
+        return [];
+      }
+      const response = await api.get<PurchaseOrderEmailLogEntry[]>(
+        `${purchaseOrdersPath}/${sendModalOrder.id}/email-log`
+      );
+      return response.data;
+    },
+    enabled: Boolean(sendModalOrder)
+  });
+
+  const sendToSupplier = useMutation<void, AxiosError<ApiErrorResponse>, PurchaseOrderDetail>({
+    mutationFn: async (order) => {
+      await api.post(`${purchaseOrdersPath}/${order.id}/send-to-supplier`, {
+        to_email_override: overrideEmail.trim() ? overrideEmail.trim() : null
+      });
+    },
+    onSuccess: async (_, order) => {
+      setMessage("Email envoyé au fournisseur.");
+      setOverrideEmail("");
+      setSendModalOrder(null);
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({
+        queryKey: ["purchase-order-email-log", order.id]
+      });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible d'envoyer l'e-mail.");
+    },
     onSettled: () => {
       window.setTimeout(() => setMessage(null), 4000);
     }
@@ -295,6 +357,17 @@ export function PurchaseOrdersPanel({
     }
   };
 
+  const handleOpenSendModal = (order: PurchaseOrderDetail) => {
+    setError(null);
+    setOverrideEmail("");
+    setSendModalOrder(order);
+  };
+
+  const handleCloseSendModal = () => {
+    setSendModalOrder(null);
+    setOverrideEmail("");
+  };
+
   return (
     <section className="space-y-4">
       <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -386,6 +459,13 @@ export function PurchaseOrdersPanel({
                           {order.note ? (
                             <li className="text-slate-400">Note: {order.note}</li>
                           ) : null}
+                          {order.last_sent_at ? (
+                            <li className="text-slate-400">
+                              Dernier envoi: {new Date(order.last_sent_at).toLocaleString()}
+                              {order.last_sent_to ? ` → ${order.last_sent_to}` : ""}
+                              {order.last_sent_by ? ` (par ${order.last_sent_by})` : ""}
+                            </li>
+                          ) : null}
                         </ul>
                       </td>
                       <td className="px-4 py-3 text-slate-200">
@@ -420,6 +500,21 @@ export function PurchaseOrdersPanel({
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
+                          {canSendEmail ? (
+                            <button
+                              type="button"
+                              onClick={() => handleOpenSendModal(order)}
+                              disabled={!order.supplier_email}
+                              className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                              title={
+                                order.supplier_email
+                                  ? "Envoyer le bon de commande au fournisseur"
+                                  : "Ajoutez un email fournisseur pour activer l'envoi"
+                              }
+                            >
+                              Envoyer au fournisseur
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>
@@ -653,6 +748,105 @@ export function PurchaseOrdersPanel({
           )}
         </div>
       </div>
+
+      {sendModalOrder ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4">
+          <div className="w-full max-w-xl rounded-lg border border-slate-800 bg-slate-900 p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4 className="text-lg font-semibold text-white">Envoyer au fournisseur</h4>
+                <p className="text-xs text-slate-400">
+                  Bon de commande #{sendModalOrder.id} · Site {user?.site_key ?? "-"}
+                  {sendModalOrder.supplier_name ? ` · ${sendModalOrder.supplier_name}` : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={handleCloseSendModal}
+                className="text-sm text-slate-400 hover:text-slate-200"
+              >
+                Fermer
+              </button>
+            </div>
+
+            <div className="mt-4 space-y-3 text-sm text-slate-200">
+              <div>
+                <p className="text-xs uppercase text-slate-500">Destinataire</p>
+                <p className="font-semibold">
+                  {sendModalOrder.supplier_name ?? "Fournisseur"} ·{" "}
+                  {sendModalOrder.supplier_email ?? "Email manquant"}
+                </p>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="override-email">
+                  Email alternatif (facultatif)
+                </label>
+                <input
+                  id="override-email"
+                  type="email"
+                  value={overrideEmail}
+                  onChange={(event) => setOverrideEmail(event.target.value)}
+                  placeholder="contact@fournisseur.com"
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                />
+              </div>
+              {sendModalOrder.last_sent_at ? (
+                <p className="text-xs text-slate-400">
+                  Dernier envoi: {new Date(sendModalOrder.last_sent_at).toLocaleString()}
+                </p>
+              ) : null}
+            </div>
+
+            <div className="mt-6 flex flex-wrap justify-between gap-3">
+              <button
+                type="button"
+                onClick={handleCloseSendModal}
+                className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() => sendToSupplier.mutate(sendModalOrder)}
+                disabled={sendToSupplier.isPending}
+                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {sendToSupplier.isPending ? "Envoi..." : "Confirmer l'envoi"}
+              </button>
+            </div>
+
+            <div className="mt-6">
+              <h5 className="text-sm font-semibold text-white">Historique e-mails</h5>
+              {emailLogQuery.isLoading ? (
+                <p className="text-xs text-slate-400">Chargement de l'historique...</p>
+              ) : emailLogQuery.data && emailLogQuery.data.length > 0 ? (
+                <ul className="mt-2 space-y-2 text-xs text-slate-300">
+                  {emailLogQuery.data.map((entry) => (
+                    <li
+                      key={entry.id}
+                      className="rounded border border-slate-800 bg-slate-950/60 px-3 py-2"
+                    >
+                      <p className="font-semibold">
+                        {new Date(entry.created_at).toLocaleString()} ·{" "}
+                        {entry.status === "sent" ? "Envoyé" : "Échec"}
+                      </p>
+                      <p>
+                        À: {entry.supplier_email}
+                        {entry.user_email ? ` · Par: ${entry.user_email}` : ""}
+                      </p>
+                      {entry.error_message ? (
+                        <p className="text-rose-300">Erreur: {entry.error_message}</p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="text-xs text-slate-400">Aucun envoi enregistré.</p>
+              )}
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

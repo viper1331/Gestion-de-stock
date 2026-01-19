@@ -403,6 +403,21 @@ def _init_core_database() -> None:
                 updated_at TEXT NOT NULL,
                 updated_by TEXT
             );
+            CREATE TABLE IF NOT EXISTS purchase_order_email_log (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                created_at TEXT NOT NULL,
+                site_key TEXT NOT NULL,
+                module_key TEXT NOT NULL,
+                purchase_order_id INTEGER NOT NULL,
+                purchase_order_number TEXT,
+                supplier_id INTEGER,
+                supplier_email TEXT NOT NULL,
+                user_id INTEGER,
+                user_email TEXT,
+                status TEXT NOT NULL CHECK(status IN ('sent','failed')),
+                message_id TEXT,
+                error_message TEXT
+            );
             """
         )
         default_paths = get_default_site_db_paths()
@@ -729,7 +744,10 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     status TEXT NOT NULL DEFAULT 'PENDING',
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     note TEXT,
-                    auto_created INTEGER NOT NULL DEFAULT 0
+                    auto_created INTEGER NOT NULL DEFAULT 0,
+                    last_sent_at TEXT,
+                    last_sent_to TEXT,
+                    last_sent_by TEXT
                 );
                 CREATE TABLE IF NOT EXISTS purchase_order_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

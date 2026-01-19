@@ -7,7 +7,8 @@ from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import StreamingResponse
 
 from backend.api.auth import get_current_user
-from backend.core import models, services
+from backend.core import db, models, services
+from backend.services.email_sender import EmailSendError
 from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 router = APIRouter()
@@ -84,6 +85,39 @@ async def download_order_pdf(
         media_type="application/pdf",
         headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
+
+
+@router.post("/{order_id}/send-to-supplier", response_model=models.PurchaseOrderSendResponse)
+async def send_to_supplier(
+    order_id: int,
+    payload: models.PurchaseOrderSendRequest | None = None,
+    user: models.User = Depends(get_current_user),
+) -> models.PurchaseOrderSendResponse:
+    _require_permission(user, action="edit")
+    try:
+        return services.send_purchase_order_to_supplier(
+            db.get_current_site_key(),
+            order_id,
+            user,
+            to_email_override=payload.to_email_override if payload else None,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except EmailSendError as exc:
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@router.get("/{order_id}/email-log", response_model=list[models.PurchaseOrderEmailLogEntry])
+async def get_order_email_log(
+    order_id: int,
+    user: models.User = Depends(get_current_user),
+) -> list[models.PurchaseOrderEmailLogEntry]:
+    _require_permission(user, action="edit")
+    try:
+        services.get_purchase_order(order_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return services.list_purchase_order_email_logs(db.get_current_site_key(), order_id)
 
 
 @router.put("/{order_id}", response_model=models.PurchaseOrderDetail)
