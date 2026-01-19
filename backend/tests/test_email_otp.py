@@ -7,7 +7,7 @@ import pytest
 
 from backend.app import app
 from backend.core import db, security, services
-from backend.services import notifications
+from backend.services import notifications, system_settings
 
 client = TestClient(app)
 
@@ -42,6 +42,37 @@ def _create_user(username: str, password: str, *, otp_email_enabled: bool = True
         conn.commit()
 
 
+def _configure_email_settings(**otp_overrides: int | bool) -> None:
+    system_settings.set_setting_json(
+        system_settings.SMTP_SETTINGS_KEY,
+        {
+            "host": None,
+            "port": 587,
+            "username": None,
+            "from_email": "StockOps <no-reply@localhost>",
+            "use_tls": True,
+            "use_ssl": False,
+            "timeout_seconds": 10,
+            "dev_sink": True,
+        },
+        "tests",
+    )
+    otp_payload: dict[str, int | bool] = {
+        "ttl_minutes": 10,
+        "code_length": 6,
+        "max_attempts": 5,
+        "resend_cooldown_seconds": 45,
+        "rate_limit_per_hour": 6,
+        "allow_insecure_dev": True,
+    }
+    otp_payload.update(otp_overrides)
+    system_settings.set_setting_json(
+        system_settings.OTP_EMAIL_SETTINGS_KEY,
+        otp_payload,
+        "tests",
+    )
+
+
 @pytest.fixture(autouse=True)
 def _clean_email_tables() -> None:
     services.ensure_database_ready()
@@ -62,9 +93,8 @@ def _login(username: str, password: str) -> dict[str, object]:
     return response.json()
 
 
-def test_login_email_otp_flow_success(monkeypatch) -> None:
-    monkeypatch.setenv("ALLOW_INSECURE_EMAIL_DEV", "1")
-    monkeypatch.setenv("EMAIL_DEV_SINK", "1")
+def test_login_email_otp_flow_success() -> None:
+    _configure_email_settings()
     _create_user("email-otp-user", "password123", otp_email_enabled=True)
     payload = _login("email-otp-user", "password123")
     assert payload["status"] == "2fa_required"
@@ -78,9 +108,8 @@ def test_login_email_otp_flow_success(monkeypatch) -> None:
     assert "access_token" in verify.json()
 
 
-def test_login_email_otp_expired(monkeypatch) -> None:
-    monkeypatch.setenv("ALLOW_INSECURE_EMAIL_DEV", "1")
-    monkeypatch.setenv("EMAIL_DEV_SINK", "1")
+def test_login_email_otp_expired() -> None:
+    _configure_email_settings()
     _create_user("email-otp-expired", "password123", otp_email_enabled=True)
     payload = _login("email-otp-expired", "password123")
     with db.get_core_connection() as conn:
@@ -96,9 +125,8 @@ def test_login_email_otp_expired(monkeypatch) -> None:
     assert verify.status_code == 401
 
 
-def test_login_email_otp_attempt_limit(monkeypatch) -> None:
-    monkeypatch.setenv("OTP_EMAIL_MAX_ATTEMPTS", "2")
-    monkeypatch.setenv("EMAIL_DEV_SINK", "1")
+def test_login_email_otp_attempt_limit() -> None:
+    _configure_email_settings(max_attempts=3, allow_insecure_dev=False)
     _create_user("email-otp-limit", "password123", otp_email_enabled=True)
     payload = _login("email-otp-limit", "password123")
     first = client.post(
@@ -110,12 +138,16 @@ def test_login_email_otp_attempt_limit(monkeypatch) -> None:
         "/auth/otp-email/verify",
         json={"challenge_id": payload["challenge_id"], "code": "000000"},
     )
-    assert second.status_code == 403
+    assert second.status_code == 401
+    third = client.post(
+        "/auth/otp-email/verify",
+        json={"challenge_id": payload["challenge_id"], "code": "000000"},
+    )
+    assert third.status_code == 403
 
 
-def test_resend_cooldown_429(monkeypatch) -> None:
-    monkeypatch.setenv("OTP_EMAIL_RESEND_COOLDOWN_SECONDS", "60")
-    monkeypatch.setenv("EMAIL_DEV_SINK", "1")
+def test_resend_cooldown_429() -> None:
+    _configure_email_settings(resend_cooldown_seconds=60, allow_insecure_dev=False)
     _create_user("email-otp-resend", "password123", otp_email_enabled=True)
     payload = _login("email-otp-resend", "password123")
     resend = client.post(
@@ -125,8 +157,8 @@ def test_resend_cooldown_429(monkeypatch) -> None:
     assert resend.status_code == 429
 
 
-def test_outbox_enqueue_and_worker_marks_sent(monkeypatch) -> None:
-    monkeypatch.setenv("EMAIL_DEV_SINK", "1")
+def test_outbox_enqueue_and_worker_marks_sent() -> None:
+    _configure_email_settings(allow_insecure_dev=False)
     notifications.enqueue_email("test@example.com", "Sujet", "Body")
     result = notifications.run_outbox_once()
     assert result.sent in {0, 1}

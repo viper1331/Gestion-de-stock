@@ -1,13 +1,13 @@
 """SMTP email delivery helpers."""
 from __future__ import annotations
 
-from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
-import os
 from pathlib import Path
 from email.message import EmailMessage
 import smtplib
+
+from backend.services.system_settings import SmtpConfig, get_email_smtp_config
 
 logger = logging.getLogger(__name__)
 
@@ -16,50 +16,6 @@ _DEV_SINK_PATH = Path("logs") / "email_dev_sink.log"
 
 class EmailSendError(RuntimeError):
     pass
-
-
-@dataclass(frozen=True)
-class EmailSettings:
-    host: str | None
-    port: int
-    username: str | None
-    password: str | None
-    from_email: str
-    use_tls: bool
-    use_ssl: bool
-    timeout_seconds: int
-    dev_sink: bool
-
-
-def _get_int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _get_bool_env(name: str, default: bool = False) -> bool:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    return raw.strip() in {"1", "true", "True", "yes", "YES"}
-
-
-def get_email_settings() -> EmailSettings:
-    return EmailSettings(
-        host=os.getenv("SMTP_HOST"),
-        port=_get_int_env("SMTP_PORT", 587),
-        username=os.getenv("SMTP_USERNAME"),
-        password=os.getenv("SMTP_PASSWORD"),
-        from_email=os.getenv("SMTP_FROM_EMAIL", "StockOps <no-reply@localhost>"),
-        use_tls=_get_bool_env("SMTP_USE_TLS", True),
-        use_ssl=_get_bool_env("SMTP_USE_SSL", False),
-        timeout_seconds=_get_int_env("SMTP_TIMEOUT_SECONDS", 10),
-        dev_sink=_get_bool_env("EMAIL_DEV_SINK", False),
-    )
 
 
 def _write_dev_sink(
@@ -83,7 +39,7 @@ def _write_dev_sink(
         handle.write("---\n")
 
 
-def _login_if_needed(server: smtplib.SMTP, settings: EmailSettings) -> None:
+def _login_if_needed(server: smtplib.SMTP, settings: SmtpConfig) -> None:
     if settings.username and settings.password:
         server.login(settings.username, settings.password)
 
@@ -96,7 +52,7 @@ def send_email_smtp(
     *,
     sensitive: bool = False,
 ) -> None:
-    settings = get_email_settings()
+    settings = get_email_smtp_config()
     if settings.dev_sink:
         _write_dev_sink(
             to_email=to_email,
