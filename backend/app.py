@@ -21,6 +21,7 @@ from backend.api import (
     item_links,
     link_categories,
     pharmacy,
+    stock,
     pharmacy_orders,
     remise_orders,
     purchase_orders,
@@ -120,6 +121,7 @@ app.include_router(backup.router, prefix="/backup", tags=["backup"])
 app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
 app.include_router(dotations.router, prefix="/dotations", tags=["dotations"])
 app.include_router(pharmacy.router, prefix="/pharmacy", tags=["pharmacy"])
+app.include_router(stock.router, prefix="/stock", tags=["stock"])
 app.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["purchase-orders"])
 app.include_router(purchase_suggestions.router, tags=["purchase-suggestions"])
 app.include_router(remise_orders.router, prefix="/remise-inventory/orders", tags=["remise-purchase-orders"])

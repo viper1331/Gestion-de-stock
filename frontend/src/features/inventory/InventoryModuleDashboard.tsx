@@ -341,8 +341,13 @@ export function InventoryModuleDashboard({
       if (!config.exportPdfPath) {
         throw new Error("Aucun export PDF configuré pour ce module.");
       }
+      const params = new URLSearchParams();
+      if (debouncedSearch) {
+        params.set("q", debouncedSearch);
+      }
       const response = await api.get<ArrayBuffer>(config.exportPdfPath, {
-        responseType: "arraybuffer"
+        responseType: "arraybuffer",
+        params: params.toString() ? Object.fromEntries(params.entries()) : undefined
       });
       return response.data;
     },

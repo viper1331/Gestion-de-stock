@@ -16,7 +16,12 @@ export function Dashboard() {
   const canView = user?.role === "admin" || modulePermissions.canAccess("clothing");
 
   const inventoryConfig = useMemo(
-    () => ({ ...DEFAULT_INVENTORY_CONFIG, title: moduleTitle }),
+    () => ({
+      ...DEFAULT_INVENTORY_CONFIG,
+      title: moduleTitle,
+      exportPdfPath: "/stock/pdf/export",
+      exportPdfFilenamePrefix: "inventaire_habillement"
+    }),
     [moduleTitle]
   );
 

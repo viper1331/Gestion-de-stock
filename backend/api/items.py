@@ -69,3 +69,4 @@ async def fetch_movements(item_id: int, user: models.User = Depends(get_current_
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.fetch_movements(item_id)
+
