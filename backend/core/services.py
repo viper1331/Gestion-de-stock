@@ -3808,6 +3808,17 @@ def _normalize_email(value: str) -> str:
     return value.strip().lower()
 
 
+def _generate_pending_username(display_name: str | None) -> str:
+    base = (display_name or "").strip().lower()
+    if base:
+        base = re.sub(r"\s+", "-", base)
+        base = re.sub(r"[^a-z0-9_-]", "", base)
+        base = base.strip("-_")
+    if not base:
+        base = "user"
+    return f"{base}-{uuid4().hex[:8]}"
+
+
 def seed_default_admin() -> None:
     default_username = "admin"
     default_password = "admin123"
@@ -4554,21 +4565,29 @@ def authenticate(username: str, password: str) -> Optional[models.User]:
 
 def register_user(payload: models.RegisterRequest) -> models.User:
     ensure_database_ready()
-    email = payload.email.strip()
-    normalized_email = _normalize_email(email)
-    if not normalized_email:
-        raise ValueError("L'email est requis")
+    email = payload.email.strip() if payload.email else ""
+    otp_email_enabled = bool(payload.otp_email_enabled)
+    if payload.otp_method == "email":
+        if not email:
+            raise ValueError("L'email est requis")
+        if "@" not in email:
+            raise ValueError("Email invalide")
+    if email and "@" not in email:
+        raise ValueError("Email invalide")
+    normalized_email = _normalize_email(email) if email else None
+    username = email if email else _generate_pending_username(payload.display_name)
     hashed = security.hash_password(payload.password)
     with db.get_users_connection() as conn:
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(users)").fetchall()}
         if "email_normalized" not in columns:
             raise UsersDbNotReadyError("DB users pas migrée")
-        exists = conn.execute(
-            "SELECT 1 FROM users WHERE email_normalized = ?",
-            (normalized_email,),
-        ).fetchone()
-        if exists:
-            raise ValueError("Cet email existe déjà")
+        if normalized_email:
+            exists = conn.execute(
+                "SELECT 1 FROM users WHERE email_normalized = ?",
+                (normalized_email,),
+            ).fetchone()
+            if exists:
+                raise ValueError("Cet email existe déjà")
         cur = conn.execute(
             """
             INSERT INTO users (
@@ -4579,13 +4598,22 @@ def register_user(payload: models.RegisterRequest) -> models.User:
                 role,
                 is_active,
                 status,
+                otp_email_enabled,
                 site_key,
                 display_name,
                 created_at
             )
-            VALUES (?, ?, ?, ?, 'user', 0, 'pending', ?, ?, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, 'user', 0, 'pending', ?, ?, ?, CURRENT_TIMESTAMP)
             """,
-            (email, email, normalized_email, hashed, db.DEFAULT_SITE_KEY, payload.display_name),
+            (
+                username,
+                email or None,
+                normalized_email,
+                hashed,
+                1 if otp_email_enabled else 0,
+                db.DEFAULT_SITE_KEY,
+                payload.display_name,
+            ),
         )
         conn.commit()
         user_id = cur.lastrowid
