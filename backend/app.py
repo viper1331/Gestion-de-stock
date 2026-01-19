@@ -47,7 +47,11 @@ from backend.core.logging_config import (
     purge_rotated_logs,
 )
 from backend.core.env_loader import load_env
-from backend.core.services import _ensure_vehicle_pharmacy_templates, ensure_database_ready
+from backend.core.services import (
+    _ensure_vehicle_pharmacy_templates,
+    ensure_database_ready,
+    ensure_password_reset_configured,
+)
 from backend.core import two_factor_crypto
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
@@ -69,6 +73,7 @@ async def _lifespan(app: FastAPI):
         purge_rotated_logs(LOG_DIR, LOG_BACKUP_COUNT, logger)
         ensure_database_ready()
         two_factor_crypto.ensure_configured()
+        ensure_password_reset_configured()
         _ensure_vehicle_pharmacy_templates()
         notifications.ensure_email_delivery_ready()
         notifications.purge_email_tables()

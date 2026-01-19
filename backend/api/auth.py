@@ -34,11 +34,14 @@ def get_current_user(token: str = Depends(oauth2_scheme)) -> models.User:
     user = services.get_user(username)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Utilisateur introuvable")
+    session_version = payload.get("session_version")
+    if session_version is None or int(session_version) != int(user.session_version):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Jeton invalide")
     return user
 
 
 def _build_token_for_user(user: models.User) -> models.Token:
-    token_data = {"role": user.role}
+    token_data = {"role": user.role, "session_version": user.session_version}
     access_token = security.create_access_token(user.username, token_data)
     refresh_token = security.create_refresh_token(user.username, token_data)
     return models.Token(access_token=access_token, refresh_token=refresh_token)
@@ -179,6 +182,45 @@ async def register(payload: models.RegisterRequest) -> models.RegisterResponse:
     return models.RegisterResponse(message="Demande envoyée, en attente de validation.")
 
 
+@router.post(
+    "/password-reset/request",
+    response_model=models.PasswordResetRequestResponse,
+)
+async def password_reset_request(
+    payload: models.PasswordResetRequest,
+    request: Request,
+) -> models.PasswordResetRequestResponse:
+    request_ip = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    try:
+        dev_token = services.request_password_reset(payload.email, request_ip, user_agent)
+    except services.PasswordResetRateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de demandes, veuillez réessayer plus tard.",
+        ) from exc
+    return models.PasswordResetRequestResponse(ok=True, dev_reset_token=dev_token)
+
+
+@router.post(
+    "/password-reset/confirm",
+    response_model=models.PasswordResetConfirmResponse,
+)
+async def password_reset_confirm(
+    payload: models.PasswordResetConfirmRequest,
+    request: Request,
+) -> models.PasswordResetConfirmResponse:
+    request_ip = request.client.host if request.client else None
+    try:
+        services.confirm_password_reset(payload.token, payload.new_password, request_ip)
+    except ValueError as exc:
+        detail = str(exc)
+        if detail == "Token invalide ou expiré":
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail) from exc
+    return models.PasswordResetConfirmResponse(ok=True)
+
+
 @router.post("/refresh", response_model=models.Token)
 async def refresh(request: models.RefreshRequest) -> models.Token:
     try:
@@ -193,6 +235,9 @@ async def refresh(request: models.RefreshRequest) -> models.Token:
     user = services.get_user(username)
     if not user:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Utilisateur introuvable")
+    session_version = payload.get("session_version")
+    if session_version is None or int(session_version) != int(user.session_version):
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Jeton invalide")
     return _build_token_for_user(user)
 
 
