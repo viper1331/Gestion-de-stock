@@ -82,7 +82,9 @@ def test_enroll_confirm_enables_2fa() -> None:
         json={"username": username, "password": "password123", "remember_me": False},
     )
     assert status.status_code == 200
-    assert status.json().get("status") == "totp_required"
+    payload = status.json()
+    assert payload.get("status") == "2fa_required"
+    assert payload.get("method") == "totp"
 
 
 def test_two_factor_verification_and_rate_limit() -> None:
@@ -90,7 +92,7 @@ def test_two_factor_verification_and_rate_limit() -> None:
     _create_user(username, "password123")
     secret = _enroll_2fa(username, "password123")
     login = _login(username, "password123")
-    challenge_id = login["challenge_token"]
+    challenge_id = login["challenge_id"]
     for _ in range(5):
         response = client.post(
             "/auth/totp/verify",
@@ -105,7 +107,7 @@ def test_two_factor_verification_and_rate_limit() -> None:
     two_factor.clear_rate_limit(username, "testclient")
 
     login = _login(username, "password123")
-    challenge_id = login["challenge_token"]
+    challenge_id = login["challenge_id"]
     code = pyotp.TOTP(secret).now()
     valid = client.post(
         "/auth/totp/verify",
@@ -121,7 +123,7 @@ def test_challenge_expiration_blocks_verification(monkeypatch) -> None:
     secret = _enroll_2fa(username, "password123")
     monkeypatch.setenv("TWO_FACTOR_CHALLENGE_TTL_SECONDS", "1")
     login = _login(username, "password123")
-    challenge_id = login["challenge_token"]
+    challenge_id = login["challenge_id"]
     time.sleep(1.2)
     code = pyotp.TOTP(secret).now()
     response = client.post(

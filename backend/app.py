@@ -55,6 +55,7 @@ from backend.core.services import (
 from backend.core import two_factor_crypto
 from backend.core.storage import MEDIA_ROOT
 from backend.services.backup_scheduler import backup_scheduler
+from backend.services import notifications
 from backend.services.pdf.vehicle_inventory.playwright_support import (
     PLAYWRIGHT_OK,
     maybe_install_chromium_on_startup,
@@ -67,13 +68,15 @@ configure_logging()
 logger = logging.getLogger(__name__)
 
 @asynccontextmanager
-async def _lifespan(_: FastAPI):
+async def _lifespan(app: FastAPI):
     try:
         purge_rotated_logs(LOG_DIR, LOG_BACKUP_COUNT, logger)
         ensure_database_ready()
         two_factor_crypto.ensure_configured()
         ensure_password_reset_configured()
         _ensure_vehicle_pharmacy_templates()
+        notifications.ensure_email_delivery_ready()
+        notifications.purge_email_tables()
     except sqlite3.IntegrityError:
         if logger:
             logger.warning("Vehicle pharmacy templates already exist; skipping seed.")
@@ -87,10 +90,12 @@ async def _lifespan(_: FastAPI):
         )
     await backup_scheduler.reload_from_db()
     await backup_scheduler.start()
+    notifications.start_outbox_worker(app)
     try:
         yield
     finally:
         await backup_scheduler.stop()
+        await notifications.shutdown_outbox_worker(app)
 
 
 app = FastAPI(title="Gestion Stock Pro API", version="2.0.0", lifespan=_lifespan)

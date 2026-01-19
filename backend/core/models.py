@@ -267,6 +267,16 @@ class TotpRequiredResponse(BaseModel):
     needs_email_upgrade: bool | None = None
 
 
+class TwoFactorRequiredResponse(BaseModel):
+    status: Literal["2fa_required"] = "2fa_required"
+    method: Literal["totp", "email_otp"]
+    challenge_id: str
+    user: LoginUserSummary
+    needs_email_upgrade: bool | None = None
+    resend_cooldown_seconds: int | None = None
+    dev_code: str | None = None
+
+
 class TotpEnrollRequiredResponse(BaseModel):
     status: Literal["totp_enroll_required"] = "totp_enroll_required"
     challenge_token: str
@@ -295,6 +305,21 @@ class TwoFactorVerifyRequest(BaseModel):
 class TotpVerifyRequest(BaseModel):
     challenge_token: str
     code: str
+
+
+class OtpEmailVerifyRequest(BaseModel):
+    challenge_id: str
+    code: str
+
+
+class OtpEmailResendRequest(BaseModel):
+    challenge_id: str
+
+
+class OtpEmailResendResponse(BaseModel):
+    status: Literal["resent"] = "resent"
+    resend_cooldown_seconds: int
+    dev_code: str | None = None
 
 
 class TotpEnrollConfirmRequest(BaseModel):

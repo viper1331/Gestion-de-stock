@@ -11,6 +11,7 @@ from fastapi.security import OAuth2PasswordBearer
 from backend.core import (
     db,
     models,
+    otp_email,
     security,
     services,
     two_factor,
@@ -97,11 +98,12 @@ def _allow_secret_plaintext() -> bool:
 
 @router.post(
     "/login",
-    response_model=models.TotpRequiredResponse | models.TotpEnrollRequiredResponse,
+    response_model=models.TwoFactorRequiredResponse | models.TotpEnrollRequiredResponse,
 )
 async def login(
     credentials: models.LoginRequest,
-) -> models.TotpRequiredResponse | models.TotpEnrollRequiredResponse:
+    request: Request,
+) -> models.TwoFactorRequiredResponse | models.TotpEnrollRequiredResponse:
     user, needs_email_upgrade = services.authenticate_with_identifier(
         credentials.identifier,
         credentials.password,
@@ -112,8 +114,43 @@ async def login(
     two_factor_row = _get_two_factor_row(user.username)
     if bool(two_factor_row.get("two_factor_enabled")):
         challenge_token = two_factor.create_challenge(user.username, purpose="verify")
-        return models.TotpRequiredResponse(
-            challenge_token=challenge_token,
+        return models.TwoFactorRequiredResponse(
+            method="totp",
+            challenge_id=challenge_token,
+            user=_build_login_user_summary(user),
+            needs_email_upgrade=needs_email_upgrade or None,
+        )
+    if user.otp_email_enabled:
+        if not user.email or "@" not in user.email:
+            logger.error("OTP email enabled but no email configured for %s", user.username)
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service d'authentification indisponible",
+            )
+        ip_address = request.client.host if request.client else None
+        user_agent = request.headers.get("user-agent")
+        try:
+            challenge_id, dev_code, resend_cooldown = otp_email.create_email_otp_challenge(
+                user.id,
+                user.email,
+                ip_address,
+                user_agent,
+            )
+        except otp_email.EmailOtpRateLimitError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+                detail="Trop de demandes",
+            ) from exc
+        except otp_email.EmailOtpChallengeError as exc:
+            raise HTTPException(
+                status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+                detail="Service d'authentification indisponible",
+            ) from exc
+        return models.TwoFactorRequiredResponse(
+            method="email_otp",
+            challenge_id=challenge_id,
+            resend_cooldown_seconds=resend_cooldown,
+            dev_code=dev_code,
             user=_build_login_user_summary(user),
             needs_email_upgrade=needs_email_upgrade or None,
         )
@@ -379,6 +416,66 @@ async def totp_verify(
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Utilisateur introuvable")
     logger.info("2FA success for %s", username)
     return _build_token_with_user(user)
+
+
+@router.post("/otp-email/verify", response_model=models.TokenWithUser)
+async def otp_email_verify(
+    payload: models.OtpEmailVerifyRequest,
+    request: Request,
+) -> models.TokenWithUser:
+    ip_address = request.client.host if request.client else None
+    try:
+        user_id = otp_email.verify_email_otp(payload.challenge_id, payload.code)
+    except otp_email.EmailOtpAttemptsExceeded as exc:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Code invalide",
+        ) from exc
+    except otp_email.EmailOtpChallengeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Code invalide",
+        ) from exc
+    user = services.get_user_by_id(user_id)
+    if not user:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Utilisateur introuvable")
+    _ensure_user_active(user)
+    logger.info("Email OTP success for %s (ip=%s)", user.username, ip_address or "unknown")
+    return _build_token_with_user(user)
+
+
+@router.post("/otp-email/resend", response_model=models.OtpEmailResendResponse)
+async def otp_email_resend(
+    payload: models.OtpEmailResendRequest,
+    request: Request,
+) -> models.OtpEmailResendResponse:
+    ip_address = request.client.host if request.client else None
+    user_agent = request.headers.get("user-agent")
+    try:
+        dev_code, resend_cooldown = otp_email.resend_email_otp_challenge(
+            payload.challenge_id,
+            ip_address,
+            user_agent,
+        )
+    except otp_email.EmailOtpCooldownError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Veuillez patienter avant de renvoyer un code",
+        ) from exc
+    except otp_email.EmailOtpRateLimitError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="Trop de demandes",
+        ) from exc
+    except otp_email.EmailOtpChallengeError as exc:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Challenge invalide",
+        ) from exc
+    return models.OtpEmailResendResponse(
+        resend_cooldown_seconds=resend_cooldown,
+        dev_code=dev_code,
+    )
 
 
 @router.post("/totp/enroll/confirm", response_model=models.TokenWithUser)
