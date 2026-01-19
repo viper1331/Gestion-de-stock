@@ -105,6 +105,64 @@ def test_register_creates_pending_and_blocks_login() -> None:
     assert login.json()["detail"] == "Compte en attente de validation administrateur."
 
 
+def test_register_email_otp_requires_email() -> None:
+    services.ensure_database_ready()
+    response = client.post(
+        "/auth/register",
+        json={"otp_method": "email", "password": "Password123!"},
+    )
+    assert response.status_code == 400, response.text
+    assert response.json()["detail"] == "L'email est requis"
+
+
+def test_register_email_otp_sets_flag() -> None:
+    services.ensure_database_ready()
+    email = "otp.email.user@example.com"
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM users WHERE email_normalized = ?", (email.lower(),))
+        conn.commit()
+
+    response = client.post(
+        "/auth/register",
+        json={"otp_method": "email", "email": email, "password": "Password123!"},
+    )
+    assert response.status_code == 201, response.text
+
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            "SELECT otp_email_enabled FROM users WHERE email_normalized = ?",
+            (email.lower(),),
+        ).fetchone()
+    assert row is not None
+    assert row["otp_email_enabled"] == 1
+
+
+def test_register_totp_defaults_to_totp_flag() -> None:
+    services.ensure_database_ready()
+    display_name = "Totp Pending User"
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM users WHERE display_name = ?", (display_name,))
+        conn.commit()
+
+    response = client.post(
+        "/auth/register",
+        json={
+            "otp_method": "totp",
+            "password": "Password123!",
+            "display_name": display_name,
+        },
+    )
+    assert response.status_code == 201, response.text
+
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            "SELECT otp_email_enabled FROM users WHERE display_name = ?",
+            (display_name,),
+        ).fetchone()
+    assert row is not None
+    assert row["otp_email_enabled"] == 0
+
+
 def test_approve_allows_login() -> None:
     services.ensure_database_ready()
     email = "approved.user@example.com"

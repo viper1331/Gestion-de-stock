@@ -217,9 +217,19 @@ class LoginRequest(BaseModel):
 
 
 class RegisterRequest(BaseModel):
-    email: str
+    otp_method: Literal["totp", "email"] = "totp"
+    otp_email_enabled: bool | None = None
+    email: str | None = None
     password: str
     display_name: str | None = None
+
+    @model_validator(mode="after")
+    def _normalize_otp_method(self) -> "RegisterRequest":
+        if self.otp_email_enabled is not None:
+            self.otp_method = "email" if self.otp_email_enabled else "totp"
+        if self.otp_email_enabled is None:
+            self.otp_email_enabled = self.otp_method == "email"
+        return self
 
 
 class RegisterResponse(BaseModel):
