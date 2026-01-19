@@ -48,48 +48,45 @@ def _extract_pdf_stream_text(pdf_bytes: bytes) -> bytes:
     return b"".join(chunks)
 
 
-def test_purchase_order_pdf_includes_group_headers() -> None:
-    export_config = pdf_config._build_default_export_config()
-    export_config.modules["purchase_orders"] = PdfModuleConfig(
-        override_global=True,
-        config=PdfConfigOverrides(
-            grouping=PdfGroupingConfig(enabled=True, keys=["article"]),
-        ),
+def test_purchase_order_pdf_includes_expected_headers() -> None:
+    order = models.PurchaseOrderDetail(
+        id=42,
+        supplier_id=None,
+        status="PENDING",
+        created_at=datetime.now(),
+        note=None,
+        auto_created=False,
+        supplier_name="Test Supplier",
+        items=[
+            models.PurchaseOrderItem(
+                id=1,
+                purchase_order_id=42,
+                item_id=10,
+                quantity_ordered=4,
+                quantity_received=2,
+                item_name="Gants",
+                sku="SKU-001",
+                unit="Boîte",
+            ),
+            models.PurchaseOrderItem(
+                id=2,
+                purchase_order_id=42,
+                item_id=11,
+                quantity_ordered=3,
+                quantity_received=1,
+                item_name="Masques",
+                sku="SKU-002",
+                unit="Unité",
+            ),
+        ],
     )
-    original = _with_pdf_exports(export_config)
-    try:
-        order = models.PurchaseOrderDetail(
-            id=42,
-            supplier_id=None,
-            status="PENDING",
-            created_at=datetime.now(),
-            note=None,
-            auto_created=False,
-            supplier_name="Test Supplier",
-            items=[
-                models.PurchaseOrderItem(
-                    id=1,
-                    purchase_order_id=42,
-                    item_id=10,
-                    quantity_ordered=4,
-                    quantity_received=2,
-                    item_name="Gants",
-                ),
-                models.PurchaseOrderItem(
-                    id=2,
-                    purchase_order_id=42,
-                    item_id=11,
-                    quantity_ordered=3,
-                    quantity_received=1,
-                    item_name="Gants",
-                ),
-            ],
-        )
-        pdf_bytes = services.generate_purchase_order_pdf(order)
-    finally:
-        get_config().pdf_exports = original
+    pdf_bytes = services.generate_purchase_order_pdf(order)
     content = _extract_pdf_stream_text(pdf_bytes)
-    assert b"Article :" in content
+    assert b"SKU" in content
+    assert b"D\\351signation" in content or b"D\xc3\xa9signation" in content
+    assert b"Quantit\\351" in content or b"Quantit\xc3\xa9" in content
+    assert b"Unit\\351" in content or b"Unit\xc3\xa9" in content
+    assert b"R\\351ceptionn\\351" not in content and b"R\xc3\xa9ceptionn\xc3\xa9" not in content
 
 
 def test_remise_inventory_pdf_includes_group_headers() -> None:

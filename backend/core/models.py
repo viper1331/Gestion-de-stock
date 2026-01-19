@@ -970,6 +970,8 @@ class PurchaseOrderItem(BaseModel):
     quantity_ordered: int
     quantity_received: int
     item_name: str | None = None
+    sku: str | None = None
+    unit: str | None = None
 
 
 class PurchaseOrderItemInput(BaseModel):
@@ -1071,6 +1073,8 @@ class RemisePurchaseOrderItem(BaseModel):
     quantity_ordered: int
     quantity_received: int
     item_name: str | None = None
+    sku: str | None = None
+    unit: str | None = None
 
 
 class RemisePurchaseOrderItemInput(BaseModel):
@@ -1344,6 +1348,8 @@ class PharmacyPurchaseOrderItem(BaseModel):
     quantity_ordered: int
     quantity_received: int
     pharmacy_item_name: str | None = None
+    sku: str | None = None
+    unit: str | None = None
 
 
 class PharmacyPurchaseOrderItemInput(BaseModel):
