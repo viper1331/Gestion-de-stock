@@ -33,7 +33,7 @@ from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
 from backend.core import db, menu_registry, models, security, sites, system_config
-from backend.core.pdf_config_models import PdfColumnConfig, PdfConfig
+from backend.services.purchase_order_pdf import render_purchase_order_pdf
 from backend.core.storage import (
     MEDIA_ROOT,
     PHARMACY_LOT_MEDIA_DIR,
@@ -449,14 +449,6 @@ _PURCHASE_ORDER_STATUSES: set[str] = {
     "PARTIALLY_RECEIVED",
     "RECEIVED",
     "CANCELLED",
-}
-
-_PURCHASE_ORDER_STATUS_LABELS: dict[str, str] = {
-    "PENDING": "En attente",
-    "ORDERED": "Commandé",
-    "PARTIALLY_RECEIVED": "Partiellement reçu",
-    "RECEIVED": "Reçu",
-    "CANCELLED": "Annulé",
 }
 
 
@@ -7555,7 +7547,9 @@ def _build_purchase_order_detail(
                poi.item_id,
                poi.quantity_ordered,
                poi.quantity_received,
-               i.name AS item_name
+               i.name AS item_name,
+               i.sku AS sku,
+               COALESCE(NULLIF(TRIM(i.size), ''), 'Unité') AS unit
         FROM purchase_order_items AS poi
         JOIN items AS i ON i.id = poi.item_id
         WHERE poi.purchase_order_id = ?
@@ -7571,6 +7565,8 @@ def _build_purchase_order_detail(
             quantity_ordered=item_row["quantity_ordered"],
             quantity_received=item_row["quantity_received"],
             item_name=item_row["item_name"],
+            sku=item_row["sku"],
+            unit=item_row["unit"],
         )
         for item_row in items_cur.fetchall()
     ]
@@ -7700,370 +7696,36 @@ def update_purchase_order(order_id: int, payload: models.PurchaseOrderUpdate) ->
     return get_purchase_order(order_id)
 
 
-def _render_purchase_order_pdf(
-    *,
-    title: str,
-    meta_lines: list[str],
-    note_lines: list[str],
-    items: list[tuple[str, int, int]],
-    module_key: str,
-) -> bytes:
-    resolved = resolve_pdf_config(module_key)
-    pdf_config = resolved.config
-    buffer = io.BytesIO()
-    page_size = page_size_for_format(pdf_config.format)
-    pdf = canvas.Canvas(buffer, pagesize=page_size)
-    width, height = page_size
-    margin_top, margin_right, margin_bottom, margin_left = margins_for_format(pdf_config.format)
-    scale = effective_density_scale(pdf_config.format)
-    theme = scale_reportlab_theme(resolve_reportlab_theme(pdf_config.theme), scale)
-
-    def start_page(suffix: str = "") -> float:
-        apply_theme_reportlab(pdf, page_size, pdf_config.theme, scale=scale)
-        draw_watermark(pdf, pdf_config, page_size, scale=scale)
-        if not pdf_config.header.enabled:
-            return height - margin_top
-        pdf.setFillColor(theme.text_color)
-        pdf.setFont(theme.font_family, theme.heading_font_size + (2 * scale))
-        pdf.drawString(margin_left, height - margin_top, f"{title}{suffix}")
-        pdf.setFillColor(theme.muted_text_color)
-        pdf.setFont(theme.font_family, theme.base_font_size)
-        y_position = height - margin_top - (18 * scale)
-        for meta in meta_lines:
-            pdf.drawString(margin_left, y_position, meta)
-            y_position -= 12 * scale
-        pdf.setFillColor(theme.text_color)
-        return y_position - (6 * scale)
-
-    def draw_table_header(y_position: float) -> float:
-        header_height = 18 * scale
-        columns = [col for col in pdf_config.content.columns if col.visible] or [
-            PdfColumnConfig(key="article", label="Article", visible=True),
-            PdfColumnConfig(key="ordered", label="Commandé", visible=True),
-            PdfColumnConfig(key="received", label="Réceptionné", visible=True),
-        ]
-        table_width = width - margin_left - margin_right
-        column_widths = _resolve_purchase_order_column_widths(columns, table_width)
-        pdf.setFillColor(theme.table_header_bg)
-        pdf.rect(
-            margin_left,
-            y_position - header_height + (6 * scale),
-            table_width,
-            header_height,
-            stroke=0,
-            fill=1,
-        )
-        pdf.setFillColor(theme.table_header_text)
-        pdf.setFont(theme.font_family, theme.base_font_size)
-        x = margin_left
-        for column in columns:
-            label = column.label
-            if column.key in {"ordered", "received"}:
-                pdf.drawRightString(x + column_widths[column.key], y_position, label)
-            else:
-                pdf.drawString(x, y_position, label)
-            x += column_widths[column.key]
-        pdf.setStrokeColor(theme.border_color)
-        pdf.rect(
-            margin_left,
-            y_position - header_height + (6 * scale),
-            table_width,
-            header_height,
-            stroke=1,
-            fill=0,
-        )
-        pdf.setFillColor(theme.text_color)
-        return y_position - (12 * scale)
-
-    def draw_table_title(y_position: float, *, suffix: str = "") -> float:
-        pdf.setFont(theme.font_family, theme.base_font_size + (2 * scale))
-        pdf.drawString(margin_left, y_position, f"Lignes de commande{suffix}")
-        y_position -= 16 * scale
-        return draw_table_header(y_position)
-
-    page_number = 1
-
-    def ensure_space(
-        y_position: float,
-        needed: float,
-        *,
-        on_new_page: Optional[Callable[[float], float]] = None,
-        suffix: str = " (suite)",
-    ) -> float:
-        nonlocal page_number
-        if y_position <= margin_bottom + needed:
-            _draw_purchase_order_footer(
-                pdf,
-                pdf_config=pdf_config,
-                page_width=width,
-                margin_right=margin_right,
-                margin_bottom=margin_bottom,
-                page_number=page_number,
-            )
-            pdf.showPage()
-            page_number += 1
-            y_new = start_page(suffix)
-            if on_new_page is not None:
-                y_new = on_new_page(y_new)
-            return y_new
-        return y_position
-
-    y = start_page()
-
-    def draw_note_heading(y_position: float) -> float:
-        pdf.setFont(theme.font_family, theme.base_font_size + (1 * scale))
-        pdf.drawString(margin_left, y_position, "Note")
-        y_position -= 12 * scale
-        pdf.setFont(theme.font_family, theme.base_font_size)
-        return y_position
-
-    if note_lines:
-        y = ensure_space(y, 24 * scale)
-        y = draw_note_heading(y)
-        for line in note_lines:
-            y = ensure_space(y, 18 * scale, on_new_page=draw_note_heading)
-            pdf.drawString(margin_left, y, line)
-            y -= 12 * scale
-        y -= 6 * scale
-
-    table_new_page = lambda pos: draw_table_title(pos, suffix=" (suite)")
-
-    y = ensure_space(y, 60 * scale)
-    y = draw_table_title(y)
-    if not items:
-        y = ensure_space(y, 24 * scale, on_new_page=table_new_page)
-        pdf.drawString(margin_left, y, "Aucune ligne de commande enregistrée.")
-        y -= 12 * scale
-    else:
-        all_columns = pdf_config.content.columns or [
-            PdfColumnConfig(key="article", label="Article", visible=True),
-            PdfColumnConfig(key="ordered", label="Commandé", visible=True),
-            PdfColumnConfig(key="received", label="Réceptionné", visible=True),
-        ]
-        columns = [col for col in all_columns if col.visible] or all_columns[:1]
-        label_map = {col.key: col.label for col in all_columns}
-        table_width = width - margin_left - margin_right
-        column_widths = _resolve_purchase_order_column_widths(columns, table_width)
-        row_index = 0
-        grouping = pdf_config.grouping
-        grouping_keys = [key for key in grouping.keys if key]
-        if grouping.enabled and not grouping_keys and pdf_config.content.group_by:
-            grouping_keys = [pdf_config.content.group_by]
-
-        def render_group_header(group: GroupNode, *, level: int) -> None:
-            nonlocal y
-            if grouping.header_style == "none":
-                return
-            stats = compute_group_stats(group, value_fn=lambda row, key: row["raw"].get(key))
-            count = stats.row_count if grouping.counts_scope == "leaf" else (
-                stats.child_count if group.children else stats.row_count
-            )
-            label = label_map.get(group.key, group.key)
-            value = group.value if group.value not in (None, "") else "—"
-            header_text = f"{label} : {value}"
-            if grouping.show_counts:
-                header_text = f"{header_text} ({count})"
-            header_height = 16
-            y = ensure_space(y, header_height + 6, on_new_page=table_new_page)
-            if grouping.header_style == "bar":
-                pdf.setFillColor(theme.table_header_bg)
-                pdf.rect(margin_left, y - header_height + 6, table_width, header_height, stroke=0, fill=1)
-                pdf.setFillColor(theme.table_header_text)
-            else:
-                pdf.setFillColor(theme.text_color)
-            pdf.setFont(theme.font_family, theme.base_font_size)
-            pdf.drawString(margin_left + 4, y, header_text)
-            pdf.setFillColor(theme.text_color)
-            y -= header_height - 2
-
-        def render_subtotal(group: GroupNode) -> None:
-            nonlocal y
-            if not grouping.show_subtotals:
-                return
-            if grouping.subtotal_scope == "leaf" and group.children:
-                return
-            subtotal_columns = set(grouping.subtotal_columns)
-            if not subtotal_columns:
-                return
-            stats = compute_group_stats(
-                group,
-                subtotal_columns=subtotal_columns,
-                value_fn=lambda row, key: row["raw"].get(key),
-            )
-            y = ensure_space(y, 24, on_new_page=table_new_page)
-            label = "Sous-total"
-            pdf.setFont(theme.font_family, theme.base_font_size)
-            _render_purchase_order_row(
-                pdf,
-                columns=columns,
-                column_widths=column_widths,
-                x_start=margin_left,
-                y=y,
-                line=label,
-                ordered=int(stats.subtotals.get("ordered", 0)),
-                received=int(stats.subtotals.get("received", 0)),
-                is_first_line=True,
-            )
-            pdf.setStrokeColor(theme.border_color)
-            pdf.line(margin_left, y - 2, margin_left + table_width, y - 2)
-            y -= 12
-
-        def render_row(row: dict[str, dict[str, object]]) -> None:
-            nonlocal y, row_index
-            name = str(row["raw"].get("article", "-") or "-")
-            ordered = int(row["raw"].get("ordered", 0) or 0)
-            received = int(row["raw"].get("received", 0) or 0)
-            name_lines = wrap(name, 80) or ["-"]
-            for index, line in enumerate(name_lines):
-                y = ensure_space(y, 24 * scale, on_new_page=table_new_page)
-                if row_index % 2 == 1:
-                    pdf.setFillColor(theme.table_row_alt_bg)
-                    pdf.rect(
-                        margin_left,
-                        y - (10 * scale),
-                        table_width,
-                        14 * scale,
-                        stroke=0,
-                        fill=1,
-                    )
-                    pdf.setFillColor(theme.text_color)
-                _render_purchase_order_row(
-                    pdf,
-                    columns=columns,
-                    column_widths=column_widths,
-                    x_start=margin_left,
-                    y=y,
-                    line=line,
-                    ordered=ordered,
-                    received=received,
-                    is_first_line=index == 0,
-                )
-                pdf.setStrokeColor(theme.border_color)
-                pdf.line(margin_left, y - (2 * scale), margin_left + table_width, y - (2 * scale))
-                row_index += 1
-                y -= 12 * scale
-            y -= 4 * scale
-
-        row_payloads = [
-            {"raw": {"article": name, "ordered": ordered, "received": received}}
-            for name, ordered, received in items
-        ]
-
-        if grouping.enabled and grouping_keys:
-            group_tree = build_group_tree(
-                row_payloads,
-                grouping_keys,
-                key_fn=lambda row, key: row["raw"].get(key),
-            )
-
-            def render_group(group: GroupNode, *, level: int, is_first_level: bool) -> None:
-                nonlocal y, page_number
-                if grouping.page_break_between_level1 and level == 0 and not is_first_level:
-                    _draw_purchase_order_footer(
-                        pdf,
-                        pdf_config=pdf_config,
-                        page_width=width,
-                        margin_right=margin_right,
-                        margin_bottom=margin_bottom,
-                        page_number=page_number,
-                    )
-                    pdf.showPage()
-                    page_number += 1
-                    y = start_page()
-                    y = draw_table_title(y)
-                render_group_header(group, level=level)
-                if group.children:
-                    for index, child in enumerate(group.children):
-                        render_group(child, level=level + 1, is_first_level=index == 0)
-                else:
-                    for row in group.rows:
-                        render_row(row)
-                render_subtotal(group)
-
-            for index, group in enumerate(group_tree):
-                render_group(group, level=0, is_first_level=index == 0)
-        else:
-            for row in row_payloads:
-                render_row(row)
-
-    _draw_purchase_order_footer(
-        pdf,
-        pdf_config=pdf_config,
-        page_width=width,
-        margin_right=margin_right,
-        margin_bottom=margin_bottom,
-        page_number=page_number,
-    )
-    pdf.save()
-    buffer.seek(0)
-    return buffer.getvalue()
-
-
-def _resolve_purchase_order_column_widths(
-    columns: list[PdfColumnConfig],
-    table_width: float,
-) -> dict[str, float]:
-    widths: dict[str, float] = {}
-    has_article = any(column.key == "article" for column in columns)
-    numeric_columns = [column for column in columns if column.key in {"ordered", "received"}]
-    numeric_width = 70 if numeric_columns else 0
-    remaining_width = table_width - (numeric_width * len(numeric_columns))
-    for column in columns:
-        if column.key in {"ordered", "received"}:
-            widths[column.key] = numeric_width
-        else:
-            widths[column.key] = remaining_width if has_article else table_width / len(columns)
-    return widths
-
-
-def _render_purchase_order_row(
-    pdf: canvas.Canvas,
-    *,
-    columns: list[PdfColumnConfig],
-    column_widths: dict[str, float],
-    x_start: float,
-    y: float,
-    line: str,
-    ordered: int,
-    received: int,
-    is_first_line: bool,
-) -> None:
-    x = x_start
-    for column in columns:
-        if column.key == "article":
-            pdf.drawString(x, y, line)
-        elif column.key == "ordered" and is_first_line:
-            pdf.drawRightString(x + column_widths[column.key], y, str(ordered))
-        elif column.key == "received" and is_first_line:
-            pdf.drawRightString(x + column_widths[column.key], y, str(received))
-        x += column_widths[column.key]
-
-
-def _draw_purchase_order_footer(
-    pdf: canvas.Canvas,
-    *,
-    pdf_config: PdfConfig,
-    page_width: float,
-    margin_right: float,
-    margin_bottom: float,
-    page_number: int,
-) -> None:
-    if not pdf_config.footer.enabled:
-        return
-    footer_bits: list[str] = []
-    if pdf_config.footer.text:
-        footer_bits.append(pdf_config.footer.text)
-    if pdf_config.footer.show_printed_at:
-        footer_bits.append(datetime.now().strftime("Édité le %d/%m/%Y %H:%M"))
-    if pdf_config.footer.show_pagination:
-        footer_bits.append(f"Page {page_number}")
-    footer_text = " — ".join(footer_bits)
-    theme = resolve_reportlab_theme(pdf_config.theme)
-    scale = effective_density_scale(pdf_config.format)
-    theme = scale_reportlab_theme(theme, scale)
-    pdf.setFillColor(theme.muted_text_color)
-    pdf.setFont(theme.font_family, theme.base_font_size - (1 * scale))
-    pdf.drawRightString(page_width - margin_right, margin_bottom - (4 * scale), footer_text)
+def _build_purchase_order_blocks(
+    order: models.PurchaseOrderDetail
+    | models.RemisePurchaseOrderDetail
+    | models.PharmacyPurchaseOrderDetail,
+) -> tuple[dict[str, str | None], dict[str, str | None], dict[str, str | None]]:
+    supplier = None
+    if order.supplier_id is not None:
+        try:
+            supplier = get_supplier(order.supplier_id)
+        except ValueError:
+            supplier = None
+    supplier_name = order.supplier_name or (supplier.name if supplier else None)
+    buyer_block = {
+        "Nom": None,
+        "Téléphone": None,
+        "Email": None,
+    }
+    supplier_block = {
+        "Nom": supplier_name,
+        "Contact": supplier.contact_name if supplier else None,
+        "Téléphone": supplier.phone if supplier else None,
+        "Email": supplier.email if supplier else None,
+        "Adresse": supplier.address if supplier else None,
+    }
+    delivery_block: dict[str, str | None] = {
+        "Adresse": None,
+        "Date souhaitée": None,
+        "Contact": None,
+    }
+    return buyer_block, supplier_block, delivery_block
 
 
 def _format_date_label(value: date | None) -> str:
@@ -8416,32 +8078,26 @@ def _render_remise_inventory_pdf(
 
 
 def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
-    status_label = _PURCHASE_ORDER_STATUS_LABELS.get(order.status, order.status)
-    created_at = order.created_at.strftime("%d/%m/%Y %H:%M")
-    supplier = order.supplier_name or "Aucun"
-    meta_lines = [
-        f"Bon de commande n° {order.id}",
-        f"Créé le : {created_at}",
-        f"Fournisseur : {supplier}",
-        f"Statut : {status_label}",
-    ]
-    if order.auto_created:
-        meta_lines.append("Création automatique : Oui")
-    note_lines = wrap(order.note or "", 90) if order.note else []
-    item_rows = [
-        (
-            line.item_name or f"Article #{line.item_id}",
-            line.quantity_ordered,
-            line.quantity_received,
-        )
-        for line in order.items
-    ]
-    return _render_purchase_order_pdf(
-        title="Bon de commande inventaire",
-        meta_lines=meta_lines,
-        note_lines=note_lines,
-        items=item_rows,
-        module_key="purchase_orders",
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+    return render_purchase_order_pdf(
+        title="BON DE COMMANDE",
+        purchase_order=order,
+        buyer_block=buyer_block,
+        supplier_block=supplier_block,
+        delivery_block=delivery_block,
+        include_received=False,
+    )
+
+
+def generate_purchase_order_reception_pdf(order: models.PurchaseOrderDetail) -> bytes:
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+    return render_purchase_order_pdf(
+        title="BON DE COMMANDE",
+        purchase_order=order,
+        buyer_block=buyer_block,
+        supplier_block=supplier_block,
+        delivery_block=delivery_block,
+        include_received=True,
     )
 
 
@@ -8662,62 +8318,28 @@ def list_purchase_order_email_logs(
 
 
 def generate_remise_purchase_order_pdf(order: models.RemisePurchaseOrderDetail) -> bytes:
-    status_label = _PURCHASE_ORDER_STATUS_LABELS.get(order.status, order.status)
-    created_at = order.created_at.strftime("%d/%m/%Y %H:%M")
-    supplier = order.supplier_name or "Aucun"
-    meta_lines = [
-        f"Bon de commande remises n° {order.id}",
-        f"Créé le : {created_at}",
-        f"Fournisseur : {supplier}",
-        f"Statut : {status_label}",
-    ]
-    if order.auto_created:
-        meta_lines.append("Création automatique : Oui")
-    note_lines = wrap(order.note or "", 90) if order.note else []
-    item_rows = [
-        (
-            line.item_name or f"Article #{line.remise_item_id}",
-            line.quantity_ordered,
-            line.quantity_received,
-        )
-        for line in order.items
-    ]
-    return _render_purchase_order_pdf(
-        title="Bon de commande inventaire remises",
-        meta_lines=meta_lines,
-        note_lines=note_lines,
-        items=item_rows,
-        module_key="remise_orders",
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+    return render_purchase_order_pdf(
+        title="BON DE COMMANDE",
+        purchase_order=order,
+        buyer_block=buyer_block,
+        supplier_block=supplier_block,
+        delivery_block=delivery_block,
+        include_received=False,
     )
 
 
 def generate_pharmacy_purchase_order_pdf(
     order: models.PharmacyPurchaseOrderDetail,
 ) -> bytes:
-    status_label = _PURCHASE_ORDER_STATUS_LABELS.get(order.status, order.status)
-    created_at = order.created_at.strftime("%d/%m/%Y %H:%M")
-    supplier = order.supplier_name or "Aucun"
-    meta_lines = [
-        f"Bon de commande pharmacie n° {order.id}",
-        f"Créé le : {created_at}",
-        f"Fournisseur : {supplier}",
-        f"Statut : {status_label}",
-    ]
-    note_lines = wrap(order.note or "", 90) if order.note else []
-    item_rows = [
-        (
-            line.pharmacy_item_name or f"Article #{line.pharmacy_item_id}",
-            line.quantity_ordered,
-            line.quantity_received,
-        )
-        for line in order.items
-    ]
-    return _render_purchase_order_pdf(
-        title="Bon de commande pharmacie",
-        meta_lines=meta_lines,
-        note_lines=note_lines,
-        items=item_rows,
-        module_key="pharmacy_orders",
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+    return render_purchase_order_pdf(
+        title="BON DE COMMANDE",
+        purchase_order=order,
+        buyer_block=buyer_block,
+        supplier_block=supplier_block,
+        delivery_block=delivery_block,
+        include_received=False,
     )
 
 
@@ -8872,7 +8494,9 @@ def _build_remise_purchase_order_detail(
                rpoi.remise_item_id,
                rpoi.quantity_ordered,
                rpoi.quantity_received,
-               ri.name AS item_name
+               ri.name AS item_name,
+               ri.sku AS sku,
+               COALESCE(NULLIF(TRIM(ri.size), ''), 'Unité') AS unit
         FROM remise_purchase_order_items AS rpoi
         JOIN remise_items AS ri ON ri.id = rpoi.remise_item_id
         WHERE rpoi.purchase_order_id = ?
@@ -8888,6 +8512,8 @@ def _build_remise_purchase_order_detail(
             quantity_ordered=item_row["quantity_ordered"],
             quantity_received=item_row["quantity_received"],
             item_name=item_row["item_name"],
+            sku=item_row["sku"],
+            unit=item_row["unit"],
         )
         for item_row in items_cur.fetchall()
     ]
@@ -10292,7 +9918,9 @@ def _build_pharmacy_purchase_order_detail(
                poi.pharmacy_item_id,
                poi.quantity_ordered,
                poi.quantity_received,
-               pi.name AS pharmacy_item_name
+               pi.name AS pharmacy_item_name,
+               NULLIF(TRIM(pi.barcode), '') AS sku,
+               COALESCE(NULLIF(TRIM(pi.packaging), ''), 'Unité') AS unit
         FROM pharmacy_purchase_order_items AS poi
         JOIN pharmacy_items AS pi ON pi.id = poi.pharmacy_item_id
         WHERE poi.purchase_order_id = ?
@@ -10308,6 +9936,8 @@ def _build_pharmacy_purchase_order_detail(
             quantity_ordered=item_row["quantity_ordered"],
             quantity_received=item_row["quantity_received"],
             pharmacy_item_name=item_row["pharmacy_item_name"],
+            sku=item_row["sku"],
+            unit=item_row["unit"],
         )
         for item_row in items_cur.fetchall()
     ]
