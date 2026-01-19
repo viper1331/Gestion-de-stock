@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
+import { useAuth } from "../auth/useAuth";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 
@@ -28,6 +29,7 @@ interface PharmacyPurchaseOrderDetail {
   id: number;
   supplier_id: number | null;
   supplier_name: string | null;
+  supplier_email: string | null;
   status: string;
   created_at: string;
   note: string | null;
@@ -58,6 +60,7 @@ const ORDER_STATUSES: Array<{ value: string; label: string }> = [
 ];
 
 export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
+  const { user } = useAuth();
   const queryClient = useQueryClient();
   const [draftLines, setDraftLines] = useState<PharmacyOrderDraftLine[]>([
     { pharmacyItemId: "", quantity: 1 }
@@ -72,6 +75,8 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const [editStatus, setEditStatus] = useState<string>("ORDERED");
   const [editNote, setEditNote] = useState<string>("");
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
+  const [sendingId, setSendingId] = useState<number | null>(null);
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ["pharmacy-orders"],
@@ -154,6 +159,48 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
     },
     onError: () => setError("Impossible d'enregistrer la réception."),
     onSettled: () => window.setTimeout(() => setMessage(null), 4000)
+  });
+
+  const sendToSupplier = useMutation<void, AxiosError<ApiErrorResponse>, PharmacyPurchaseOrderDetail>({
+    mutationFn: async (order) => {
+      await api.post(`/pharmacy/orders/${order.id}/send-to-supplier`);
+    },
+    onMutate: (order) => {
+      setSendingId(order.id);
+    },
+    onSuccess: async () => {
+      setMessage("Email envoyé au fournisseur.");
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-orders"] });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible d'envoyer l'e-mail.");
+    },
+    onSettled: () => {
+      setSendingId(null);
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const deleteOrder = useMutation<void, AxiosError<ApiErrorResponse>, PharmacyPurchaseOrderDetail>({
+    mutationFn: async (order) => {
+      await api.delete(`/pharmacy/orders/${order.id}`);
+    },
+    onMutate: (order) => {
+      setDeletingId(order.id);
+    },
+    onSuccess: async () => {
+      setMessage("Bon de commande supprimé.");
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-orders"] });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible de supprimer le bon de commande.");
+    },
+    onSettled: () => {
+      setDeletingId(null);
+      window.setTimeout(() => setMessage(null), 4000);
+    }
   });
 
   const handleAddLine = () => {
@@ -247,6 +294,13 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
     } finally {
       setDownloadingId(null);
     }
+  };
+
+  const handleDeleteOrder = (order: PharmacyPurchaseOrderDetail) => {
+    if (!window.confirm(`Supprimer le bon de commande #${order.id} ?`)) {
+      return;
+    }
+    deleteOrder.mutate(order);
   };
 
   return (
@@ -367,6 +421,31 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              onClick={() => sendToSupplier.mutate(order)}
+                              disabled={sendingId === order.id || !order.supplier_email}
+                              className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                              title={
+                                order.supplier_email
+                                  ? "Envoyer le bon de commande au fournisseur"
+                                  : "Ajoutez un email fournisseur pour activer l'envoi"
+                              }
+                            >
+                              {sendingId === order.id ? "Envoi..." : "Envoyer au fournisseur"}
+                            </button>
+                          ) : null}
+                          {user?.role === "admin" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteOrder(order)}
+                              disabled={deletingId === order.id}
+                              className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deletingId === order.id ? "Suppression..." : "Supprimer"}
+                            </button>
+                          ) : null}
                         </div>
                       </td>
                     </tr>

@@ -8169,6 +8169,61 @@ def _record_purchase_order_email_log(
         conn.commit()
 
 
+def _record_purchase_order_audit_log(
+    *,
+    created_at: str,
+    site_key: str,
+    module_key: str,
+    action: str,
+    purchase_order_id: int,
+    supplier_id: int | None,
+    supplier_name: str | None,
+    supplier_email: str | None,
+    recipient_email: str | None,
+    user_id: int | None,
+    user_email: str | None,
+    status: str,
+    message: str | None,
+) -> None:
+    with db.get_core_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO purchase_order_audit_log (
+                created_at,
+                site_key,
+                module_key,
+                action,
+                purchase_order_id,
+                supplier_id,
+                supplier_name,
+                supplier_email,
+                recipient_email,
+                user_id,
+                user_email,
+                status,
+                message
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                created_at,
+                site_key,
+                module_key,
+                action,
+                purchase_order_id,
+                supplier_id,
+                supplier_name,
+                supplier_email,
+                recipient_email,
+                user_id,
+                user_email,
+                status,
+                message,
+            ),
+        )
+        conn.commit()
+
+
 def send_purchase_order_to_supplier(
     site_key: str,
     purchase_order_id: int,
@@ -8193,14 +8248,46 @@ def send_purchase_order_to_supplier(
         order = _build_purchase_order_detail(conn, row)
         supplier_email = row["supplier_email"]
         supplier_id = row["supplier_id"]
+        supplier_name = row["supplier_name"]
 
     override_email = to_email_override.strip() if to_email_override else None
     if override_email == "":
         override_email = None
+    sent_at = datetime.now(timezone.utc).isoformat()
     if override_email and "@" not in override_email:
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="purchase_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=override_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="error",
+            message="Adresse e-mail invalide.",
+        )
         raise ValueError("Adresse e-mail invalide.")
     if not override_email:
         if not supplier_email or "@" not in str(supplier_email):
+            _record_purchase_order_audit_log(
+                created_at=sent_at,
+                site_key=normalized_site_key,
+                module_key="purchase_orders",
+                action="send_to_supplier",
+                purchase_order_id=order.id,
+                supplier_id=supplier_id,
+                supplier_name=supplier_name,
+                supplier_email=supplier_email,
+                recipient_email=None,
+                user_id=sent_by_user.id,
+                user_email=sent_by_user.email,
+                status="error",
+                message="Email fournisseur manquant.",
+            )
             raise ValueError("Email fournisseur manquant.")
 
     to_email = override_email or str(supplier_email)
@@ -8217,7 +8304,6 @@ def send_purchase_order_to_supplier(
         context={"order_id": order.id, "ref": order.id},
     )
     reply_to = sent_by_user.email if sent_by_user.email and "@" in sent_by_user.email else None
-    sent_at = datetime.now(timezone.utc).isoformat()
     try:
         message_id = email_sender.send_email(
             to_email,
@@ -8241,6 +8327,21 @@ def send_purchase_order_to_supplier(
             status="sent",
             message_id=message_id,
         )
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="purchase_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="ok",
+            message=f"Email envoyé ({message_id})",
+        )
     except email_sender.EmailSendError as exc:
         _record_purchase_order_email_log(
             created_at=sent_at,
@@ -8254,6 +8355,21 @@ def send_purchase_order_to_supplier(
             user_email=sent_by_user.email,
             status="failed",
             error_message=str(exc),
+        )
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="purchase_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="error",
+            message=str(exc),
         )
         raise
 
@@ -8315,6 +8431,254 @@ def list_purchase_order_email_logs(
         )
         for row in rows
     ]
+
+
+def _delete_purchase_order_record(
+    *,
+    site_key: str,
+    purchase_order_id: int,
+    module_key: str,
+    order_table: str,
+    items_table: str,
+    not_found_message: str,
+    requested_by: models.User,
+) -> None:
+    ensure_database_ready()
+    normalized_site_key = sites.normalize_site_key(site_key) or db.DEFAULT_SITE_KEY
+    with db.get_stock_connection(normalized_site_key) as conn:
+        row = conn.execute(
+            f"""
+            SELECT po.id,
+                   po.status,
+                   po.supplier_id,
+                   s.name AS supplier_name,
+                   s.email AS supplier_email
+            FROM {order_table} AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            WHERE po.id = ?
+            """,
+            (purchase_order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError(not_found_message)
+        status = str(row["status"] or "").strip().upper()
+        if status == "RECEIVED":
+            sent_at = datetime.now(timezone.utc).isoformat()
+            _record_purchase_order_audit_log(
+                created_at=sent_at,
+                site_key=normalized_site_key,
+                module_key=module_key,
+                action="delete",
+                purchase_order_id=purchase_order_id,
+                supplier_id=row["supplier_id"],
+                supplier_name=row["supplier_name"],
+                supplier_email=row["supplier_email"],
+                recipient_email=None,
+                user_id=requested_by.id,
+                user_email=requested_by.email,
+                status="error",
+                message="Impossible de supprimer un BC reçu",
+            )
+            raise ValueError("Impossible de supprimer un BC reçu")
+        try:
+            conn.execute("BEGIN")
+            conn.execute(
+                f"DELETE FROM {items_table} WHERE purchase_order_id = ?",
+                (purchase_order_id,),
+            )
+            conn.execute(f"DELETE FROM {order_table} WHERE id = ?", (purchase_order_id,))
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+
+    sent_at = datetime.now(timezone.utc).isoformat()
+    _record_purchase_order_audit_log(
+        created_at=sent_at,
+        site_key=normalized_site_key,
+        module_key=module_key,
+        action="delete",
+        purchase_order_id=purchase_order_id,
+        supplier_id=row["supplier_id"],
+        supplier_name=row["supplier_name"],
+        supplier_email=row["supplier_email"],
+        recipient_email=None,
+        user_id=requested_by.id,
+        user_email=requested_by.email,
+        status="ok",
+        message="Suppression effectuée",
+    )
+
+
+def delete_purchase_order(site_key: str, order_id: int, user: models.User) -> None:
+    _delete_purchase_order_record(
+        site_key=site_key,
+        purchase_order_id=order_id,
+        module_key="purchase_orders",
+        order_table="purchase_orders",
+        items_table="purchase_order_items",
+        not_found_message="Bon de commande introuvable",
+        requested_by=user,
+    )
+
+
+def delete_remise_purchase_order(site_key: str, order_id: int, user: models.User) -> None:
+    _delete_purchase_order_record(
+        site_key=site_key,
+        purchase_order_id=order_id,
+        module_key="remise_orders",
+        order_table="remise_purchase_orders",
+        items_table="remise_purchase_order_items",
+        not_found_message="Bon de commande remise introuvable",
+        requested_by=user,
+    )
+
+
+def delete_pharmacy_purchase_order(site_key: str, order_id: int, user: models.User) -> None:
+    _delete_purchase_order_record(
+        site_key=site_key,
+        purchase_order_id=order_id,
+        module_key="pharmacy_orders",
+        order_table="pharmacy_purchase_orders",
+        items_table="pharmacy_purchase_order_items",
+        not_found_message="Bon de commande pharmacie introuvable",
+        requested_by=user,
+    )
+
+
+def send_pharmacy_purchase_order_to_supplier(
+    site_key: str,
+    purchase_order_id: int,
+    sent_by_user: models.User,
+) -> models.PurchaseOrderSendResponse:
+    ensure_database_ready()
+    normalized_site_key = sites.normalize_site_key(site_key) or db.DEFAULT_SITE_KEY
+    with db.get_stock_connection(normalized_site_key) as conn:
+        row = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
+            FROM pharmacy_purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            WHERE po.id = ?
+            """,
+            (purchase_order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande pharmacie introuvable")
+        order = _build_pharmacy_purchase_order_detail(conn, row)
+        supplier_email = row["supplier_email"]
+        supplier_id = row["supplier_id"]
+        supplier_name = row["supplier_name"]
+
+    if not supplier_email or "@" not in str(supplier_email):
+        sent_at = datetime.now(timezone.utc).isoformat()
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="pharmacy_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=None,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="error",
+            message="Email fournisseur manquant.",
+        )
+        raise ValueError("Email fournisseur manquant.")
+
+    to_email = str(supplier_email)
+    site_info = _get_site_info_for_email(normalized_site_key)
+    subject, body_text, body_html = notifications.build_purchase_order_email(
+        order, site_info, sent_by_user
+    )
+    pdf_bytes = generate_pharmacy_purchase_order_pdf(order)
+    resolved = resolve_pdf_config("pharmacy_orders")
+    filename = render_filename(
+        resolved.config.filename.pattern,
+        module_key="pharmacy_orders",
+        module_title=resolved.module_label,
+        context={"order_id": order.id, "ref": order.id},
+    )
+    reply_to = sent_by_user.email if sent_by_user.email and "@" in sent_by_user.email else None
+    sent_at = datetime.now(timezone.utc).isoformat()
+    try:
+        message_id = email_sender.send_email(
+            to_email,
+            subject,
+            body_text,
+            body_html,
+            reply_to=reply_to,
+            attachments=[(filename, pdf_bytes, "application/pdf")],
+            sensitive=True,
+        )
+        _record_purchase_order_email_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="pharmacy_orders",
+            purchase_order_id=order.id,
+            purchase_order_number=str(order.id),
+            supplier_id=supplier_id,
+            supplier_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="sent",
+            message_id=message_id,
+        )
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="pharmacy_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="ok",
+            message=f"Email envoyé ({message_id})",
+        )
+    except email_sender.EmailSendError as exc:
+        _record_purchase_order_email_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="pharmacy_orders",
+            purchase_order_id=order.id,
+            purchase_order_number=str(order.id),
+            supplier_id=supplier_id,
+            supplier_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="failed",
+            error_message=str(exc),
+        )
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="pharmacy_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="error",
+            message=str(exc),
+        )
+        raise
+
+    return models.PurchaseOrderSendResponse(
+        status="sent",
+        sent_to=to_email,
+        sent_at=sent_at,
+        message_id=message_id,
+    )
 
 
 def generate_remise_purchase_order_pdf(order: models.RemisePurchaseOrderDetail) -> bytes:
@@ -9945,6 +10309,7 @@ def _build_pharmacy_purchase_order_detail(
         id=order_row["id"],
         supplier_id=order_row["supplier_id"],
         supplier_name=order_row["supplier_name"],
+        supplier_email=order_row["supplier_email"],
         status=order_row["status"],
         created_at=order_row["created_at"],
         note=order_row["note"],
@@ -9957,7 +10322,7 @@ def list_pharmacy_purchase_orders() -> list[models.PharmacyPurchaseOrderDetail]:
     with db.get_stock_connection() as conn:
         cur = conn.execute(
             """
-            SELECT po.*, s.name AS supplier_name
+            SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
             FROM pharmacy_purchase_orders AS po
             LEFT JOIN suppliers AS s ON s.id = po.supplier_id
             ORDER BY po.created_at DESC, po.id DESC
@@ -9972,7 +10337,7 @@ def get_pharmacy_purchase_order(order_id: int) -> models.PharmacyPurchaseOrderDe
     with db.get_stock_connection() as conn:
         row = conn.execute(
             """
-            SELECT po.*, s.name AS supplier_name
+            SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
             FROM pharmacy_purchase_orders AS po
             LEFT JOIN suppliers AS s ON s.id = po.supplier_id
             WHERE po.id = ?

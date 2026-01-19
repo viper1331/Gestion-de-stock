@@ -133,6 +133,7 @@ export function PurchaseOrdersPanel({
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [sendModalOrder, setSendModalOrder] = useState<PurchaseOrderDetail | null>(null);
   const [overrideEmail, setOverrideEmail] = useState<string>("");
+  const [deletingId, setDeletingId] = useState<number | null>(null);
 
   const resolveItemId = (item: PurchaseOrderItem) => {
     const candidate = item[itemIdField];
@@ -260,6 +261,27 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const deleteOrder = useMutation<void, AxiosError<ApiErrorResponse>, PurchaseOrderDetail>({
+    mutationFn: async (order) => {
+      await api.delete(`${purchaseOrdersPath}/${order.id}`);
+    },
+    onMutate: (order) => {
+      setDeletingId(order.id);
+    },
+    onSuccess: async () => {
+      setMessage("Bon de commande supprimé.");
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible de supprimer le bon de commande.");
+    },
+    onSettled: () => {
+      setDeletingId(null);
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
   const handleAddLine = () => {
     setDraftLines((prev) => [...prev, { itemId: "", quantity: 1 }]);
   };
@@ -366,6 +388,13 @@ export function PurchaseOrdersPanel({
   const handleCloseSendModal = () => {
     setSendModalOrder(null);
     setOverrideEmail("");
+  };
+
+  const handleDeleteOrder = (order: PurchaseOrderDetail) => {
+    if (!window.confirm(`Supprimer le bon de commande #${order.id} ?`)) {
+      return;
+    }
+    deleteOrder.mutate(order);
   };
 
   return (
@@ -513,6 +542,16 @@ export function PurchaseOrdersPanel({
                               }
                             >
                               Envoyer au fournisseur
+                            </button>
+                          ) : null}
+                          {user?.role === "admin" ? (
+                            <button
+                              type="button"
+                              onClick={() => handleDeleteOrder(order)}
+                              disabled={deletingId === order.id}
+                              className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                            >
+                              {deletingId === order.id ? "Suppression..." : "Supprimer"}
                             </button>
                           ) : null}
                         </div>
