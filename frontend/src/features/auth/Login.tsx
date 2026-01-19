@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { QRCodeCanvas } from "qrcode.react";
 import { useAuth } from "./useAuth";
 import { AppTextInput } from "components/AppTextInput";
@@ -8,9 +8,22 @@ import { useLocation } from "react-router-dom";
 export function Login() {
   const { login, verifyTwoFactor, confirmTotpEnrollment, clearError, isLoading, error } = useAuth();
   const location = useLocation();
-  const [identifier, setIdentifier] = useState("admin");
-  const [password, setPassword] = useState("admin123");
-  const [remember, setRemember] = useState(true);
+  const [remember, setRemember] = useState(() => {
+    if (typeof window === "undefined") {
+      return false;
+    }
+    return window.localStorage.getItem("gsp_login_remember") === "true";
+  });
+  const [identifier, setIdentifier] = useState(() => {
+    if (typeof window === "undefined") {
+      return "";
+    }
+    if (window.localStorage.getItem("gsp_login_remember") !== "true") {
+      return "";
+    }
+    return window.localStorage.getItem("gsp_login_identifier") ?? "";
+  });
+  const [password, setPassword] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [otpauthUri, setOtpauthUri] = useState<string | null>(null);
   const [secretMasked, setSecretMasked] = useState<string | null>(null);
@@ -23,6 +36,23 @@ export function Login() {
   const [registerDisplayName, setRegisterDisplayName] = useState("");
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerLoading, setRegisterLoading] = useState(false);
+
+  useEffect(() => {
+    setPassword("");
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    if (!remember) {
+      window.localStorage.removeItem("gsp_login_remember");
+      window.localStorage.removeItem("gsp_login_identifier");
+      return;
+    }
+    window.localStorage.setItem("gsp_login_remember", "true");
+    window.localStorage.setItem("gsp_login_identifier", identifier);
+  }, [identifier, remember]);
 
   const idleLogoutMessage = useMemo(() => {
     const params = new URLSearchParams(location.search);
