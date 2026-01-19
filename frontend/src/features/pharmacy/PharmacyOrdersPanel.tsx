@@ -64,6 +64,17 @@ const ORDER_STATUSES: Array<{ value: string; label: string }> = [
 export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const { user } = useAuth();
   const queryClient = useQueryClient();
+  const { data: suppliersData } = useQuery({
+    queryKey: ["suppliers", { module: "pharmacy" }],
+    queryFn: async () => {
+      const response = await api.get<Supplier[]>("/suppliers/", {
+        params: { module: "pharmacy" }
+      });
+      return response.data;
+    },
+    enabled: canEdit
+  });
+  const suppliers = suppliersData ?? [];
   const [draftLines, setDraftLines] = useState<PharmacyOrderDraftLine[]>([
     { pharmacyItemId: "", quantity: 1 }
   ]);
@@ -133,17 +144,6 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
       const response = await api.get<PharmacyItemOption[]>("/pharmacy/");
       return response.data;
     }
-  });
-
-  const { data: suppliers = [] } = useQuery({
-    queryKey: ["suppliers", { module: "pharmacy" }],
-    queryFn: async () => {
-      const response = await api.get<Supplier[]>("/suppliers/", {
-        params: { module: "pharmacy" }
-      });
-      return response.data;
-    },
-    enabled: canEdit
   });
 
   const createOrder = useMutation({
