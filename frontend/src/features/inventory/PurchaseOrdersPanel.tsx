@@ -11,6 +11,8 @@ import { AppTextArea } from "components/AppTextArea";
 interface Supplier {
   id: number;
   name: string;
+  email: string | null;
+  address: string | null;
 }
 
 interface ItemOption {
@@ -134,6 +136,51 @@ export function PurchaseOrdersPanel({
   const [sendModalOrder, setSendModalOrder] = useState<PurchaseOrderDetail | null>(null);
   const [overrideEmail, setOverrideEmail] = useState<string>("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const selectedDraftSupplier = useMemo(
+    () => suppliers.find((supplier) => supplier.id === draftSupplier),
+    [draftSupplier, suppliers]
+  );
+  const selectedEditSupplier = useMemo(
+    () => suppliers.find((supplier) => supplier.id === editSupplier),
+    [editSupplier, suppliers]
+  );
+
+  const renderSupplierDetails = (supplier?: Supplier) => {
+    if (!supplier) {
+      return null;
+    }
+    return (
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-email-display">
+            Email
+          </label>
+          <AppTextInput
+            id="supplier-email-display"
+            value={supplier.email ?? ""}
+            placeholder="Non renseigné"
+            readOnly
+            disabled
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          />
+        </div>
+        <div className="space-y-1 sm:col-span-2">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-address-display">
+            Adresse
+          </label>
+          <AppTextArea
+            id="supplier-address-display"
+            value={supplier.address ?? ""}
+            placeholder="Non renseignée"
+            rows={2}
+            readOnly
+            disabled
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          />
+        </div>
+      </div>
+    );
+  };
 
   const resolveItemId = (item: PurchaseOrderItem) => {
     const candidate = item[itemIdField];
@@ -601,6 +648,7 @@ export function PurchaseOrdersPanel({
                     ))}
                   </select>
                 </div>
+                {renderSupplierDetails(selectedEditSupplier)}
 
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-status">
@@ -676,6 +724,7 @@ export function PurchaseOrdersPanel({
                     ))}
                   </select>
                 </div>
+                {renderSupplierDetails(selectedDraftSupplier)}
 
                 <div className="space-y-1">
                   <label className="text-xs font-semibold text-slate-300" htmlFor="po-status">
