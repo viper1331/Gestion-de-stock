@@ -1004,6 +1004,56 @@ class PurchaseOrderDetail(PurchaseOrder):
     items: list[PurchaseOrderItem] = Field(default_factory=list)
 
 
+class PurchaseSuggestionLine(BaseModel):
+    id: int
+    suggestion_id: int
+    item_id: int
+    sku: str | None = None
+    label: str | None = None
+    qty_suggested: int
+    qty_final: int
+    unit: str | None = None
+    reason: str | None = None
+    stock_current: int
+    threshold: int
+
+
+class PurchaseSuggestion(BaseModel):
+    id: int
+    site_key: str
+    module_key: str
+    supplier_id: int | None = None
+    supplier_name: str | None = None
+    status: Literal["draft", "converted", "dismissed"]
+    created_at: datetime
+    updated_at: datetime
+    created_by: str | None = None
+
+
+class PurchaseSuggestionDetail(PurchaseSuggestion):
+    lines: list[PurchaseSuggestionLine] = Field(default_factory=list)
+
+
+class PurchaseSuggestionLineUpdate(BaseModel):
+    id: int = Field(..., gt=0)
+    qty_final: int | None = Field(default=None, ge=0)
+    remove: bool = False
+
+
+class PurchaseSuggestionUpdatePayload(BaseModel):
+    lines: list[PurchaseSuggestionLineUpdate] = Field(default_factory=list)
+
+
+class PurchaseSuggestionRefreshPayload(BaseModel):
+    module_keys: list[str] = Field(default_factory=list)
+
+
+class PurchaseSuggestionConvertResult(BaseModel):
+    suggestion_id: int
+    purchase_order_id: int
+    module_key: str
+
+
 class RemisePurchaseOrder(BaseModel):
     id: int
     supplier_id: int | None = None
