@@ -98,6 +98,31 @@ npm install
 npm run tauri dev
 ```
 
+## Configuration e-mail & OTP e-mail
+
+Les paramètres SMTP et OTP e-mail sont lus via `.env` (chargé au démarrage du backend). Exemple :
+
+```ini
+SMTP_HOST=
+SMTP_PORT=587
+SMTP_USERNAME=
+SMTP_PASSWORD=
+SMTP_FROM_EMAIL=StockOps <no-reply@domaine.tld>
+SMTP_USE_TLS=1
+SMTP_USE_SSL=0
+SMTP_TIMEOUT_SECONDS=10
+
+OTP_EMAIL_TTL_MINUTES=10
+OTP_EMAIL_CODE_LENGTH=6
+OTP_EMAIL_MAX_ATTEMPTS=5
+OTP_EMAIL_RESEND_COOLDOWN_SECONDS=45
+OTP_EMAIL_RATE_LIMIT_PER_HOUR=6
+EMAIL_DEV_SINK=0
+ALLOW_INSECURE_EMAIL_DEV=0
+```
+
+> `EMAIL_DEV_SINK=1` désactive l'envoi SMTP et écrit un résumé en local (utile en dev).
+
 ## Configuration Git
 Si le dépôt a été récupéré sans informations de remote (par exemple via une archive ZIP), ajoutez l'origine GitHub avant de lancer
 un `git pull` :

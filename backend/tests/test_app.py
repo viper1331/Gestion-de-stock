@@ -116,7 +116,7 @@ def _login_headers(username: str, password: str) -> dict[str, str]:
         assert confirm.status_code == 200, confirm.text
         token = confirm.json()["access_token"]
         return {"Authorization": f"Bearer {token}"}
-    if payload.get("status") == "totp_required":
+    if payload.get("status") == "2fa_required" and payload.get("method") == "totp":
         with db.get_users_connection() as conn:
             row = conn.execute(
                 "SELECT two_factor_secret_enc FROM users WHERE username = ?",
@@ -127,7 +127,7 @@ def _login_headers(username: str, password: str) -> dict[str, str]:
         code = pyotp.TOTP(secret).now()
         verify = client.post(
             "/auth/totp/verify",
-            json={"challenge_token": payload["challenge_token"], "code": code},
+            json={"challenge_token": payload["challenge_id"], "code": code},
         )
         assert verify.status_code == 200, verify.text
         token = verify.json()["access_token"]

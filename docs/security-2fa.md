@@ -20,10 +20,14 @@ les utilisateurs doivent activer TOTP pour pouvoir se connecter.
 
 ```json
 {
-  "status": "totp_required",
+  "status": "2fa_required",
+  "method": "totp",
   "challenge_id": "...",
-  "username": "...",
-  "available_methods": ["totp"]
+  "user": {
+    "username": "...",
+    "role": "user",
+    "site_key": "JLL"
+  }
 }
 ```
 

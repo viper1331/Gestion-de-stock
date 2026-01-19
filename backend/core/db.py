@@ -333,6 +333,45 @@ def _init_core_database() -> None:
                 retention_count INTEGER NOT NULL DEFAULT 3,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
             );
+            CREATE TABLE IF NOT EXISTS otp_email_challenges (
+                id TEXT PRIMARY KEY,
+                user_id INTEGER NOT NULL,
+                code_hash TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                expires_at TEXT NOT NULL,
+                used_at TEXT,
+                attempt_count INTEGER NOT NULL DEFAULT 0,
+                last_sent_at TEXT NOT NULL,
+                request_ip TEXT,
+                user_agent TEXT
+            );
+            CREATE INDEX IF NOT EXISTS idx_otp_user_id
+            ON otp_email_challenges(user_id);
+            CREATE INDEX IF NOT EXISTS idx_otp_code_hash
+            ON otp_email_challenges(code_hash);
+            CREATE INDEX IF NOT EXISTS idx_otp_expires_at
+            ON otp_email_challenges(expires_at);
+            CREATE TABLE IF NOT EXISTS email_outbox (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                to_email TEXT NOT NULL,
+                subject TEXT NOT NULL,
+                body_text TEXT NOT NULL,
+                body_html TEXT,
+                created_at TEXT NOT NULL,
+                sent_at TEXT,
+                send_attempts INTEGER NOT NULL DEFAULT 0,
+                last_error TEXT,
+                priority INTEGER NOT NULL DEFAULT 5
+            );
+            CREATE INDEX IF NOT EXISTS idx_outbox_sent_at
+            ON email_outbox(sent_at);
+            CREATE INDEX IF NOT EXISTS idx_outbox_priority
+            ON email_outbox(priority);
+            CREATE TABLE IF NOT EXISTS otp_email_rate_limits (
+                key TEXT PRIMARY KEY,
+                window_start TEXT NOT NULL,
+                count INTEGER NOT NULL
+            );
             """
         )
         default_paths = get_default_site_db_paths()

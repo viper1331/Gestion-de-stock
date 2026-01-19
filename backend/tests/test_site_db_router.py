@@ -65,7 +65,7 @@ def _login_token(username: str, password: str) -> str:
         )
         assert confirm.status_code == 200, confirm.text
         return confirm.json()["access_token"]
-    if payload.get("status") == "totp_required":
+    if payload.get("status") == "2fa_required" and payload.get("method") == "totp":
         with db.get_users_connection() as conn:
             row = conn.execute(
                 "SELECT two_factor_secret_enc FROM users WHERE username = ?",
@@ -76,7 +76,7 @@ def _login_token(username: str, password: str) -> str:
         code = pyotp.TOTP(secret).now()
         verify = client.post(
             "/auth/totp/verify",
-            json={"challenge_token": payload["challenge_token"], "code": code},
+            json={"challenge_token": payload["challenge_id"], "code": code},
         )
         assert verify.status_code == 200, verify.text
         return verify.json()["access_token"]

@@ -207,7 +207,7 @@ def test_legacy_username_login_allows_access() -> None:
     )
     assert login.status_code == 200, login.text
     payload = login.json()
-    assert payload["status"] in {"totp_required", "totp_enroll_required"}
+    assert payload["status"] in {"2fa_required", "totp_enroll_required"}
     assert payload.get("needs_email_upgrade") is True
 
 

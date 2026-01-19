@@ -6,7 +6,16 @@ import { api } from "../../lib/api";
 import { useLocation } from "react-router-dom";
 
 export function Login() {
-  const { login, verifyTwoFactor, confirmTotpEnrollment, clearError, isLoading, error } = useAuth();
+  const {
+    login,
+    verifyTwoFactor,
+    verifyEmailOtp,
+    resendEmailOtp,
+    confirmTotpEnrollment,
+    clearError,
+    isLoading,
+    error
+  } = useAuth();
   const location = useLocation();
   const [remember, setRemember] = useState(false);
   const [identifier, setIdentifier] = useState("");
@@ -16,7 +25,9 @@ export function Login() {
   const [secretMasked, setSecretMasked] = useState<string | null>(null);
   const [secretPlain, setSecretPlain] = useState<string | null>(null);
   const [totpCode, setTotpCode] = useState("");
-  const [step, setStep] = useState<"credentials" | "totp" | "enroll">("credentials");
+  const [step, setStep] = useState<"credentials" | "totp" | "enroll" | "email_otp">(
+    "credentials"
+  );
   const [mode, setMode] = useState<"login" | "register" | "register-success">("login");
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
@@ -24,10 +35,23 @@ export function Login() {
   const [registerOtpMethod, setRegisterOtpMethod] = useState<"totp" | "email">("totp");
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerLoading, setRegisterLoading] = useState(false);
+  const [emailOtpCode, setEmailOtpCode] = useState("");
+  const [emailOtpDevCode, setEmailOtpDevCode] = useState<string | null>(null);
+  const [emailResendCooldown, setEmailResendCooldown] = useState(0);
 
   useEffect(() => {
     setPassword("");
   }, []);
+
+  useEffect(() => {
+    if (step !== "email_otp" || emailResendCooldown <= 0) {
+      return;
+    }
+    const timer = window.setInterval(() => {
+      setEmailResendCooldown((current) => (current > 0 ? current - 1 : 0));
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, [emailResendCooldown, step]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -58,12 +82,19 @@ export function Login() {
       : normalizedIdentifier;
     const result = await login({ username: loginIdentifier, password, remember });
     if (result.status === "requires_2fa") {
-      setChallengeId(result.challenge.challenge_token);
+      setChallengeId(result.challenge.challenge_id);
       setOtpauthUri(null);
       setSecretMasked(null);
       setSecretPlain(null);
-      setStep("totp");
-      setTotpCode("");
+      if (result.challenge.method === "email_otp") {
+        setStep("email_otp");
+        setEmailOtpCode("");
+        setEmailOtpDevCode(result.challenge.dev_code ?? null);
+        setEmailResendCooldown(result.challenge.resend_cooldown_seconds ?? 0);
+      } else {
+        setStep("totp");
+        setTotpCode("");
+      }
       clearError();
     } else if (result.status === "enroll_required") {
       setChallengeId(result.challenge.challenge_token);
@@ -107,11 +138,26 @@ export function Login() {
     if (!challengeId) {
       return;
     }
-    await verifyTwoFactor({
-      challengeId,
-      code: totpCode,
-      rememberSession: remember
-    });
+    if (step === "email_otp") {
+      await verifyEmailOtp({
+        challengeId,
+        code: emailOtpCode,
+        rememberSession: remember
+      });
+      return;
+    }
+    await verifyTwoFactor({ challengeId, code: totpCode, rememberSession: remember });
+  };
+
+  const handleResendEmailOtp = async () => {
+    if (!challengeId || emailResendCooldown > 0) {
+      return;
+    }
+    const result = await resendEmailOtp({ challengeId });
+    if (result.status === "resent") {
+      setEmailResendCooldown(result.data.resend_cooldown_seconds ?? 0);
+      setEmailOtpDevCode(result.data.dev_code ?? null);
+    }
   };
 
   const handleEnrollConfirm = async (event: FormEvent) => {
@@ -131,12 +177,18 @@ export function Login() {
       <form className="space-y-6" onSubmit={step === "enroll" ? handleEnrollConfirm : handleVerify}>
         <header className="space-y-1 text-center">
           <h1 className="text-2xl font-semibold">
-            {step === "enroll" ? "Configurer l’authentification 2 facteurs" : "Entrer votre code"}
+            {step === "enroll"
+              ? "Configurer l’authentification 2 facteurs"
+              : step === "email_otp"
+                ? "Saisir le code e-mail"
+                : "Entrer votre code"}
           </h1>
           <p className="text-sm text-slate-400">
             {step === "enroll"
               ? "Scannez le QR code puis saisissez le code généré."
-              : "Entrez le code fourni par votre application Authenticator."}
+              : step === "email_otp"
+                ? "Entrez le code reçu dans votre boîte e-mail."
+                : "Entrez le code fourni par votre application Authenticator."}
           </p>
         </header>
         {idleLogoutMessage ? (
@@ -154,18 +206,51 @@ export function Login() {
           </div>
         ) : null}
         <div className="space-y-2">
-          <label className="block text-sm font-medium text-slate-200" htmlFor="totpCode">
+          <label
+            className="block text-sm font-medium text-slate-200"
+            htmlFor={step === "email_otp" ? "emailOtpCode" : "totpCode"}
+          >
             Code à 6 chiffres
           </label>
-          <AppTextInput
-            id="totpCode"
-            className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
-            value={totpCode}
-            onChange={(event) => setTotpCode(event.target.value)}
-            title="Saisissez le code 2FA"
-            inputMode="numeric"
-          />
+          {step === "email_otp" ? (
+            <AppTextInput
+              id="emailOtpCode"
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+              value={emailOtpCode}
+              onChange={(event) => setEmailOtpCode(event.target.value)}
+              title="Saisissez le code reçu par e-mail"
+              inputMode="numeric"
+            />
+          ) : (
+            <AppTextInput
+              id="totpCode"
+              className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
+              value={totpCode}
+              onChange={(event) => setTotpCode(event.target.value)}
+              title="Saisissez le code 2FA"
+              inputMode="numeric"
+            />
+          )}
         </div>
+        {step === "email_otp" ? (
+          <div className="flex flex-wrap items-center gap-3 text-xs text-slate-400">
+            <button
+              type="button"
+              onClick={handleResendEmailOtp}
+              disabled={isLoading || emailResendCooldown > 0}
+              className="text-indigo-300 hover:text-indigo-200 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {emailResendCooldown > 0
+                ? `Renvoyer le code (${emailResendCooldown}s)`
+                : "Renvoyer le code"}
+            </button>
+            {emailOtpDevCode ? (
+              <span className="rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1 text-amber-200">
+                DEV : {emailOtpDevCode}
+              </span>
+            ) : null}
+          </div>
+        ) : null}
         <div className="flex flex-wrap gap-3 text-sm">
           <button
             type="button"
@@ -175,6 +260,8 @@ export function Login() {
               setOtpauthUri(null);
               setSecretMasked(null);
               setSecretPlain(null);
+              setEmailOtpDevCode(null);
+              setEmailResendCooldown(0);
               clearError();
             }}
             className="text-slate-400 hover:text-slate-200"
@@ -246,6 +333,9 @@ export function Login() {
                     <span className="block font-medium">Code par e-mail (OTP)</span>
                     <span className="block text-xs text-slate-400">
                       Recevez un code à usage unique dans votre boîte mail.
+                    </span>
+                    <span className="block text-xs text-slate-400">
+                      Vous recevrez un code par e-mail à chaque connexion.
                     </span>
                   </span>
                 </label>

@@ -20,8 +20,11 @@ interface LoginPayload {
 }
 
 interface TwoFactorChallenge {
-  status: "totp_required";
-  challenge_token: string;
+  status: "2fa_required";
+  method: "totp" | "email_otp";
+  challenge_id: string;
+  resend_cooldown_seconds?: number | null;
+  dev_code?: string | null;
   user: {
     username: string;
     role: string;
@@ -131,7 +134,7 @@ export function useAuth() {
             remember_me: remember
           }
         );
-        if ("status" in data && data.status === "totp_required") {
+        if ("status" in data && data.status === "2fa_required") {
           setReady(true);
           return { status: "requires_2fa", challenge: data };
         }
@@ -201,6 +204,71 @@ export function useAuth() {
       }
     },
     [completeLogin, setError, setLoading, setReady]
+  );
+
+  const verifyEmailOtp = useCallback(
+    async ({
+      challengeId,
+      code,
+      rememberSession
+    }: {
+      challengeId: string;
+      code: string;
+      rememberSession: boolean;
+    }) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const { data } = await api.post("/auth/otp-email/verify", {
+          challenge_id: challengeId,
+          code
+        });
+        await completeLogin(data, rememberSession);
+        return { status: "authenticated" };
+      } catch (err) {
+        const detail = getErrorDetail(err);
+        if (detail?.toLowerCase().includes("expir")) {
+          setError("Code expiré. Réessayez.");
+        } else if (detail?.toLowerCase().includes("challenge")) {
+          setError("Challenge invalide. Réessayez.");
+        } else {
+          setError("Code e-mail invalide");
+        }
+        return { status: "error" };
+      } finally {
+        setLoading(false);
+        setReady(true);
+      }
+    },
+    [completeLogin, setError, setLoading, setReady]
+  );
+
+  const resendEmailOtp = useCallback(
+    async ({ challengeId }: { challengeId: string }) => {
+      try {
+        setLoading(true);
+        setError(null);
+        const { data } = await api.post<{
+          resend_cooldown_seconds: number;
+          dev_code?: string | null;
+        }>("/auth/otp-email/resend", {
+          challenge_id: challengeId
+        });
+        return { status: "resent", data };
+      } catch (err) {
+        const detail = getErrorDetail(err);
+        if (detail?.toLowerCase().includes("patienter")) {
+          setError("Veuillez patienter avant de renvoyer un code.");
+        } else {
+          setError("Impossible de renvoyer le code.");
+        }
+        return { status: "error" };
+      } finally {
+        setLoading(false);
+        setReady(true);
+      }
+    },
+    [setError, setLoading, setReady]
   );
 
   const confirmTotpEnrollment = useCallback(
@@ -328,6 +396,8 @@ export function useAuth() {
       isCheckingSession,
       login,
       verifyTwoFactor,
+      verifyEmailOtp,
+      resendEmailOtp,
       confirmTotpEnrollment,
       clearError,
       logout,
@@ -346,6 +416,8 @@ export function useAuth() {
       token,
       user,
       verifyTwoFactor,
+      verifyEmailOtp,
+      resendEmailOtp,
       confirmTotpEnrollment,
       clearError
     ]
