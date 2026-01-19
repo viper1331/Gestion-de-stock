@@ -8,21 +8,8 @@ import { useLocation } from "react-router-dom";
 export function Login() {
   const { login, verifyTwoFactor, confirmTotpEnrollment, clearError, isLoading, error } = useAuth();
   const location = useLocation();
-  const [remember, setRemember] = useState(() => {
-    if (typeof window === "undefined") {
-      return false;
-    }
-    return window.localStorage.getItem("gsp_login_remember") === "true";
-  });
-  const [identifier, setIdentifier] = useState(() => {
-    if (typeof window === "undefined") {
-      return "";
-    }
-    if (window.localStorage.getItem("gsp_login_remember") !== "true") {
-      return "";
-    }
-    return window.localStorage.getItem("gsp_login_identifier") ?? "";
-  });
+  const [remember, setRemember] = useState(false);
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [challengeId, setChallengeId] = useState<string | null>(null);
   const [otpauthUri, setOtpauthUri] = useState<string | null>(null);
@@ -34,6 +21,7 @@ export function Login() {
   const [registerEmail, setRegisterEmail] = useState("");
   const [registerPassword, setRegisterPassword] = useState("");
   const [registerDisplayName, setRegisterDisplayName] = useState("");
+  const [registerOtpMethod, setRegisterOtpMethod] = useState<"totp" | "email">("totp");
   const [registerError, setRegisterError] = useState<string | null>(null);
   const [registerLoading, setRegisterLoading] = useState(false);
 
@@ -92,11 +80,15 @@ export function Login() {
     event.preventDefault();
     setRegisterError(null);
     setRegisterLoading(true);
+    const trimmedEmail = registerEmail.trim();
+    const shouldSendEmail = trimmedEmail.length > 0;
     try {
       await api.post("/auth/register", {
-        email: registerEmail,
+        email: shouldSendEmail ? trimmedEmail : undefined,
         password: registerPassword,
-        display_name: registerDisplayName || undefined
+        display_name: registerDisplayName || undefined,
+        otp_method: registerOtpMethod,
+        otp_email_enabled: registerOtpMethod === "email"
       });
       setMode("register-success");
     } catch (err) {
@@ -221,17 +213,66 @@ export function Login() {
         ) : (
           <>
             <div className="space-y-2">
+              <label className="block text-sm font-medium text-slate-200">Méthode 2FA</label>
+              <div className="space-y-3">
+                <label className="flex items-start gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-200">
+                  <AppTextInput
+                    type="radio"
+                    name="registerOtpMethod"
+                    value="totp"
+                    checked={registerOtpMethod === "totp"}
+                    onChange={() => setRegisterOtpMethod("totp")}
+                    title="Utiliser une application d’authentification"
+                    className="mt-1"
+                  />
+                  <span className="space-y-1">
+                    <span className="block font-medium">Application d’authentification (TOTP)</span>
+                    <span className="block text-xs text-slate-400">
+                      Utilisez une application mobile pour générer votre code de connexion.
+                    </span>
+                  </span>
+                </label>
+                <label className="flex items-start gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-3 text-sm text-slate-200">
+                  <AppTextInput
+                    type="radio"
+                    name="registerOtpMethod"
+                    value="email"
+                    checked={registerOtpMethod === "email"}
+                    onChange={() => setRegisterOtpMethod("email")}
+                    title="Recevoir un code par email"
+                    className="mt-1"
+                  />
+                  <span className="space-y-1">
+                    <span className="block font-medium">Code par e-mail (OTP)</span>
+                    <span className="block text-xs text-slate-400">
+                      Recevez un code à usage unique dans votre boîte mail.
+                    </span>
+                  </span>
+                </label>
+              </div>
+            </div>
+            <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-200" htmlFor="registerEmail">
-                Email
+                Email{registerOtpMethod === "totp" ? " (optionnel)" : ""}
               </label>
               <AppTextInput
                 id="registerEmail"
                 type="email"
+                required={registerOtpMethod === "email"}
                 className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100 focus:border-indigo-500 focus:outline-none"
                 value={registerEmail}
                 onChange={(event) => setRegisterEmail(event.target.value)}
                 title="Entrez votre email"
               />
+              {registerOtpMethod === "email" ? (
+                <p className="text-xs text-slate-400">
+                  Cette adresse servira à recevoir votre code de connexion.
+                </p>
+              ) : (
+                <p className="text-xs text-slate-400">
+                  Vous configurerez votre application après validation administrateur.
+                </p>
+              )}
             </div>
             <div className="space-y-2">
               <label className="block text-sm font-medium text-slate-200" htmlFor="registerPassword">
@@ -275,6 +316,7 @@ export function Login() {
             setMode("login");
             setRegisterError(null);
             setRegisterLoading(false);
+            setRegisterOtpMethod("totp");
           }}
           className="text-sm text-slate-400 hover:text-slate-200"
         >
@@ -346,6 +388,7 @@ export function Login() {
         onClick={() => {
           setMode("register");
           clearError();
+          setRegisterOtpMethod("totp");
         }}
         className="w-full text-sm text-slate-400 hover:text-slate-200"
       >
