@@ -121,7 +121,13 @@ EMAIL_DEV_SINK=0
 ALLOW_INSECURE_EMAIL_DEV=0
 ```
 
-> `EMAIL_DEV_SINK=1` désactive l'envoi SMTP et écrit un résumé en local (utile en dev).
+> `EMAIL_DEV_SINK=1` désactive l'envoi SMTP et écrit un résumé en local (utile en dev) dans `logs/email_dev_sink.log`.
+
+Un endpoint admin permet de vérifier la configuration SMTP via la file outbox :
+
+```bash
+POST /admin/email/test
+```
 
 ## Configuration Git
 Si le dépôt a été récupéré sans informations de remote (par exemple via une archive ZIP), ajoutez l'origine GitHub avant de lancer

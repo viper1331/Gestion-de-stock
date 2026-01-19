@@ -16,8 +16,8 @@ from backend.core.logging_config import (
     purge_rotated_logs,
 )
 from backend.services.debug_service import load_debug_config, save_debug_config
-from backend.services.email_sender import EmailSendError, send_email_smtp
 from backend.services.backup_scheduler import backup_scheduler
+from backend.services import notifications
 from backend.services.backup_settings import MAX_BACKUP_INTERVAL_MINUTES
 from backend.services import system_settings
 
@@ -66,6 +66,12 @@ class SmtpSettingsUpdate(BaseModel):
 
 class SmtpTestRequest(BaseModel):
     to_email: str
+
+
+class EmailTestRequest(BaseModel):
+    to_email: str
+    subject: str
+    body: str
 
 
 class OtpEmailSettingsPayload(BaseModel):
@@ -309,23 +315,68 @@ def update_smtp_settings(
 
 @router.post("/email/smtp-test")
 def test_smtp_settings(payload: SmtpTestRequest, user: models.User = Depends(require_admin)):
-    raw = system_settings.get_setting_json(system_settings.SMTP_SETTINGS_KEY)
-    if raw is None:
+    result = _enqueue_test_email(
+        payload.to_email.strip(),
+        "Test SMTP StockOps",
+        "Ceci est un e-mail de test StockOps.",
+        send_now=False,
+    )
+    if result.get("dev_sink"):
+        return {"status": "skipped", "to_email": payload.to_email.strip(), "dev_sink": True}
+    return result
+
+
+@router.post("/email/test")
+def test_email_delivery(
+    payload: EmailTestRequest,
+    send_now: bool = False,
+    user: models.User = Depends(require_admin),
+):
+    return _enqueue_test_email(
+        payload.to_email.strip(),
+        payload.subject.strip(),
+        payload.body,
+        send_now=send_now,
+    )
+
+
+def _enqueue_test_email(
+    to_email: str,
+    subject: str,
+    body: str,
+    *,
+    send_now: bool,
+) -> dict[str, object]:
+    config = system_settings.get_email_smtp_config()
+    if not config.dev_sink and not config.host:
         raise HTTPException(status_code=400, detail="SMTP non configuré")
-    config, _ = system_settings.get_email_smtp_config_state()
+    email_id = notifications.enqueue_email(
+        to_email=to_email,
+        subject=subject,
+        body_text=body,
+        purpose="smtp_test",
+        meta={"endpoint": "admin_email_test"},
+    )
+    response: dict[str, object] = {"status": "queued", "to_email": to_email}
     if config.dev_sink:
-        return {"status": "skipped"}
-    if not config.host:
-        raise HTTPException(status_code=400, detail="SMTP non configuré")
-    try:
-        send_email_smtp(
-            payload.to_email.strip(),
-            "Test SMTP StockOps",
-            "Ceci est un e-mail de test StockOps.",
-        )
-    except EmailSendError:
-        raise HTTPException(status_code=400, detail="Échec de l'envoi SMTP") from None
-    return {"status": "sent"}
+        response["dev_sink"] = True
+    if not send_now:
+        return response
+    notifications.run_outbox_once()
+    with db.get_core_connection() as conn:
+        row = conn.execute(
+            "SELECT sent_at, last_error FROM email_outbox WHERE id = ?",
+            (email_id,),
+        ).fetchone()
+    if row and row["sent_at"]:
+        return {"status": "sent", "to_email": to_email, "dev_sink": config.dev_sink}
+    error = str(row["last_error"]) if row and row["last_error"] else "unknown"
+    return {
+        "status": "queued_but_failed",
+        "to_email": to_email,
+        "error": error,
+        "dev_sink": config.dev_sink,
+    }
 
 
 @router.get("/email/otp-settings", response_model=OtpEmailSettingsPayload)
