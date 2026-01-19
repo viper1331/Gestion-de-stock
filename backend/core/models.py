@@ -1007,6 +1007,9 @@ class PurchaseOrderUpdate(BaseModel):
 class PurchaseOrderDetail(PurchaseOrder):
     supplier_name: str | None = None
     supplier_email: str | None = None
+    supplier_email_resolved: str | None = None
+    supplier_has_email: bool = False
+    supplier_missing_reason: str | None = None
     items: list[PurchaseOrderItem] = Field(default_factory=list)
 
 
@@ -1136,6 +1139,9 @@ class RemisePurchaseOrderUpdate(BaseModel):
 
 
 class RemisePurchaseOrderDetail(RemisePurchaseOrder):
+    supplier_email_resolved: str | None = None
+    supplier_has_email: bool = False
+    supplier_missing_reason: str | None = None
     items: list[RemisePurchaseOrderItem] = Field(default_factory=list)
 
 
@@ -1408,6 +1414,9 @@ class PharmacyPurchaseOrder(BaseModel):
 class PharmacyPurchaseOrderDetail(PharmacyPurchaseOrder):
     supplier_name: str | None = None
     supplier_email: str | None = None
+    supplier_email_resolved: str | None = None
+    supplier_has_email: bool = False
+    supplier_missing_reason: str | None = None
     items: list[PharmacyPurchaseOrderItem] = Field(default_factory=list)
 
 

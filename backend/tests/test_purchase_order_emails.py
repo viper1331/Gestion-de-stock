@@ -269,6 +269,69 @@ def test_send_purchase_order_missing_supplier_email() -> None:
     assert row["count"] == 0
 
 
+def test_purchase_order_resolves_supplier_email_in_detail_and_list() -> None:
+    _reset_tables()
+    _create_user("po_admin", "password", role="admin", email="admin@example.com")
+    headers = _login_headers("po_admin", "password")
+    order_id = _create_purchase_order(supplier_email="supplier@example.com")
+
+    detail_response = client.get(f"/purchase-orders/{order_id}", headers=headers)
+    assert detail_response.status_code == 200, detail_response.text
+    detail_payload = detail_response.json()
+    assert detail_payload["supplier_email_resolved"] == "supplier@example.com"
+    assert detail_payload["supplier_has_email"] is True
+    assert detail_payload["supplier_missing_reason"] is None
+
+    list_response = client.get("/purchase-orders/", headers=headers)
+    assert list_response.status_code == 200, list_response.text
+    listing = list_response.json()
+    assert listing
+    resolved = next(item for item in listing if item["id"] == order_id)
+    assert resolved["supplier_email_resolved"] == "supplier@example.com"
+    assert resolved["supplier_has_email"] is True
+    assert resolved["supplier_missing_reason"] is None
+
+
+def test_send_purchase_order_supplier_deleted_returns_conflict() -> None:
+    _reset_tables()
+    _create_user("po_admin", "password", role="admin", email="admin@example.com")
+    headers = _login_headers("po_admin", "password")
+    order_id = _create_purchase_order(supplier_email="supplier@example.com")
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM suppliers")
+        conn.commit()
+
+    response = client.post(
+        f"/purchase-orders/{order_id}/send-to-supplier",
+        headers=headers,
+        json={},
+    )
+
+    assert response.status_code == 409
+    payload = response.json()
+    assert payload["detail"] == "Fournisseur introuvable sur le site actif."
+
+
+def test_send_purchase_order_supplier_email_missing_returns_bad_request() -> None:
+    _reset_tables()
+    _create_user("po_admin", "password", role="admin", email="admin@example.com")
+    headers = _login_headers("po_admin", "password")
+    order_id = _create_purchase_order(supplier_email=None)
+
+    response = client.post(
+        f"/purchase-orders/{order_id}/send-to-supplier",
+        headers=headers,
+        json={},
+    )
+
+    assert response.status_code == 400
+    payload = response.json()
+    assert (
+        payload["detail"]
+        == "Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi."
+    )
+
+
 def test_send_pharmacy_purchase_order_to_supplier_success() -> None:
     _reset_tables()
     _create_user("po_admin", "password", role="admin", email="admin@example.com")

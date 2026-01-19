@@ -126,6 +126,9 @@ async def send_to_supplier(
             order_id,
             user,
         )
+    except services.SupplierResolutionError as exc:
+        status_code = 409 if exc.code == "SUPPLIER_NOT_FOUND" else 400
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except EmailSendError as exc:
