@@ -1,5 +1,6 @@
 import { ChangeEvent, FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { isAxiosError } from "axios";
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
@@ -176,6 +177,7 @@ export function PharmacyPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isExporting, setIsExporting] = useState(false);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [tableMaxHeight, setTableMaxHeight] = useState<number | null>(null);
@@ -652,6 +654,61 @@ export function PharmacyPage() {
           <p className="text-sm text-slate-400">Gérez vos médicaments et consommables médicaux.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={async () => {
+              setMessage(null);
+              setError(null);
+              setIsExporting(true);
+              try {
+                const params = new URLSearchParams();
+                if (debouncedSearch) {
+                  params.set("q", debouncedSearch);
+                }
+                const response = await api.get<ArrayBuffer>("/pharmacy/pdf/export", {
+                  responseType: "arraybuffer",
+                  params: params.toString() ? Object.fromEntries(params.entries()) : undefined
+                });
+                const blob = new Blob([response.data], { type: "application/pdf" });
+                const url = window.URL.createObjectURL(blob);
+                const link = document.createElement("a");
+                const now = new Date();
+                const timestamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(
+                  now.getDate()
+                ).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(
+                  2,
+                  "0"
+                )}`;
+                link.href = url;
+                link.download = `inventaire_pharmacie_${timestamp}.pdf`;
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                window.URL.revokeObjectURL(url);
+                setMessage("Inventaire exporté en PDF.");
+              } catch (exportError) {
+                let errorMessage = "Une erreur est survenue lors de l'export du PDF.";
+                if (isAxiosError(exportError)) {
+                  const detail = exportError.response?.data?.detail;
+                  if (typeof detail === "string" && detail.trim().length > 0) {
+                    errorMessage = detail;
+                  } else if (exportError.response?.status === 403) {
+                    errorMessage = "Accès refusé.";
+                  }
+                } else if (exportError instanceof Error && exportError.message) {
+                  errorMessage = exportError.message;
+                }
+                setError(errorMessage);
+              } finally {
+                setIsExporting(false);
+              }
+            }}
+            disabled={isExporting}
+            className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-70"
+            title="Exporter l'inventaire au format PDF"
+          >
+            {isExporting ? "Export en cours…" : "Exporter PDF"}
+          </button>
           <ColumnManager
             options={columnOptions}
             visibility={columnVisibility}
