@@ -10,6 +10,8 @@ import { AppTextArea } from "components/AppTextArea";
 interface Supplier {
   id: number;
   name: string;
+  email: string | null;
+  address: string | null;
 }
 
 interface PharmacyItemOption {
@@ -77,6 +79,45 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [sendingId, setSendingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const selectedDraftSupplier = suppliers.find((supplier) => supplier.id === draftSupplier);
+  const selectedEditSupplier = suppliers.find((supplier) => supplier.id === editSupplier);
+
+  const renderSupplierDetails = (supplier?: Supplier) => {
+    if (!supplier) {
+      return null;
+    }
+    return (
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-supplier-email">
+            Email
+          </label>
+          <AppTextInput
+            id="pharmacy-supplier-email"
+            value={supplier.email ?? ""}
+            placeholder="Non renseigné"
+            readOnly
+            disabled
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          />
+        </div>
+        <div className="space-y-1 sm:col-span-2">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-supplier-address">
+            Adresse
+          </label>
+          <AppTextArea
+            id="pharmacy-supplier-address"
+            value={supplier.address ?? ""}
+            placeholder="Non renseignée"
+            rows={2}
+            readOnly
+            disabled
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          />
+        </div>
+      </div>
+    );
+  };
 
   const { data: orders = [], isLoading } = useQuery({
     queryKey: ["pharmacy-orders"],
@@ -472,11 +513,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                   Modifier le bon de commande #{editingOrder.id}
                 </h4>
                 <form className="mt-4 space-y-4" onSubmit={handleEditSubmit}>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-supplier">
-                      Fournisseur
-                    </label>
-                    <select
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-supplier">
+                    Fournisseur
+                  </label>
+                  <select
                       id="pharmacy-edit-order-supplier"
                       value={editSupplier}
                       onChange={(event) =>
@@ -485,18 +526,19 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                       className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                     >
                       <option value="">Aucun</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier.id} value={supplier.id}>
-                          {supplier.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                    {suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {renderSupplierDetails(selectedEditSupplier)}
 
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-status">
-                      Statut
-                    </label>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-status">
+                    Statut
+                  </label>
                     <select
                       id="pharmacy-edit-order-status"
                       value={editStatus}
@@ -547,11 +589,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
               <>
                 <h4 className="text-sm font-semibold text-white">Créer un bon de commande</h4>
                 <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-supplier">
-                      Fournisseur
-                    </label>
-                    <select
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-supplier">
+                    Fournisseur
+                  </label>
+                  <select
                       id="pharmacy-order-supplier"
                       value={draftSupplier}
                       onChange={(event) =>
@@ -560,18 +602,19 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                       className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                     >
                       <option value="">Aucun</option>
-                      {suppliers.map((supplier) => (
-                        <option key={supplier.id} value={supplier.id}>
-                          {supplier.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+                    {suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                {renderSupplierDetails(selectedDraftSupplier)}
 
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-status">
-                      Statut initial
-                    </label>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-status">
+                    Statut initial
+                  </label>
                     <select
                       id="pharmacy-order-status"
                       value={draftStatus}

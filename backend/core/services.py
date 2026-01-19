@@ -8246,9 +8246,15 @@ def send_purchase_order_to_supplier(
         if row is None:
             raise ValueError("Bon de commande introuvable")
         order = _build_purchase_order_detail(conn, row)
-        supplier_email = row["supplier_email"]
         supplier_id = row["supplier_id"]
-        supplier_name = row["supplier_name"]
+        supplier = None
+        if supplier_id is not None:
+            try:
+                supplier = get_supplier(supplier_id)
+            except ValueError:
+                supplier = None
+        supplier_name = supplier.name if supplier else None
+        supplier_email = supplier.email if supplier else None
 
     override_email = to_email_override.strip() if to_email_override else None
     if override_email == "":
@@ -8566,9 +8572,15 @@ def send_pharmacy_purchase_order_to_supplier(
         if row is None:
             raise ValueError("Bon de commande pharmacie introuvable")
         order = _build_pharmacy_purchase_order_detail(conn, row)
-        supplier_email = row["supplier_email"]
         supplier_id = row["supplier_id"]
-        supplier_name = row["supplier_name"]
+        supplier = None
+        if supplier_id is not None:
+            try:
+                supplier = get_supplier(supplier_id)
+            except ValueError:
+                supplier = None
+        supplier_name = supplier.name if supplier else None
+        supplier_email = supplier.email if supplier else None
 
     if not supplier_email or "@" not in str(supplier_email):
         sent_at = datetime.now(timezone.utc).isoformat()
