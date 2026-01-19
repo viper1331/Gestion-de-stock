@@ -1299,6 +1299,9 @@ def ensure_database_ready() -> None:
 
         _restore_inventory_snapshots()
         seed_default_admin()
+        from backend.services import system_settings
+
+        system_settings.seed_default_system_settings()
         _db_initialized = True
 
 

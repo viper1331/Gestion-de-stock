@@ -9,7 +9,8 @@ import os
 from typing import Any
 
 from backend.core import db, models, services
-from backend.services.email_sender import EmailSendError, get_email_settings, send_email_smtp
+from backend.services.email_sender import EmailSendError, send_email_smtp
+from backend.services.system_settings import get_email_smtp_config
 
 logger = logging.getLogger(__name__)
 
@@ -42,7 +43,7 @@ def _get_int_env(name: str, default: int) -> int:
 
 
 def is_email_delivery_available() -> bool:
-    settings = get_email_settings()
+    settings = get_email_smtp_config()
     return bool(settings.dev_sink or settings.host)
 
 

@@ -397,6 +397,12 @@ def _init_core_database() -> None:
                 window_start TEXT NOT NULL,
                 count INTEGER NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS system_settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL,
+                updated_at TEXT NOT NULL,
+                updated_by TEXT
+            );
             """
         )
         default_paths = get_default_site_db_paths()

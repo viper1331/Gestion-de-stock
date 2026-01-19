@@ -5,11 +5,11 @@ import hashlib
 import hmac
 import os
 import secrets
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from backend.core import db, security, services
 from backend.services import notifications
+from backend.services.system_settings import get_email_otp_config
 
 
 class EmailOtpChallengeError(RuntimeError):
@@ -32,15 +32,6 @@ class EmailOtpAttemptsExceeded(RuntimeError):
     pass
 
 
-@dataclass(frozen=True)
-class EmailOtpSettings:
-    ttl_minutes: int
-    code_length: int
-    max_attempts: int
-    resend_cooldown_seconds: int
-    rate_limit_per_hour: int
-
-
 def _utc_now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -51,26 +42,6 @@ def _utc_now_iso() -> str:
 
 def _parse_iso(value: str) -> datetime:
     return datetime.fromisoformat(value)
-
-
-def _get_int_env(name: str, default: int) -> int:
-    raw = os.getenv(name)
-    if raw is None:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        return default
-
-
-def _get_settings() -> EmailOtpSettings:
-    return EmailOtpSettings(
-        ttl_minutes=max(1, _get_int_env("OTP_EMAIL_TTL_MINUTES", 10)),
-        code_length=max(4, _get_int_env("OTP_EMAIL_CODE_LENGTH", 6)),
-        max_attempts=max(1, _get_int_env("OTP_EMAIL_MAX_ATTEMPTS", 5)),
-        resend_cooldown_seconds=max(5, _get_int_env("OTP_EMAIL_RESEND_COOLDOWN_SECONDS", 45)),
-        rate_limit_per_hour=max(1, _get_int_env("OTP_EMAIL_RATE_LIMIT_PER_HOUR", 6)),
-    )
 
 
 def _get_pepper() -> str:
@@ -138,7 +109,7 @@ def _enforce_rate_limit(conn, key: str, limit: int) -> None:
 def _ensure_delivery_available() -> None:
     if notifications.is_email_delivery_available():
         return
-    raise EmailOtpChallengeError("Service e-mail indisponible")
+    raise EmailOtpChallengeError("OTP e-mail indisponible, SMTP non configuré.")
 
 
 def create_email_otp_challenge(
@@ -149,7 +120,7 @@ def create_email_otp_challenge(
 ) -> tuple[str, str | None, int]:
     services.ensure_database_ready()
     _ensure_delivery_available()
-    settings = _get_settings()
+    settings = get_email_otp_config()
     normalized_email = email.strip().lower()
     now = _utc_now()
     challenge_id = secrets.token_urlsafe(32)
@@ -213,7 +184,7 @@ def create_email_otp_challenge(
             (normalized_email, subject, body_text, body_html, now.isoformat()),
         )
         conn.commit()
-    dev_code = code if os.getenv("ALLOW_INSECURE_EMAIL_DEV") == "1" else None
+    dev_code = code if settings.allow_insecure_dev else None
     return challenge_id, dev_code, settings.resend_cooldown_seconds
 
 
@@ -224,7 +195,7 @@ def resend_email_otp_challenge(
 ) -> tuple[str | None, int]:
     services.ensure_database_ready()
     _ensure_delivery_available()
-    settings = _get_settings()
+    settings = get_email_otp_config()
     now = _utc_now()
     with db.get_core_connection() as core_conn:
         row = core_conn.execute(
@@ -301,13 +272,13 @@ def resend_email_otp_challenge(
             (email, subject, body_text, body_html, now.isoformat()),
         )
         core_conn.commit()
-    dev_code = code if os.getenv("ALLOW_INSECURE_EMAIL_DEV") == "1" else None
+    dev_code = code if settings.allow_insecure_dev else None
     return dev_code, settings.resend_cooldown_seconds
 
 
 def verify_email_otp(challenge_id: str, code: str) -> int:
     services.ensure_database_ready()
-    settings = _get_settings()
+    settings = get_email_otp_config()
     now = _utc_now()
     with db.get_core_connection() as conn:
         row = conn.execute(

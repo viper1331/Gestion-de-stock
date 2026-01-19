@@ -16,8 +16,10 @@ from backend.core.logging_config import (
     purge_rotated_logs,
 )
 from backend.services.debug_service import load_debug_config, save_debug_config
+from backend.services.email_sender import EmailSendError, send_email_smtp
 from backend.services.backup_scheduler import backup_scheduler
 from backend.services.backup_settings import MAX_BACKUP_INTERVAL_MINUTES
+from backend.services import system_settings
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -37,10 +39,80 @@ class LogStatusResponse(BaseModel):
     files: list[LogFileEntry]
 
 
+class SmtpSettingsResponse(BaseModel):
+    host: str | None
+    port: int
+    username: str | None
+    from_email: str
+    use_tls: bool
+    use_ssl: bool
+    timeout_seconds: int
+    dev_sink: bool
+    smtp_password_set: bool
+
+
+class SmtpSettingsUpdate(BaseModel):
+    host: str | None = None
+    port: int
+    username: str | None = None
+    from_email: str
+    use_tls: bool
+    use_ssl: bool
+    timeout_seconds: int
+    dev_sink: bool
+    password: str | None = None
+    clear_password: bool | None = None
+
+
+class SmtpTestRequest(BaseModel):
+    to_email: str
+
+
+class OtpEmailSettingsPayload(BaseModel):
+    ttl_minutes: int
+    code_length: int
+    max_attempts: int
+    resend_cooldown_seconds: int
+    rate_limit_per_hour: int
+    allow_insecure_dev: bool
+
+
 def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return user
+
+
+def _normalize_optional_text(value: str | None) -> str | None:
+    if value is None:
+        return None
+    trimmed = value.strip()
+    return trimmed or None
+
+
+def _validate_smtp_payload(payload: SmtpSettingsUpdate) -> None:
+    host = _normalize_optional_text(payload.host)
+    if not payload.dev_sink and not host:
+        raise HTTPException(status_code=400, detail="Hôte SMTP requis")
+    if payload.port < 1 or payload.port > 65535:
+        raise HTTPException(status_code=400, detail="Port SMTP invalide")
+    if payload.use_tls and payload.use_ssl:
+        raise HTTPException(status_code=400, detail="TLS et SSL ne peuvent pas être activés ensemble")
+    if payload.timeout_seconds <= 0:
+        raise HTTPException(status_code=400, detail="Timeout SMTP invalide")
+
+
+def _validate_otp_payload(payload: OtpEmailSettingsPayload) -> None:
+    if payload.ttl_minutes < 3 or payload.ttl_minutes > 60:
+        raise HTTPException(status_code=400, detail="TTL OTP invalide (3-60 minutes)")
+    if payload.code_length < 4 or payload.code_length > 10:
+        raise HTTPException(status_code=400, detail="Longueur du code invalide (4-10)")
+    if payload.max_attempts < 3 or payload.max_attempts > 10:
+        raise HTTPException(status_code=400, detail="Tentatives max invalides (3-10)")
+    if payload.resend_cooldown_seconds < 10 or payload.resend_cooldown_seconds > 300:
+        raise HTTPException(status_code=400, detail="Cooldown invalide (10-300 secondes)")
+    if payload.rate_limit_per_hour < 1 or payload.rate_limit_per_hour > 60:
+        raise HTTPException(status_code=400, detail="Rate limit invalide (1-60 par heure)")
 
 
 @router.get("/debug-config", response_model=models.DebugConfig)
@@ -178,6 +250,107 @@ def update_security_settings(
     config.security.idle_logout_minutes = payload.idle_logout_minutes
     config.security.logout_on_close = payload.logout_on_close
     save_config(config)
+    return payload
+
+
+@router.get("/email/smtp-settings", response_model=SmtpSettingsResponse)
+def get_smtp_settings(user: models.User = Depends(require_admin)) -> SmtpSettingsResponse:
+    config, password_set = system_settings.get_email_smtp_config_state()
+    return SmtpSettingsResponse(
+        host=config.host,
+        port=config.port,
+        username=config.username,
+        from_email=config.from_email,
+        use_tls=config.use_tls,
+        use_ssl=config.use_ssl,
+        timeout_seconds=config.timeout_seconds,
+        dev_sink=config.dev_sink,
+        smtp_password_set=password_set,
+    )
+
+
+@router.put("/email/smtp-settings", response_model=SmtpSettingsResponse)
+def update_smtp_settings(
+    payload: SmtpSettingsUpdate, user: models.User = Depends(require_admin)
+) -> SmtpSettingsResponse:
+    _validate_smtp_payload(payload)
+    current = system_settings.get_setting_json(system_settings.SMTP_SETTINGS_KEY) or {}
+    password_enc = current.get("password_enc")
+    if payload.clear_password:
+        password_enc = None
+    if payload.password not in (None, ""):
+        password_enc = system_settings.encrypt_smtp_password(payload.password)
+    value: dict[str, object] = {
+        "host": _normalize_optional_text(payload.host),
+        "port": payload.port,
+        "username": _normalize_optional_text(payload.username),
+        "from_email": payload.from_email.strip(),
+        "use_tls": payload.use_tls,
+        "use_ssl": payload.use_ssl,
+        "timeout_seconds": payload.timeout_seconds,
+        "dev_sink": payload.dev_sink,
+    }
+    if password_enc:
+        value["password_enc"] = password_enc
+    system_settings.set_setting_json(system_settings.SMTP_SETTINGS_KEY, value, user.username)
+    config, password_set = system_settings.get_email_smtp_config_state()
+    return SmtpSettingsResponse(
+        host=config.host,
+        port=config.port,
+        username=config.username,
+        from_email=config.from_email,
+        use_tls=config.use_tls,
+        use_ssl=config.use_ssl,
+        timeout_seconds=config.timeout_seconds,
+        dev_sink=config.dev_sink,
+        smtp_password_set=password_set,
+    )
+
+
+@router.post("/email/smtp-test")
+def test_smtp_settings(payload: SmtpTestRequest, user: models.User = Depends(require_admin)):
+    raw = system_settings.get_setting_json(system_settings.SMTP_SETTINGS_KEY)
+    if raw is None:
+        raise HTTPException(status_code=400, detail="SMTP non configuré")
+    config, _ = system_settings.get_email_smtp_config_state()
+    if config.dev_sink:
+        return {"status": "skipped"}
+    if not config.host:
+        raise HTTPException(status_code=400, detail="SMTP non configuré")
+    try:
+        send_email_smtp(
+            payload.to_email.strip(),
+            "Test SMTP StockOps",
+            "Ceci est un e-mail de test StockOps.",
+        )
+    except EmailSendError:
+        raise HTTPException(status_code=400, detail="Échec de l'envoi SMTP") from None
+    return {"status": "sent"}
+
+
+@router.get("/email/otp-settings", response_model=OtpEmailSettingsPayload)
+def get_otp_email_settings(user: models.User = Depends(require_admin)) -> OtpEmailSettingsPayload:
+    config = system_settings.get_email_otp_config()
+    return OtpEmailSettingsPayload(
+        ttl_minutes=config.ttl_minutes,
+        code_length=config.code_length,
+        max_attempts=config.max_attempts,
+        resend_cooldown_seconds=config.resend_cooldown_seconds,
+        rate_limit_per_hour=config.rate_limit_per_hour,
+        allow_insecure_dev=config.allow_insecure_dev,
+    )
+
+
+@router.put("/email/otp-settings", response_model=OtpEmailSettingsPayload)
+def update_otp_email_settings(
+    payload: OtpEmailSettingsPayload, user: models.User = Depends(require_admin)
+) -> OtpEmailSettingsPayload:
+    _validate_otp_payload(payload)
+    system_settings.set_setting_json(
+        system_settings.OTP_EMAIL_SETTINGS_KEY,
+        payload.model_dump(),
+        user.username,
+    )
     return payload
 
 
