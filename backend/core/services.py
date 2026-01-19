@@ -44,12 +44,13 @@ from backend.core.storage import (
     relative_to_media,
 )
 from backend.services import barcode as barcode_service
-from backend.services import notifications
+from backend.services import email_sender, notifications
 from backend.services.pdf_config import (
     draw_watermark,
     effective_density_scale,
     margins_for_format,
     page_size_for_format,
+    render_filename,
     resolve_pdf_config,
 )
 from backend.services.pdf.theme import apply_theme_reportlab, resolve_reportlab_theme, scale_reportlab_theme
@@ -2578,6 +2579,12 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_orders ADD COLUMN status TEXT NOT NULL DEFAULT 'PENDING'")
         if "supplier_id" not in po_columns:
             execute("ALTER TABLE purchase_orders ADD COLUMN supplier_id INTEGER")
+        if "last_sent_at" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN last_sent_at TEXT")
+        if "last_sent_to" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN last_sent_to TEXT")
+        if "last_sent_by" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN last_sent_by TEXT")
 
         poi_info = execute("PRAGMA table_info(purchase_order_items)").fetchall()
         poi_columns = {row["name"] for row in poi_info}
@@ -7571,10 +7578,14 @@ def _build_purchase_order_detail(
         id=order_row["id"],
         supplier_id=order_row["supplier_id"],
         supplier_name=order_row["supplier_name"],
+        supplier_email=order_row["supplier_email"],
         status=order_row["status"],
         created_at=order_row["created_at"],
         note=order_row["note"],
         auto_created=bool(order_row["auto_created"]),
+        last_sent_at=order_row["last_sent_at"],
+        last_sent_to=order_row["last_sent_to"],
+        last_sent_by=order_row["last_sent_by"],
         items=items,
     )
 
@@ -7584,7 +7595,7 @@ def list_purchase_orders() -> list[models.PurchaseOrderDetail]:
     with db.get_stock_connection() as conn:
         cur = conn.execute(
             """
-            SELECT po.*, s.name AS supplier_name
+            SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
             FROM purchase_orders AS po
             LEFT JOIN suppliers AS s ON s.id = po.supplier_id
             ORDER BY po.created_at DESC, po.id DESC
@@ -7599,7 +7610,7 @@ def get_purchase_order(order_id: int) -> models.PurchaseOrderDetail:
     with db.get_stock_connection() as conn:
         row = conn.execute(
             """
-            SELECT po.*, s.name AS supplier_name
+            SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
             FROM purchase_orders AS po
             LEFT JOIN suppliers AS s ON s.id = po.supplier_id
             WHERE po.id = ?
@@ -8432,6 +8443,222 @@ def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
         items=item_rows,
         module_key="purchase_orders",
     )
+
+
+def _get_site_info_for_email(site_key: str) -> models.SiteInfo:
+    try:
+        sites_list = sites.list_sites()
+    except Exception:
+        sites_list = []
+    for site in sites_list:
+        if site.site_key == site_key:
+            return site
+    return models.SiteInfo(
+        site_key=site_key,
+        display_name=site_key,
+        db_path=str(db.get_stock_db_path(site_key)),
+        is_active=True,
+    )
+
+
+def _record_purchase_order_email_log(
+    *,
+    created_at: str,
+    site_key: str,
+    module_key: str,
+    purchase_order_id: int,
+    purchase_order_number: str | None,
+    supplier_id: int | None,
+    supplier_email: str,
+    user_id: int | None,
+    user_email: str | None,
+    status: str,
+    message_id: str | None = None,
+    error_message: str | None = None,
+) -> None:
+    with db.get_core_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO purchase_order_email_log (
+                created_at,
+                site_key,
+                module_key,
+                purchase_order_id,
+                purchase_order_number,
+                supplier_id,
+                supplier_email,
+                user_id,
+                user_email,
+                status,
+                message_id,
+                error_message
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                created_at,
+                site_key,
+                module_key,
+                purchase_order_id,
+                purchase_order_number,
+                supplier_id,
+                supplier_email,
+                user_id,
+                user_email,
+                status,
+                message_id,
+                error_message,
+            ),
+        )
+        conn.commit()
+
+
+def send_purchase_order_to_supplier(
+    site_key: str,
+    purchase_order_id: int,
+    sent_by_user: models.User,
+    *,
+    to_email_override: str | None = None,
+) -> models.PurchaseOrderSendResponse:
+    ensure_database_ready()
+    normalized_site_key = sites.normalize_site_key(site_key) or db.DEFAULT_SITE_KEY
+    with db.get_stock_connection(normalized_site_key) as conn:
+        row = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
+            FROM purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            WHERE po.id = ?
+            """,
+            (purchase_order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        order = _build_purchase_order_detail(conn, row)
+        supplier_email = row["supplier_email"]
+        supplier_id = row["supplier_id"]
+
+    override_email = to_email_override.strip() if to_email_override else None
+    if override_email == "":
+        override_email = None
+    if override_email and "@" not in override_email:
+        raise ValueError("Adresse e-mail invalide.")
+    if not override_email:
+        if not supplier_email or "@" not in str(supplier_email):
+            raise ValueError("Email fournisseur manquant.")
+
+    to_email = override_email or str(supplier_email)
+    site_info = _get_site_info_for_email(normalized_site_key)
+    subject, body_text, body_html = notifications.build_purchase_order_email(
+        order, site_info, sent_by_user
+    )
+    pdf_bytes = generate_purchase_order_pdf(order)
+    resolved = resolve_pdf_config("purchase_orders")
+    filename = render_filename(
+        resolved.config.filename.pattern,
+        module_key="purchase_orders",
+        module_title=resolved.module_label,
+        context={"order_id": order.id, "ref": order.id},
+    )
+    reply_to = sent_by_user.email if sent_by_user.email and "@" in sent_by_user.email else None
+    sent_at = datetime.now(timezone.utc).isoformat()
+    try:
+        message_id = email_sender.send_email(
+            to_email,
+            subject,
+            body_text,
+            body_html,
+            reply_to=reply_to,
+            attachments=[(filename, pdf_bytes, "application/pdf")],
+            sensitive=True,
+        )
+        _record_purchase_order_email_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="purchase_orders",
+            purchase_order_id=order.id,
+            purchase_order_number=str(order.id),
+            supplier_id=supplier_id,
+            supplier_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="sent",
+            message_id=message_id,
+        )
+    except email_sender.EmailSendError as exc:
+        _record_purchase_order_email_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="purchase_orders",
+            purchase_order_id=order.id,
+            purchase_order_number=str(order.id),
+            supplier_id=supplier_id,
+            supplier_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="failed",
+            error_message=str(exc),
+        )
+        raise
+
+    with db.get_stock_connection(normalized_site_key) as conn:
+        conn.execute(
+            """
+            UPDATE purchase_orders
+            SET last_sent_at = ?, last_sent_to = ?, last_sent_by = ?
+            WHERE id = ?
+            """,
+            (
+                sent_at,
+                to_email,
+                sent_by_user.email or sent_by_user.username,
+                order.id,
+            ),
+        )
+        conn.commit()
+
+    return models.PurchaseOrderSendResponse(
+        status="sent",
+        sent_to=to_email,
+        sent_at=sent_at,
+        message_id=message_id,
+    )
+
+
+def list_purchase_order_email_logs(
+    site_key: str,
+    purchase_order_id: int,
+) -> list[models.PurchaseOrderEmailLogEntry]:
+    ensure_database_ready()
+    normalized_site_key = sites.normalize_site_key(site_key) or db.DEFAULT_SITE_KEY
+    with db.get_core_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_email_log
+            WHERE site_key = ? AND purchase_order_id = ?
+            ORDER BY created_at DESC
+            """,
+            (normalized_site_key, purchase_order_id),
+        ).fetchall()
+    return [
+        models.PurchaseOrderEmailLogEntry(
+            id=row["id"],
+            created_at=row["created_at"],
+            site_key=row["site_key"],
+            module_key=row["module_key"],
+            purchase_order_id=row["purchase_order_id"],
+            purchase_order_number=row["purchase_order_number"],
+            supplier_id=row["supplier_id"],
+            supplier_email=row["supplier_email"],
+            user_id=row["user_id"],
+            user_email=row["user_email"],
+            status=row["status"],
+            message_id=row["message_id"],
+            error_message=row["error_message"],
+        )
+        for row in rows
+    ]
 
 
 def generate_remise_purchase_order_pdf(order: models.RemisePurchaseOrderDetail) -> bytes:

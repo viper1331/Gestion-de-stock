@@ -152,6 +152,31 @@ def enqueue_login_otp_email(
     enqueue_email(to_email, subject, body_text, body_html, priority=1)
 
 
+def build_purchase_order_email(
+    purchase_order: models.PurchaseOrderDetail,
+    site: models.SiteInfo,
+    user: models.User | None,
+) -> tuple[str, str, str]:
+    site_label = site.display_name or site.site_key
+    subject = f"Bon de commande #{purchase_order.id} - {site_label}"
+    supplier_name = purchase_order.supplier_name or "votre équipe"
+    sender_label = user.display_name or user.username if user else "notre équipe"
+    intro = f"Bonjour {supplier_name},"
+    body_text = (
+        f"{intro}\n\n"
+        f"Veuillez trouver ci-joint le bon de commande #{purchase_order.id} "
+        f"pour le site {site_label}.\n\n"
+        f"Cordialement,\n{sender_label}\n"
+    )
+    body_html = (
+        f"<p>{intro}</p>"
+        f"<p>Veuillez trouver ci-joint le bon de commande <strong>#{purchase_order.id}</strong> "
+        f"pour le site <strong>{site_label}</strong>.</p>"
+        f"<p>Cordialement,<br />{sender_label}</p>"
+    )
+    return subject, body_text, body_html
+
+
 def run_outbox_once(max_batch: int | None = None) -> OutboxRunResult:
     services.ensure_database_ready()
     batch_size = max_batch or _DEFAULT_OUTBOX_BATCH_SIZE

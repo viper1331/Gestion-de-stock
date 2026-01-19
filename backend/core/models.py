@@ -961,6 +961,9 @@ class PurchaseOrder(BaseModel):
     created_at: datetime
     note: str | None = None
     auto_created: bool = False
+    last_sent_at: datetime | None = None
+    last_sent_to: str | None = None
+    last_sent_by: str | None = None
 
 
 class PurchaseOrderItem(BaseModel):
@@ -1001,7 +1004,35 @@ class PurchaseOrderUpdate(BaseModel):
 
 class PurchaseOrderDetail(PurchaseOrder):
     supplier_name: str | None = None
+    supplier_email: str | None = None
     items: list[PurchaseOrderItem] = Field(default_factory=list)
+
+
+class PurchaseOrderEmailLogEntry(BaseModel):
+    id: int
+    created_at: str
+    site_key: str
+    module_key: str
+    purchase_order_id: int
+    purchase_order_number: str | None = None
+    supplier_id: int | None = None
+    supplier_email: str
+    user_id: int | None = None
+    user_email: str | None = None
+    status: Literal["sent", "failed"]
+    message_id: str | None = None
+    error_message: str | None = None
+
+
+class PurchaseOrderSendRequest(BaseModel):
+    to_email_override: str | None = None
+
+
+class PurchaseOrderSendResponse(BaseModel):
+    status: Literal["sent", "failed"]
+    sent_to: str
+    sent_at: str
+    message_id: str | None = None
 
 
 class PurchaseSuggestionLine(BaseModel):
