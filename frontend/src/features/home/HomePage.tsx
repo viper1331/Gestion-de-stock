@@ -17,11 +17,12 @@ import { EditableBlock } from "../../components/EditableBlock";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
-const PATH_MODULE_MAP: Record<string, string> = {
+const PATH_MODULE_MAP: Record<string, string | string[]> = {
   "/barcode": "barcode",
   "/inventory": "clothing",
   "/reports": "clothing",
   "/purchase-orders": "clothing",
+  "/purchase-suggestions": ["clothing", "pharmacy", "inventory_remise"],
   "/suppliers": "suppliers",
   "/collaborators": "dotations",
   "/dotations": "dotations",
@@ -250,12 +251,14 @@ export function HomePage() {
         return false;
       }
 
-      const moduleId = PATH_MODULE_MAP[normalizedPath];
-      if (!moduleId) {
+      const moduleRequirement = PATH_MODULE_MAP[normalizedPath];
+      if (!moduleRequirement) {
         return true;
       }
-
-      return canAccess(moduleId);
+      if (Array.isArray(moduleRequirement)) {
+        return moduleRequirement.some((module) => canAccess(module));
+      }
+      return canAccess(moduleRequirement);
     });
   }, [canAccess, isModuleLoading, quickLinks, user]);
 

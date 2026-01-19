@@ -34,6 +34,11 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
             "purchase-orders-panel": ("clothing", "view"),
         }
     },
+    "module:purchasing:suggestions": {
+        "blocks": {
+            "purchase-suggestions-panel": None,
+        }
+    },
     "module:reports:clothing": {
         "blocks": {
             "reports-main": ("clothing", "view"),

@@ -27,6 +27,7 @@ import { MessagesPage } from "../features/messages/MessagesPage";
 import { PdfStudioPage } from "../features/pdf-config/PdfStudioPage";
 import { PharmacyLinksPage } from "../features/operations/PharmacyLinksPage";
 import { LinkCategoriesPage } from "../features/operations/LinkCategoriesPage";
+import { PurchaseSuggestionsPage } from "../features/purchasing/PurchaseSuggestionsPage";
 
 export const router = createBrowserRouter([
   {
@@ -53,6 +54,7 @@ export const router = createBrowserRouter([
       { path: "barcode", element: <BarcodePage /> },
       { path: "reports", element: <ReportsPage /> },
       { path: "purchase-orders", element: <PurchaseOrdersPage /> },
+      { path: "purchase-suggestions", element: <PurchaseSuggestionsPage /> },
       { path: "settings", element: <SettingsPage /> },
       { path: "suppliers", element: <SuppliersPage /> },
       { path: "collaborators", element: <CollaboratorsPage /> },

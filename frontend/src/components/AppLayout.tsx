@@ -267,6 +267,14 @@ export function AppLayout() {
               module: "clothing"
             },
             {
+              id: "purchase_suggestions",
+              to: "/purchase-suggestions",
+              label: "Suggestions de commandes",
+              tooltip: "Préparer les bons de commande selon les seuils",
+              icon: "💡",
+              modules: ["clothing", "pharmacy", "inventory_remise"]
+            },
+            {
               id: "suppliers",
               to: "/suppliers",
               label: moduleTitles.suppliers,

@@ -32,7 +32,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
-from backend.core import db, menu_registry, models, security, sites
+from backend.core import db, menu_registry, models, security, sites, system_config
 from backend.core.pdf_config_models import PdfColumnConfig, PdfConfig
 from backend.core.storage import (
     MEDIA_ROOT,
@@ -120,6 +120,12 @@ _MODULE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "dotations": ("clothing",),
     "vehicle_qrcodes": ("vehicle_inventory",),
 }
+
+_PURCHASE_SUGGESTION_MODULES: tuple[str, ...] = (
+    "clothing",
+    "pharmacy",
+    "inventory_remise",
+)
 
 
 @dataclass(frozen=True)
@@ -493,6 +499,529 @@ def _normalize_purchase_order_status(status: str | None) -> str:
     if candidate not in _PURCHASE_ORDER_STATUSES:
         raise ValueError("Statut de commande invalide")
     return candidate
+
+
+def _get_purchase_suggestions_safety_buffer() -> int:
+    config = system_config.get_config()
+    raw = config.extra.get("purchase_suggestions_safety_buffer", 0)
+    try:
+        return max(0, int(raw))
+    except (TypeError, ValueError):
+        return 0
+
+
+def _extract_reorder_qty(extra: dict[str, Any] | None) -> int | None:
+    if not extra:
+        return None
+    value = extra.get("reorder_qty")
+    if value is None:
+        return None
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _calculate_suggested_qty(
+    quantity: int, threshold: int, reorder_qty: int | None, safety_buffer: int
+) -> int:
+    if reorder_qty is not None:
+        return max(0, reorder_qty)
+    return max(0, threshold - quantity) + max(0, safety_buffer)
+
+
+def _build_purchase_suggestion_line(
+    *,
+    item_id: int,
+    sku: str | None,
+    label: str | None,
+    quantity: int,
+    threshold: int,
+    unit: str | None,
+    supplier_id: int | None,
+    reorder_qty: int | None,
+    safety_buffer: int,
+) -> dict[str, Any]:
+    qty_suggested = _calculate_suggested_qty(quantity, threshold, reorder_qty, safety_buffer)
+    return {
+        "item_id": item_id,
+        "sku": sku,
+        "label": label,
+        "qty_suggested": qty_suggested,
+        "qty_final": qty_suggested,
+        "unit": unit,
+        "reason": "Stock sous seuil",
+        "stock_current": quantity,
+        "threshold": threshold,
+        "supplier_id": supplier_id,
+    }
+
+
+def _get_reorder_candidates(
+    conn: sqlite3.Connection,
+    module_key: str,
+    safety_buffer: int,
+) -> list[dict[str, Any]]:
+    if module_key == "clothing":
+        rows = conn.execute(
+            """
+            SELECT id, name, sku, size, quantity, low_stock_threshold, supplier_id, track_low_stock
+            FROM items
+            WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
+            """
+        ).fetchall()
+        candidates: list[dict[str, Any]] = []
+        for row in rows:
+            if "track_low_stock" in row.keys() and not bool(row["track_low_stock"]):
+                continue
+            candidates.append(
+                _build_purchase_suggestion_line(
+                    item_id=row["id"],
+                    sku=row["sku"],
+                    label=row["name"],
+                    quantity=row["quantity"],
+                    threshold=row["low_stock_threshold"],
+                    unit=row["size"],
+                    supplier_id=row["supplier_id"],
+                    reorder_qty=None,
+                    safety_buffer=safety_buffer,
+                )
+            )
+        return candidates
+    if module_key == "pharmacy":
+        rows = conn.execute(
+            """
+            SELECT id, name, barcode, packaging, dosage, quantity, low_stock_threshold, extra_json
+            FROM pharmacy_items
+            WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
+            """
+        ).fetchall()
+        candidates = []
+        for row in rows:
+            extra = _parse_extra_json(row["extra_json"])
+            candidates.append(
+                _build_purchase_suggestion_line(
+                    item_id=row["id"],
+                    sku=row["barcode"] or str(row["id"]),
+                    label=row["name"],
+                    quantity=row["quantity"],
+                    threshold=row["low_stock_threshold"],
+                    unit=row["packaging"] or row["dosage"],
+                    supplier_id=extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None,
+                    reorder_qty=_extract_reorder_qty(extra),
+                    safety_buffer=safety_buffer,
+                )
+            )
+        return candidates
+    if module_key == "inventory_remise":
+        rows = conn.execute(
+            """
+            SELECT id, name, sku, size, quantity, low_stock_threshold, supplier_id, track_low_stock, extra_json
+            FROM remise_items
+            WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
+            """
+        ).fetchall()
+        candidates = []
+        for row in rows:
+            if "track_low_stock" in row.keys() and not bool(row["track_low_stock"]):
+                continue
+            extra = _parse_extra_json(row["extra_json"])
+            candidates.append(
+                _build_purchase_suggestion_line(
+                    item_id=row["id"],
+                    sku=row["sku"],
+                    label=row["name"],
+                    quantity=row["quantity"],
+                    threshold=row["low_stock_threshold"],
+                    unit=row["size"],
+                    supplier_id=row["supplier_id"],
+                    reorder_qty=_extract_reorder_qty(extra),
+                    safety_buffer=safety_buffer,
+                )
+            )
+        return candidates
+    raise ValueError(f"Module de suggestion inconnu: {module_key}")
+
+
+def get_reorder_candidates(site_key: str, module_key: str) -> list[dict[str, Any]]:
+    ensure_database_ready()
+    if module_key not in _PURCHASE_SUGGESTION_MODULES:
+        raise ValueError(f"Module de suggestion inconnu: {module_key}")
+    safety_buffer = _get_purchase_suggestions_safety_buffer()
+    with db.get_stock_connection(site_key) as conn:
+        return _get_reorder_candidates(conn, module_key, safety_buffer)
+
+
+def _get_purchase_suggestion_lines(
+    conn: sqlite3.Connection, suggestion_ids: list[int]
+) -> dict[int, list[models.PurchaseSuggestionLine]]:
+    if not suggestion_ids:
+        return {}
+    placeholders = ", ".join("?" for _ in suggestion_ids)
+    rows = conn.execute(
+        f"""
+        SELECT *
+        FROM purchase_suggestion_lines
+        WHERE suggestion_id IN ({placeholders})
+        ORDER BY id
+        """,
+        suggestion_ids,
+    ).fetchall()
+    lines: dict[int, list[models.PurchaseSuggestionLine]] = defaultdict(list)
+    for row in rows:
+        line = models.PurchaseSuggestionLine(
+            id=row["id"],
+            suggestion_id=row["suggestion_id"],
+            item_id=row["item_id"],
+            sku=row["sku"],
+            label=row["label"],
+            qty_suggested=row["qty_suggested"],
+            qty_final=row["qty_final"],
+            unit=row["unit"],
+            reason=row["reason"],
+            stock_current=row["stock_current"],
+            threshold=row["threshold"],
+        )
+        lines[line.suggestion_id].append(line)
+    return lines
+
+
+def list_purchase_suggestions(
+    *,
+    site_key: str,
+    status: str | None = None,
+    module_key: str | None = None,
+    allowed_modules: Iterable[str] | None = None,
+) -> list[models.PurchaseSuggestionDetail]:
+    ensure_database_ready()
+    with db.get_stock_connection(site_key) as conn:
+        query = """
+            SELECT ps.*, s.name AS supplier_name
+            FROM purchase_suggestions AS ps
+            LEFT JOIN suppliers AS s ON s.id = ps.supplier_id
+            WHERE ps.site_key = ?
+        """
+        params: list[Any] = [site_key]
+        if status:
+            query += " AND ps.status = ?"
+            params.append(status)
+        if module_key:
+            query += " AND ps.module_key = ?"
+            params.append(module_key)
+        if allowed_modules is not None:
+            allowed = list(allowed_modules)
+            if not allowed:
+                return []
+            placeholders = ", ".join("?" for _ in allowed)
+            query += f" AND ps.module_key IN ({placeholders})"
+            params.extend(allowed)
+        query += " ORDER BY ps.updated_at DESC, ps.id DESC"
+        rows = conn.execute(query, params).fetchall()
+        suggestion_ids = [row["id"] for row in rows]
+        lines_by_suggestion = _get_purchase_suggestion_lines(conn, suggestion_ids)
+        results: list[models.PurchaseSuggestionDetail] = []
+        for row in rows:
+            results.append(
+                models.PurchaseSuggestionDetail(
+                    id=row["id"],
+                    site_key=row["site_key"],
+                    module_key=row["module_key"],
+                    supplier_id=row["supplier_id"],
+                    supplier_name=row["supplier_name"],
+                    status=row["status"],
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                    created_by=row["created_by"],
+                    lines=lines_by_suggestion.get(row["id"], []),
+                )
+            )
+        return results
+
+
+def get_purchase_suggestion(suggestion_id: int) -> models.PurchaseSuggestionDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT ps.*, s.name AS supplier_name
+            FROM purchase_suggestions AS ps
+            LEFT JOIN suppliers AS s ON s.id = ps.supplier_id
+            WHERE ps.id = ?
+            """,
+            (suggestion_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Suggestion introuvable")
+        lines_by_suggestion = _get_purchase_suggestion_lines(conn, [suggestion_id])
+        return models.PurchaseSuggestionDetail(
+            id=row["id"],
+            site_key=row["site_key"],
+            module_key=row["module_key"],
+            supplier_id=row["supplier_id"],
+            supplier_name=row["supplier_name"],
+            status=row["status"],
+            created_at=row["created_at"],
+            updated_at=row["updated_at"],
+            created_by=row["created_by"],
+            lines=lines_by_suggestion.get(suggestion_id, []),
+        )
+
+
+def refresh_purchase_suggestions(
+    *, site_key: str, module_keys: Iterable[str], created_by: str | None = None
+) -> list[models.PurchaseSuggestionDetail]:
+    ensure_database_ready()
+    safety_buffer = _get_purchase_suggestions_safety_buffer()
+    module_list = [module for module in module_keys if module in _PURCHASE_SUGGESTION_MODULES]
+    if not module_list:
+        return []
+    with db.get_stock_connection(site_key) as conn:
+        for module_key in module_list:
+            candidates = _get_reorder_candidates(conn, module_key, safety_buffer)
+            grouped: dict[int | None, list[dict[str, Any]]] = defaultdict(list)
+            for candidate in candidates:
+                grouped[candidate["supplier_id"]].append(candidate)
+            existing_rows = conn.execute(
+                """
+                SELECT id, supplier_id
+                FROM purchase_suggestions
+                WHERE site_key = ? AND module_key = ? AND status = 'draft'
+                """,
+                (site_key, module_key),
+            ).fetchall()
+            existing_by_supplier: dict[int | None, int] = {
+                row["supplier_id"]: row["id"] for row in existing_rows
+            }
+            processed_suppliers: set[int | None] = set()
+            for supplier_id, items in grouped.items():
+                processed_suppliers.add(supplier_id)
+                suggestion_id = existing_by_supplier.get(supplier_id)
+                if suggestion_id is None:
+                    cur = conn.execute(
+                        """
+                        INSERT INTO purchase_suggestions (
+                            site_key, module_key, supplier_id, status, created_at, updated_at, created_by
+                        )
+                        VALUES (?, ?, ?, 'draft', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)
+                        """,
+                        (site_key, module_key, supplier_id, created_by),
+                    )
+                    suggestion_id = int(cur.lastrowid)
+                else:
+                    conn.execute(
+                        """
+                        UPDATE purchase_suggestions
+                        SET updated_at = CURRENT_TIMESTAMP
+                        WHERE id = ?
+                        """,
+                        (suggestion_id,),
+                    )
+                current_item_ids = {item["item_id"] for item in items}
+                for item in items:
+                    row = conn.execute(
+                        """
+                        SELECT id, qty_final, qty_suggested
+                        FROM purchase_suggestion_lines
+                        WHERE suggestion_id = ? AND item_id = ?
+                        """,
+                        (suggestion_id, item["item_id"]),
+                    ).fetchone()
+                    if row is None:
+                        conn.execute(
+                            """
+                            INSERT INTO purchase_suggestion_lines (
+                                suggestion_id, item_id, sku, label, qty_suggested, qty_final, unit, reason,
+                                stock_current, threshold
+                            )
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            """,
+                            (
+                                suggestion_id,
+                                item["item_id"],
+                                item["sku"],
+                                item["label"],
+                                item["qty_suggested"],
+                                item["qty_final"],
+                                item["unit"],
+                                item["reason"],
+                                item["stock_current"],
+                                item["threshold"],
+                            ),
+                        )
+                        continue
+                    previous_suggested = row["qty_suggested"]
+                    previous_final = row["qty_final"]
+                    next_final = previous_final
+                    if previous_final == previous_suggested:
+                        next_final = item["qty_final"]
+                    conn.execute(
+                        """
+                        UPDATE purchase_suggestion_lines
+                        SET sku = ?, label = ?, qty_suggested = ?, qty_final = ?, unit = ?, reason = ?,
+                            stock_current = ?, threshold = ?
+                        WHERE id = ?
+                        """,
+                        (
+                            item["sku"],
+                            item["label"],
+                            item["qty_suggested"],
+                            next_final,
+                            item["unit"],
+                            item["reason"],
+                            item["stock_current"],
+                            item["threshold"],
+                            row["id"],
+                        ),
+                    )
+                if current_item_ids:
+                    placeholders = ", ".join("?" for _ in current_item_ids)
+                    conn.execute(
+                        f"""
+                        DELETE FROM purchase_suggestion_lines
+                        WHERE suggestion_id = ? AND item_id NOT IN ({placeholders})
+                        """,
+                        (suggestion_id, *current_item_ids),
+                    )
+                else:
+                    conn.execute(
+                        "DELETE FROM purchase_suggestion_lines WHERE suggestion_id = ?",
+                        (suggestion_id,),
+                    )
+            for row in existing_rows:
+                if row["supplier_id"] in processed_suppliers:
+                    continue
+                conn.execute(
+                    """
+                    UPDATE purchase_suggestions
+                    SET status = 'dismissed', updated_at = CURRENT_TIMESTAMP
+                    WHERE id = ?
+                    """,
+                    (row["id"],),
+                )
+                conn.execute(
+                    "DELETE FROM purchase_suggestion_lines WHERE suggestion_id = ?",
+                    (row["id"],),
+                )
+        conn.commit()
+    return list_purchase_suggestions(
+        site_key=site_key,
+        module_key=None,
+        status="draft",
+        allowed_modules=module_list,
+    )
+
+
+def update_purchase_suggestion_lines(
+    suggestion_id: int, payload: models.PurchaseSuggestionUpdatePayload
+) -> models.PurchaseSuggestionDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT status FROM purchase_suggestions WHERE id = ?",
+            (suggestion_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Suggestion introuvable")
+        if row["status"] != "draft":
+            raise ValueError("Suggestion non modifiable")
+        for line in payload.lines:
+            if line.remove:
+                conn.execute(
+                    "DELETE FROM purchase_suggestion_lines WHERE id = ? AND suggestion_id = ?",
+                    (line.id, suggestion_id),
+                )
+                continue
+            if line.qty_final is not None:
+                conn.execute(
+                    """
+                    UPDATE purchase_suggestion_lines
+                    SET qty_final = ?
+                    WHERE id = ? AND suggestion_id = ?
+                    """,
+                    (line.qty_final, line.id, suggestion_id),
+                )
+        remaining = conn.execute(
+            "SELECT COUNT(1) AS total FROM purchase_suggestion_lines WHERE suggestion_id = ?",
+            (suggestion_id,),
+        ).fetchone()
+        if remaining and remaining["total"] == 0:
+            conn.execute(
+                """
+                UPDATE purchase_suggestions
+                SET status = 'dismissed', updated_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (suggestion_id,),
+            )
+        else:
+            conn.execute(
+                "UPDATE purchase_suggestions SET updated_at = CURRENT_TIMESTAMP WHERE id = ?",
+                (suggestion_id,),
+            )
+        conn.commit()
+    return get_purchase_suggestion(suggestion_id)
+
+
+def convert_purchase_suggestion_to_po(
+    suggestion_id: int, user: models.User
+) -> models.PurchaseSuggestionConvertResult:
+    suggestion = get_purchase_suggestion(suggestion_id)
+    if suggestion.status != "draft":
+        raise ValueError("Suggestion déjà traitée")
+    valid_lines = [line for line in suggestion.lines if line.qty_final > 0]
+    if not valid_lines:
+        raise ValueError("Aucune ligne valide pour créer le bon de commande")
+    if suggestion.module_key == "clothing":
+        payload = models.PurchaseOrderCreate(
+            supplier_id=suggestion.supplier_id,
+            items=[
+                models.PurchaseOrderItemInput(
+                    item_id=line.item_id, quantity_ordered=line.qty_final
+                )
+                for line in valid_lines
+            ],
+        )
+        order = create_purchase_order(payload)
+    elif suggestion.module_key == "pharmacy":
+        payload = models.PharmacyPurchaseOrderCreate(
+            supplier_id=suggestion.supplier_id,
+            items=[
+                models.PharmacyPurchaseOrderItemInput(
+                    pharmacy_item_id=line.item_id, quantity_ordered=line.qty_final
+                )
+                for line in valid_lines
+            ],
+        )
+        order = create_pharmacy_purchase_order(payload)
+    elif suggestion.module_key == "inventory_remise":
+        payload = models.RemisePurchaseOrderCreate(
+            supplier_id=suggestion.supplier_id,
+            items=[
+                models.RemisePurchaseOrderItemInput(
+                    remise_item_id=line.item_id, quantity_ordered=line.qty_final
+                )
+                for line in valid_lines
+            ],
+        )
+        order = create_remise_purchase_order(payload)
+    else:
+        raise ValueError("Module de suggestion inconnu")
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            """
+            UPDATE purchase_suggestions
+            SET status = 'converted', updated_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (suggestion_id,),
+        )
+        conn.commit()
+    return models.PurchaseSuggestionConvertResult(
+        suggestion_id=suggestion_id,
+        purchase_order_id=order.id,
+        module_key=suggestion.module_key,
+    )
 
 
 def _aggregate_positive_quantities(entries: Iterable[tuple[int, int]]) -> dict[int, int]:
@@ -1928,6 +2457,33 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_purchase_order_items_item ON purchase_order_items(item_id);
             CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+            CREATE TABLE IF NOT EXISTS purchase_suggestions (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_key TEXT NOT NULL,
+                module_key TEXT NOT NULL,
+                supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                status TEXT NOT NULL DEFAULT 'draft',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                created_by TEXT
+            );
+            CREATE TABLE IF NOT EXISTS purchase_suggestion_lines (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                suggestion_id INTEGER NOT NULL REFERENCES purchase_suggestions(id) ON DELETE CASCADE,
+                item_id INTEGER NOT NULL,
+                sku TEXT,
+                label TEXT,
+                qty_suggested INTEGER NOT NULL,
+                qty_final INTEGER NOT NULL,
+                unit TEXT,
+                reason TEXT,
+                stock_current INTEGER NOT NULL,
+                threshold INTEGER NOT NULL
+            );
+            CREATE INDEX IF NOT EXISTS idx_purchase_suggestions_scope
+            ON purchase_suggestions(site_key, module_key, supplier_id, status);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_suggestion_lines_item
+            ON purchase_suggestion_lines(suggestion_id, item_id);
         """
         )
         execute(

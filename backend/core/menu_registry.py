@@ -19,6 +19,7 @@ ITEM_IDS: set[str] = {
     "clothing_dashboard",
     "clothing_reports",
     "clothing_purchase_orders",
+    "purchase_suggestions",
     "suppliers",
     "collaborators",
     "dotations",

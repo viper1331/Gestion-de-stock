@@ -738,6 +738,33 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     quantity_ordered INTEGER NOT NULL,
                     quantity_received INTEGER NOT NULL DEFAULT 0
                 );
+                CREATE TABLE IF NOT EXISTS purchase_suggestions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_key TEXT NOT NULL,
+                    module_key TEXT NOT NULL,
+                    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                    status TEXT NOT NULL DEFAULT 'draft',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    created_by TEXT
+                );
+                CREATE TABLE IF NOT EXISTS purchase_suggestion_lines (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    suggestion_id INTEGER NOT NULL REFERENCES purchase_suggestions(id) ON DELETE CASCADE,
+                    item_id INTEGER NOT NULL,
+                    sku TEXT,
+                    label TEXT,
+                    qty_suggested INTEGER NOT NULL,
+                    qty_final INTEGER NOT NULL,
+                    unit TEXT,
+                    reason TEXT,
+                    stock_current INTEGER NOT NULL,
+                    threshold INTEGER NOT NULL
+                );
+                CREATE INDEX IF NOT EXISTS idx_purchase_suggestions_scope
+                ON purchase_suggestions(site_key, module_key, supplier_id, status);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_suggestion_lines_item
+                ON purchase_suggestion_lines(suggestion_id, item_id);
                 CREATE TABLE IF NOT EXISTS ui_menu_prefs (
                     username TEXT NOT NULL,
                     menu_key TEXT NOT NULL,
