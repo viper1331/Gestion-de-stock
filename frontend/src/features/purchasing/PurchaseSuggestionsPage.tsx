@@ -17,6 +17,7 @@ interface PurchaseSuggestionLine {
   item_id: number;
   sku: string | null;
   label: string | null;
+  variant_label: string | null;
   qty_suggested: number;
   qty_final: number;
   unit: string | null;
@@ -190,6 +191,7 @@ function SuggestionCard({
             <tr>
               <th className="px-3 py-2">Article</th>
               <th className="px-3 py-2">SKU</th>
+              <th className="px-3 py-2 w-32">Taille / Variante</th>
               <th className="px-3 py-2">Stock</th>
               <th className="px-3 py-2">Seuil</th>
               <th className="px-3 py-2">Qté suggérée</th>
@@ -204,6 +206,11 @@ function SuggestionCard({
               <tr key={line.id}>
                 <td className="px-3 py-2 text-slate-100">{line.label ?? `#${line.item_id}`}</td>
                 <td className="px-3 py-2 text-slate-400">{line.sku ?? "-"}</td>
+                <td className="px-3 py-2 text-xs text-slate-300 md:text-sm">
+                  <span className="block max-w-[140px] whitespace-normal break-words leading-snug">
+                    {line.variant_label ?? "—"}
+                  </span>
+                </td>
                 <td className="px-3 py-2 text-slate-400">{line.stock_current}</td>
                 <td className="px-3 py-2 text-slate-400">{line.threshold}</td>
                 <td className="px-3 py-2 text-slate-300">{line.qty_suggested}</td>
@@ -234,7 +241,7 @@ function SuggestionCard({
             ))}
             {suggestion.lines.length === 0 ? (
               <tr>
-                <td className="px-3 py-4 text-center text-sm text-slate-500" colSpan={9}>
+                <td className="px-3 py-4 text-center text-sm text-slate-500" colSpan={10}>
                   Aucune ligne disponible.
                 </td>
               </tr>

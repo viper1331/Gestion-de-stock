@@ -277,3 +277,48 @@ def test_permissions_filter_modules() -> None:
 
     response = client.get("/purchasing/suggestions", params={"module": "clothing"}, headers=user_headers)
     assert response.status_code == 403, response.text
+
+
+def test_suggestion_variant_labels() -> None:
+    _reset_tables()
+    _create_user("suggest_admin", "password", role="admin")
+    headers = _login_headers("suggest_admin", "password")
+
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO items (name, sku, size, quantity, low_stock_threshold, track_low_stock)
+            VALUES ('T-shirt', 'CL-05', 'M', 1, 5, 1)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, dosage, packaging, quantity, low_stock_threshold)
+            VALUES ('Paracétamol', '500mg', 'Boîte 100', 2, 6)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, track_low_stock)
+            VALUES ('Lampe', 'RM-02', 0, 4, 1)
+            """
+        )
+        conn.commit()
+
+    response = client.post(
+        "/purchasing/suggestions/refresh",
+        json={"module_keys": ["clothing", "pharmacy", "inventory_remise"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    response = client.get("/purchasing/suggestions", headers=headers)
+    assert response.status_code == 200, response.text
+    data = response.json()
+    suggestions_by_module = {entry["module_key"]: entry for entry in data}
+    assert suggestions_by_module["clothing"]["lines"][0]["variant_label"] == "M"
+    assert (
+        suggestions_by_module["pharmacy"]["lines"][0]["variant_label"]
+        == "500mg • Boîte 100"
+    )
+    assert suggestions_by_module["inventory_remise"]["lines"][0]["variant_label"] is None

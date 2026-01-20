@@ -1046,6 +1046,7 @@ class PurchaseSuggestionLine(BaseModel):
     item_id: int
     sku: str | None = None
     label: str | None = None
+    variant_label: str | None = None
     qty_suggested: int
     qty_final: int
     unit: str | None = None
