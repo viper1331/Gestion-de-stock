@@ -1060,6 +1060,9 @@ class PurchaseSuggestion(BaseModel):
     module_key: str
     supplier_id: int | None = None
     supplier_name: str | None = None
+    supplier_display: str | None = None
+    supplier_email: str | None = None
+    supplier_status: Literal["ok", "missing", "inactive", "no_email"] | None = None
     status: Literal["draft", "converted", "dismissed"]
     created_at: datetime
     updated_at: datetime
