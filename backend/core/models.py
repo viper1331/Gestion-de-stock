@@ -1236,6 +1236,7 @@ class PharmacyItemBase(BaseModel):
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
     category_id: Optional[int] = Field(default=None, gt=0)
+    supplier_id: Optional[int] = Field(default=None, gt=0)
     extra: dict[str, object] | None = None
 
 
@@ -1253,6 +1254,7 @@ class PharmacyItemUpdate(BaseModel):
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
     category_id: Optional[int] = Field(default=None, gt=0)
+    supplier_id: Optional[int] = Field(default=None, gt=0)
     extra: dict[str, object] | None = None
 
 

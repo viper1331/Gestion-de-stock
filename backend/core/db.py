@@ -851,7 +851,8 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     low_stock_threshold INTEGER NOT NULL DEFAULT 5,
                     expiration_date DATE,
                     location TEXT,
-                    category_id INTEGER REFERENCES pharmacy_categories(id) ON DELETE SET NULL
+                    category_id INTEGER REFERENCES pharmacy_categories(id) ON DELETE SET NULL,
+                    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
                 );
                 CREATE TABLE IF NOT EXISTS pharmacy_movements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
