@@ -7544,6 +7544,61 @@ class SupplierResolutionError(ValueError):
         self.message = message
 
 
+def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> models.Supplier:
+    ensure_database_ready()
+    if supplier_id is None:
+        raise SupplierResolutionError(
+            "SUPPLIER_MISSING",
+            "Bon de commande non associé à un fournisseur",
+        )
+    normalized_site_key = sites.normalize_site_key(str(site_id)) if site_id is not None else None
+    if not normalized_site_key:
+        normalized_site_key = db.DEFAULT_SITE_KEY
+    with db.get_stock_connection(normalized_site_key) as conn:
+        row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+        if row is None:
+            raise SupplierResolutionError(
+                "SUPPLIER_NOT_FOUND",
+                "Fournisseur introuvable",
+            )
+        if "is_active" in row.keys() and not row["is_active"]:
+            raise SupplierResolutionError(
+                "SUPPLIER_INACTIVE",
+                "Fournisseur supprimé ou inactif",
+            )
+        if "is_deleted" in row.keys() and row["is_deleted"]:
+            raise SupplierResolutionError(
+                "SUPPLIER_INACTIVE",
+                "Fournisseur supprimé ou inactif",
+            )
+        if "deleted_at" in row.keys() and row["deleted_at"]:
+            raise SupplierResolutionError(
+                "SUPPLIER_INACTIVE",
+                "Fournisseur supprimé ou inactif",
+            )
+        modules_map = _load_supplier_modules(conn, [row["id"]])
+        modules = modules_map.get(row["id"]) or ["suppliers"]
+        return models.Supplier(
+            id=row["id"],
+            name=row["name"],
+            contact_name=row["contact_name"],
+            phone=row["phone"],
+            email=row["email"],
+            address=row["address"],
+            modules=modules,
+        )
+
+
+def require_supplier_email(supplier: models.Supplier) -> str:
+    raw_email = str(supplier.email or "").strip()
+    if not raw_email:
+        raise SupplierResolutionError("SUPPLIER_EMAIL_MISSING", "Email fournisseur manquant")
+    normalized = _normalize_email(raw_email)
+    if len(normalized) < 5 or "@" not in normalized:
+        raise SupplierResolutionError("SUPPLIER_EMAIL_INVALID", "Email fournisseur invalide")
+    return normalized
+
+
 def resolve_supplier_email_for_order(
     *,
     site_id: str | int,
@@ -8487,22 +8542,180 @@ def send_purchase_order_to_supplier(
     )
 
 
+def send_remise_purchase_order_to_supplier(
+    site_key: str,
+    purchase_order_id: int,
+    sent_by_user: models.User,
+    *,
+    to_email_override: str | None = None,
+) -> models.PurchaseOrderSendResponse:
+    ensure_database_ready()
+    normalized_site_key = sites.normalize_site_key(site_key) or db.DEFAULT_SITE_KEY
+    with db.get_stock_connection(normalized_site_key) as conn:
+        row = conn.execute(
+            """
+            SELECT po.*, s.name AS supplier_name
+            FROM remise_purchase_orders AS po
+            LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            WHERE po.id = ?
+            """,
+            (purchase_order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        order = _build_remise_purchase_order_detail(
+            conn,
+            row,
+            site_key=normalized_site_key,
+        )
+        supplier_id = row["supplier_id"]
+        supplier_name = row["supplier_name"]
+
+    try:
+        supplier = get_supplier_for_order(normalized_site_key, supplier_id)
+        resolved_email = require_supplier_email(supplier)
+    except SupplierResolutionError as exc:
+        sent_at = datetime.now(timezone.utc).isoformat()
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="remise_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=None,
+            recipient_email=None,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="error",
+            message=str(exc),
+        )
+        raise
+
+    to_email = resolved_email
+    supplier_name = supplier.name if supplier else supplier_name
+    supplier_email = supplier.email if supplier else None
+    site_info = _get_site_info_for_email(normalized_site_key)
+    subject, body_text, body_html = notifications.build_purchase_order_email(
+        order, site_info, sent_by_user
+    )
+    subject = f"Bon de commande REMISE - {site_info.display_name or site_info.site_key} - #{order.id}"
+    pdf_bytes = generate_remise_purchase_order_pdf(order)
+    resolved = resolve_pdf_config("remise_orders")
+    filename = render_filename(
+        resolved.config.filename.pattern,
+        module_key="remise_orders",
+        module_title=resolved.module_label,
+        context={"order_id": order.id, "ref": order.id},
+    )
+    reply_to = sent_by_user.email if sent_by_user.email and "@" in sent_by_user.email else None
+    sent_at = datetime.now(timezone.utc).isoformat()
+    try:
+        message_id = email_sender.send_email(
+            to_email,
+            subject,
+            body_text,
+            body_html,
+            reply_to=reply_to,
+            attachments=[(filename, pdf_bytes, "application/pdf")],
+            sensitive=True,
+        )
+        _record_purchase_order_email_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="remise_orders",
+            purchase_order_id=order.id,
+            purchase_order_number=str(order.id),
+            supplier_id=supplier_id,
+            supplier_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="sent",
+            message_id=message_id,
+        )
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="remise_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="ok",
+            message=f"Email envoyé ({message_id})",
+        )
+    except email_sender.EmailSendError as exc:
+        _record_purchase_order_email_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="remise_orders",
+            purchase_order_id=order.id,
+            purchase_order_number=str(order.id),
+            supplier_id=supplier_id,
+            supplier_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="failed",
+            error_message=str(exc),
+        )
+        _record_purchase_order_audit_log(
+            created_at=sent_at,
+            site_key=normalized_site_key,
+            module_key="remise_orders",
+            action="send_to_supplier",
+            purchase_order_id=order.id,
+            supplier_id=supplier_id,
+            supplier_name=supplier_name,
+            supplier_email=supplier_email,
+            recipient_email=to_email,
+            user_id=sent_by_user.id,
+            user_email=sent_by_user.email,
+            status="error",
+            message=str(exc),
+        )
+        raise
+
+    return models.PurchaseOrderSendResponse(
+        status="sent",
+        sent_to=to_email,
+        sent_at=sent_at,
+        message_id=message_id,
+    )
+
+
 def list_purchase_order_email_logs(
     site_key: str,
     purchase_order_id: int,
+    module_key: str | None = None,
 ) -> list[models.PurchaseOrderEmailLogEntry]:
     ensure_database_ready()
     normalized_site_key = sites.normalize_site_key(site_key) or db.DEFAULT_SITE_KEY
     with db.get_core_connection() as conn:
-        rows = conn.execute(
-            """
-            SELECT *
-            FROM purchase_order_email_log
-            WHERE site_key = ? AND purchase_order_id = ?
-            ORDER BY created_at DESC
-            """,
-            (normalized_site_key, purchase_order_id),
-        ).fetchall()
+        if module_key:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM purchase_order_email_log
+                WHERE site_key = ? AND purchase_order_id = ? AND module_key = ?
+                ORDER BY created_at DESC
+                """,
+                (normalized_site_key, purchase_order_id, module_key),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT *
+                FROM purchase_order_email_log
+                WHERE site_key = ? AND purchase_order_id = ?
+                ORDER BY created_at DESC
+                """,
+                (normalized_site_key, purchase_order_id),
+            ).fetchall()
     return [
         models.PurchaseOrderEmailLogEntry(
             id=row["id"],
@@ -8973,6 +9186,7 @@ def _build_remise_purchase_order_detail(
     order_row: sqlite3.Row,
     *,
     site_key: str | None = None,
+    suppliers_map: dict[int, models.Supplier] | None = None,
 ) -> models.RemisePurchaseOrderDetail:
     items_cur = conn.execute(
         """
@@ -9004,30 +9218,51 @@ def _build_remise_purchase_order_detail(
         )
         for item_row in items_cur.fetchall()
     ]
+    supplier_email = None
     resolved_email = None
     supplier_has_email = False
     supplier_missing_reason = None
-    try:
-        resolved_email, _ = resolve_supplier_email_for_order(
-            site_id=site_key or db.get_current_site_key(),
-            supplier_id=order_row["supplier_id"],
-            legacy_supplier_name=order_row["supplier_name"],
-            legacy_supplier_email=None,
-        )
-        if resolved_email and "@" in resolved_email:
-            supplier_has_email = True
+    supplier_missing = False
+    supplier_id = order_row["supplier_id"]
+    supplier = None
+    if supplier_id is None:
+        supplier_missing_reason = "SUPPLIER_MISSING"
+    else:
+        if suppliers_map is not None:
+            supplier = suppliers_map.get(supplier_id)
         else:
-            resolved_email = None
-            supplier_missing_reason = "SUPPLIER_EMAIL_MISSING"
-    except SupplierResolutionError as exc:
-        supplier_missing_reason = exc.code
+            row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+            if row is not None:
+                modules_map = _load_supplier_modules(conn, [row["id"]])
+                modules = modules_map.get(row["id"]) or ["suppliers"]
+                supplier = models.Supplier(
+                    id=row["id"],
+                    name=row["name"],
+                    contact_name=row["contact_name"],
+                    phone=row["phone"],
+                    email=row["email"],
+                    address=row["address"],
+                    modules=modules,
+                )
+        if supplier is None:
+            supplier_missing = True
+            supplier_missing_reason = "SUPPLIER_NOT_FOUND"
+        else:
+            supplier_email = supplier.email
+            try:
+                resolved_email = require_supplier_email(supplier)
+                supplier_has_email = True
+            except SupplierResolutionError as exc:
+                supplier_missing_reason = exc.code
     return models.RemisePurchaseOrderDetail(
         id=order_row["id"],
-        supplier_id=order_row["supplier_id"],
+        supplier_id=supplier_id,
         supplier_name=order_row["supplier_name"],
+        supplier_email=supplier_email,
         supplier_email_resolved=resolved_email,
         supplier_has_email=supplier_has_email,
         supplier_missing_reason=supplier_missing_reason,
+        supplier_missing=supplier_missing,
         status=order_row["status"],
         created_at=order_row["created_at"],
         note=order_row["note"],
@@ -9048,8 +9283,36 @@ def list_remise_purchase_orders() -> list[models.RemisePurchaseOrderDetail]:
             """
         )
         rows = cur.fetchall()
+        supplier_ids = {row["supplier_id"] for row in rows if row["supplier_id"] is not None}
+        suppliers_map: dict[int, models.Supplier] = {}
+        if supplier_ids:
+            placeholders = ", ".join("?" for _ in supplier_ids)
+            supplier_rows = conn.execute(
+                f"SELECT * FROM suppliers WHERE id IN ({placeholders})",
+                tuple(supplier_ids),
+            ).fetchall()
+            modules_map = _load_supplier_modules(
+                conn, [supplier_row["id"] for supplier_row in supplier_rows]
+            )
+            suppliers_map = {
+                supplier_row["id"]: models.Supplier(
+                    id=supplier_row["id"],
+                    name=supplier_row["name"],
+                    contact_name=supplier_row["contact_name"],
+                    phone=supplier_row["phone"],
+                    email=supplier_row["email"],
+                    address=supplier_row["address"],
+                    modules=modules_map.get(supplier_row["id"]) or ["suppliers"],
+                )
+                for supplier_row in supplier_rows
+            }
         return [
-            _build_remise_purchase_order_detail(conn, row, site_key=db.get_current_site_key())
+            _build_remise_purchase_order_detail(
+                conn,
+                row,
+                site_key=db.get_current_site_key(),
+                suppliers_map=suppliers_map,
+            )
             for row in rows
         ]
 
@@ -9068,7 +9331,32 @@ def get_remise_purchase_order(order_id: int) -> models.RemisePurchaseOrderDetail
         ).fetchone()
         if row is None:
             raise ValueError("Bon de commande introuvable")
-        return _build_remise_purchase_order_detail(conn, row, site_key=db.get_current_site_key())
+        supplier_ids = [row["supplier_id"]] if row["supplier_id"] is not None else []
+        suppliers_map: dict[int, models.Supplier] = {}
+        if supplier_ids:
+            supplier_row = conn.execute(
+                "SELECT * FROM suppliers WHERE id = ?",
+                (supplier_ids[0],),
+            ).fetchone()
+            if supplier_row is not None:
+                modules_map = _load_supplier_modules(conn, [supplier_row["id"]])
+                suppliers_map = {
+                    supplier_row["id"]: models.Supplier(
+                        id=supplier_row["id"],
+                        name=supplier_row["name"],
+                        contact_name=supplier_row["contact_name"],
+                        phone=supplier_row["phone"],
+                        email=supplier_row["email"],
+                        address=supplier_row["address"],
+                        modules=modules_map.get(supplier_row["id"]) or ["suppliers"],
+                    )
+                }
+        return _build_remise_purchase_order_detail(
+            conn,
+            row,
+            site_key=db.get_current_site_key(),
+            suppliers_map=suppliers_map,
+        )
 
 
 def create_remise_purchase_order(

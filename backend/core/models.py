@@ -1139,9 +1139,11 @@ class RemisePurchaseOrderUpdate(BaseModel):
 
 
 class RemisePurchaseOrderDetail(RemisePurchaseOrder):
+    supplier_email: str | None = None
     supplier_email_resolved: str | None = None
     supplier_has_email: bool = False
     supplier_missing_reason: str | None = None
+    supplier_missing: bool = False
     items: list[RemisePurchaseOrderItem] = Field(default_factory=list)
 
 
