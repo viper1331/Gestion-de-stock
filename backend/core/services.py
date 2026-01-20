@@ -10193,6 +10193,16 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT * FROM pharmacy_items ORDER BY name COLLATE NOCASE")
+        rows = cur.fetchall()
+        supplier_ids = sorted({row["supplier_id"] for row in rows if row["supplier_id"] is not None})
+        suppliers_by_id: dict[int, sqlite3.Row] = {}
+        if supplier_ids:
+            placeholders = ", ".join("?" for _ in supplier_ids)
+            supplier_rows = conn.execute(
+                f"SELECT id, name, email FROM suppliers WHERE id IN ({placeholders})",
+                supplier_ids,
+            ).fetchall()
+            suppliers_by_id = {row["id"]: row for row in supplier_rows}
         return [
             models.PharmacyItem(
                 id=row["id"],
@@ -10206,9 +10216,19 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 location=row["location"],
                 category_id=row["category_id"],
                 supplier_id=row["supplier_id"] if "supplier_id" in row.keys() else None,
+                supplier_name=(
+                    suppliers_by_id.get(row["supplier_id"])["name"]
+                    if row["supplier_id"] is not None and row["supplier_id"] in suppliers_by_id
+                    else None
+                ),
+                supplier_email=(
+                    suppliers_by_id.get(row["supplier_id"])["email"]
+                    if row["supplier_id"] is not None and row["supplier_id"] in suppliers_by_id
+                    else None
+                ),
                 extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
             )
-            for row in cur.fetchall()
+            for row in rows
         ]
 
 
