@@ -121,7 +121,11 @@ async def get_order_email_log(
         services.get_purchase_order(order_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
-    return services.list_purchase_order_email_logs(db.get_current_site_key(), order_id)
+    return services.list_purchase_order_email_logs(
+        db.get_current_site_key(),
+        order_id,
+        module_key="purchase_orders",
+    )
 
 
 @router.put("/{order_id}", response_model=models.PurchaseOrderDetail)

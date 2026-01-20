@@ -37,6 +37,8 @@ interface PurchaseOrderDetail {
   supplier_id: number | null;
   supplier_name: string | null;
   supplier_email: string | null;
+  supplier_missing?: boolean;
+  supplier_missing_reason?: string | null;
   status: string;
   created_at: string;
   note: string | null;
@@ -188,6 +190,38 @@ export function PurchaseOrdersPanel({
       return candidate;
     }
     return item.item_id ?? null;
+  };
+
+  const getSupplierSendState = (order: PurchaseOrderDetail) => {
+    const missingReason = order.supplier_missing_reason;
+    const isMissingSupplier =
+      order.supplier_missing ||
+      missingReason === "SUPPLIER_NOT_FOUND" ||
+      missingReason === "SUPPLIER_MISSING" ||
+      missingReason === "SUPPLIER_INACTIVE";
+    if (isMissingSupplier) {
+      return {
+        canSend: false,
+        tooltip:
+          missingReason === "SUPPLIER_MISSING"
+            ? "Bon de commande non associé à un fournisseur"
+            : "Fournisseur introuvable (supprimé ?)"
+      };
+    }
+    if (
+      missingReason === "SUPPLIER_EMAIL_MISSING" ||
+      missingReason === "SUPPLIER_EMAIL_INVALID" ||
+      !order.supplier_email
+    ) {
+      return {
+        canSend: false,
+        tooltip: "Ajoutez un email fournisseur pour activer l'envoi"
+      };
+    }
+    return {
+      canSend: true,
+      tooltip: "Envoyer le bon de commande au fournisseur"
+    };
   };
 
   const { data: orders = [], isLoading: loadingOrders } = useQuery({
@@ -576,21 +610,22 @@ export function PurchaseOrdersPanel({
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
-                          {canSendEmail ? (
-                            <button
-                              type="button"
-                              onClick={() => handleOpenSendModal(order)}
-                              disabled={!order.supplier_email}
-                              className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-                              title={
-                                order.supplier_email
-                                  ? "Envoyer le bon de commande au fournisseur"
-                                  : "Ajoutez un email fournisseur pour activer l'envoi"
-                              }
-                            >
-                              Envoyer au fournisseur
-                            </button>
-                          ) : null}
+                          {canSendEmail
+                            ? (() => {
+                                const supplierState = getSupplierSendState(order);
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleOpenSendModal(order)}
+                                    disabled={!supplierState.canSend}
+                                    className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                    title={supplierState.tooltip}
+                                  >
+                                    Envoyer au fournisseur
+                                  </button>
+                                );
+                              })()
+                            : null}
                           {user?.role === "admin" ? (
                             <button
                               type="button"
@@ -861,8 +896,12 @@ export function PurchaseOrdersPanel({
               <div>
                 <p className="text-xs uppercase text-slate-500">Destinataire</p>
                 <p className="font-semibold">
-                  {sendModalOrder.supplier_name ?? "Fournisseur"} ·{" "}
-                  {sendModalOrder.supplier_email ?? "Email manquant"}
+                  {sendModalOrder.supplier_missing ||
+                  sendModalOrder.supplier_missing_reason === "SUPPLIER_NOT_FOUND" ||
+                  sendModalOrder.supplier_missing_reason === "SUPPLIER_INACTIVE"
+                    ? "Fournisseur introuvable"
+                    : sendModalOrder.supplier_name ?? "Fournisseur"}{" "}
+                  · {sendModalOrder.supplier_email ?? "Email manquant"}
                 </p>
               </div>
               <div className="space-y-1">
