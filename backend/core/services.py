@@ -680,6 +680,30 @@ def _get_purchase_suggestion_lines(
     return lines
 
 
+def _is_supplier_inactive(row: sqlite3.Row) -> bool:
+    if "is_active" in row.keys() and not row["is_active"]:
+        return True
+    if "is_deleted" in row.keys() and row["is_deleted"]:
+        return True
+    if "deleted_at" in row.keys() and row["deleted_at"]:
+        return True
+    return False
+
+
+def _resolve_suggestion_supplier_payload(
+    row: sqlite3.Row | None,
+) -> tuple[str | None, str | None, str]:
+    if row is None:
+        return None, None, "missing"
+    display = row["name"]
+    if _is_supplier_inactive(row):
+        return display, None, "inactive"
+    email = str(row["email"] or "").strip()
+    if not email:
+        return display, None, "no_email"
+    return display, row["email"], "ok"
+
+
 def list_purchase_suggestions(
     *,
     site_key: str,
@@ -690,9 +714,8 @@ def list_purchase_suggestions(
     ensure_database_ready()
     with db.get_stock_connection(site_key) as conn:
         query = """
-            SELECT ps.*, s.name AS supplier_name
+            SELECT ps.*
             FROM purchase_suggestions AS ps
-            LEFT JOIN suppliers AS s ON s.id = ps.supplier_id
             WHERE ps.site_key = ?
         """
         params: list[Any] = [site_key]
@@ -711,17 +734,37 @@ def list_purchase_suggestions(
             params.extend(allowed)
         query += " ORDER BY ps.updated_at DESC, ps.id DESC"
         rows = conn.execute(query, params).fetchall()
+        supplier_ids = sorted({row["supplier_id"] for row in rows if row["supplier_id"] is not None})
+        suppliers_by_id: dict[int, sqlite3.Row] = {}
+        if supplier_ids:
+            placeholders = ", ".join("?" for _ in supplier_ids)
+            supplier_rows = conn.execute(
+                f"SELECT * FROM suppliers WHERE id IN ({placeholders})",
+                supplier_ids,
+            ).fetchall()
+            suppliers_by_id = {row["id"]: row for row in supplier_rows}
         suggestion_ids = [row["id"] for row in rows]
         lines_by_suggestion = _get_purchase_suggestion_lines(conn, suggestion_ids)
         results: list[models.PurchaseSuggestionDetail] = []
         for row in rows:
+            supplier_row = (
+                suppliers_by_id.get(row["supplier_id"])
+                if row["supplier_id"] is not None
+                else None
+            )
+            supplier_display, supplier_email, supplier_status = _resolve_suggestion_supplier_payload(
+                supplier_row
+            )
             results.append(
                 models.PurchaseSuggestionDetail(
                     id=row["id"],
                     site_key=row["site_key"],
                     module_key=row["module_key"],
                     supplier_id=row["supplier_id"],
-                    supplier_name=row["supplier_name"],
+                    supplier_name=supplier_display,
+                    supplier_display=supplier_display,
+                    supplier_email=supplier_email,
+                    supplier_status=supplier_status,
                     status=row["status"],
                     created_at=row["created_at"],
                     updated_at=row["updated_at"],
@@ -737,22 +780,33 @@ def get_purchase_suggestion(suggestion_id: int) -> models.PurchaseSuggestionDeta
     with db.get_stock_connection() as conn:
         row = conn.execute(
             """
-            SELECT ps.*, s.name AS supplier_name
+            SELECT ps.*
             FROM purchase_suggestions AS ps
-            LEFT JOIN suppliers AS s ON s.id = ps.supplier_id
             WHERE ps.id = ?
             """,
             (suggestion_id,),
         ).fetchone()
         if row is None:
             raise ValueError("Suggestion introuvable")
+        supplier_row = None
+        if row["supplier_id"] is not None:
+            supplier_row = conn.execute(
+                "SELECT * FROM suppliers WHERE id = ?",
+                (row["supplier_id"],),
+            ).fetchone()
+        supplier_display, supplier_email, supplier_status = _resolve_suggestion_supplier_payload(
+            supplier_row
+        )
         lines_by_suggestion = _get_purchase_suggestion_lines(conn, [suggestion_id])
         return models.PurchaseSuggestionDetail(
             id=row["id"],
             site_key=row["site_key"],
             module_key=row["module_key"],
             supplier_id=row["supplier_id"],
-            supplier_name=row["supplier_name"],
+            supplier_name=supplier_display,
+            supplier_display=supplier_display,
+            supplier_email=supplier_email,
+            supplier_status=supplier_status,
             status=row["status"],
             created_at=row["created_at"],
             updated_at=row["updated_at"],
@@ -962,6 +1016,12 @@ def convert_purchase_suggestion_to_po(
     suggestion = get_purchase_suggestion(suggestion_id)
     if suggestion.status != "draft":
         raise ValueError("Suggestion déjà traitée")
+    if suggestion.supplier_id is None:
+        raise ValueError("Fournisseur introuvable")
+    try:
+        resolve_supplier(suggestion.site_key, suggestion.supplier_id)
+    except SupplierResolutionError as exc:
+        raise ValueError(exc.message) from exc
     valid_lines = [line for line in suggestion.lines if line.qty_final > 0]
     if not valid_lines:
         raise ValueError("Aucune ligne valide pour créer le bon de commande")
@@ -7544,14 +7604,9 @@ class SupplierResolutionError(ValueError):
         self.message = message
 
 
-def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> models.Supplier:
+def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
     ensure_database_ready()
-    if supplier_id is None:
-        raise SupplierResolutionError(
-            "SUPPLIER_MISSING",
-            "Bon de commande non associé à un fournisseur",
-        )
-    normalized_site_key = sites.normalize_site_key(str(site_id)) if site_id is not None else None
+    normalized_site_key = sites.normalize_site_key(str(site_key)) if site_key is not None else None
     if not normalized_site_key:
         normalized_site_key = db.DEFAULT_SITE_KEY
     with db.get_stock_connection(normalized_site_key) as conn:
@@ -7587,6 +7642,15 @@ def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> model
             address=row["address"],
             modules=modules,
         )
+
+
+def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> models.Supplier:
+    if supplier_id is None:
+        raise SupplierResolutionError(
+            "SUPPLIER_MISSING",
+            "Bon de commande non associé à un fournisseur",
+        )
+    return resolve_supplier(site_id, supplier_id)
 
 
 def require_supplier_email(supplier: models.Supplier) -> str:

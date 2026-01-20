@@ -9,6 +9,7 @@ import { EditablePageLayout, type EditablePageBlock } from "../../components/Edi
 import { EditableBlock } from "../../components/EditableBlock";
 
 type PurchaseSuggestionStatus = "draft" | "converted" | "dismissed";
+type SupplierSuggestionStatus = "ok" | "missing" | "inactive" | "no_email";
 
 interface PurchaseSuggestionLine {
   id: number;
@@ -30,6 +31,9 @@ interface PurchaseSuggestion {
   module_key: string;
   supplier_id: number | null;
   supplier_name: string | null;
+  supplier_display: string | null;
+  supplier_email: string | null;
+  supplier_status: SupplierSuggestionStatus | null;
   status: PurchaseSuggestionStatus;
   created_at: string;
   updated_at: string;
@@ -95,15 +99,40 @@ function SuggestionCard({
   };
 
   const hasLines = suggestion.lines.length > 0;
-  const convertDisabled = !canEdit || isConverting || !hasLines;
+  const supplierStatus = suggestion.supplier_status ?? "missing";
+  const supplierDisplay = suggestion.supplier_display ?? suggestion.supplier_name;
+  const convertBlocked =
+    supplierStatus === "missing" || supplierStatus === "inactive" || !hasLines;
+  const convertDisabled = !canEdit || isConverting || convertBlocked;
+  const supplierStatusLabel = {
+    missing: "Fournisseur introuvable",
+    inactive: "Fournisseur inactif",
+    no_email: "Email fournisseur manquant",
+    ok: null
+  } satisfies Record<SupplierSuggestionStatus, string | null>;
+  const supplierStatusTooltip = {
+    missing: "Ce fournisseur n'existe plus sur le site.",
+    inactive: "Ce fournisseur est inactif ou supprimé sur le site.",
+    no_email: "Ajoutez un email au fournisseur pour activer l'envoi.",
+    ok: ""
+  } satisfies Record<SupplierSuggestionStatus, string>;
+  const convertTooltip =
+    supplierStatus === "missing"
+      ? "Ce fournisseur n'existe plus sur le site."
+      : supplierStatus === "inactive"
+        ? "Ce fournisseur est inactif ou supprimé sur le site."
+        : "";
 
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 shadow-sm">
       <div className="flex flex-wrap items-start justify-between gap-4">
         <div className="space-y-1">
           <h3 className="text-lg font-semibold text-white">
-            {suggestion.supplier_name ?? "Fournisseur non renseigné"}
+            {supplierDisplay ?? "Fournisseur non renseigné"}
           </h3>
+          <p className="text-xs text-slate-400">
+            Email : {suggestion.supplier_email ?? "—"}
+          </p>
           <p className="text-xs uppercase tracking-wide text-slate-400">
             {moduleLabel} · Site {suggestion.site_key}
           </p>
@@ -118,6 +147,14 @@ function SuggestionCard({
               Brouillon
             </span>
           ) : null}
+          {supplierStatusLabel[supplierStatus] ? (
+            <span
+              className="rounded-full border border-rose-400/40 bg-rose-500/10 px-3 py-1 text-xs font-semibold text-rose-200"
+              title={supplierStatusTooltip[supplierStatus]}
+            >
+              {supplierStatusLabel[supplierStatus]}
+            </span>
+          ) : null}
           {!canEdit ? (
             <span className="rounded-full border border-slate-700 px-3 py-1 text-xs text-slate-400">
               Lecture seule
@@ -127,6 +164,7 @@ function SuggestionCard({
             type="button"
             className="rounded bg-emerald-500 px-4 py-2 text-sm font-semibold text-white transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:bg-emerald-900"
             disabled={convertDisabled}
+            title={convertDisabled && convertTooltip ? convertTooltip : undefined}
             onClick={() => onConvert(suggestion.id)}
           >
             {isConverting ? "Création..." : "Créer BC"}
