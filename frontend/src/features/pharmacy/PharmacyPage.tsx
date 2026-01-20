@@ -31,6 +31,8 @@ interface PharmacyItem {
   location: string | null;
   category_id: number | null;
   supplier_id: number | null;
+  supplier_name?: string | null;
+  supplier_email?: string | null;
   extra?: Record<string, unknown>;
 }
 
@@ -127,7 +129,8 @@ type PharmacyColumnKey =
   | "low_stock_threshold"
   | "expiration"
   | "location"
-  | "category";
+  | "category"
+  | "supplier";
 
 const PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY = "gsp/pharmacy-column-visibility";
 
@@ -140,7 +143,8 @@ const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
   low_stock_threshold: true,
   expiration: true,
   location: true,
-  category: false
+  category: false,
+  supplier: true
 };
 
 const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
@@ -152,7 +156,8 @@ const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
   { key: "low_stock_threshold", label: "Seuil faible" },
   { key: "expiration", label: "Expiration" },
   { key: "location", label: "Localisation" },
-  { key: "category", label: "Catégorie" }
+  { key: "category", label: "Catégorie" },
+  { key: "supplier", label: "Fournisseur" }
 ];
 
 const normalizeSearchTerm = (value: string) => value.toLowerCase().replace(/\s+/g, " ").trim();
@@ -832,6 +837,9 @@ export function PharmacyPage() {
               ) : null}
               {columnVisibility.expiration !== false ? <th className="px-4 py-3 text-left">Expiration</th> : null}
               {columnVisibility.location !== false ? <th className="px-4 py-3 text-left">Localisation</th> : null}
+              {columnVisibility.supplier !== false ? (
+                <th className="hidden px-4 py-3 text-left lg:table-cell">Fournisseur</th>
+              ) : null}
               {columnVisibility.category !== false ? <th className="px-4 py-3 text-left">Catégorie</th> : null}
               {customColumns.map((column) =>
                 columnVisibility[column.key] === true ? (
@@ -933,6 +941,26 @@ export function PharmacyPage() {
                   ) : null}
                   {columnVisibility.location !== false ? (
                     <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
+                  ) : null}
+                  {columnVisibility.supplier !== false ? (
+                    <td className="hidden px-4 py-3 text-slate-300 lg:table-cell">
+                      {item.supplier_name ? (
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-medium text-slate-200">{item.supplier_name}</span>
+                          {item.supplier_email ? null : (
+                            <span className="inline-flex items-center rounded border border-slate-600/60 bg-slate-800/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+                              Email manquant
+                            </span>
+                          )}
+                        </div>
+                      ) : item.supplier_id ? (
+                        <span className="inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                          Fournisseur introuvable
+                        </span>
+                      ) : (
+                        <span className="text-slate-500">—</span>
+                      )}
+                    </td>
                   ) : null}
                   {columnVisibility.category !== false ? (
                     <td className="px-4 py-3 text-slate-300">

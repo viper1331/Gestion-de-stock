@@ -1260,6 +1260,8 @@ class PharmacyItemUpdate(BaseModel):
 
 class PharmacyItem(PharmacyItemBase):
     id: int
+    supplier_name: Optional[str] = None
+    supplier_email: Optional[str] = None
     extra: dict[str, object] = Field(default_factory=dict)
 
 
