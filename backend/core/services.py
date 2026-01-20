@@ -21,7 +21,7 @@ import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from textwrap import wrap
-from typing import Any, BinaryIO, Callable, Iterable, Iterator, Optional, TypeVar
+from typing import Any, BinaryIO, Callable, ContextManager, Iterable, Iterator, Optional, TypeVar
 from urllib.parse import urlparse
 from uuid import uuid4
 
@@ -86,6 +86,8 @@ _PASSWORD_RESET_MIN_LENGTH = 10
 _MENU_ORDER_MAX_ITEMS = 200
 _MENU_ORDER_MAX_ID_LENGTH = 100
 
+_SUPPLIER_MIGRATION_LOCK = threading.Lock()
+_SUPPLIER_MIGRATED_SITES: set[str] = set()
 
 class MessageRateLimitError(RuntimeError):
     def __init__(self, *, count: int, window_seconds: int) -> None:
@@ -257,6 +259,11 @@ def _resolve_media_path(relative_path: str | None) -> Path | None:
     except ValueError:
         return None
     return candidate
+
+
+def _get_site_stock_conn(site_key: str | int | None) -> ContextManager[sqlite3.Connection]:
+    normalized = sites.normalize_site_key(str(site_key)) if site_key else db.DEFAULT_SITE_KEY
+    return db.get_stock_connection(normalized)
 
 
 def _store_media_file(directory: Path, stream: BinaryIO, filename: str | None) -> str:
@@ -675,7 +682,7 @@ def get_reorder_candidates(site_key: str, module_key: str) -> list[dict[str, Any
     if module_key not in _PURCHASE_SUGGESTION_MODULES:
         raise ValueError(f"Module de suggestion inconnu: {module_key}")
     safety_buffer = _get_purchase_suggestions_safety_buffer()
-    with db.get_stock_connection(site_key) as conn:
+    with _get_site_stock_conn(site_key) as conn:
         return _get_reorder_candidates(conn, module_key, safety_buffer)
 
 
@@ -734,7 +741,78 @@ def _resolve_suggestion_supplier_payload(
     email = str(row["email"] or "").strip()
     if not email:
         return display, None, "no_email"
+    normalized_email = _normalize_email(email)
+    if len(normalized_email) < 5 or "@" not in normalized_email:
+        return display, None, "no_email"
     return display, row["email"], "ok"
+
+
+def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+        (table_name,),
+    ).fetchone()
+    return row is not None
+
+
+def migrate_legacy_suppliers_to_site(site_key: str | int | None) -> None:
+    normalized_site_key = sites.normalize_site_key(str(site_key)) if site_key else db.DEFAULT_SITE_KEY
+    if not normalized_site_key:
+        normalized_site_key = db.DEFAULT_SITE_KEY
+    if normalized_site_key == db.DEFAULT_SITE_KEY:
+        return
+    with _SUPPLIER_MIGRATION_LOCK:
+        if normalized_site_key in _SUPPLIER_MIGRATED_SITES:
+            return
+        _SUPPLIER_MIGRATED_SITES.add(normalized_site_key)
+    try:
+        with db.get_stock_connection(db.DEFAULT_SITE_KEY) as legacy, db.get_stock_connection(
+            normalized_site_key
+        ) as site:
+            if not _table_exists(legacy, "suppliers") or not _table_exists(site, "suppliers"):
+                return
+            legacy_count = legacy.execute("SELECT COUNT(1) FROM suppliers").fetchone()[0]
+            site_count = site.execute("SELECT COUNT(1) FROM suppliers").fetchone()[0]
+            if legacy_count <= 0 or site_count > 0:
+                return
+            rows = legacy.execute(
+                "SELECT id, name, contact_name, phone, email, address FROM suppliers"
+            ).fetchall()
+            if rows:
+                site.executemany(
+                    """
+                    INSERT OR IGNORE INTO suppliers (id, name, contact_name, phone, email, address)
+                    VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    [
+                        (
+                            row["id"],
+                            row["name"],
+                            row["contact_name"],
+                            row["phone"],
+                            row["email"],
+                            row["address"],
+                        )
+                        for row in rows
+                    ],
+                )
+            if _table_exists(legacy, "supplier_modules") and _table_exists(site, "supplier_modules"):
+                module_rows = legacy.execute(
+                    "SELECT supplier_id, module FROM supplier_modules"
+                ).fetchall()
+                if module_rows:
+                    site.executemany(
+                        """
+                        INSERT OR IGNORE INTO supplier_modules (supplier_id, module)
+                        VALUES (?, ?)
+                        """,
+                        [(row["supplier_id"], row["module"]) for row in module_rows],
+                    )
+            site.commit()
+    except Exception:
+        with _SUPPLIER_MIGRATION_LOCK:
+            _SUPPLIER_MIGRATED_SITES.discard(normalized_site_key)
+        raise
 
 
 def list_purchase_suggestions(
@@ -745,7 +823,8 @@ def list_purchase_suggestions(
     allowed_modules: Iterable[str] | None = None,
 ) -> list[models.PurchaseSuggestionDetail]:
     ensure_database_ready()
-    with db.get_stock_connection(site_key) as conn:
+    migrate_legacy_suppliers_to_site(site_key)
+    with _get_site_stock_conn(site_key) as conn:
         query = """
             SELECT ps.*
             FROM purchase_suggestions AS ps
@@ -856,7 +935,8 @@ def refresh_purchase_suggestions(
     module_list = [module for module in module_keys if module in _PURCHASE_SUGGESTION_MODULES]
     if not module_list:
         return []
-    with db.get_stock_connection(site_key) as conn:
+    migrate_legacy_suppliers_to_site(site_key)
+    with _get_site_stock_conn(site_key) as conn:
         for module_key in module_list:
             candidates = _get_reorder_candidates(conn, module_key, safety_buffer)
             grouped: dict[int | None, list[dict[str, Any]]] = defaultdict(list)
@@ -7506,10 +7586,16 @@ def _get_module_title(module_key: str) -> str:
     return titles.get(module_key, module_key)
 
 
-def list_suppliers(module: str | None = None) -> list[models.Supplier]:
+def list_suppliers(
+    site_key: str | int | None = None, module: str | None = None
+) -> list[models.Supplier]:
     ensure_database_ready()
+    resolved_site_key = (
+        sites.normalize_site_key(str(site_key)) if site_key else db.get_current_site_key()
+    )
+    migrate_legacy_suppliers_to_site(resolved_site_key)
     module_filter = (module or "").strip().lower()
-    with db.get_stock_connection() as conn:
+    with _get_site_stock_conn(resolved_site_key) as conn:
         if module_filter:
             if module_filter == "suppliers":
                 cur = conn.execute(
@@ -7563,9 +7649,13 @@ def list_suppliers(module: str | None = None) -> list[models.Supplier]:
         return suppliers
 
 
-def get_supplier(supplier_id: int) -> models.Supplier:
+def get_supplier(site_key: str | int | None, supplier_id: int) -> models.Supplier:
     ensure_database_ready()
-    with db.get_stock_connection() as conn:
+    resolved_site_key = (
+        sites.normalize_site_key(str(site_key)) if site_key else db.get_current_site_key()
+    )
+    migrate_legacy_suppliers_to_site(resolved_site_key)
+    with _get_site_stock_conn(resolved_site_key) as conn:
         cur = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,))
         row = cur.fetchone()
         if row is None:
@@ -7583,10 +7673,15 @@ def get_supplier(supplier_id: int) -> models.Supplier:
         )
 
 
-def create_supplier(payload: models.SupplierCreate) -> models.Supplier:
+def create_supplier(
+    site_key: str | int | None, payload: models.SupplierCreate
+) -> models.Supplier:
     ensure_database_ready()
+    resolved_site_key = (
+        sites.normalize_site_key(str(site_key)) if site_key else db.get_current_site_key()
+    )
     modules = _normalize_supplier_modules(payload.modules)
-    with db.get_stock_connection() as conn:
+    with _get_site_stock_conn(resolved_site_key) as conn:
         cur = conn.execute(
             """
             INSERT INTO suppliers (name, contact_name, phone, email, address)
@@ -7597,15 +7692,20 @@ def create_supplier(payload: models.SupplierCreate) -> models.Supplier:
         supplier_id = cur.lastrowid
         _replace_supplier_modules(conn, supplier_id, modules)
         conn.commit()
-        return get_supplier(supplier_id)
+        return get_supplier(resolved_site_key, supplier_id)
 
 
-def update_supplier(supplier_id: int, payload: models.SupplierUpdate) -> models.Supplier:
+def update_supplier(
+    site_key: str | int | None, supplier_id: int, payload: models.SupplierUpdate
+) -> models.Supplier:
     ensure_database_ready()
+    resolved_site_key = (
+        sites.normalize_site_key(str(site_key)) if site_key else db.get_current_site_key()
+    )
     updates = payload.model_dump(exclude_unset=True)
     modules_update = updates.pop("modules", None)
     fields = {k: v for k, v in updates.items()}
-    with db.get_stock_connection() as conn:
+    with _get_site_stock_conn(resolved_site_key) as conn:
         cur = conn.execute("SELECT 1 FROM suppliers WHERE id = ?", (supplier_id,))
         if cur.fetchone() is None:
             raise ValueError("Fournisseur introuvable")
@@ -7618,12 +7718,15 @@ def update_supplier(supplier_id: int, payload: models.SupplierUpdate) -> models.
             modules = _normalize_supplier_modules(modules_update)
             _replace_supplier_modules(conn, supplier_id, modules)
         conn.commit()
-    return get_supplier(supplier_id)
+    return get_supplier(resolved_site_key, supplier_id)
 
 
-def delete_supplier(supplier_id: int) -> None:
+def delete_supplier(site_key: str | int | None, supplier_id: int) -> None:
     ensure_database_ready()
-    with db.get_stock_connection() as conn:
+    resolved_site_key = (
+        sites.normalize_site_key(str(site_key)) if site_key else db.get_current_site_key()
+    )
+    with _get_site_stock_conn(resolved_site_key) as conn:
         cur = conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
         if cur.rowcount == 0:
             raise ValueError("Fournisseur introuvable")
@@ -7642,7 +7745,8 @@ def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
     normalized_site_key = sites.normalize_site_key(str(site_key)) if site_key is not None else None
     if not normalized_site_key:
         normalized_site_key = db.DEFAULT_SITE_KEY
-    with db.get_stock_connection(normalized_site_key) as conn:
+    migrate_legacy_suppliers_to_site(normalized_site_key)
+    with _get_site_stock_conn(normalized_site_key) as conn:
         row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
         if row is None:
             raise SupplierResolutionError(
@@ -7706,6 +7810,7 @@ def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> model
             "SUPPLIER_MISSING",
             "Bon de commande non associé à un fournisseur",
         )
+    migrate_legacy_suppliers_to_site(site_id)
     with db.get_stock_connection(site_id) as conn:
         supplier = resolve_supplier_for_order(conn, site_id, supplier_id)
     if supplier is None:
@@ -7737,6 +7842,7 @@ def resolve_supplier_email_for_order(
     normalized_site_key = sites.normalize_site_key(str(site_id)) if site_id is not None else None
     if not normalized_site_key:
         normalized_site_key = db.DEFAULT_SITE_KEY
+    migrate_legacy_suppliers_to_site(normalized_site_key)
     with db.get_stock_connection(normalized_site_key) as conn:
         supplier = resolve_supplier_for_order(conn, normalized_site_key, supplier_id)
     if supplier is None:

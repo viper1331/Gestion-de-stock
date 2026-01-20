@@ -4,7 +4,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import get_current_user
-from backend.core import models, services
+from backend.core import db, models, services
 
 router = APIRouter()
 
@@ -22,7 +22,8 @@ async def list_suppliers(
     user: models.User = Depends(get_current_user),
 ) -> list[models.Supplier]:
     _require_permission(user, action="view")
-    return services.list_suppliers(module=module)
+    site_key = db.get_current_site_key()
+    return services.list_suppliers(site_key=site_key, module=module)
 
 
 @router.post("/", response_model=models.Supplier, status_code=201)
@@ -30,7 +31,8 @@ async def create_supplier(
     payload: models.SupplierCreate, user: models.User = Depends(get_current_user)
 ) -> models.Supplier:
     _require_permission(user, action="edit")
-    return services.create_supplier(payload)
+    site_key = db.get_current_site_key()
+    return services.create_supplier(site_key, payload)
 
 
 @router.get("/{supplier_id}", response_model=models.Supplier)
@@ -39,7 +41,8 @@ async def get_supplier(
 ) -> models.Supplier:
     _require_permission(user, action="view")
     try:
-        return services.get_supplier(supplier_id)
+        site_key = db.get_current_site_key()
+        return services.get_supplier(site_key, supplier_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -52,7 +55,8 @@ async def update_supplier(
 ) -> models.Supplier:
     _require_permission(user, action="edit")
     try:
-        return services.update_supplier(supplier_id, payload)
+        site_key = db.get_current_site_key()
+        return services.update_supplier(site_key, supplier_id, payload)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
@@ -63,6 +67,7 @@ async def delete_supplier(
 ) -> None:
     _require_permission(user, action="edit")
     try:
-        services.delete_supplier(supplier_id)
+        site_key = db.get_current_site_key()
+        services.delete_supplier(site_key, supplier_id)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
