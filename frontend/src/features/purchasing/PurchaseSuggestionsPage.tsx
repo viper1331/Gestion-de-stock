@@ -100,28 +100,41 @@ function SuggestionCard({
 
   const hasLines = suggestion.lines.length > 0;
   const supplierStatus = suggestion.supplier_status ?? "missing";
-  const supplierDisplay = suggestion.supplier_display ?? suggestion.supplier_name;
+  const hasSupplier = suggestion.supplier_id !== null;
+  const supplierDisplay = hasSupplier
+    ? suggestion.supplier_display ?? suggestion.supplier_name ?? "Fournisseur introuvable"
+    : "Fournisseur non renseigné";
   const convertBlocked =
-    supplierStatus === "missing" || supplierStatus === "inactive" || !hasLines;
+    !hasSupplier ||
+    supplierStatus === "missing" ||
+    supplierStatus === "inactive" ||
+    supplierStatus === "no_email" ||
+    !hasLines;
   const convertDisabled = !canEdit || isConverting || convertBlocked;
   const supplierStatusLabel = {
-    missing: "Fournisseur introuvable",
+    missing: hasSupplier ? "Fournisseur introuvable" : "Fournisseur non renseigné",
     inactive: "Fournisseur inactif",
     no_email: "Email fournisseur manquant",
     ok: null
   } satisfies Record<SupplierSuggestionStatus, string | null>;
   const supplierStatusTooltip = {
-    missing: "Ce fournisseur n'existe plus sur le site.",
+    missing: hasSupplier
+      ? "Ce fournisseur n'existe plus sur le site."
+      : "Associez un fournisseur pour générer un bon de commande.",
     inactive: "Ce fournisseur est inactif ou supprimé sur le site.",
     no_email: "Ajoutez un email au fournisseur pour activer l'envoi.",
     ok: ""
   } satisfies Record<SupplierSuggestionStatus, string>;
   const convertTooltip =
-    supplierStatus === "missing"
-      ? "Ce fournisseur n'existe plus sur le site."
-      : supplierStatus === "inactive"
-        ? "Ce fournisseur est inactif ou supprimé sur le site."
-        : "";
+    !hasSupplier
+      ? "Renseignez un fournisseur pour créer un bon de commande."
+      : supplierStatus === "missing"
+        ? "Ce fournisseur n'existe plus sur le site."
+        : supplierStatus === "inactive"
+          ? "Ce fournisseur est inactif ou supprimé sur le site."
+          : supplierStatus === "no_email"
+            ? "Ajoutez un email fournisseur pour créer un bon de commande."
+            : "";
 
   return (
     <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 shadow-sm">

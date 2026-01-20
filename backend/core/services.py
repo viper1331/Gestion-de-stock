@@ -573,6 +573,23 @@ def _resolve_supplier_id_from_name(
     return int(row["id"]) if row is not None else None
 
 
+def _require_supplier_for_module(
+    conn: sqlite3.Connection,
+    supplier_id: int,
+    *,
+    module_key: str,
+) -> None:
+    row = conn.execute(
+        "SELECT 1 FROM suppliers WHERE id = ?",
+        (supplier_id,),
+    ).fetchone()
+    if row is None:
+        raise ValueError("Fournisseur invalide")
+    modules = _load_supplier_modules(conn, [supplier_id]).get(supplier_id) or ["suppliers"]
+    if module_key not in modules:
+        raise ValueError("Fournisseur invalide")
+
+
 def _get_reorder_candidates(
     conn: sqlite3.Connection,
     module_key: str,
@@ -607,7 +624,15 @@ def _get_reorder_candidates(
     if module_key == "pharmacy":
         rows = conn.execute(
             """
-            SELECT id, name, barcode, packaging, dosage, quantity, low_stock_threshold, extra_json
+            SELECT id,
+                   name,
+                   barcode,
+                   packaging,
+                   dosage,
+                   quantity,
+                   low_stock_threshold,
+                   supplier_id,
+                   extra_json
             FROM pharmacy_items
             WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
             """
@@ -616,8 +641,12 @@ def _get_reorder_candidates(
         for row in rows:
             extra = _parse_extra_json(row["extra_json"])
             supplier_id = (
-                extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None
+                row["supplier_id"] if "supplier_id" in row.keys() else None
             )
+            if supplier_id is None:
+                supplier_id = (
+                    extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None
+                )
             if supplier_id is None:
                 supplier_id = _resolve_supplier_id_from_name(
                     conn,
@@ -2780,6 +2809,8 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute(
                 "ALTER TABLE pharmacy_items ADD COLUMN low_stock_threshold INTEGER NOT NULL DEFAULT 5"
             )
+        if "supplier_id" not in pharmacy_columns:
+            execute("ALTER TABLE pharmacy_items ADD COLUMN supplier_id INTEGER")
         if "extra_json" not in pharmacy_columns:
             execute("ALTER TABLE pharmacy_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
         execute(
@@ -2787,6 +2818,12 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             CREATE UNIQUE INDEX IF NOT EXISTS idx_pharmacy_items_barcode
             ON pharmacy_items(barcode)
             WHERE barcode IS NOT NULL
+            """
+        )
+        execute(
+            """
+            CREATE INDEX IF NOT EXISTS idx_pharmacy_items_supplier_id
+            ON pharmacy_items(supplier_id)
             """
         )
 
@@ -10168,6 +10205,7 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 expiration_date=row["expiration_date"],
                 location=row["location"],
                 category_id=row["category_id"],
+                supplier_id=row["supplier_id"] if "supplier_id" in row.keys() else None,
                 extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
             )
             for row in cur.fetchall()
@@ -10608,6 +10646,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
             expiration_date=row["expiration_date"],
             location=row["location"],
             category_id=row["category_id"],
+            supplier_id=row["supplier_id"] if "supplier_id" in row.keys() else None,
             extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
         )
 
@@ -10620,6 +10659,9 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
     extra = validate_and_merge_extra("pharmacy_items", None, payload.extra)
     with db.get_stock_connection() as conn:
         barcode = _normalize_barcode(payload.barcode)
+        supplier_id = payload.supplier_id
+        if supplier_id is not None:
+            _require_supplier_for_module(conn, supplier_id, module_key="pharmacy")
         try:
             cur = conn.execute(
                 """
@@ -10633,9 +10675,10 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     expiration_date,
                     location,
                     category_id,
+                    supplier_id,
                     extra_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
@@ -10647,6 +10690,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     expiration_date,
                     payload.location,
                     payload.category_id,
+                    supplier_id,
                     _dump_extra_json(extra),
                 ),
             )
@@ -10674,6 +10718,9 @@ def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> mo
             raise ValueError("Produit pharmaceutique introuvable")
         merged_extra = validate_and_merge_extra("pharmacy_items", row["extra_json"], extra_payload)
         fields["extra_json"] = _dump_extra_json(merged_extra)
+    if "supplier_id" in fields and fields["supplier_id"] is not None:
+        with db.get_stock_connection() as conn:
+            _require_supplier_for_module(conn, int(fields["supplier_id"]), module_key="pharmacy")
     if not fields:
         return get_pharmacy_item(item_id)
     assignments = ", ".join(f"{col} = ?" for col in fields)

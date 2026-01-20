@@ -30,6 +30,7 @@ interface PharmacyItem {
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
+  supplier_id: number | null;
   extra?: Record<string, unknown>;
 }
 
@@ -43,6 +44,7 @@ interface PharmacyPayload {
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
+  supplier_id: number | null;
   extra: Record<string, unknown>;
 }
 
@@ -56,6 +58,7 @@ const EMPTY_PHARMACY_PAYLOAD: PharmacyPayload = {
   expiration_date: null,
   location: null,
   category_id: null,
+  supplier_id: null,
   extra: {}
 };
 
@@ -69,7 +72,14 @@ interface PharmacyFormDraft {
   expiration_date: string;
   location: string;
   category_id: string;
+  supplier_id: string;
   extra: Record<string, unknown>;
+}
+
+interface SupplierOption {
+  id: number;
+  name: string;
+  email: string | null;
 }
 
 function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
@@ -84,6 +94,7 @@ function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
     expiration_date: payload.expiration_date ?? "",
     location: payload.location ?? "",
     category_id: payload.category_id ? String(payload.category_id) : "",
+    supplier_id: payload.supplier_id ? String(payload.supplier_id) : "",
     extra: payload.extra ?? {}
   };
 }
@@ -216,6 +227,7 @@ export function PharmacyPage() {
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const canView = user?.role === "admin" || modulePermissions.canAccess("pharmacy");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("pharmacy", "edit");
+  const canViewSuppliers = user?.role === "admin" || modulePermissions.canAccess("suppliers");
   const moduleTitle = useModuleTitle("pharmacy");
 
   const { data: items = [], isFetching } = useQuery({
@@ -234,6 +246,17 @@ export function PharmacyPage() {
       return response.data;
     },
     enabled: canView
+  });
+
+  const { data: suppliers = [] } = useQuery({
+    queryKey: ["suppliers", { module: "pharmacy" }],
+    queryFn: async () => {
+      const response = await api.get<SupplierOption[]>("/suppliers/", {
+        params: { module: "pharmacy" }
+      });
+      return response.data;
+    },
+    enabled: canView && canViewSuppliers
   });
 
   const { data: customFieldDefinitions = [] } = useQuery({
@@ -510,6 +533,7 @@ export function PharmacyPage() {
         expiration_date: selected.expiration_date,
         location: selected.location,
         category_id: selected.category_id,
+        supplier_id: selected.supplier_id,
         extra: extraDefaults
       };
     }
@@ -520,6 +544,9 @@ export function PharmacyPage() {
   const [isBarcodeAuto, setIsBarcodeAuto] = useState<boolean>(
     !(formValues.barcode && formValues.barcode.trim().length > 0)
   );
+  const selectedSupplierMissing =
+    draft.supplier_id.trim().length > 0 &&
+    !suppliers.some((supplier) => String(supplier.id) === draft.supplier_id);
 
   useEffect(() => {
     setDraft(createPharmacyFormDraft(formValues));
@@ -625,6 +652,7 @@ export function PharmacyPage() {
       expiration_date: draft.expiration_date.trim() ? draft.expiration_date : null,
       location: draft.location.trim() ? draft.location.trim() : null,
       category_id: draft.category_id.trim() ? Number(draft.category_id) : null,
+      supplier_id: draft.supplier_id.trim() ? Number(draft.supplier_id) : null,
       extra: draft.extra
     };
 
@@ -1065,6 +1093,36 @@ export function PharmacyPage() {
                     </option>
                   ))}
                 </select>
+              </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-supplier">
+                  Fournisseur
+                </label>
+                {canViewSuppliers ? (
+                  <select
+                    id="pharmacy-supplier"
+                    value={draft.supplier_id}
+                    onChange={(event) => updateDraft({ supplier_id: event.target.value })}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    title="Associez un fournisseur à cet article"
+                    disabled={createItem.isPending || updateItem.isPending}
+                  >
+                    <option value="">Aucun</option>
+                    {selectedSupplierMissing ? (
+                      <option value={draft.supplier_id}>Fournisseur introuvable</option>
+                    ) : null}
+                    {suppliers.map((supplier) => (
+                      <option key={supplier.id} value={supplier.id}>
+                        {supplier.name}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-xs text-slate-400">
+                    Fournisseur géré par un admin
+                    {draft.supplier_id.trim() ? ` (ID ${draft.supplier_id})` : "."}
+                  </div>
+                )}
               </div>
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-quantity">
