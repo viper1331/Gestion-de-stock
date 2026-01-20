@@ -551,6 +551,21 @@ def _build_purchase_suggestion_line(
     }
 
 
+def _resolve_supplier_id_from_name(
+    conn: sqlite3.Connection, supplier_name: str | None
+) -> int | None:
+    if not supplier_name:
+        return None
+    normalized = " ".join(str(supplier_name).strip().split())
+    if not normalized:
+        return None
+    row = conn.execute(
+        "SELECT id FROM suppliers WHERE lower(trim(name)) = ?",
+        (normalized.lower(),),
+    ).fetchone()
+    return int(row["id"]) if row is not None else None
+
+
 def _get_reorder_candidates(
     conn: sqlite3.Connection,
     module_key: str,
@@ -593,6 +608,16 @@ def _get_reorder_candidates(
         candidates = []
         for row in rows:
             extra = _parse_extra_json(row["extra_json"])
+            supplier_id = (
+                extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None
+            )
+            if supplier_id is None:
+                supplier_id = _resolve_supplier_id_from_name(
+                    conn,
+                    extra.get("supplier_name")
+                    or extra.get("supplier")
+                    or extra.get("fournisseur"),
+                )
             candidates.append(
                 _build_purchase_suggestion_line(
                     item_id=row["id"],
@@ -601,7 +626,7 @@ def _get_reorder_candidates(
                     quantity=row["quantity"],
                     threshold=row["low_stock_threshold"],
                     unit=row["packaging"] or row["dosage"],
-                    supplier_id=extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None,
+                    supplier_id=supplier_id,
                     reorder_qty=_extract_reorder_qty(extra),
                     safety_buffer=safety_buffer,
                 )
@@ -620,6 +645,14 @@ def _get_reorder_candidates(
             if "track_low_stock" in row.keys() and not bool(row["track_low_stock"]):
                 continue
             extra = _parse_extra_json(row["extra_json"])
+            supplier_id = row["supplier_id"]
+            if supplier_id is None:
+                supplier_id = _resolve_supplier_id_from_name(
+                    conn,
+                    extra.get("supplier_name")
+                    or extra.get("supplier")
+                    or extra.get("fournisseur"),
+                )
             candidates.append(
                 _build_purchase_suggestion_line(
                     item_id=row["id"],
@@ -628,7 +661,7 @@ def _get_reorder_candidates(
                     quantity=row["quantity"],
                     threshold=row["low_stock_threshold"],
                     unit=row["size"],
-                    supplier_id=row["supplier_id"],
+                    supplier_id=supplier_id,
                     reorder_qty=_extract_reorder_qty(extra),
                     safety_buffer=safety_buffer,
                 )
@@ -7644,13 +7677,43 @@ def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
         )
 
 
+def resolve_supplier_for_order(
+    conn: sqlite3.Connection,
+    site_id: str | int,
+    supplier_id: int | None,
+) -> models.Supplier | None:
+    if supplier_id is None:
+        return None
+    row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
+    if row is None or _is_supplier_inactive(row):
+        return None
+    modules_map = _load_supplier_modules(conn, [row["id"]])
+    modules = modules_map.get(row["id"]) or ["suppliers"]
+    return models.Supplier(
+        id=row["id"],
+        name=row["name"],
+        contact_name=row["contact_name"],
+        phone=row["phone"],
+        email=row["email"],
+        address=row["address"],
+        modules=modules,
+    )
+
+
 def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> models.Supplier:
     if supplier_id is None:
         raise SupplierResolutionError(
             "SUPPLIER_MISSING",
             "Bon de commande non associé à un fournisseur",
         )
-    return resolve_supplier(site_id, supplier_id)
+    with db.get_stock_connection(site_id) as conn:
+        supplier = resolve_supplier_for_order(conn, site_id, supplier_id)
+    if supplier is None:
+        raise SupplierResolutionError(
+            "SUPPLIER_NOT_FOUND",
+            "Fournisseur introuvable",
+        )
+    return supplier
 
 
 def require_supplier_email(supplier: models.Supplier) -> str:
@@ -7674,40 +7737,20 @@ def resolve_supplier_email_for_order(
     normalized_site_key = sites.normalize_site_key(str(site_id)) if site_id is not None else None
     if not normalized_site_key:
         normalized_site_key = db.DEFAULT_SITE_KEY
-    if supplier_id is not None:
-        with db.get_stock_connection(normalized_site_key) as conn:
-            row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-            if row is None:
-                raise SupplierResolutionError(
-                    "SUPPLIER_NOT_FOUND",
-                    "Fournisseur introuvable sur le site actif.",
-                )
-            raw_email = str(row["email"] or "")
-            normalized_email = _normalize_email(raw_email) if raw_email.strip() else ""
-            if not normalized_email:
-                raise SupplierResolutionError(
-                    "SUPPLIER_EMAIL_MISSING",
-                    "Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi.",
-                )
-            modules_map = _load_supplier_modules(conn, [row["id"]])
-            modules = modules_map.get(row["id"]) or ["suppliers"]
-            supplier = models.Supplier(
-                id=row["id"],
-                name=row["name"],
-                contact_name=row["contact_name"],
-                phone=row["phone"],
-                email=row["email"],
-                address=row["address"],
-                modules=modules,
+    with db.get_stock_connection(normalized_site_key) as conn:
+        supplier = resolve_supplier_for_order(conn, normalized_site_key, supplier_id)
+    if supplier is None:
+        if supplier_id is None:
+            raise SupplierResolutionError(
+                "SUPPLIER_MISSING",
+                "Bon de commande non associé à un fournisseur",
             )
-        return normalized_email, supplier
-    legacy_email = str(legacy_supplier_email or "").strip()
-    if legacy_email:
-        return _normalize_email(legacy_email), None
-    raise SupplierResolutionError(
-        "SUPPLIER_EMAIL_MISSING",
-        "Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi.",
-    )
+        raise SupplierResolutionError(
+            "SUPPLIER_NOT_FOUND",
+            "Fournisseur introuvable sur le site actif.",
+        )
+    normalized_email = require_supplier_email(supplier)
+    return normalized_email, supplier
 
 
 def _build_purchase_order_detail(
@@ -7749,25 +7792,23 @@ def _build_purchase_order_detail(
     resolved_email = None
     supplier_has_email = False
     supplier_missing_reason = None
-    try:
-        resolved_email, _ = resolve_supplier_email_for_order(
-            site_id=site_key or db.get_current_site_key(),
-            supplier_id=order_row["supplier_id"],
-            legacy_supplier_name=order_row["supplier_name"],
-            legacy_supplier_email=order_row["supplier_email"],
-        )
-        if resolved_email and "@" in resolved_email:
+    supplier_id = order_row["supplier_id"]
+    supplier = resolve_supplier_for_order(conn, site_key or db.get_current_site_key(), supplier_id)
+    if supplier_id is None:
+        supplier_missing_reason = "SUPPLIER_MISSING"
+    elif supplier is None:
+        supplier_missing_reason = "SUPPLIER_NOT_FOUND"
+    else:
+        try:
+            resolved_email = require_supplier_email(supplier)
             supplier_has_email = True
-        else:
-            resolved_email = None
-            supplier_missing_reason = "SUPPLIER_EMAIL_MISSING"
-    except SupplierResolutionError as exc:
-        supplier_missing_reason = exc.code
+        except SupplierResolutionError as exc:
+            supplier_missing_reason = exc.code
     return models.PurchaseOrderDetail(
         id=order_row["id"],
-        supplier_id=order_row["supplier_id"],
+        supplier_id=supplier_id,
         supplier_name=order_row["supplier_name"],
-        supplier_email=order_row["supplier_email"],
+        supplier_email=supplier.email if supplier else None,
         supplier_email_resolved=resolved_email,
         supplier_has_email=supplier_has_email,
         supplier_missing_reason=supplier_missing_reason,
@@ -7902,10 +7943,10 @@ def _build_purchase_order_blocks(
 ) -> tuple[dict[str, str | None], dict[str, str | None], dict[str, str | None]]:
     supplier = None
     if order.supplier_id is not None:
-        try:
-            supplier = get_supplier(order.supplier_id)
-        except ValueError:
-            supplier = None
+        with db.get_stock_connection() as conn:
+            supplier = resolve_supplier_for_order(
+                conn, db.get_current_site_key(), order.supplier_id
+            )
     supplier_name = order.supplier_name or (supplier.name if supplier else None)
     buyer_block = {
         "Nom": None,
@@ -8450,12 +8491,8 @@ def send_purchase_order_to_supplier(
         supplier_email = row["supplier_email"]
 
     try:
-        resolved_email, supplier = resolve_supplier_email_for_order(
-            site_id=normalized_site_key,
-            supplier_id=supplier_id,
-            legacy_supplier_name=supplier_name,
-            legacy_supplier_email=supplier_email,
-        )
+        supplier = get_supplier_for_order(normalized_site_key, supplier_id)
+        resolved_email = require_supplier_email(supplier)
     except SupplierResolutionError as exc:
         sent_at = datetime.now(timezone.utc).isoformat()
         _record_purchase_order_audit_log(
@@ -8474,31 +8511,12 @@ def send_purchase_order_to_supplier(
             message=str(exc),
         )
         raise
-    if not resolved_email or "@" not in resolved_email:
-        sent_at = datetime.now(timezone.utc).isoformat()
-        _record_purchase_order_audit_log(
-            created_at=sent_at,
-            site_key=normalized_site_key,
-            module_key="purchase_orders",
-            action="send_to_supplier",
-            purchase_order_id=order.id,
-            supplier_id=supplier_id,
-            supplier_name=supplier_name,
-            supplier_email=supplier_email,
-            recipient_email=None,
-            user_id=sent_by_user.id,
-            user_email=sent_by_user.email,
-            status="error",
-            message="Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi.",
-        )
-        raise SupplierResolutionError(
-            "SUPPLIER_EMAIL_MISSING",
-            "Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi.",
-        )
 
     to_email = resolved_email
     supplier_name = supplier.name if supplier else supplier_name
     supplier_email = supplier.email if supplier else supplier_email
+    if to_email_override:
+        to_email = _normalize_email(to_email_override)
     sent_at = datetime.now(timezone.utc).isoformat()
     site_info = _get_site_info_for_email(normalized_site_key)
     subject, body_text, body_html = notifications.build_purchase_order_email(
@@ -8660,6 +8678,8 @@ def send_remise_purchase_order_to_supplier(
     to_email = resolved_email
     supplier_name = supplier.name if supplier else supplier_name
     supplier_email = supplier.email if supplier else None
+    if to_email_override:
+        to_email = _normalize_email(to_email_override)
     site_info = _get_site_info_for_email(normalized_site_key)
     subject, body_text, body_html = notifications.build_purchase_order_email(
         order, site_info, sent_by_user
@@ -8938,12 +8958,8 @@ def send_pharmacy_purchase_order_to_supplier(
         supplier_email = row["supplier_email"]
 
     try:
-        resolved_email, supplier = resolve_supplier_email_for_order(
-            site_id=normalized_site_key,
-            supplier_id=supplier_id,
-            legacy_supplier_name=supplier_name,
-            legacy_supplier_email=supplier_email,
-        )
+        supplier = get_supplier_for_order(normalized_site_key, supplier_id)
+        resolved_email = require_supplier_email(supplier)
     except SupplierResolutionError as exc:
         sent_at = datetime.now(timezone.utc).isoformat()
         _record_purchase_order_audit_log(
@@ -8962,28 +8978,6 @@ def send_pharmacy_purchase_order_to_supplier(
             message=str(exc),
         )
         raise
-    if not resolved_email or "@" not in resolved_email:
-        sent_at = datetime.now(timezone.utc).isoformat()
-        _record_purchase_order_audit_log(
-            created_at=sent_at,
-            site_key=normalized_site_key,
-            module_key="pharmacy_orders",
-            action="send_to_supplier",
-            purchase_order_id=order.id,
-            supplier_id=supplier_id,
-            supplier_name=supplier_name,
-            supplier_email=supplier_email,
-            recipient_email=None,
-            user_id=sent_by_user.id,
-            user_email=sent_by_user.email,
-            status="error",
-            message="Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi.",
-        )
-        raise SupplierResolutionError(
-            "SUPPLIER_EMAIL_MISSING",
-            "Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi.",
-        )
-
     to_email = resolved_email
     supplier_name = supplier.name if supplier else supplier_name
     supplier_email = supplier.email if supplier else supplier_email
@@ -9295,19 +9289,7 @@ def _build_remise_purchase_order_detail(
         if suppliers_map is not None:
             supplier = suppliers_map.get(supplier_id)
         else:
-            row = conn.execute("SELECT * FROM suppliers WHERE id = ?", (supplier_id,)).fetchone()
-            if row is not None:
-                modules_map = _load_supplier_modules(conn, [row["id"]])
-                modules = modules_map.get(row["id"]) or ["suppliers"]
-                supplier = models.Supplier(
-                    id=row["id"],
-                    name=row["name"],
-                    contact_name=row["contact_name"],
-                    phone=row["phone"],
-                    email=row["email"],
-                    address=row["address"],
-                    modules=modules,
-                )
+            supplier = resolve_supplier_for_order(conn, site_key or db.get_current_site_key(), supplier_id)
         if supplier is None:
             supplier_missing = True
             supplier_missing_reason = "SUPPLIER_NOT_FOUND"
@@ -9369,6 +9351,7 @@ def list_remise_purchase_orders() -> list[models.RemisePurchaseOrderDetail]:
                     modules=modules_map.get(supplier_row["id"]) or ["suppliers"],
                 )
                 for supplier_row in supplier_rows
+                if not _is_supplier_inactive(supplier_row)
             }
         return [
             _build_remise_purchase_order_detail(
@@ -9402,7 +9385,7 @@ def get_remise_purchase_order(order_id: int) -> models.RemisePurchaseOrderDetail
                 "SELECT * FROM suppliers WHERE id = ?",
                 (supplier_ids[0],),
             ).fetchone()
-            if supplier_row is not None:
+            if supplier_row is not None and not _is_supplier_inactive(supplier_row):
                 modules_map = _load_supplier_modules(conn, [supplier_row["id"]])
                 suppliers_map = {
                     supplier_row["id"]: models.Supplier(
@@ -10809,25 +10792,23 @@ def _build_pharmacy_purchase_order_detail(
     resolved_email = None
     supplier_has_email = False
     supplier_missing_reason = None
-    try:
-        resolved_email, _ = resolve_supplier_email_for_order(
-            site_id=site_key or db.get_current_site_key(),
-            supplier_id=order_row["supplier_id"],
-            legacy_supplier_name=order_row["supplier_name"],
-            legacy_supplier_email=order_row["supplier_email"],
-        )
-        if resolved_email and "@" in resolved_email:
+    supplier_id = order_row["supplier_id"]
+    supplier = resolve_supplier_for_order(conn, site_key or db.get_current_site_key(), supplier_id)
+    if supplier_id is None:
+        supplier_missing_reason = "SUPPLIER_MISSING"
+    elif supplier is None:
+        supplier_missing_reason = "SUPPLIER_NOT_FOUND"
+    else:
+        try:
+            resolved_email = require_supplier_email(supplier)
             supplier_has_email = True
-        else:
-            resolved_email = None
-            supplier_missing_reason = "SUPPLIER_EMAIL_MISSING"
-    except SupplierResolutionError as exc:
-        supplier_missing_reason = exc.code
+        except SupplierResolutionError as exc:
+            supplier_missing_reason = exc.code
     return models.PharmacyPurchaseOrderDetail(
         id=order_row["id"],
-        supplier_id=order_row["supplier_id"],
+        supplier_id=supplier_id,
         supplier_name=order_row["supplier_name"],
-        supplier_email=order_row["supplier_email"],
+        supplier_email=supplier.email if supplier else None,
         supplier_email_resolved=resolved_email,
         supplier_has_email=supplier_has_email,
         supplier_missing_reason=supplier_missing_reason,

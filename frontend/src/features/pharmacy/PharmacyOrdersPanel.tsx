@@ -63,7 +63,7 @@ const ORDER_STATUSES: Array<{ value: string; label: string }> = [
 
 export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const { user } = useAuth();
-  const { data: suppliersData } = useQuery({
+  const { data: suppliers = [] } = useQuery({
     queryKey: ["suppliers", { module: "pharmacy" }],
     queryFn: async () => {
       const response = await api.get<Supplier[]>("/suppliers/", {
@@ -73,7 +73,6 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
     },
     enabled: canEdit
   });
-  const suppliers = suppliersData ?? [];
   const queryClient = useQueryClient();
   const [draftLines, setDraftLines] = useState<PharmacyOrderDraftLine[]>([
     { pharmacyItemId: "", quantity: 1 }
@@ -380,12 +379,23 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                     }))
                     .filter((line) => line.quantity > 0);
                   const canReceive = outstanding.length > 0;
+                  const canSendToSupplier = Boolean(order.supplier_id && order.supplier_email);
+                  const sendTooltip = order.supplier_id
+                    ? "Ajoutez un email fournisseur pour activer l'envoi"
+                    : "Bon de commande non associé à un fournisseur";
                   return (
                     <tr key={order.id}>
                       <td className="px-4 py-3 text-slate-300">
                         {new Date(order.created_at).toLocaleString()}
                       </td>
-                      <td className="px-4 py-3 text-slate-200">{order.supplier_name ?? "-"}</td>
+                      <td className="px-4 py-3 text-slate-200">
+                        <div className="flex flex-col">
+                          <span>{order.supplier_name ?? "-"}</span>
+                          <span className="text-xs text-slate-400">
+                            {order.supplier_email ?? "Email manquant"}
+                          </span>
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-slate-200">
                         <select
                           value={order.status}
@@ -466,13 +476,9 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                             <button
                               type="button"
                               onClick={() => sendToSupplier.mutate(order)}
-                              disabled={sendingId === order.id || !order.supplier_email}
+                              disabled={sendingId === order.id || !canSendToSupplier}
                               className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-                              title={
-                                order.supplier_email
-                                  ? "Envoyer le bon de commande au fournisseur"
-                                  : "Ajoutez un email fournisseur pour activer l'envoi"
-                              }
+                              title={canSendToSupplier ? "Envoyer le bon de commande au fournisseur" : sendTooltip}
                             >
                               {sendingId === order.id ? "Envoi..." : "Envoyer au fournisseur"}
                             </button>

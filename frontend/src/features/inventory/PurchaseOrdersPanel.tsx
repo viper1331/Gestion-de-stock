@@ -531,7 +531,14 @@ export function PurchaseOrdersPanel({
                           </span>
                         ) : null}
                       </td>
-                      <td className="px-4 py-3 text-slate-200">{order.supplier_name ?? "-"}</td>
+                      <td className="px-4 py-3 text-slate-200">
+                        <div className="flex flex-col">
+                          <span>{order.supplier_name ?? "-"}</span>
+                          <span className="text-xs text-slate-400">
+                            {order.supplier_email ?? "Email manquant"}
+                          </span>
+                        </div>
+                      </td>
                       <td className="px-4 py-3 text-slate-200">
                         <select
                           value={order.status}
