@@ -723,21 +723,57 @@ def _get_purchase_suggestion_lines(
     placeholders = ", ".join("?" for _ in suggestion_ids)
     rows = conn.execute(
         f"""
-        SELECT *
-        FROM purchase_suggestion_lines
-        WHERE suggestion_id IN ({placeholders})
-        ORDER BY id
+        SELECT psl.*, ps.module_key
+        FROM purchase_suggestion_lines AS psl
+        JOIN purchase_suggestions AS ps ON ps.id = psl.suggestion_id
+        WHERE psl.suggestion_id IN ({placeholders})
+        ORDER BY psl.id
         """,
         suggestion_ids,
     ).fetchall()
+    item_ids_by_module: dict[str, set[int]] = defaultdict(set)
+    for row in rows:
+        item_ids_by_module[row["module_key"]].add(row["item_id"])
+    items_by_module: dict[str, dict[int, sqlite3.Row]] = {}
+    module_tables = {
+        "clothing": "items",
+        "pharmacy": "pharmacy_items",
+        "inventory_remise": "remise_items",
+    }
+    for module_key, item_ids in item_ids_by_module.items():
+        if not item_ids:
+            continue
+        table = module_tables.get(module_key)
+        if not table:
+            continue
+        item_placeholders = ", ".join("?" for _ in item_ids)
+        item_rows = conn.execute(
+            f"SELECT * FROM {table} WHERE id IN ({item_placeholders})",
+            list(item_ids),
+        ).fetchall()
+        items_by_module[module_key] = {item_row["id"]: item_row for item_row in item_rows}
+    custom_fields_by_scope: dict[str, list[models.CustomFieldDefinition]] = {}
+    if "clothing" in item_ids_by_module:
+        custom_fields_by_scope["items"] = _load_custom_field_definitions(
+            conn, "items", active_only=True
+        )
+    if "inventory_remise" in item_ids_by_module:
+        custom_fields_by_scope["remise_items"] = _load_custom_field_definitions(
+            conn, "remise_items", active_only=True
+        )
     lines: dict[int, list[models.PurchaseSuggestionLine]] = defaultdict(list)
     for row in rows:
+        module_key = row["module_key"]
+        item_row = items_by_module.get(module_key, {}).get(row["item_id"])
         line = models.PurchaseSuggestionLine(
             id=row["id"],
             suggestion_id=row["suggestion_id"],
             item_id=row["item_id"],
             sku=row["sku"],
             label=row["label"],
+            variant_label=_resolve_variant_label(
+                module_key, item_row, custom_fields_by_scope=custom_fields_by_scope
+            ),
             qty_suggested=row["qty_suggested"],
             qty_final=row["qty_final"],
             unit=row["unit"],
@@ -747,6 +783,75 @@ def _get_purchase_suggestion_lines(
         )
         lines[line.suggestion_id].append(line)
     return lines
+
+
+def _normalize_variant_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text if text else None
+
+
+def _extract_variant_from_row(row: sqlite3.Row | None, fields: Iterable[str]) -> str | None:
+    if row is None:
+        return None
+    for field in fields:
+        if field in row.keys():
+            value = _normalize_variant_value(row[field])
+            if value:
+                return value
+    return None
+
+
+def _extract_variant_from_custom_fields(
+    extra: dict[str, Any],
+    definitions: Iterable[models.CustomFieldDefinition],
+) -> str | None:
+    if not extra:
+        return None
+    target_labels = {"taille", "size", "variant", "variante"}
+    for key, value in extra.items():
+        if str(key).strip().lower() in target_labels:
+            variant_value = _normalize_variant_value(value)
+            if variant_value:
+                return variant_value
+    for definition in definitions:
+        label_key = definition.label.strip().lower()
+        key_key = definition.key.strip().lower()
+        if label_key in target_labels or key_key in target_labels:
+            variant_value = _normalize_variant_value(extra.get(definition.key))
+            if variant_value:
+                return variant_value
+    return None
+
+
+def _resolve_variant_label(
+    module_key: str,
+    item_row: sqlite3.Row | None,
+    *,
+    custom_fields_by_scope: dict[str, list[models.CustomFieldDefinition]],
+) -> str | None:
+    if item_row is None:
+        return None
+    if module_key == "pharmacy":
+        dosage = _normalize_variant_value(item_row["dosage"]) if "dosage" in item_row.keys() else None
+        packaging = (
+            _normalize_variant_value(item_row["packaging"])
+            if "packaging" in item_row.keys()
+            else None
+        )
+        parts = [part for part in [dosage, packaging] if part]
+        return " • ".join(parts) if parts else None
+    direct_fields = ["size", "taille", "variant", "variante"]
+    direct_value = _extract_variant_from_row(item_row, direct_fields)
+    if direct_value:
+        return direct_value
+    extra = {}
+    if "extra_json" in item_row.keys():
+        extra = _parse_extra_json(item_row["extra_json"])
+    scope = "remise_items" if module_key == "inventory_remise" else "items"
+    definitions = custom_fields_by_scope.get(scope, [])
+    return _extract_variant_from_custom_fields(extra, definitions)
 
 
 def _is_supplier_inactive(row: sqlite3.Row) -> bool:
