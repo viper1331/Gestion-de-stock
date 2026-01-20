@@ -161,17 +161,23 @@ def build_purchase_order_email(
     subject = f"Bon de commande #{purchase_order.id} - {site_label}"
     supplier_name = purchase_order.supplier_name or "votre équipe"
     sender_label = user.display_name or user.username if user else "notre équipe"
+    sender_email = user.email if user and user.email else None
+    sender_contact = (
+        f"{sender_label} <{sender_email}>" if sender_email else sender_label
+    )
     intro = f"Bonjour {supplier_name},"
     body_text = (
         f"{intro}\n\n"
         f"Veuillez trouver ci-joint le bon de commande #{purchase_order.id} "
         f"pour le site {site_label}.\n\n"
+        f"Expéditeur : {sender_contact}\n\n"
         f"Cordialement,\n{sender_label}\n"
     )
     body_html = (
         f"<p>{intro}</p>"
         f"<p>Veuillez trouver ci-joint le bon de commande <strong>#{purchase_order.id}</strong> "
         f"pour le site <strong>{site_label}</strong>.</p>"
+        f"<p>Expéditeur : {sender_contact}</p>"
         f"<p>Cordialement,<br />{sender_label}</p>"
     )
     return subject, body_text, body_html
