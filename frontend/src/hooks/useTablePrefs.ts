@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { api } from "../lib/api";
+import { useAuthStore } from "../features/auth/authStore";
 
 export type TablePrefs = {
   v: 1;
@@ -14,7 +15,7 @@ type TablePrefsResponse = {
   prefs: TablePrefs;
 };
 
-const SAVE_DEBOUNCE_MS = 500;
+const LOCAL_STORAGE_PREFIX = "ui.table.layout";
 
 const isRecord = (value: unknown): value is Record<string, unknown> =>
   typeof value === "object" && value !== null && !Array.isArray(value);
@@ -25,6 +26,54 @@ const normalizePrefs = (prefs: TablePrefs): TablePrefs => ({
   order: prefs.order ? [...prefs.order] : undefined,
   widths: prefs.widths ? { ...prefs.widths } : undefined
 });
+
+const resolveModuleKey = (tableKey: string) => {
+  const [moduleKey] = tableKey.split(".");
+  return moduleKey?.trim() ? moduleKey.trim() : tableKey;
+};
+
+const buildStorageKey = (layoutKey: string) => `${LOCAL_STORAGE_PREFIX}:${layoutKey}`;
+
+const loadStoredPrefs = (layoutKey: string): TablePrefs | null => {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const raw = window.localStorage.getItem(buildStorageKey(layoutKey));
+  if (!raw) {
+    return null;
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!isRecord(parsed) || parsed.v !== 1) {
+      return null;
+    }
+    return parsed as TablePrefs;
+  } catch {
+    return null;
+  }
+};
+
+const saveStoredPrefs = (layoutKey: string, prefs: TablePrefs) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.setItem(buildStorageKey(layoutKey), JSON.stringify(normalizePrefs(prefs)));
+  } catch {
+    // Ignore local storage failures.
+  }
+};
+
+const removeStoredPrefs = (layoutKey: string) => {
+  if (typeof window === "undefined") {
+    return;
+  }
+  try {
+    window.localStorage.removeItem(buildStorageKey(layoutKey));
+  } catch {
+    // Ignore local storage failures.
+  }
+};
 
 const mergePrefs = (defaults: TablePrefs, saved?: TablePrefs | null): TablePrefs => {
   const base = normalizePrefs(defaults);
@@ -70,46 +119,80 @@ const mergePrefs = (defaults: TablePrefs, saved?: TablePrefs | null): TablePrefs
   return next;
 };
 
-export function useTablePrefs(tableKey: string, defaults: TablePrefs) {
-  const [prefs, setPrefs] = useState<TablePrefs>(() => mergePrefs(defaults));
+export function useTablePrefs(
+  tableKey: string,
+  defaults: TablePrefs,
+  options?: { moduleKey?: string }
+) {
+  const user = useAuthStore((state) => state.user);
+  const moduleKey = useMemo(
+    () => options?.moduleKey ?? resolveModuleKey(tableKey),
+    [options?.moduleKey, tableKey]
+  );
+  const siteKey = user?.site_key ?? "unknown";
+  const layoutKey = useMemo(
+    () => (user ? `${siteKey}:${moduleKey}:${tableKey}:${user.id}` : null),
+    [moduleKey, siteKey, tableKey, user]
+  );
+  const [prefs, setPrefs] = useState<TablePrefs>(() => {
+    if (!layoutKey) {
+      return mergePrefs(defaults);
+    }
+    return mergePrefs(defaults, loadStoredPrefs(layoutKey));
+  });
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
-  const hasLoaded = useRef(false);
-  const savingRef = useRef(false);
-  const pendingRef = useRef<TablePrefs | null>(null);
-  const debounceRef = useRef<number | null>(null);
-  const skipNextSaveRef = useRef(false);
   const defaultsRef = useRef<TablePrefs>(defaults);
+  const prefsRef = useRef<TablePrefs>(prefs);
+  const didHydrateRef = useRef(false);
+  const lastSavedRef = useRef("");
+
+  useEffect(() => {
+    prefsRef.current = prefs;
+  }, [prefs]);
 
   useEffect(() => {
     defaultsRef.current = defaults;
-    if (!hasLoaded.current) {
-      setPrefs(mergePrefs(defaults));
-      return;
-    }
     setPrefs((current) => mergePrefs(defaults, current));
   }, [defaults]);
 
   useEffect(() => {
     let isActive = true;
     const fetchPrefs = async () => {
+      if (!layoutKey) {
+        didHydrateRef.current = false;
+        setIsLoading(false);
+        return;
+      }
       setIsLoading(true);
+      const localPrefs = loadStoredPrefs(layoutKey);
+      const localMerged = mergePrefs(defaultsRef.current, localPrefs ?? undefined);
+      if (isActive) {
+        prefsRef.current = localMerged;
+        setPrefs(localMerged);
+      }
       try {
         const response = await api.get<TablePrefsResponse | null>(
           `/ui/table-prefs/${encodeURIComponent(tableKey)}`
         );
-        const merged = mergePrefs(defaultsRef.current, response.data?.prefs);
-        if (isActive) {
-          setPrefs(merged);
+        const savedPrefs = response.data?.prefs ?? null;
+        if (savedPrefs) {
+          const merged = mergePrefs(defaultsRef.current, savedPrefs);
+          if (isActive) {
+            prefsRef.current = merged;
+            setPrefs(merged);
+          }
+          saveStoredPrefs(layoutKey, merged);
+          lastSavedRef.current = JSON.stringify(normalizePrefs(merged));
+        } else {
+          lastSavedRef.current = JSON.stringify(normalizePrefs(localMerged));
         }
       } catch {
-        if (isActive) {
-          setPrefs(mergePrefs(defaultsRef.current));
-        }
+        lastSavedRef.current = JSON.stringify(normalizePrefs(localMerged));
       } finally {
         if (isActive) {
           setIsLoading(false);
-          hasLoaded.current = true;
+          didHydrateRef.current = true;
         }
       }
     };
@@ -117,78 +200,79 @@ export function useTablePrefs(tableKey: string, defaults: TablePrefs) {
     return () => {
       isActive = false;
     };
-  }, [tableKey]);
+  }, [layoutKey, tableKey]);
 
-  const savePrefs = useCallback(async (nextPrefs: TablePrefs) => {
-    if (savingRef.current) {
-      pendingRef.current = nextPrefs;
-      return;
-    }
-    savingRef.current = true;
-    setIsSaving(true);
-    try {
-      await api.put(`/ui/table-prefs/${encodeURIComponent(tableKey)}`, {
-        prefs: nextPrefs
-      });
-    } finally {
-      savingRef.current = false;
-      setIsSaving(false);
-      if (pendingRef.current) {
-        const pending = pendingRef.current;
-        pendingRef.current = null;
-        void savePrefs(pending);
-      }
-    }
-  }, [tableKey]);
+  const updatePrefs = useCallback((updater: (current: TablePrefs) => TablePrefs) => {
+    const next = updater(prefsRef.current);
+    prefsRef.current = next;
+    setPrefs(next);
+    return next;
+  }, []);
 
-  useEffect(() => {
-    if (!hasLoaded.current || isLoading) {
-      return undefined;
-    }
-    if (skipNextSaveRef.current) {
-      skipNextSaveRef.current = false;
-      return undefined;
-    }
-    if (debounceRef.current) {
-      window.clearTimeout(debounceRef.current);
-    }
-    debounceRef.current = window.setTimeout(() => {
-      void savePrefs(prefs);
-    }, SAVE_DEBOUNCE_MS);
-    return () => {
-      if (debounceRef.current) {
-        window.clearTimeout(debounceRef.current);
+  const persistLayout = useCallback(
+    async (nextPrefs: TablePrefs) => {
+      if (!layoutKey || !didHydrateRef.current) {
+        return;
       }
-    };
-  }, [prefs, isLoading, savePrefs]);
+      const normalized = normalizePrefs(nextPrefs);
+      const signature = JSON.stringify(normalized);
+      if (signature === lastSavedRef.current) {
+        return;
+      }
+      lastSavedRef.current = signature;
+      saveStoredPrefs(layoutKey, normalized);
+      setIsSaving(true);
+      try {
+        await api.put(`/ui/table-prefs/${encodeURIComponent(tableKey)}`, {
+          prefs: normalized
+        });
+      } catch {
+        // Backend unavailable; local storage already updated.
+      } finally {
+        setIsSaving(false);
+      }
+    },
+    [layoutKey, tableKey]
+  );
 
   const setVisible = useCallback((columnKey: string, value?: boolean) => {
-    setPrefs((current) => {
+    const next = updatePrefs((current) => {
       const visible = { ...(current.visible ?? {}) };
       const isVisible = visible[columnKey] !== false;
       const nextValue = value ?? !isVisible;
       visible[columnKey] = nextValue;
       return { ...current, visible };
     });
-  }, []);
+    void persistLayout(next);
+  }, [persistLayout, updatePrefs]);
 
   const setOrder = useCallback((order: string[]) => {
-    setPrefs((current) => ({ ...current, order: [...order] }));
-  }, []);
+    const next = updatePrefs((current) => ({ ...current, order: [...order] }));
+    void persistLayout(next);
+  }, [persistLayout, updatePrefs]);
 
   const setWidth = useCallback((columnKey: string, width: number) => {
-    setPrefs((current) => {
+    updatePrefs((current) => {
       const widths = { ...(current.widths ?? {}) };
       widths[columnKey] = width;
       return { ...current, widths };
     });
-  }, []);
+  }, [updatePrefs]);
 
   const reset = useCallback(async () => {
-    skipNextSaveRef.current = true;
-    setPrefs(mergePrefs(defaultsRef.current));
+    const next = mergePrefs(defaultsRef.current);
+    prefsRef.current = next;
+    setPrefs(next);
+    if (layoutKey) {
+      removeStoredPrefs(layoutKey);
+    }
+    lastSavedRef.current = JSON.stringify(normalizePrefs(next));
     await api.delete(`/ui/table-prefs/${encodeURIComponent(tableKey)}`);
-  }, [tableKey]);
+  }, [layoutKey, tableKey]);
+
+  const persist = useCallback(() => {
+    void persistLayout(prefsRef.current);
+  }, [persistLayout]);
 
   return useMemo(
     () => ({
@@ -196,10 +280,11 @@ export function useTablePrefs(tableKey: string, defaults: TablePrefs) {
       setVisible,
       setOrder,
       setWidth,
+      persist,
       reset,
       isLoading,
       isSaving
     }),
-    [prefs, setVisible, setOrder, setWidth, reset, isLoading, isSaving]
+    [prefs, setVisible, setOrder, setWidth, persist, reset, isLoading, isSaving]
   );
 }

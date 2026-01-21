@@ -502,6 +502,7 @@ export function InventoryModuleDashboard({
     setVisible,
     setOrder,
     setWidth,
+    persist,
     reset
   } = useTablePrefs(config.tableKey ?? "clothing.items", {
     v: 1,
@@ -916,6 +917,7 @@ export function InventoryModuleDashboard({
                             label={meta.label}
                             width={resolveColumnWidth(columnKey, meta.width)}
                             onResize={(value) => setWidth(columnKey, value)}
+                            onResizeEnd={persist}
                             className={meta.headerClass}
                           />
                         );
@@ -1388,12 +1390,14 @@ function SortableHeaderCell({
   label,
   width,
   onResize,
+  onResizeEnd,
   className
 }: {
   id: string;
   label: string;
   width: number;
   onResize: (value: number) => void;
+  onResizeEnd?: () => void;
   className?: string;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
@@ -1431,6 +1435,9 @@ function SortableHeaderCell({
           max={320}
           value={width}
           onChange={(event) => onResize(Number(event.target.value))}
+          onMouseUp={onResizeEnd}
+          onTouchEnd={onResizeEnd}
+          onKeyUp={onResizeEnd}
           className="h-1 w-24 cursor-ew-resize appearance-none rounded-full bg-slate-700"
           title={`Ajuster la largeur de la colonne ${label}`}
         />
