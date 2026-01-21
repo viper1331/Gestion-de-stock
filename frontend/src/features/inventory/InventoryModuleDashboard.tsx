@@ -8,6 +8,7 @@ import {
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
+import { DraggableModal } from "../../components/DraggableModal";
 import { api } from "../../lib/api";
 import { buildCustomFieldDefaults, CustomFieldDefinition, sortCustomFields } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
@@ -151,6 +152,7 @@ export function InventoryModuleDashboard({
   const [formMode, setFormMode] = useState<"create" | "edit">("create");
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
@@ -176,6 +178,12 @@ export function InventoryModuleDashboard({
   const openSidebar = () => setIsSidebarOpen(true);
   const closeSidebar = () => {
     setIsSidebarOpen(false);
+    setFormMode("create");
+    setSelectedItem(null);
+  };
+
+  const closeItemModal = () => {
+    setIsItemModalOpen(false);
     setFormMode("create");
     setSelectedItem(null);
   };
@@ -653,6 +661,8 @@ export function InventoryModuleDashboard({
         savedItem = await createItem.mutateAsync(values);
       }
 
+      setIsItemModalOpen(false);
+
       if (supportsItemImages && savedItem) {
         try {
           if (imageFile) {
@@ -751,18 +761,18 @@ export function InventoryModuleDashboard({
           className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
           title={
             isSidebarOpen
-              ? "Masquer le panneau latéral des formulaires"
-              : "Afficher le panneau latéral des formulaires"
+              ? "Masquer le panneau latéral"
+              : "Afficher le panneau latéral"
           }
         >
-          {isSidebarOpen ? "Masquer les formulaires" : "Afficher les formulaires"}
+          {isSidebarOpen ? "Masquer le panneau" : "Afficher le panneau"}
         </button>
         <button
           type="button"
           onClick={() => {
             setFormMode("create");
             setSelectedItem(null);
-            openSidebar();
+            setIsItemModalOpen(true);
           }}
           className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
           title={`${itemNoun.newLabel} dans l'inventaire`}
@@ -1082,7 +1092,7 @@ export function InventoryModuleDashboard({
                             onClick={() => {
                               setSelectedItem(item);
                               setFormMode("edit");
-                              openSidebar();
+                              setIsItemModalOpen(true);
                             }}
                             className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
                             title={`Modifier les informations de ${item.name}`}
@@ -1124,41 +1134,6 @@ export function InventoryModuleDashboard({
 
       {isSidebarOpen ? (
         <aside className="min-w-0 space-y-6 lg:w-1/3">
-          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <div className="flex items-center justify-between gap-2">
-              <h3 className="text-sm font-semibold text-white">
-                {formMode === "edit" ? `Modifier ${itemNoun.definite}` : itemNoun.newLabel}
-              </h3>
-              <button
-                type="button"
-                onClick={closeSidebar}
-                className="rounded-md border border-slate-700 px-2 py-1 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-                title="Fermer le panneau latéral"
-              >
-                Fermer
-              </button>
-            </div>
-            <ItemForm
-              key={`${formMode}-${selectedItem?.id ?? "new"}`}
-              initialValues={formInitialValues}
-              categories={categories}
-              suppliers={suppliers}
-              mode={formMode}
-              isSubmitting={createItem.isPending || updateItem.isPending}
-              onSubmit={handleSubmitItem}
-              onCancel={closeSidebar}
-              supportsItemImages={supportsItemImages}
-              initialImageUrl={initialImageUrl}
-              supportsExpirationDate={supportsExpirationDate}
-              itemNoun={itemNoun}
-              existingSkus={existingSkus}
-              barcodePrefix={barcodePrefix}
-              currentItemId={selectedItem?.id ?? null}
-              enableLowStockOptOut={supportsLowStockOptOut}
-              customFieldDefinitions={activeCustomFields}
-            />
-          </div>
-
           <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
             <h3 className="text-sm font-semibold text-white">Mouvement de stock</h3>
             <MovementForm
@@ -1206,6 +1181,36 @@ export function InventoryModuleDashboard({
     </div>
   );
 
+  const itemModal = (
+    <DraggableModal
+      open={isItemModalOpen}
+      title={formMode === "edit" ? `Modifier ${itemNoun.definite}` : itemNoun.newLabel}
+      onClose={closeItemModal}
+      width="min(900px, 92vw)"
+      maxHeight="85vh"
+    >
+      <ItemForm
+        key={`${formMode}-${selectedItem?.id ?? "new"}`}
+        initialValues={formInitialValues}
+        categories={categories}
+        suppliers={suppliers}
+        mode={formMode}
+        isSubmitting={createItem.isPending || updateItem.isPending}
+        onSubmit={handleSubmitItem}
+        onCancel={closeItemModal}
+        supportsItemImages={supportsItemImages}
+        initialImageUrl={initialImageUrl}
+        supportsExpirationDate={supportsExpirationDate}
+        itemNoun={itemNoun}
+        existingSkus={existingSkus}
+        barcodePrefix={barcodePrefix}
+        currentItemId={selectedItem?.id ?? null}
+        enableLowStockOptOut={supportsLowStockOptOut}
+        customFieldDefinitions={activeCustomFields}
+      />
+    </DraggableModal>
+  );
+
   const ordersContent = config.showPurchaseOrders ? (
     <PurchaseOrdersPanel
       suppliers={suppliers}
@@ -1224,7 +1229,12 @@ export function InventoryModuleDashboard({
     return renderLayout({
       header: headerContent,
       filters: filtersContent,
-      table: tableContent,
+      table: (
+        <>
+          {tableContent}
+          {itemModal}
+        </>
+      ),
       orders: ordersContent ?? undefined
     });
   }
@@ -1271,24 +1281,27 @@ export function InventoryModuleDashboard({
   }
 
   return (
-    <EditablePageLayout
-      pageKey="module:clothing:inventory"
-      blocks={blocks}
-      renderHeader={({ editButton, actionButtons, isEditing }) => (
-        <div className="space-y-4">
-          <header className="space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
-            <div className="space-y-1">
-              <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
-              <p className="text-sm text-slate-400">{config.description}</p>
-            </div>
-            {renderToolbar({ editButton, actionButtons, isEditing })}
-          </header>
+    <>
+      {itemModal}
+      <EditablePageLayout
+        pageKey="module:clothing:inventory"
+        blocks={blocks}
+        renderHeader={({ editButton, actionButtons, isEditing }) => (
+          <div className="space-y-4">
+            <header className="space-y-4 rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
+              <div className="space-y-1">
+                <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
+                <p className="text-sm text-slate-400">{config.description}</p>
+              </div>
+              {renderToolbar({ editButton, actionButtons, isEditing })}
+            </header>
 
-          {message ? <Alert tone="success" message={message} /> : null}
-          {error ? <Alert tone="error" message={error} /> : null}
-        </div>
-      )}
-    />
+            {message ? <Alert tone="success" message={message} /> : null}
+            {error ? <Alert tone="error" message={error} /> : null}
+          </div>
+        )}
+      />
+    </>
   );
 }
 
