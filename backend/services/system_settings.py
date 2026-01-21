@@ -15,8 +15,10 @@ logger = logging.getLogger(__name__)
 
 SMTP_SETTINGS_KEY = "email.smtp"
 OTP_EMAIL_SETTINGS_KEY = "email.otp"
+PURCHASE_SUGGESTION_SETTINGS_KEY = "purchase_suggestions"
 
 _DEFAULT_FROM_EMAIL = "StockOps <no-reply@localhost>"
+_DEFAULT_EXPIRY_SOON_DAYS = 30
 
 
 @dataclass(frozen=True)
@@ -40,6 +42,11 @@ class OtpEmailConfig:
     resend_cooldown_seconds: int
     rate_limit_per_hour: int
     allow_insecure_dev: bool
+
+
+@dataclass(frozen=True)
+class PurchaseSuggestionSettings:
+    expiry_soon_days: int
 
 
 def _utc_now_iso() -> str:
@@ -105,6 +112,12 @@ def _otp_env_defaults() -> dict[str, Any]:
     }
 
 
+def _purchase_suggestion_env_defaults() -> dict[str, Any]:
+    return {
+        "expiry_soon_days": max(0, _get_int_env("EXPIRY_SOON_DAYS", _DEFAULT_EXPIRY_SOON_DAYS)),
+    }
+
+
 def get_setting_json(key: str) -> dict[str, Any] | None:
     with db.get_core_connection() as conn:
         row = conn.execute(
@@ -165,6 +178,7 @@ def seed_default_system_settings() -> None:
         smtp_value["password_enc"] = encrypt_smtp_password(password)
 
     otp_value = _otp_env_defaults()
+    purchase_suggestion_value = _purchase_suggestion_env_defaults()
 
     with db.get_core_connection() as conn:
         smtp_exists = conn.execute(
@@ -191,6 +205,20 @@ def seed_default_system_settings() -> None:
                 (
                     OTP_EMAIL_SETTINGS_KEY,
                     json.dumps(otp_value, ensure_ascii=False),
+                    _utc_now_iso(),
+                    None,
+                ),
+            )
+        purchase_suggestion_exists = conn.execute(
+            "SELECT 1 FROM system_settings WHERE key = ?",
+            (PURCHASE_SUGGESTION_SETTINGS_KEY,),
+        ).fetchone()
+        if not purchase_suggestion_exists:
+            conn.execute(
+                "INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                (
+                    PURCHASE_SUGGESTION_SETTINGS_KEY,
+                    json.dumps(purchase_suggestion_value, ensure_ascii=False),
                     _utc_now_iso(),
                     None,
                 ),
@@ -296,3 +324,20 @@ def get_email_otp_config() -> OtpEmailConfig:
         defaults = _otp_env_defaults()
         return OtpEmailConfig(**defaults)
     return _otp_from_dict(raw)
+
+
+def _purchase_suggestion_from_dict(payload: dict[str, Any]) -> PurchaseSuggestionSettings:
+    defaults = _purchase_suggestion_env_defaults()
+    expiry_soon_days = _coerce_int(
+        payload.get("expiry_soon_days", defaults["expiry_soon_days"]),
+        defaults["expiry_soon_days"],
+    )
+    return PurchaseSuggestionSettings(expiry_soon_days=max(0, expiry_soon_days))
+
+
+def get_purchase_suggestion_settings() -> PurchaseSuggestionSettings:
+    raw = get_setting_json(PURCHASE_SUGGESTION_SETTINGS_KEY)
+    if raw is None:
+        defaults = _purchase_suggestion_env_defaults()
+        return PurchaseSuggestionSettings(expiry_soon_days=defaults["expiry_soon_days"])
+    return _purchase_suggestion_from_dict(raw)

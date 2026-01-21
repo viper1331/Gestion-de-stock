@@ -78,6 +78,10 @@ interface OtpEmailSettingsPayload {
   allow_insecure_dev: boolean;
 }
 
+interface PurchaseSuggestionSettingsPayload {
+  expiry_soon_days: number;
+}
+
 const EMPTY_VEHICLE_TYPE_FORM: VehicleTypeFormState = {
   code: "",
   label: "",
@@ -118,6 +122,10 @@ const DEFAULT_OTP_FORM: OtpEmailSettingsPayload = {
   allow_insecure_dev: false
 };
 
+const DEFAULT_PURCHASE_SUGGESTION_SETTINGS: PurchaseSuggestionSettingsPayload = {
+  expiry_soon_days: 30
+};
+
 export function AdminSettingsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -140,6 +148,10 @@ export function AdminSettingsPage() {
   const [otpForm, setOtpForm] = useState<OtpEmailSettingsPayload>(DEFAULT_OTP_FORM);
   const [otpMessage, setOtpMessage] = useState<string | null>(null);
   const [otpError, setOtpError] = useState<string | null>(null);
+  const [purchaseSuggestionSettings, setPurchaseSuggestionSettings] =
+    useState<PurchaseSuggestionSettingsPayload>(DEFAULT_PURCHASE_SUGGESTION_SETTINGS);
+  const [purchaseSuggestionMessage, setPurchaseSuggestionMessage] = useState<string | null>(null);
+  const [purchaseSuggestionError, setPurchaseSuggestionError] = useState<string | null>(null);
   const [persistLogsEnabled, setPersistLogsEnabled] = useState<boolean>(() =>
     isLogPersistenceEnabled()
   );
@@ -192,6 +204,17 @@ export function AdminSettingsPage() {
     enabled: isAdmin
   });
 
+  const { data: purchaseSuggestionSettingsData } = useQuery<PurchaseSuggestionSettingsPayload>({
+    queryKey: ["admin-purchase-suggestion-settings"],
+    queryFn: async () => {
+      const response = await api.get<PurchaseSuggestionSettingsPayload>(
+        "/admin/purchase-suggestions/settings"
+      );
+      return response.data;
+    },
+    enabled: isAdmin
+  });
+
   useEffect(() => {
     setSelectedSite(siteContext?.override_site_key ?? "");
   }, [siteContext?.override_site_key]);
@@ -220,6 +243,13 @@ export function AdminSettingsPage() {
     }
     setOtpForm(otpSettings);
   }, [otpSettings]);
+
+  useEffect(() => {
+    if (!purchaseSuggestionSettingsData) {
+      return;
+    }
+    setPurchaseSuggestionSettings(purchaseSuggestionSettingsData);
+  }, [purchaseSuggestionSettingsData]);
 
   const resetVehicleTypeForm = () => {
     setVehicleTypeForm(EMPTY_VEHICLE_TYPE_FORM);
@@ -464,6 +494,21 @@ export function AdminSettingsPage() {
     onError: () => {
       setOtpMessage(null);
       setOtpError("Impossible d'enregistrer les paramètres OTP e-mail.");
+    }
+  });
+
+  const updatePurchaseSuggestionSettings = useMutation({
+    mutationFn: async (payload: PurchaseSuggestionSettingsPayload) => {
+      await api.put("/admin/purchase-suggestions/settings", payload);
+    },
+    onSuccess: async () => {
+      setPurchaseSuggestionMessage("Paramètre de péremption mis à jour.");
+      setPurchaseSuggestionError(null);
+      await queryClient.invalidateQueries({ queryKey: ["admin-purchase-suggestion-settings"] });
+    },
+    onError: () => {
+      setPurchaseSuggestionMessage(null);
+      setPurchaseSuggestionError("Impossible d'enregistrer le paramètre de péremption.");
     }
   });
 
@@ -908,6 +953,68 @@ export function AdminSettingsPage() {
               type="submit"
               className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
               disabled={updateOtpSettings.isPending}
+            >
+              Enregistrer
+            </button>
+          </div>
+        </form>
+      </div>
+
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-white">Suggestions de commande</h3>
+          <p className="text-xs text-slate-400">
+            Définissez le seuil en jours pour signaler les péremptions proches.
+          </p>
+        </div>
+        {purchaseSuggestionMessage ? (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+            {purchaseSuggestionMessage}
+          </div>
+        ) : null}
+        {purchaseSuggestionError ? (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+            {purchaseSuggestionError}
+          </div>
+        ) : null}
+        <form
+          className="space-y-4"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setPurchaseSuggestionMessage(null);
+            setPurchaseSuggestionError(null);
+            updatePurchaseSuggestionSettings.mutate(purchaseSuggestionSettings);
+          }}
+        >
+          <div className="grid gap-4 md:grid-cols-2">
+            <label className="text-xs text-slate-300">
+              Péremption proche (jours)
+              <span
+                title="0-365 jours."
+                className="ml-1 text-[11px] text-slate-500"
+              >
+                ⓘ
+              </span>
+              <AppTextInput
+                type="number"
+                min={0}
+                max={365}
+                value={purchaseSuggestionSettings.expiry_soon_days}
+                onChange={(event) =>
+                  setPurchaseSuggestionSettings((prev) => ({
+                    ...prev,
+                    expiry_soon_days: Number(event.target.value)
+                  }))
+                }
+                className="mt-1 w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100"
+              />
+            </label>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="submit"
+              className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+              disabled={updatePurchaseSuggestionSettings.isPending}
             >
               Enregistrer
             </button>

@@ -44,7 +44,7 @@ from backend.core.storage import (
     relative_to_media,
 )
 from backend.services import barcode as barcode_service
-from backend.services import email_sender, notifications
+from backend.services import email_sender, notifications, system_settings
 from backend.services.pdf_config import (
     draw_watermark,
     effective_density_scale,
@@ -510,6 +510,11 @@ def _get_purchase_suggestions_safety_buffer() -> int:
         return 0
 
 
+def _get_purchase_suggestions_expiry_soon_days() -> int:
+    settings = system_settings.get_purchase_suggestion_settings()
+    return max(0, settings.expiry_soon_days)
+
+
 def _extract_reorder_qty(extra: dict[str, Any] | None) -> int | None:
     if not extra:
         return None
@@ -531,6 +536,36 @@ def _calculate_suggested_qty(
     return max(0, threshold - quantity) + max(0, safety_buffer)
 
 
+_SUGGESTION_REASON_ORDER = ("LOW_STOCK", "EXPIRY_SOON")
+
+
+def _normalize_reason_codes(codes: Iterable[str]) -> list[str]:
+    normalized = {code for code in codes if code}
+    return [code for code in _SUGGESTION_REASON_ORDER if code in normalized]
+
+
+def _build_reason_label(reason_codes: Iterable[str], expiry_days_left: int | None) -> str | None:
+    parts: list[str] = []
+    reason_set = set(reason_codes)
+    if "LOW_STOCK" in reason_set:
+        parts.append("Stock sous seuil")
+    if "EXPIRY_SOON" in reason_set:
+        suffix = f" (J-{expiry_days_left})" if expiry_days_left is not None else ""
+        parts.append(f"Péremption proche{suffix}")
+    return " + ".join(parts) if parts else None
+
+
+def _suggested_qty_for_expiry(
+    quantity: int,
+    threshold: int,
+    reorder_qty: int | None,
+    safety_buffer: int,
+) -> int:
+    if reorder_qty is not None or threshold > 0:
+        return _calculate_suggested_qty(quantity, threshold, reorder_qty, safety_buffer)
+    return 1
+
+
 def _build_purchase_suggestion_line(
     *,
     item_id: int,
@@ -542,8 +577,18 @@ def _build_purchase_suggestion_line(
     supplier_id: int | None,
     reorder_qty: int | None,
     safety_buffer: int,
+    reason_codes: Iterable[str],
+    expiry_date: date | None = None,
+    expiry_days_left: int | None = None,
+    reason_label: str | None = None,
+    suggested_qty_override: int | None = None,
 ) -> dict[str, Any]:
-    qty_suggested = _calculate_suggested_qty(quantity, threshold, reorder_qty, safety_buffer)
+    qty_suggested = suggested_qty_override
+    if qty_suggested is None:
+        qty_suggested = _calculate_suggested_qty(quantity, threshold, reorder_qty, safety_buffer)
+    normalized_reason_codes = _normalize_reason_codes(reason_codes)
+    reason_label = reason_label or _build_reason_label(normalized_reason_codes, expiry_days_left)
+    expiry_date_value = expiry_date.isoformat() if expiry_date else None
     return {
         "item_id": item_id,
         "sku": sku,
@@ -551,7 +596,11 @@ def _build_purchase_suggestion_line(
         "qty_suggested": qty_suggested,
         "qty_final": qty_suggested,
         "unit": unit,
-        "reason": "Stock sous seuil",
+        "reason": reason_label,
+        "reason_codes": normalized_reason_codes,
+        "expiry_date": expiry_date_value,
+        "expiry_days_left": expiry_days_left,
+        "reason_label": reason_label,
         "stock_current": quantity,
         "threshold": threshold,
         "supplier_id": supplier_id,
@@ -571,6 +620,36 @@ def _resolve_supplier_id_from_name(
         (normalized.lower(),),
     ).fetchone()
     return int(row["id"]) if row is not None else None
+
+
+def _resolve_pharmacy_supplier_id(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    extra: dict[str, Any],
+) -> int | None:
+    supplier_id = row["supplier_id"] if "supplier_id" in row.keys() else None
+    if supplier_id is None:
+        supplier_id = extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None
+    if supplier_id is None:
+        supplier_id = _resolve_supplier_id_from_name(
+            conn,
+            extra.get("supplier_name") or extra.get("supplier") or extra.get("fournisseur"),
+        )
+    return supplier_id
+
+
+def _resolve_remise_supplier_id(
+    conn: sqlite3.Connection,
+    row: sqlite3.Row,
+    extra: dict[str, Any],
+) -> int | None:
+    supplier_id = row["supplier_id"]
+    if supplier_id is None:
+        supplier_id = _resolve_supplier_id_from_name(
+            conn,
+            extra.get("supplier_name") or extra.get("supplier") or extra.get("fournisseur"),
+        )
+    return supplier_id
 
 
 def _require_supplier_for_module(
@@ -594,7 +673,10 @@ def _get_reorder_candidates(
     conn: sqlite3.Connection,
     module_key: str,
     safety_buffer: int,
+    expiry_soon_days: int,
 ) -> list[dict[str, Any]]:
+    candidates_by_item: dict[int, dict[str, Any]] = {}
+
     if module_key == "clothing":
         rows = conn.execute(
             """
@@ -603,26 +685,25 @@ def _get_reorder_candidates(
             WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
             """
         ).fetchall()
-        candidates: list[dict[str, Any]] = []
         for row in rows:
             if "track_low_stock" in row.keys() and not bool(row["track_low_stock"]):
                 continue
-            candidates.append(
-                _build_purchase_suggestion_line(
-                    item_id=row["id"],
-                    sku=row["sku"],
-                    label=row["name"],
-                    quantity=row["quantity"],
-                    threshold=row["low_stock_threshold"],
-                    unit=row["size"],
-                    supplier_id=row["supplier_id"],
-                    reorder_qty=None,
-                    safety_buffer=safety_buffer,
-                )
+            candidates_by_item[row["id"]] = _build_purchase_suggestion_line(
+                item_id=row["id"],
+                sku=row["sku"],
+                label=row["name"],
+                quantity=row["quantity"],
+                threshold=row["low_stock_threshold"],
+                unit=row["size"],
+                supplier_id=row["supplier_id"],
+                reorder_qty=None,
+                safety_buffer=safety_buffer,
+                reason_codes=["LOW_STOCK"],
             )
-        return candidates
+        return list(candidates_by_item.values())
+
     if module_key == "pharmacy":
-        rows = conn.execute(
+        low_stock_rows = conn.execute(
             """
             SELECT id,
                    name,
@@ -637,25 +718,67 @@ def _get_reorder_candidates(
             WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
             """
         ).fetchall()
-        candidates = []
-        for row in rows:
+        for row in low_stock_rows:
             extra = _parse_extra_json(row["extra_json"])
-            supplier_id = (
-                row["supplier_id"] if "supplier_id" in row.keys() else None
+            supplier_id = _resolve_pharmacy_supplier_id(conn, row, extra)
+            candidates_by_item[row["id"]] = _build_purchase_suggestion_line(
+                item_id=row["id"],
+                sku=row["barcode"] or str(row["id"]),
+                label=row["name"],
+                quantity=row["quantity"],
+                threshold=row["low_stock_threshold"],
+                unit=row["packaging"] or row["dosage"],
+                supplier_id=supplier_id,
+                reorder_qty=_extract_reorder_qty(extra),
+                safety_buffer=safety_buffer,
+                reason_codes=["LOW_STOCK"],
             )
-            if supplier_id is None:
-                supplier_id = (
-                    extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None
+        if _table_has_column(conn, "pharmacy_items", "expiration_date") and expiry_soon_days >= 0:
+            expiry_rows = conn.execute(
+                """
+                SELECT id,
+                       name,
+                       barcode,
+                       packaging,
+                       dosage,
+                       quantity,
+                       low_stock_threshold,
+                       expiration_date,
+                       supplier_id,
+                       extra_json
+                FROM pharmacy_items
+                WHERE expiration_date IS NOT NULL
+                """
+            ).fetchall()
+            today = date.today()
+            for row in expiry_rows:
+                expiry_date = _parse_date(row["expiration_date"])
+                if expiry_date is None:
+                    continue
+                days_left = (expiry_date - today).days
+                if days_left < 0 or days_left > expiry_soon_days:
+                    continue
+                extra = _parse_extra_json(row["extra_json"])
+                supplier_id = _resolve_pharmacy_supplier_id(conn, row, extra)
+                existing = candidates_by_item.get(row["id"])
+                if existing:
+                    existing["reason_codes"] = _normalize_reason_codes(
+                        [*existing.get("reason_codes", []), "EXPIRY_SOON"]
+                    )
+                    existing["expiry_date"] = expiry_date.isoformat()
+                    existing["expiry_days_left"] = days_left
+                    existing["reason_label"] = _build_reason_label(
+                        existing["reason_codes"], days_left
+                    )
+                    existing["reason"] = existing["reason_label"]
+                    continue
+                suggested_qty = _suggested_qty_for_expiry(
+                    row["quantity"],
+                    row["low_stock_threshold"],
+                    _extract_reorder_qty(extra),
+                    safety_buffer,
                 )
-            if supplier_id is None:
-                supplier_id = _resolve_supplier_id_from_name(
-                    conn,
-                    extra.get("supplier_name")
-                    or extra.get("supplier")
-                    or extra.get("fournisseur"),
-                )
-            candidates.append(
-                _build_purchase_suggestion_line(
+                candidates_by_item[row["id"]] = _build_purchase_suggestion_line(
                     item_id=row["id"],
                     sku=row["barcode"] or str(row["id"]),
                     label=row["name"],
@@ -665,32 +788,84 @@ def _get_reorder_candidates(
                     supplier_id=supplier_id,
                     reorder_qty=_extract_reorder_qty(extra),
                     safety_buffer=safety_buffer,
+                    reason_codes=["EXPIRY_SOON"],
+                    expiry_date=expiry_date,
+                    expiry_days_left=days_left,
+                    suggested_qty_override=suggested_qty,
                 )
-            )
-        return candidates
+        return list(candidates_by_item.values())
+
     if module_key == "inventory_remise":
-        rows = conn.execute(
+        low_stock_rows = conn.execute(
             """
             SELECT id, name, sku, size, quantity, low_stock_threshold, supplier_id, track_low_stock, extra_json
             FROM remise_items
             WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
             """
         ).fetchall()
-        candidates = []
-        for row in rows:
+        for row in low_stock_rows:
             if "track_low_stock" in row.keys() and not bool(row["track_low_stock"]):
                 continue
             extra = _parse_extra_json(row["extra_json"])
-            supplier_id = row["supplier_id"]
-            if supplier_id is None:
-                supplier_id = _resolve_supplier_id_from_name(
-                    conn,
-                    extra.get("supplier_name")
-                    or extra.get("supplier")
-                    or extra.get("fournisseur"),
+            supplier_id = _resolve_remise_supplier_id(conn, row, extra)
+            candidates_by_item[row["id"]] = _build_purchase_suggestion_line(
+                item_id=row["id"],
+                sku=row["sku"],
+                label=row["name"],
+                quantity=row["quantity"],
+                threshold=row["low_stock_threshold"],
+                unit=row["size"],
+                supplier_id=supplier_id,
+                reorder_qty=_extract_reorder_qty(extra),
+                safety_buffer=safety_buffer,
+                reason_codes=["LOW_STOCK"],
+            )
+        if _table_has_column(conn, "remise_items", "expiration_date") and expiry_soon_days >= 0:
+            expiry_rows = conn.execute(
+                """
+                SELECT id,
+                       name,
+                       sku,
+                       size,
+                       quantity,
+                       low_stock_threshold,
+                       supplier_id,
+                       track_low_stock,
+                       extra_json,
+                       expiration_date
+                FROM remise_items
+                WHERE expiration_date IS NOT NULL
+                """
+            ).fetchall()
+            today = date.today()
+            for row in expiry_rows:
+                expiry_date = _parse_date(row["expiration_date"])
+                if expiry_date is None:
+                    continue
+                days_left = (expiry_date - today).days
+                if days_left < 0 or days_left > expiry_soon_days:
+                    continue
+                extra = _parse_extra_json(row["extra_json"])
+                supplier_id = _resolve_remise_supplier_id(conn, row, extra)
+                existing = candidates_by_item.get(row["id"])
+                if existing:
+                    existing["reason_codes"] = _normalize_reason_codes(
+                        [*existing.get("reason_codes", []), "EXPIRY_SOON"]
+                    )
+                    existing["expiry_date"] = expiry_date.isoformat()
+                    existing["expiry_days_left"] = days_left
+                    existing["reason_label"] = _build_reason_label(
+                        existing["reason_codes"], days_left
+                    )
+                    existing["reason"] = existing["reason_label"]
+                    continue
+                suggested_qty = _suggested_qty_for_expiry(
+                    row["quantity"],
+                    row["low_stock_threshold"],
+                    _extract_reorder_qty(extra),
+                    safety_buffer,
                 )
-            candidates.append(
-                _build_purchase_suggestion_line(
+                candidates_by_item[row["id"]] = _build_purchase_suggestion_line(
                     item_id=row["id"],
                     sku=row["sku"],
                     label=row["name"],
@@ -700,9 +875,13 @@ def _get_reorder_candidates(
                     supplier_id=supplier_id,
                     reorder_qty=_extract_reorder_qty(extra),
                     safety_buffer=safety_buffer,
+                    reason_codes=["EXPIRY_SOON"],
+                    expiry_date=expiry_date,
+                    expiry_days_left=days_left,
+                    suggested_qty_override=suggested_qty,
                 )
-            )
-        return candidates
+        return list(candidates_by_item.values())
+
     raise ValueError(f"Module de suggestion inconnu: {module_key}")
 
 
@@ -711,8 +890,9 @@ def get_reorder_candidates(site_key: str, module_key: str) -> list[dict[str, Any
     if module_key not in _PURCHASE_SUGGESTION_MODULES:
         raise ValueError(f"Module de suggestion inconnu: {module_key}")
     safety_buffer = _get_purchase_suggestions_safety_buffer()
+    expiry_soon_days = _get_purchase_suggestions_expiry_soon_days()
     with _get_site_stock_conn(site_key) as conn:
-        return _get_reorder_candidates(conn, module_key, safety_buffer)
+        return _get_reorder_candidates(conn, module_key, safety_buffer, expiry_soon_days)
 
 
 def _get_purchase_suggestion_lines(
@@ -765,6 +945,24 @@ def _get_purchase_suggestion_lines(
     for row in rows:
         module_key = row["module_key"]
         item_row = items_by_module.get(module_key, {}).get(row["item_id"])
+        reason_codes: list[str] = []
+        raw_reason_codes = row["reason_codes"] if "reason_codes" in row.keys() else None
+        if raw_reason_codes:
+            try:
+                parsed = json.loads(raw_reason_codes)
+                if isinstance(parsed, list):
+                    reason_codes = [str(code) for code in parsed if code]
+            except json.JSONDecodeError:
+                reason_codes = []
+        reason_label = row["reason_label"] if "reason_label" in row.keys() else None
+        if not reason_label:
+            reason_label = row["reason"]
+        if not reason_codes and reason_label:
+            if "Péremption" in reason_label:
+                reason_codes.append("EXPIRY_SOON")
+            if "Stock" in reason_label:
+                reason_codes.append("LOW_STOCK")
+        reason_codes = _normalize_reason_codes(reason_codes)
         line = models.PurchaseSuggestionLine(
             id=row["id"],
             suggestion_id=row["suggestion_id"],
@@ -778,10 +976,24 @@ def _get_purchase_suggestion_lines(
             qty_final=row["qty_final"],
             unit=row["unit"],
             reason=row["reason"],
+            reason_codes=reason_codes,
+            expiry_date=row["expiry_date"] if "expiry_date" in row.keys() else None,
+            expiry_days_left=row["expiry_days_left"] if "expiry_days_left" in row.keys() else None,
+            reason_label=reason_label,
             stock_current=row["stock_current"],
             threshold=row["threshold"],
         )
         lines[line.suggestion_id].append(line)
+    for suggestion_id, suggestion_lines in lines.items():
+        suggestion_lines.sort(
+            key=lambda line: (
+                line.expiry_days_left
+                if line.expiry_days_left is not None
+                else 999999,
+                0 if "LOW_STOCK" in line.reason_codes else 1,
+                (line.label or "").lower(),
+            )
+        )
     return lines
 
 
@@ -887,6 +1099,15 @@ def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
         (table_name,),
     ).fetchone()
     return row is not None
+
+
+def _table_has_column(conn: sqlite3.Connection, table_name: str, column_name: str) -> bool:
+    if not _table_exists(conn, table_name):
+        return False
+    columns = {
+        row["name"] for row in conn.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    return column_name in columns
 
 
 def migrate_legacy_suppliers_to_site(site_key: str | int | None) -> None:
@@ -1066,13 +1287,16 @@ def refresh_purchase_suggestions(
 ) -> list[models.PurchaseSuggestionDetail]:
     ensure_database_ready()
     safety_buffer = _get_purchase_suggestions_safety_buffer()
+    expiry_soon_days = _get_purchase_suggestions_expiry_soon_days()
     module_list = [module for module in module_keys if module in _PURCHASE_SUGGESTION_MODULES]
     if not module_list:
         return []
     migrate_legacy_suppliers_to_site(site_key)
     with _get_site_stock_conn(site_key) as conn:
         for module_key in module_list:
-            candidates = _get_reorder_candidates(conn, module_key, safety_buffer)
+            candidates = _get_reorder_candidates(
+                conn, module_key, safety_buffer, expiry_soon_days
+            )
             grouped: dict[int | None, list[dict[str, Any]]] = defaultdict(list)
             for candidate in candidates:
                 grouped[candidate["supplier_id"]].append(candidate)
@@ -1126,9 +1350,9 @@ def refresh_purchase_suggestions(
                             """
                             INSERT INTO purchase_suggestion_lines (
                                 suggestion_id, item_id, sku, label, qty_suggested, qty_final, unit, reason,
-                                stock_current, threshold
+                                reason_codes, expiry_date, expiry_days_left, reason_label, stock_current, threshold
                             )
-                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                             """,
                             (
                                 suggestion_id,
@@ -1139,6 +1363,10 @@ def refresh_purchase_suggestions(
                                 item["qty_final"],
                                 item["unit"],
                                 item["reason"],
+                                json.dumps(item.get("reason_codes") or [], ensure_ascii=False),
+                                item.get("expiry_date"),
+                                item.get("expiry_days_left"),
+                                item.get("reason_label"),
                                 item["stock_current"],
                                 item["threshold"],
                             ),
@@ -1153,6 +1381,7 @@ def refresh_purchase_suggestions(
                         """
                         UPDATE purchase_suggestion_lines
                         SET sku = ?, label = ?, qty_suggested = ?, qty_final = ?, unit = ?, reason = ?,
+                            reason_codes = ?, expiry_date = ?, expiry_days_left = ?, reason_label = ?,
                             stock_current = ?, threshold = ?
                         WHERE id = ?
                         """,
@@ -1163,6 +1392,10 @@ def refresh_purchase_suggestions(
                             next_final,
                             item["unit"],
                             item["reason"],
+                            json.dumps(item.get("reason_codes") or [], ensure_ascii=False),
+                            item.get("expiry_date"),
+                            item.get("expiry_days_left"),
+                            item.get("reason_label"),
                             item["stock_current"],
                             item["threshold"],
                             row["id"],
@@ -2777,6 +3010,10 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 qty_final INTEGER NOT NULL,
                 unit TEXT,
                 reason TEXT,
+                reason_codes TEXT,
+                expiry_date TEXT,
+                expiry_days_left INTEGER,
+                reason_label TEXT,
                 stock_current INTEGER NOT NULL,
                 threshold INTEGER NOT NULL
             );
@@ -2797,6 +3034,18 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             );
             """
         )
+
+        suggestion_line_columns = {
+            row["name"] for row in execute("PRAGMA table_info(purchase_suggestion_lines)").fetchall()
+        }
+        if "reason_codes" not in suggestion_line_columns:
+            execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN reason_codes TEXT")
+        if "expiry_date" not in suggestion_line_columns:
+            execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN expiry_date TEXT")
+        if "expiry_days_left" not in suggestion_line_columns:
+            execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN expiry_days_left INTEGER")
+        if "reason_label" not in suggestion_line_columns:
+            execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN reason_label TEXT")
 
         backup_settings_info = execute("PRAGMA table_info(backup_settings)").fetchall()
         backup_settings_columns = {row["name"] for row in backup_settings_info}

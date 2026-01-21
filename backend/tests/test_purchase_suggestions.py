@@ -1,4 +1,5 @@
 import sys
+from datetime import date, timedelta
 from pathlib import Path
 
 import urllib.parse
@@ -12,6 +13,7 @@ if str(ROOT) not in sys.path:
 
 from backend.app import app
 from backend.core import db, security, services, two_factor_crypto
+from backend.services import system_settings
 
 client = TestClient(app)
 
@@ -322,3 +324,85 @@ def test_suggestion_variant_labels() -> None:
         == "500mg • Boîte 100"
     )
     assert suggestions_by_module["inventory_remise"]["lines"][0]["variant_label"] is None
+
+
+def test_pharmacy_expiry_soon_suggestions() -> None:
+    _reset_tables()
+    _create_user("suggest_admin", "password", role="admin")
+    headers = _login_headers("suggest_admin", "password")
+    system_settings.set_setting_json(
+        system_settings.PURCHASE_SUGGESTION_SETTINGS_KEY,
+        {"expiry_soon_days": 10},
+        "suggest_admin",
+    )
+
+    soon_date = (date.today() + timedelta(days=7)).isoformat()
+    expired_date = (date.today() - timedelta(days=1)).isoformat()
+    combo_date = (date.today() + timedelta(days=5)).isoformat()
+
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, expiration_date)
+            VALUES ('Gaze', 50, 5, ?)
+            """,
+            (soon_date,),
+        )
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, expiration_date)
+            VALUES ('Bandage périmé', 50, 5, ?)
+            """,
+            (expired_date,),
+        )
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, expiration_date)
+            VALUES ('Compresses', 1, 5, ?)
+            """,
+            (combo_date,),
+        )
+        conn.commit()
+
+    response = client.post(
+        "/purchasing/suggestions/refresh",
+        json={"module_keys": ["pharmacy"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    lines = [line for suggestion in response.json() for line in suggestion["lines"]]
+    gaze = next(line for line in lines if line["label"] == "Gaze")
+    assert gaze["reason_codes"] == ["EXPIRY_SOON"]
+    assert gaze["expiry_days_left"] == 7
+    assert all(line["label"] != "Bandage périmé" for line in lines)
+
+    compresses = next(line for line in lines if line["label"] == "Compresses")
+    assert set(compresses["reason_codes"]) == {"LOW_STOCK", "EXPIRY_SOON"}
+    assert compresses["expiry_days_left"] == 5
+
+
+def test_module_without_expiry_field_does_not_break() -> None:
+    _reset_tables()
+    _create_user("suggest_admin", "password", role="admin")
+    headers = _login_headers("suggest_admin", "password")
+
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO items (name, sku, quantity, low_stock_threshold, track_low_stock)
+            VALUES ('Veste hiver', 'CL-88', 1, 5, 1)
+            """
+        )
+        conn.commit()
+
+    response = client.post(
+        "/purchasing/suggestions/refresh",
+        json={"module_keys": ["clothing"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+    lines = [line for suggestion in response.json() for line in suggestion["lines"]]
+    assert len(lines) == 1
+    assert lines[0]["reason_codes"] == ["LOW_STOCK"]
+    assert lines[0]["expiry_date"] is None

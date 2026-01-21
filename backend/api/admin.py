@@ -83,6 +83,10 @@ class OtpEmailSettingsPayload(BaseModel):
     allow_insecure_dev: bool
 
 
+class PurchaseSuggestionSettingsPayload(BaseModel):
+    expiry_soon_days: int
+
+
 def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
@@ -119,6 +123,14 @@ def _validate_otp_payload(payload: OtpEmailSettingsPayload) -> None:
         raise HTTPException(status_code=400, detail="Cooldown invalide (10-300 secondes)")
     if payload.rate_limit_per_hour < 1 or payload.rate_limit_per_hour > 60:
         raise HTTPException(status_code=400, detail="Rate limit invalide (1-60 par heure)")
+
+
+def _validate_purchase_suggestion_payload(payload: PurchaseSuggestionSettingsPayload) -> None:
+    if payload.expiry_soon_days < 0 or payload.expiry_soon_days > 365:
+        raise HTTPException(
+            status_code=400,
+            detail="Délai de péremption invalide (0-365 jours)",
+        )
 
 
 @router.get("/debug-config", response_model=models.DebugConfig)
@@ -399,6 +411,28 @@ def update_otp_email_settings(
     _validate_otp_payload(payload)
     system_settings.set_setting_json(
         system_settings.OTP_EMAIL_SETTINGS_KEY,
+        payload.model_dump(),
+        user.username,
+    )
+    return payload
+
+
+@router.get("/purchase-suggestions/settings", response_model=PurchaseSuggestionSettingsPayload)
+def get_purchase_suggestion_settings(
+    user: models.User = Depends(require_admin),
+) -> PurchaseSuggestionSettingsPayload:
+    config = system_settings.get_purchase_suggestion_settings()
+    return PurchaseSuggestionSettingsPayload(expiry_soon_days=config.expiry_soon_days)
+
+
+@router.put("/purchase-suggestions/settings", response_model=PurchaseSuggestionSettingsPayload)
+def update_purchase_suggestion_settings(
+    payload: PurchaseSuggestionSettingsPayload,
+    user: models.User = Depends(require_admin),
+) -> PurchaseSuggestionSettingsPayload:
+    _validate_purchase_suggestion_payload(payload)
+    system_settings.set_setting_json(
+        system_settings.PURCHASE_SUGGESTION_SETTINGS_KEY,
         payload.model_dump(),
         user.username,
     )
