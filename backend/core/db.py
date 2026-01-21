@@ -792,6 +792,10 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     qty_final INTEGER NOT NULL,
                     unit TEXT,
                     reason TEXT,
+                    reason_codes TEXT,
+                    expiry_date TEXT,
+                    expiry_days_left INTEGER,
+                    reason_label TEXT,
                     stock_current INTEGER NOT NULL,
                     threshold INTEGER NOT NULL
                 );

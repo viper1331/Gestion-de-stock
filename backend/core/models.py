@@ -1051,6 +1051,10 @@ class PurchaseSuggestionLine(BaseModel):
     qty_final: int
     unit: str | None = None
     reason: str | None = None
+    reason_codes: list[str] = Field(default_factory=list)
+    expiry_date: str | None = None
+    expiry_days_left: int | None = None
+    reason_label: str | None = None
     stock_current: int
     threshold: int
 

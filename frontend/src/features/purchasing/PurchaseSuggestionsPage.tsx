@@ -22,6 +22,10 @@ interface PurchaseSuggestionLine {
   qty_final: number;
   unit: string | null;
   reason: string | null;
+  reason_codes: string[];
+  expiry_date: string | null;
+  expiry_days_left: number | null;
+  reason_label: string | null;
   stock_current: number;
   threshold: number;
 }
@@ -226,7 +230,25 @@ function SuggestionCard({
                   />
                 </td>
                 <td className="px-3 py-2 text-slate-400">{line.unit ?? "-"}</td>
-                <td className="px-3 py-2 text-slate-500">{line.reason ?? "-"}</td>
+                <td className="px-3 py-2 text-slate-500">
+                  <div className="flex flex-col gap-1">
+                    <div className="flex flex-wrap gap-1">
+                      {line.reason_codes.includes("EXPIRY_SOON") ? (
+                        <span className="rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                          Péremption
+                        </span>
+                      ) : null}
+                      {line.reason_codes.includes("LOW_STOCK") ? (
+                        <span className="rounded-full bg-sky-500/15 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-200">
+                          Sous seuil
+                        </span>
+                      ) : null}
+                    </div>
+                    <span className="text-xs text-slate-400">
+                      {line.reason_label ?? line.reason ?? "-"}
+                    </span>
+                  </div>
+                </td>
                 <td className="px-3 py-2">
                   <button
                     type="button"
