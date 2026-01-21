@@ -9,8 +9,6 @@ import { router } from "./app/routes";
 import { initializeLogging } from "./lib/logger";
 import { queryClient } from "./lib/queryClient";
 import "./styles/tailwind.css";
-import "react-grid-layout/css/styles.css";
-import "react-resizable/css/styles.css";
 
 initializeLogging();
 
