@@ -1053,6 +1053,7 @@ export function PharmacyPage() {
     </section>
   );
 
+  const itemFormId = "pharmacy-item-form";
   const itemModal = (
     <DraggableModal
       open={isItemModalOpen}
@@ -1064,10 +1065,49 @@ export function PharmacyPage() {
       }}
       width="min(900px, 92vw)"
       maxHeight="85vh"
+      footer={
+        canEdit ? (
+          <div className="flex flex-wrap justify-end gap-2">
+            {formMode === "edit" ? (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelected(null);
+                  setFormMode("create");
+                }}
+                className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
+                title="Annuler la modification en cours"
+              >
+                Annuler
+              </button>
+            ) : null}
+            <button
+              type="submit"
+              form={itemFormId}
+              disabled={createItem.isPending || updateItem.isPending}
+              className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+              title={
+                formMode === "edit"
+                  ? "Enregistrer les modifications du médicament"
+                  : "Ajouter ce médicament au stock"
+              }
+            >
+              {formMode === "edit"
+                ? updateItem.isPending
+                  ? "Mise à jour..."
+                  : "Enregistrer"
+                : createItem.isPending
+                  ? "Ajout..."
+                  : "Ajouter"}
+            </button>
+          </div>
+        ) : null
+      }
     >
       {canEdit ? (
         <form
           key={`${formMode}-${selected?.id ?? "new"}`}
+          id={itemFormId}
           className="space-y-3"
           onSubmit={handleSubmit}
         >
@@ -1245,39 +1285,6 @@ export function PharmacyPage() {
               </div>
             </div>
           ) : null}
-          <div className="flex flex-wrap gap-2">
-            <button
-              type="submit"
-              disabled={createItem.isPending || updateItem.isPending}
-              className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-              title={
-                formMode === "edit"
-                  ? "Enregistrer les modifications du médicament"
-                  : "Ajouter ce médicament au stock"
-              }
-            >
-              {formMode === "edit"
-                ? updateItem.isPending
-                  ? "Mise à jour..."
-                  : "Enregistrer"
-                : createItem.isPending
-                  ? "Ajout..."
-                  : "Ajouter"}
-            </button>
-            {formMode === "edit" ? (
-              <button
-                type="button"
-                onClick={() => {
-                  setSelected(null);
-                  setFormMode("create");
-                }}
-                className="rounded-md bg-slate-800 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-700"
-                title="Annuler la modification en cours"
-              >
-                Annuler
-              </button>
-            ) : null}
-          </div>
         </form>
       ) : (
         <p className="text-xs text-slate-400">

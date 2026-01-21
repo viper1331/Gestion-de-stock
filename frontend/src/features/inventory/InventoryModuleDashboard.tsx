@@ -1181,6 +1181,7 @@ export function InventoryModuleDashboard({
     </div>
   );
 
+  const itemFormId = "inventory-item-form";
   const itemModal = (
     <DraggableModal
       open={isItemModalOpen}
@@ -1188,16 +1189,47 @@ export function InventoryModuleDashboard({
       onClose={closeItemModal}
       width="min(900px, 92vw)"
       maxHeight="85vh"
+      footer={
+        <div className="flex flex-wrap justify-end gap-2">
+          {formMode === "edit" ? (
+            <button
+              type="button"
+              onClick={closeItemModal}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"
+              title="Annuler la modification en cours"
+            >
+              Annuler
+            </button>
+          ) : null}
+          <button
+            type="submit"
+            form={itemFormId}
+            disabled={createItem.isPending || updateItem.isPending}
+            className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+            title={
+              formMode === "edit"
+                ? `Enregistrer les modifications ${itemNoun.de}`
+                : `Ajouter ${itemNoun.definite} au stock`
+            }
+          >
+            {createItem.isPending || updateItem.isPending
+              ? "Enregistrement..."
+              : formMode === "edit"
+                ? "Mettre à jour"
+                : "Créer"}
+          </button>
+        </div>
+      }
     >
       <ItemForm
         key={`${formMode}-${selectedItem?.id ?? "new"}`}
+        formId={itemFormId}
         initialValues={formInitialValues}
         categories={categories}
         suppliers={suppliers}
         mode={formMode}
         isSubmitting={createItem.isPending || updateItem.isPending}
         onSubmit={handleSubmitItem}
-        onCancel={closeItemModal}
         supportsItemImages={supportsItemImages}
         initialImageUrl={initialImageUrl}
         supportsExpirationDate={supportsExpirationDate}
@@ -1351,12 +1383,12 @@ function Alert({ tone, message }: { tone: "success" | "error"; message: string }
 }
 
 function ItemForm({
+  formId,
   initialValues,
   categories,
   suppliers,
   mode,
   onSubmit,
-  onCancel,
   isSubmitting,
   supportsItemImages = false,
   initialImageUrl = null,
@@ -1368,12 +1400,12 @@ function ItemForm({
   enableLowStockOptOut = false,
   customFieldDefinitions
 }: {
+  formId: string;
   initialValues: ItemFormValues;
   categories: Category[];
   suppliers: Supplier[];
   mode: "create" | "edit";
   onSubmit: (payload: ItemFormSubmitPayload) => Promise<void>;
-  onCancel: () => void;
   isSubmitting: boolean;
   supportsItemImages?: boolean;
   initialImageUrl?: string | null;
@@ -1560,7 +1592,7 @@ function ItemForm({
   };
 
   return (
-    <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
+    <form id={formId} className="mt-3 space-y-3" onSubmit={handleSubmit}>
       {supportsItemImages ? (
         <div className="space-y-2">
           <label className="text-xs font-semibold text-slate-300" htmlFor="item-image">
@@ -1819,30 +1851,6 @@ function ItemForm({
           </div>
         </div>
       ) : null}
-      <div className="flex justify-end gap-2 pt-2">
-        {mode === "edit" ? (
-          <button
-            type="button"
-            onClick={onCancel}
-            className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:bg-slate-800"
-            title="Annuler la modification en cours"
-          >
-            Annuler
-          </button>
-        ) : null}
-        <button
-          type="submit"
-          disabled={isSubmitting}
-          className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
-          title={
-            mode === "edit"
-              ? `Enregistrer les modifications ${itemNoun.de}`
-              : `Ajouter ${itemNoun.definite} au stock`
-          }
-        >
-          {isSubmitting ? "Enregistrement..." : mode === "edit" ? "Mettre à jour" : "Créer"}
-        </button>
-      </div>
     </form>
   );
 }
