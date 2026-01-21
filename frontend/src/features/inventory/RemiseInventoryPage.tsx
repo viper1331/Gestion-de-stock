@@ -15,6 +15,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   supplierModule: "inventory_remise",
   queryKeyPrefix: "remise-inventory",
   storageKeyPrefix: "remise-inventory",
+  tableKey: "remise.items",
   showPurchaseOrders: true,
   purchaseOrdersPath: "/remise-inventory/orders",
   purchaseOrdersItemsPath: "/remise-inventory",

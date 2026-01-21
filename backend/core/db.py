@@ -307,6 +307,15 @@ def init_databases() -> None:
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     UNIQUE(site_key, username, menu_key)
                 );
+                CREATE TABLE IF NOT EXISTS user_table_prefs (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    user_id INTEGER NOT NULL,
+                    site_key TEXT NOT NULL,
+                    table_key TEXT NOT NULL,
+                    prefs_json TEXT NOT NULL,
+                    updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(user_id, site_key, table_key)
+                );
                 """
             )
             _ensure_user_site_columns(conn)

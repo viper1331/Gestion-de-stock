@@ -14,6 +14,7 @@ export interface InventoryModuleConfig {
   supplierModule?: string | null;
   queryKeyPrefix: string;
   storageKeyPrefix: string;
+  tableKey?: string;
   showPurchaseOrders?: boolean;
   purchaseOrdersPath?: string;
   purchaseOrdersItemsPath?: string;
@@ -44,6 +45,7 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   supplierModule: "suppliers",
   queryKeyPrefix: "inventory",
   storageKeyPrefix: "inventory",
+  tableKey: "clothing.items",
   showLotMembershipColumn: true,
   showPurchaseOrders: true,
   searchPlaceholder: "Rechercher par nom ou SKU",

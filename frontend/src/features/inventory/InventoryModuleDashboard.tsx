@@ -1,10 +1,20 @@
-import { ChangeEvent, FormEvent, ReactNode, useEffect, useMemo, useState } from "react";
+import { ChangeEvent, FormEvent, ReactNode, useCallback, useEffect, useMemo, useState } from "react";
 import { isAxiosError } from "axios";
 import {
   useMutation,
   useQuery,
   useQueryClient
 } from "@tanstack/react-query";
+import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
@@ -12,7 +22,6 @@ import { DraggableModal } from "../../components/DraggableModal";
 import { api } from "../../lib/api";
 import { buildCustomFieldDefaults, CustomFieldDefinition, sortCustomFields } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
-import { persistValue, readPersistedValue } from "../../lib/persist";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
 import { useAuth } from "../auth/useAuth";
@@ -25,6 +34,7 @@ import {
 import { AppTextInput } from "components/AppTextInput";
 import { EditableBlock } from "../../components/EditableBlock";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
+import { useTablePrefs } from "../../hooks/useTablePrefs";
 
 interface Category {
   id: number;
@@ -163,8 +173,6 @@ export function InventoryModuleDashboard({
     () => createInventoryItemNounForms(config.itemNoun),
     [config.itemNoun]
   );
-  const columnStorageKey = `gsp/${config.storageKeyPrefix}/columns`;
-  const columnVisibilityStorageKey = `gsp/${config.storageKeyPrefix}/column-visibility`;
   const searchPlaceholder = config.searchPlaceholder ?? "Rechercher par nom ou SKU";
   const barcodePrefix = config.barcodePrefix ?? "SKU";
 
@@ -416,37 +424,6 @@ export function InventoryModuleDashboard({
     expiration: supportsExpirationDate
   };
 
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => ({
-    ...defaultColumnVisibility,
-    ...readPersistedValue<Record<string, boolean>>(
-      columnVisibilityStorageKey,
-      defaultColumnVisibility
-    )
-  }));
-
-  const toggleColumnVisibility = (key: string, optionKeys: Set<string>) => {
-    setColumnVisibility((previous) => {
-      const isCurrentlyVisible = previous[key] !== false;
-      if (isCurrentlyVisible) {
-        const visibleCount = Array.from(optionKeys).filter(
-          (optionKey) => previous[optionKey] !== false
-        ).length;
-        if (visibleCount <= 1) {
-          return previous;
-        }
-      }
-      const next = { ...previous, [key]: !isCurrentlyVisible };
-      persistValue(columnVisibilityStorageKey, next);
-      return next;
-    });
-  };
-
-  const resetColumnVisibility = () => {
-    const next = { ...defaultColumnVisibility };
-    setColumnVisibility(next);
-    persistValue(columnVisibilityStorageKey, next);
-  };
-
   const customColumns = useMemo(
     () =>
       sortCustomFields(activeCustomFields).map((definition) => ({
@@ -498,59 +475,176 @@ export function InventoryModuleDashboard({
   ]);
 
   const columnOptionKeys = useMemo(() => new Set(columnOptions.map((option) => option.key)), [columnOptions]);
-
-  useEffect(() => {
-    setColumnVisibility((previous) => {
-      const next: Record<string, boolean> = {};
-      for (const option of columnOptions) {
-        if (previous[option.key] !== undefined) {
-          next[option.key] = previous[option.key];
-        } else if (option.key in defaultColumnVisibility) {
-          next[option.key] = defaultColumnVisibility[option.key as InventoryColumnKey];
-        } else {
-          next[option.key] = false;
-        }
+  const defaultVisible = useMemo(() => {
+    const visible: Record<string, boolean> = {};
+    for (const option of columnOptions) {
+      if (option.key in defaultColumnVisibility) {
+        visible[option.key] = defaultColumnVisibility[option.key as InventoryColumnKey];
+      } else {
+        visible[option.key] = false;
       }
-      const hasChanges = Object.keys(previous).some((key) => !columnOptionKeys.has(key))
-        || Object.keys(next).some((key) => previous[key] !== next[key]);
-      if (hasChanges) {
-        persistValue(columnVisibilityStorageKey, next);
+    }
+    return visible;
+  }, [columnOptions, defaultColumnVisibility]);
+
+  const defaultOrder = useMemo(() => columnOptions.map((option) => option.key), [columnOptions]);
+
+  const defaultWidths = useMemo(() => {
+    const widths: Record<string, number> = { ...baseColumnWidths };
+    for (const column of customColumns) {
+      widths[column.key] = 180;
+    }
+    return widths;
+  }, [customColumns]);
+
+  const {
+    prefs,
+    setVisible,
+    setOrder,
+    setWidth,
+    reset
+  } = useTablePrefs(config.tableKey ?? "clothing.items", {
+    v: 1,
+    visible: defaultVisible,
+    order: defaultOrder,
+    widths: defaultWidths
+  });
+
+  const columnVisibility = prefs.visible ?? defaultVisible;
+  const columnOrder = prefs.order ?? defaultOrder;
+  const columnWidths = { ...defaultWidths, ...(prefs.widths ?? {}) };
+
+  const toggleColumnVisibility = useCallback((key: string, optionKeys: Set<string>) => {
+    const isCurrentlyVisible = columnVisibility[key] !== false;
+    if (isCurrentlyVisible) {
+      const visibleCount = Array.from(optionKeys).filter(
+        (optionKey) => columnVisibility[optionKey] !== false
+      ).length;
+      if (visibleCount <= 1) {
+        return;
       }
-      return hasChanges ? next : previous;
-    });
-  }, [columnOptions, columnOptionKeys, columnVisibilityStorageKey, defaultColumnVisibility]);
+    }
+    setVisible(key);
+  }, [columnVisibility, setVisible]);
 
-  const columnWidths = {
-    ...baseColumnWidths,
-    ...readPersistedValue<Record<string, number>>(columnStorageKey, baseColumnWidths)
-  };
+  const resetColumnVisibility = useCallback(() => {
+    void reset();
+  }, [reset]);
 
-  const toRem = (value: number) => `${value / 16}rem`;
-
-  const columnStyles = {
-    image: { width: toRem(columnWidths.image), minWidth: 0, maxWidth: toRem(columnWidths.image) },
-    name: { width: toRem(columnWidths.name), minWidth: 0, maxWidth: toRem(columnWidths.name) },
-    sku: { width: toRem(columnWidths.sku), minWidth: 0, maxWidth: toRem(columnWidths.sku) },
-    quantity: { width: toRem(columnWidths.quantity), minWidth: 0, maxWidth: toRem(columnWidths.quantity) },
-    size: { width: toRem(columnWidths.size), minWidth: 0, maxWidth: toRem(columnWidths.size) },
-    category: { width: toRem(columnWidths.category), minWidth: 0, maxWidth: toRem(columnWidths.category) },
-    lotMembership: {
-      width: toRem(columnWidths.lotMembership),
-      minWidth: 0,
-      maxWidth: toRem(columnWidths.lotMembership)
+  const resolveColumnWidth = useCallback(
+    (key: string, fallback: number) => {
+      const width = columnWidths[key];
+      return typeof width === "number" ? width : fallback;
     },
-    supplier: { width: toRem(columnWidths.supplier), minWidth: 0, maxWidth: toRem(columnWidths.supplier) },
-    expiration: { width: toRem(columnWidths.expiration), minWidth: 0, maxWidth: toRem(columnWidths.expiration) },
-    threshold: { width: toRem(columnWidths.threshold), minWidth: 0, maxWidth: toRem(columnWidths.threshold) }
-  } as const;
+    [columnWidths]
+  );
 
-  const saveWidth = (key: string, width: number) => {
-    persistValue(columnStorageKey, { ...columnWidths, [key]: width });
-  };
+  const getColumnStyle = useCallback(
+    (key: string, fallback: number) => {
+      const width = resolveColumnWidth(key, fallback);
+      const widthRem = `${width / 16}rem`;
+      return { width: widthRem, minWidth: 0, maxWidth: widthRem };
+    },
+    [resolveColumnWidth]
+  );
 
-  const customColumnStyle = useMemo(
-    () => ({ width: toRem(180), minWidth: 0, maxWidth: toRem(180) }),
-    []
+  const columnMeta = useMemo(() => {
+    const meta: Record<string, { label: string; headerClass?: string; cellClass?: string; width: number }> = {
+      image: {
+        label: "Image",
+        headerClass: "hidden min-[768px]:table-cell",
+        cellClass: "hidden min-[768px]:table-cell",
+        width: baseColumnWidths.image
+      },
+      name: { label: itemNoun.singularCapitalized, width: baseColumnWidths.name },
+      sku: {
+        label: "SKU",
+        headerClass: "hidden md:table-cell",
+        cellClass: "hidden md:table-cell",
+        width: baseColumnWidths.sku
+      },
+      quantity: { label: "Quantité", headerClass: "text-center", cellClass: "text-center", width: baseColumnWidths.quantity },
+      size: {
+        label: "Taille / Variante",
+        headerClass: "hidden min-[900px]:table-cell",
+        cellClass: "hidden min-[900px]:table-cell",
+        width: baseColumnWidths.size
+      },
+      category: {
+        label: "Catégorie",
+        headerClass: "hidden min-[900px]:table-cell",
+        cellClass: "hidden min-[900px]:table-cell",
+        width: baseColumnWidths.category
+      },
+      supplier: {
+        label: "Fournisseur",
+        headerClass: "hidden xl:table-cell",
+        cellClass: "hidden xl:table-cell",
+        width: baseColumnWidths.supplier
+      },
+      threshold: {
+        label: "Seuil",
+        headerClass: "hidden lg:table-cell text-center",
+        cellClass: "hidden lg:table-cell text-center",
+        width: baseColumnWidths.threshold
+      }
+    };
+    if (config.showLotMembershipColumn) {
+      meta.lotMembership = {
+        label: "Lot(s)",
+        headerClass: "hidden lg:table-cell",
+        cellClass: "hidden lg:table-cell",
+        width: baseColumnWidths.lotMembership
+      };
+    }
+    if (supportsExpirationDate) {
+      meta.expiration = {
+        label: "Péremption",
+        headerClass: "hidden min-[900px]:table-cell",
+        cellClass: "hidden min-[900px]:table-cell",
+        width: baseColumnWidths.expiration
+      };
+    }
+    for (const column of customColumns) {
+      meta[column.key] = {
+        label: column.label,
+        headerClass: "hidden lg:table-cell",
+        cellClass: "hidden lg:table-cell",
+        width: 180
+      };
+    }
+    return meta;
+  }, [config.showLotMembershipColumn, customColumns, itemNoun.singularCapitalized, supportsExpirationDate]);
+
+  const orderedColumns = useMemo(() => {
+    const filtered = columnOrder.filter((key) => columnOptionKeys.has(key));
+    const missing = Array.from(columnOptionKeys).filter((key) => !filtered.includes(key));
+    return [...filtered, ...missing];
+  }, [columnOptionKeys, columnOrder]);
+
+  const visibleColumns = useMemo(
+    () => orderedColumns.filter((key) => columnVisibility[key] !== false),
+    [orderedColumns, columnVisibility]
+  );
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } })
+  );
+
+  const handleDragEnd = useCallback(
+    (event: { active: { id: string }; over?: { id: string } | null }) => {
+      if (!event.over || event.active.id === event.over.id) {
+        return;
+      }
+      const activeIndex = orderedColumns.indexOf(event.active.id);
+      const overIndex = orderedColumns.indexOf(event.over.id);
+      if (activeIndex === -1 || overIndex === -1) {
+        return;
+      }
+      setOrder(arrayMove(orderedColumns, activeIndex, overIndex));
+    },
+    [orderedColumns, setOrder]
   );
 
   const renderCustomValue = (value: unknown) => {
@@ -565,6 +659,11 @@ export function InventoryModuleDashboard({
     }
     return String(value);
   };
+
+  const customColumnMap = useMemo(
+    () => new Map(customColumns.map((column) => [column.key, column])),
+    [customColumns]
+  );
 
   const categoryNames = useMemo(() => {
     const map = new Map<number, string>();
@@ -736,7 +835,7 @@ export function InventoryModuleDashboard({
           visibility={columnVisibility}
           onToggle={(key) => toggleColumnVisibility(key, columnOptionKeys)}
           onReset={resetColumnVisibility}
-          description="Choisissez les colonnes à afficher dans la liste."
+          description="Choisissez les colonnes à afficher dans la liste. Vos préférences sont enregistrées pour ce site."
         />
         {config.exportPdfPath ? (
           <button
@@ -797,103 +896,37 @@ export function InventoryModuleDashboard({
         <div className="min-w-0 rounded-lg border border-slate-800">
           <div className="max-h-[400px] min-h-0 min-w-0 overflow-auto">
             <table className="w-full min-w-full table-fixed divide-y divide-slate-800">
-              <thead className="bg-slate-900/60">
-                <tr>
-                  {supportsItemImages && columnVisibility.image !== false ? (
-                    <ResizableHeader
-                      label="Image"
-                      width={columnWidths.image}
-                      onResize={(value) => saveWidth("image", value)}
-                      className="hidden min-[768px]:table-cell"
-                    />
-                  ) : null}
-                  {columnVisibility.name !== false ? (
-                    <ResizableHeader
-                      label={itemNoun.singularCapitalized}
-                      width={columnWidths.name}
-                      onResize={(value) => saveWidth("name", value)}
-                    />
-                  ) : null}
-                  {columnVisibility.sku !== false ? (
-                    <ResizableHeader
-                      label="SKU"
-                      width={columnWidths.sku}
-                      onResize={(value) => saveWidth("sku", value)}
-                      className="hidden md:table-cell"
-                    />
-                  ) : null}
-                  {columnVisibility.quantity !== false ? (
-                    <ResizableHeader
-                      label="Quantité"
-                      width={columnWidths.quantity}
-                      onResize={(value) => saveWidth("quantity", value)}
-                      className="text-center"
-                    />
-                  ) : null}
-                  {columnVisibility.size !== false ? (
-                    <ResizableHeader
-                      label="Taille / Variante"
-                      width={columnWidths.size}
-                      onResize={(value) => saveWidth("size", value)}
-                      className="hidden min-[900px]:table-cell"
-                    />
-                  ) : null}
-                  {columnVisibility.category !== false ? (
-                    <ResizableHeader
-                      label="Catégorie"
-                      width={columnWidths.category}
-                      onResize={(value) => saveWidth("category", value)}
-                      className="hidden min-[900px]:table-cell"
-                    />
-                  ) : null}
-                  {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
-                    <ResizableHeader
-                      label="Lot(s)"
-                      width={columnWidths.lotMembership}
-                      onResize={(value) => saveWidth("lotMembership", value)}
-                      className="hidden lg:table-cell"
-                    />
-                  ) : null}
-                  {columnVisibility.supplier !== false ? (
-                    <ResizableHeader
-                      label="Fournisseur"
-                      width={columnWidths.supplier}
-                      onResize={(value) => saveWidth("supplier", value)}
-                      className="hidden xl:table-cell"
-                    />
-                  ) : null}
-                  {supportsExpirationDate && columnVisibility.expiration !== false ? (
-                    <ResizableHeader
-                      label="Péremption"
-                      width={columnWidths.expiration}
-                      onResize={(value) => saveWidth("expiration", value)}
-                      className="hidden min-[900px]:table-cell"
-                    />
-                  ) : null}
-                  {columnVisibility.threshold !== false ? (
-                    <ResizableHeader
-                      label="Seuil"
-                      width={columnWidths.threshold}
-                      onResize={(value) => saveWidth("threshold", value)}
-                      className="hidden lg:table-cell text-center"
-                    />
-                  ) : null}
-                  {customColumns.map((column) =>
-                    columnVisibility[column.key] === true ? (
-                      <th
-                        key={column.key}
-                        style={customColumnStyle}
-                        className="hidden px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 lg:table-cell"
-                      >
-                        {column.label}
+              <DndContext
+                sensors={sensors}
+                collisionDetection={closestCenter}
+                onDragEnd={handleDragEnd}
+              >
+                <thead className="bg-slate-900/60">
+                  <SortableContext items={visibleColumns} strategy={horizontalListSortingStrategy}>
+                    <tr>
+                      {visibleColumns.map((columnKey) => {
+                        const meta = columnMeta[columnKey];
+                        if (!meta) {
+                          return null;
+                        }
+                        return (
+                          <SortableHeaderCell
+                            key={columnKey}
+                            id={columnKey}
+                            label={meta.label}
+                            width={resolveColumnWidth(columnKey, meta.width)}
+                            onResize={(value) => setWidth(columnKey, value)}
+                            className={meta.headerClass}
+                          />
+                        );
+                      })}
+                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400">
+                        Actions
                       </th>
-                    ) : null
-                  )}
-                  <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Actions
-                  </th>
-                </tr>
-              </thead>
+                    </tr>
+                  </SortableContext>
+                </thead>
+              </DndContext>
               <tbody className="divide-y divide-slate-900 bg-slate-950/60">
                 {items.map((item, index) => {
                   const { isOutOfStock, isLowStock } = getInventoryAlerts(
@@ -920,171 +953,184 @@ export function InventoryModuleDashboard({
 
                   return (
                     <tr key={item.id} className={`${zebraTone} ${alertTone} ${selectionTone}`}>
-                      {supportsItemImages && columnVisibility.image !== false ? (
-                        <td
-                          style={columnStyles.image}
-                          className="hidden px-4 py-3 text-sm text-slate-300 min-[768px]:table-cell"
-                        >
-                          {hasImage ? (
-                            <img
-                              src={imageUrl ?? undefined}
-                              alt={`Illustration de ${item.name}`}
-                              className="h-12 w-12 rounded border border-slate-700 object-cover"
-                            />
-                          ) : (
-                            <span className="text-xs text-slate-500">Aucune</span>
-                          )}
-                        </td>
-                      ) : null}
-                      {columnVisibility.name !== false ? (
-                        <td style={columnStyles.name} className="min-w-0 px-4 py-3 text-sm text-slate-100">
-                          <span className="block truncate" title={item.name}>
-                            {item.name}
-                          </span>
-                        </td>
-                      ) : null}
-                      {columnVisibility.sku !== false ? (
-                        <td
-                          style={columnStyles.sku}
-                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 md:table-cell"
-                        >
-                          <span className="block truncate" title={item.sku ?? ""}>
-                            {item.sku}
-                          </span>
-                        </td>
-                      ) : null}
-                      {columnVisibility.quantity !== false ? (
-                        <td
-                          style={columnStyles.quantity}
-                          className={`px-4 py-3 text-center text-sm font-semibold ${
-                            isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
-                          }`}
-                          title={
-                            isOutOfStock
-                              ? `${itemNoun.demonstrativeCapitalized} est en rupture de stock`
-                              : isLowStock
-                                ? "Stock faible"
-                                : undefined
-                          }
-                        >
-                          {item.quantity}
-                          {isOutOfStock ? (
-                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                              Rupture
-                            </span>
-                          ) : null}
-                          {!isOutOfStock && isLowStock ? (
-                            <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                              Stock faible
-                            </span>
-                          ) : null}
-                        </td>
-                      ) : null}
-                      {columnVisibility.size !== false ? (
-                        <td
-                          style={columnStyles.size}
-                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
-                        >
-                          <span className="block truncate" title={item.size?.trim() || "-"}>
-                            {item.size?.trim() || "-"}
-                          </span>
-                        </td>
-                      ) : null}
-                      {columnVisibility.category !== false ? (
-                        <td
-                          style={columnStyles.category}
-                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 min-[900px]:table-cell"
-                        >
-                          <div className="min-w-0 space-y-1">
-                            <div
-                              className="truncate"
-                              title={item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                      {visibleColumns.map((columnKey) => {
+                        const meta = columnMeta[columnKey];
+                        if (!meta) {
+                          return null;
+                        }
+                        const style = getColumnStyle(columnKey, meta.width);
+                        const sharedClass = `min-w-0 px-4 py-3 text-sm ${meta.cellClass ?? ""}`.trim();
+                        if (columnKey === "image") {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-300`}>
+                              {hasImage ? (
+                                <img
+                                  src={imageUrl ?? undefined}
+                                  alt={`Illustration de ${item.name}`}
+                                  className="h-12 w-12 rounded border border-slate-700 object-cover"
+                                />
+                              ) : (
+                                <span className="text-xs text-slate-500">Aucune</span>
+                              )}
+                            </td>
+                          );
+                        }
+                        if (columnKey === "name") {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-100`}>
+                              <span className="block truncate" title={item.name}>
+                                {item.name}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (columnKey === "sku") {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-300`}>
+                              <span className="block truncate" title={item.sku ?? ""}>
+                                {item.sku}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (columnKey === "quantity") {
+                          return (
+                            <td
+                              key={columnKey}
+                              style={style}
+                              className={`${sharedClass} text-center font-semibold ${
+                                isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                              }`}
+                              title={
+                                isOutOfStock
+                                  ? `${itemNoun.demonstrativeCapitalized} est en rupture de stock`
+                                  : isLowStock
+                                    ? "Stock faible"
+                                    : undefined
+                              }
                             >
-                              {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
-                            </div>
-                            {item.assigned_vehicle_names?.length ? (
-                              <p className="truncate text-xs text-slate-400" title={item.assigned_vehicle_names.join(", ")}>
-                                Affecté à : {item.assigned_vehicle_names.join(", ")}
-                              </p>
-                            ) : null}
-                          </div>
-                        </td>
-                      ) : null}
-                      {config.showLotMembershipColumn && columnVisibility.lotMembership !== false ? (
-                        <td
-                          style={columnStyles.lotMembership}
-                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 lg:table-cell"
-                        >
-                          <div className="flex min-w-0 flex-wrap items-center gap-2">
-                            <span className="truncate" title={lotLabel}>
-                              {lotLabel}
-                            </span>
-                            <span
-                              className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isInLot ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200" : "border-slate-600 bg-slate-800 text-slate-300"}`}
+                              {item.quantity}
+                              {isOutOfStock ? (
+                                <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                                  Rupture
+                                </span>
+                              ) : null}
+                              {!isOutOfStock && isLowStock ? (
+                                <span className="ml-2 inline-flex items-center rounded border border-amber-400/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                                  Stock faible
+                                </span>
+                              ) : null}
+                            </td>
+                          );
+                        }
+                        if (columnKey === "size") {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-300`}>
+                              <span className="block truncate" title={item.size?.trim() || "-"}>
+                                {item.size?.trim() || "-"}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (columnKey === "category") {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-300`}>
+                              <div className="min-w-0 space-y-1">
+                                <div
+                                  className="truncate"
+                                  title={item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                                >
+                                  {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                                </div>
+                                {item.assigned_vehicle_names?.length ? (
+                                  <p className="truncate text-xs text-slate-400" title={item.assigned_vehicle_names.join(", ")}>
+                                    Affecté à : {item.assigned_vehicle_names.join(", ")}
+                                  </p>
+                                ) : null}
+                              </div>
+                            </td>
+                          );
+                        }
+                        if (columnKey === "lotMembership") {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-300`}>
+                              <div className="flex min-w-0 flex-wrap items-center gap-2">
+                                <span className="truncate" title={lotLabel}>
+                                  {lotLabel}
+                                </span>
+                                <span
+                                  className={`inline-flex items-center rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${isInLot ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200" : "border-slate-600 bg-slate-800 text-slate-300"}`}
+                                >
+                                  {isInLot ? "Associé" : "Aucun"}
+                                </span>
+                              </div>
+                            </td>
+                          );
+                        }
+                        if (columnKey === "supplier") {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-300`}>
+                              <span
+                                className="block truncate"
+                                title={item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                              >
+                                {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
+                              </span>
+                            </td>
+                          );
+                        }
+                        if (columnKey === "expiration") {
+                          return (
+                            <td
+                              key={columnKey}
+                              style={style}
+                              className={`${sharedClass} ${
+                                expirationStatus === "expired"
+                                  ? "text-red-300"
+                                  : expirationStatus === "expiring-soon"
+                                    ? "text-amber-200"
+                                    : "text-slate-300"
+                              }`}
                             >
-                              {isInLot ? "Associé" : "Aucun"}
-                            </span>
-                          </div>
-                        </td>
-                      ) : null}
-                      {columnVisibility.supplier !== false ? (
-                        <td
-                          style={columnStyles.supplier}
-                          className="hidden min-w-0 px-4 py-3 text-sm text-slate-300 xl:table-cell"
-                        >
-                          <span
-                            className="block truncate"
-                            title={item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
-                          >
-                            {item.supplier_id ? supplierNames.get(item.supplier_id) ?? "-" : "-"}
-                          </span>
-                        </td>
-                      ) : null}
-                      {supportsExpirationDate && columnVisibility.expiration !== false ? (
-                        <td
-                          style={columnStyles.expiration}
-                          className={`hidden px-4 py-3 text-sm min-[900px]:table-cell ${
-                            expirationStatus === "expired"
-                              ? "text-red-300"
-                              : expirationStatus === "expiring-soon"
-                                ? "text-amber-200"
-                                : "text-slate-300"
-                          }`}
-                        >
-                          {formatExpirationDate(item.expiration_date)}
-                          {expirationStatus === "expired" ? (
-                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                              Expiré
-                            </span>
-                          ) : null}
-                          {expirationStatus === "expiring-soon" ? (
-                            <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
-                              Bientôt périmé
-                            </span>
-                          ) : null}
-                        </td>
-                      ) : null}
-                      {columnVisibility.threshold !== false ? (
-                        <td
-                          style={columnStyles.threshold}
-                          className={`hidden px-4 py-3 text-center text-sm lg:table-cell ${isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"}`}
-                        >
-                          {item.low_stock_threshold}
-                        </td>
-                      ) : null}
-                      {customColumns.map((column) =>
-                        columnVisibility[column.key] === true ? (
-                          <td
-                            key={column.key}
-                            style={customColumnStyle}
-                            className="hidden px-4 py-3 text-sm text-slate-300 lg:table-cell"
-                          >
-                            <span className="block truncate" title={String(item.extra?.[column.fieldKey] ?? "")}>
-                              {renderCustomValue(item.extra?.[column.fieldKey])}
-                            </span>
-                          </td>
-                        ) : null
-                      )}
+                              {formatExpirationDate(item.expiration_date)}
+                              {expirationStatus === "expired" ? (
+                                <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                                  Expiré
+                                </span>
+                              ) : null}
+                              {expirationStatus === "expiring-soon" ? (
+                                <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
+                                  Bientôt périmé
+                                </span>
+                              ) : null}
+                            </td>
+                          );
+                        }
+                        if (columnKey === "threshold") {
+                          return (
+                            <td
+                              key={columnKey}
+                              style={style}
+                              className={`${sharedClass} ${
+                                isLowStock || isOutOfStock ? "text-slate-200" : "text-slate-300"
+                              }`}
+                            >
+                              {item.low_stock_threshold}
+                            </td>
+                          );
+                        }
+                        const customColumn = customColumnMap.get(columnKey);
+                        if (customColumn) {
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-slate-300`}>
+                              <span className="block truncate" title={String(item.extra?.[customColumn.fieldKey] ?? "")}>
+                                {renderCustomValue(item.extra?.[customColumn.fieldKey])}
+                              </span>
+                            </td>
+                          );
+                        }
+                        return null;
+                      })}
                       <td className="px-4 py-3 text-xs text-slate-200">
                         <div className="flex flex-col gap-2 sm:flex-row sm:flex-wrap sm:justify-end">
                           <button
@@ -1337,25 +1383,48 @@ export function InventoryModuleDashboard({
   );
 }
 
-function ResizableHeader({
+function SortableHeaderCell({
+  id,
   label,
   width,
   onResize,
   className
 }: {
+  id: string;
   label: string;
   width: number;
   onResize: (value: number) => void;
   className?: string;
 }) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
   const widthRem = `${width / 16}rem`;
+  const style = {
+    width: widthRem,
+    maxWidth: widthRem,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1
+  };
   return (
     <th
-      style={{ width: widthRem, maxWidth: widthRem }}
+      ref={setNodeRef}
+      style={style}
       className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 ${className ?? ""}`}
     >
-      <div className="flex items-center justify-between">
-        <span>{label}</span>
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="cursor-grab text-slate-500 hover:text-slate-200"
+            title={`Déplacer la colonne ${label}`}
+            aria-label={`Déplacer la colonne ${label}`}
+            {...attributes}
+            {...listeners}
+          >
+            ⋮⋮
+          </button>
+          <span>{label}</span>
+        </div>
         <AppTextInput
           type="range"
           min={120}

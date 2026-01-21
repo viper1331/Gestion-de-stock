@@ -85,6 +85,8 @@ _PASSWORD_RESET_MIN_LENGTH = 10
 
 _MENU_ORDER_MAX_ITEMS = 200
 _MENU_ORDER_MAX_ID_LENGTH = 100
+_TABLE_PREFS_VERSION = 1
+_TABLE_PREFS_MAX_BYTES = 50_000
 
 _SUPPLIER_MIGRATION_LOCK = threading.Lock()
 _SUPPLIER_MIGRATED_SITES: set[str] = set()
@@ -5401,6 +5403,98 @@ def set_menu_order(
         )
         conn.commit()
     return {"version": payload.version, "items": normalized}
+
+
+def _validate_table_prefs_payload(prefs: dict[str, Any]) -> dict[str, Any]:
+    if prefs.get("v") != _TABLE_PREFS_VERSION:
+        raise ValueError("Version de préférences invalide.")
+    visible = prefs.get("visible")
+    if visible is not None:
+        if not isinstance(visible, dict):
+            raise ValueError("Champ visible invalide.")
+        for key, value in visible.items():
+            if not isinstance(key, str):
+                raise ValueError("Clé de colonne invalide.")
+            if not isinstance(value, bool):
+                raise ValueError("Valeur de visibilité invalide.")
+    order = prefs.get("order")
+    if order is not None:
+        if not isinstance(order, list) or not all(isinstance(item, str) for item in order):
+            raise ValueError("Ordre des colonnes invalide.")
+    widths = prefs.get("widths")
+    if widths is not None:
+        if not isinstance(widths, dict):
+            raise ValueError("Largeurs des colonnes invalides.")
+        for key, value in widths.items():
+            if not isinstance(key, str):
+                raise ValueError("Clé de colonne invalide.")
+            if not isinstance(value, int) or isinstance(value, bool):
+                raise ValueError("Valeur de largeur invalide.")
+    return prefs
+
+
+def get_table_prefs(user_id: int, site_key: str, table_key: str) -> dict[str, Any] | None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT prefs_json
+            FROM user_table_prefs
+            WHERE user_id = ? AND site_key = ? AND table_key = ?
+            """,
+            (user_id, site_key, table_key),
+        ).fetchone()
+    if not row:
+        return None
+    try:
+        parsed = json.loads(row["prefs_json"])
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    try:
+        return _validate_table_prefs_payload(parsed)
+    except ValueError:
+        return None
+
+
+def set_table_prefs(
+    user_id: int, site_key: str, table_key: str, prefs: dict[str, Any]
+) -> dict[str, Any]:
+    ensure_database_ready()
+    if not isinstance(prefs, dict):
+        raise ValueError("Préférences invalides.")
+    validated = _validate_table_prefs_payload(prefs)
+    payload_json = json.dumps(validated, ensure_ascii=False)
+    if len(payload_json.encode("utf-8")) > _TABLE_PREFS_MAX_BYTES:
+        raise ValueError("Préférences trop volumineuses.")
+    with db.get_users_connection() as conn:
+        conn.execute(
+            """
+            INSERT INTO user_table_prefs (user_id, site_key, table_key, prefs_json, updated_at)
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id, site_key, table_key)
+            DO UPDATE SET
+                prefs_json = excluded.prefs_json,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (user_id, site_key, table_key, payload_json),
+        )
+        conn.commit()
+    return validated
+
+
+def delete_table_prefs(user_id: int, site_key: str, table_key: str) -> None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        conn.execute(
+            """
+            DELETE FROM user_table_prefs
+            WHERE user_id = ? AND site_key = ? AND table_key = ?
+            """,
+            (user_id, site_key, table_key),
+        )
+        conn.commit()
 
 
 def list_users(*, include_pending: bool = True) -> list[models.User]:

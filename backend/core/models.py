@@ -173,6 +173,15 @@ class MenuOrderResponse(BaseModel):
     items: list[MenuOrderItem]
 
 
+class TablePrefsPayload(BaseModel):
+    prefs: dict[str, object]
+
+
+class TablePrefsResponse(BaseModel):
+    table_key: str
+    prefs: dict[str, object]
+
+
 class InboxMessage(BaseModel):
     id: int
     category: str
