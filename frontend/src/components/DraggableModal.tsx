@@ -6,6 +6,8 @@ interface DraggableModalProps {
   title: string;
   onClose: () => void;
   children: ReactNode;
+  footer?: ReactNode;
+  disableDragOnMobile?: boolean;
   initialX?: number;
   initialY?: number;
   width?: number | string;
@@ -21,7 +23,8 @@ type DragState = {
 
 const DEFAULT_MODAL_WIDTH = "min(900px, 92vw)";
 const DEFAULT_MODAL_MAX_HEIGHT = "85vh";
-const MIN_VISIBLE_TITLEBAR = 48;
+const MIN_VISIBLE_EDGE = 48;
+const MIN_VISIBLE_TITLEBAR = 56;
 
 const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
 
@@ -30,6 +33,8 @@ export function DraggableModal({
   title,
   onClose,
   children,
+  footer,
+  disableDragOnMobile = true,
   initialX,
   initialY,
   width,
@@ -54,10 +59,11 @@ export function DraggableModal({
       }
       const rect = modal.getBoundingClientRect();
       const titleHeight = titleBarRef.current?.getBoundingClientRect().height ?? MIN_VISIBLE_TITLEBAR;
-      const minX = MIN_VISIBLE_TITLEBAR - rect.width;
-      const maxX = window.innerWidth - MIN_VISIBLE_TITLEBAR;
-      const minY = 0;
-      const maxY = window.innerHeight - titleHeight;
+      const minTitlebarVisible = Math.max(titleHeight, MIN_VISIBLE_TITLEBAR);
+      const minX = -(rect.width - MIN_VISIBLE_EDGE);
+      const maxX = window.innerWidth - MIN_VISIBLE_EDGE;
+      const minY = -(rect.height - minTitlebarVisible);
+      const maxY = window.innerHeight - minTitlebarVisible;
       return {
         x: clampValue(nextX, minX, maxX),
         y: clampValue(nextY, minY, maxY)
@@ -78,12 +84,16 @@ export function DraggableModal({
   }, [clampPosition, initialX, initialY]);
 
   useEffect(() => {
+    if (!disableDragOnMobile) {
+      setIsMobile(false);
+      return;
+    }
     const media = window.matchMedia("(max-width: 640px)");
     const updateMobile = () => setIsMobile(media.matches);
     updateMobile();
     media.addEventListener("change", updateMobile);
     return () => media.removeEventListener("change", updateMobile);
-  }, []);
+  }, [disableDragOnMobile]);
 
   useEffect(() => {
     if (!open) {
@@ -132,6 +142,21 @@ export function DraggableModal({
     };
     window.addEventListener("resize", handleResize);
     return () => window.removeEventListener("resize", handleResize);
+  }, [clampPosition, isMobile, open]);
+
+  useEffect(() => {
+    if (!open || isMobile) {
+      return;
+    }
+    const modal = modalRef.current;
+    if (!modal || typeof ResizeObserver === "undefined") {
+      return;
+    }
+    const observer = new ResizeObserver(() => {
+      setPosition((current) => clampPosition(current.x, current.y));
+    });
+    observer.observe(modal);
+    return () => observer.disconnect();
   }, [clampPosition, isMobile, open]);
 
   useEffect(() => {
@@ -202,9 +227,9 @@ export function DraggableModal({
       };
 
   return createPortal(
-    <div className="fixed inset-0 z-50">
+    <div className="fixed inset-0 z-40">
       <div
-        className="absolute inset-0 bg-slate-950/70"
+        className="fixed inset-0 bg-slate-950/70"
         onClick={(event) => {
           if (event.target === event.currentTarget) {
             onClose();
@@ -218,7 +243,7 @@ export function DraggableModal({
         aria-labelledby={titleId}
         tabIndex={-1}
         style={modalStyle}
-        className="fixed z-10 flex flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-2xl outline-none"
+        className="fixed z-50 flex flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-2xl outline-none"
       >
         <div
           ref={titleBarRef}
@@ -236,14 +261,23 @@ export function DraggableModal({
           <h2 id={titleId}>{title}</h2>
           <button
             type="button"
-            onClick={onClose}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={(event) => {
+              event.stopPropagation();
+              onClose();
+            }}
             className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
             aria-label="Fermer"
           >
             ✕
           </button>
         </div>
-        <div className="flex-1 overflow-auto px-4 py-4">{children}</div>
+        <div className="min-h-0 flex-1 overflow-auto px-4 py-4">{children}</div>
+        {footer ? (
+          <div className="sticky bottom-0 border-t border-slate-800 bg-slate-950 px-4 py-3">
+            {footer}
+          </div>
+        ) : null}
       </div>
     </div>,
     document.body
