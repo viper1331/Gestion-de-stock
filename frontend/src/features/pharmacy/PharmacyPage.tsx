@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import {
@@ -217,8 +217,11 @@ export function PharmacyPage() {
   const [error, setError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [tableMaxHeight, setTableMaxHeight] = useState<number | null>(null);
+  const rafRef = useRef<number | null>(null);
+  const lastMeasuredRef = useRef<{ maxHeight: number | null }>({ maxHeight: null });
 
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const canView = user?.role === "admin" || modulePermissions.canAccess("pharmacy");
@@ -481,38 +484,57 @@ export function PharmacyPage() {
     });
   }, [items, normalizedSearch]);
 
-  useLayoutEffect(() => {
-    const tableElement = tableRef.current;
-    if (!tableElement) {
+  const measureTable = useCallback(() => {
+    if (rafRef.current !== null) {
       return;
     }
-
-    const measureTable = () => {
-      const headerRow = tableElement.querySelector("thead tr");
-      const bodyRow = tableElement.querySelector("tbody tr");
+    rafRef.current = window.requestAnimationFrame(() => {
+      rafRef.current = null;
+      const tableElement = tableRef.current;
+      const targetElement = tableElement ?? containerRef.current;
+      if (!targetElement) {
+        return;
+      }
+      const headerRow = tableElement?.querySelector("thead tr");
+      const bodyRow = tableElement?.querySelector("tbody tr");
       const headerHeight = headerRow?.getBoundingClientRect().height ?? 0;
       const rowHeight = bodyRow?.getBoundingClientRect().height ?? 0;
       const fallbackHeaderHeight = headerHeight || 44;
       const fallbackRowHeight = rowHeight || 44;
       const maxHeight = fallbackHeaderHeight + fallbackRowHeight * 10;
-      setTableMaxHeight(maxHeight);
-    };
+      if (lastMeasuredRef.current.maxHeight === maxHeight) {
+        return;
+      }
+      lastMeasuredRef.current.maxHeight = maxHeight;
+      setTableMaxHeight((previous) => (previous === maxHeight ? previous : maxHeight));
+    });
+  }, []);
 
+  useEffect(() => {
     measureTable();
-
-    if (typeof ResizeObserver === "undefined") {
-      return;
+    const tableElement = tableRef.current;
+    let observer: ResizeObserver | null = null;
+    if (tableElement && typeof ResizeObserver !== "undefined") {
+      observer = new ResizeObserver(() => {
+        measureTable();
+      });
+      observer.observe(tableElement);
     }
 
-    const observer = new ResizeObserver(() => {
-      measureTable();
-    });
-    observer.observe(tableElement);
+    const handleResize = () => measureTable();
+    window.addEventListener("resize", handleResize);
 
     return () => {
-      observer.disconnect();
+      if (observer) {
+        observer.disconnect();
+      }
+      window.removeEventListener("resize", handleResize);
+      if (rafRef.current !== null) {
+        window.cancelAnimationFrame(rafRef.current);
+        rafRef.current = null;
+      }
     };
-  }, [filteredItems.length, columnVisibility, canEdit]);
+  }, [filteredItems.length, columnVisibility, canEdit, measureTable]);
 
   const lowStockItems = useMemo(
     () =>
@@ -930,6 +952,7 @@ export function PharmacyPage() {
       <div
         className="min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-slate-800"
         style={tableMaxHeight ? { maxHeight: `${tableMaxHeight}px` } : undefined}
+        ref={containerRef}
       >
         <table ref={tableRef} className="w-full table-fixed divide-y divide-slate-800">
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
