@@ -1,12 +1,21 @@
-import { ChangeEvent, FormEvent, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
+import {
+  DndContext,
+  MouseSensor,
+  TouchSensor,
+  closestCenter,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
+import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
+import { CSS } from "@dnd-kit/utilities";
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { api } from "../../lib/api";
 import { buildCustomFieldDefaults, CustomFieldDefinition, sortCustomFields } from "../../lib/customFields";
-import { persistValue, readPersistedValue } from "../../lib/persist";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
@@ -17,6 +26,7 @@ import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 import { DraggableModal } from "../../components/DraggableModal";
+import { useTablePrefs } from "../../hooks/useTablePrefs";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 
@@ -133,8 +143,6 @@ type PharmacyColumnKey =
   | "category"
   | "supplier";
 
-const PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY = "gsp/pharmacy-column-visibility";
-
 const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
   name: true,
   barcode: true,
@@ -146,6 +154,19 @@ const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
   location: true,
   category: false,
   supplier: true
+};
+
+const DEFAULT_PHARMACY_COLUMN_WIDTHS: Record<PharmacyColumnKey, number> = {
+  name: 220,
+  barcode: 160,
+  dosage: 140,
+  packaging: 180,
+  quantity: 120,
+  low_stock_threshold: 140,
+  expiration: 160,
+  location: 160,
+  category: 160,
+  supplier: 180
 };
 
 const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
@@ -198,37 +219,6 @@ export function PharmacyPage() {
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [tableMaxHeight, setTableMaxHeight] = useState<number | null>(null);
-
-  const [columnVisibility, setColumnVisibility] = useState<Record<string, boolean>>(() => ({
-    ...DEFAULT_PHARMACY_COLUMN_VISIBILITY,
-    ...readPersistedValue<Record<string, boolean>>(
-      PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY,
-      DEFAULT_PHARMACY_COLUMN_VISIBILITY
-    )
-  }));
-
-  const toggleColumnVisibility = (key: string, optionKeys: Set<string>) => {
-    setColumnVisibility((previous) => {
-      const isCurrentlyVisible = previous[key] !== false;
-      if (isCurrentlyVisible) {
-        const visibleCount = Array.from(optionKeys).filter(
-          (optionKey) => previous[optionKey] !== false
-        ).length;
-        if (visibleCount <= 1) {
-          return previous;
-        }
-      }
-      const next = { ...previous, [key]: !isCurrentlyVisible };
-      persistValue(PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY, next);
-      return next;
-    });
-  };
-
-  const resetColumnVisibility = () => {
-    const next = { ...DEFAULT_PHARMACY_COLUMN_VISIBILITY };
-    setColumnVisibility(next);
-    persistValue(PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY, next);
-  };
 
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const canView = user?.role === "admin" || modulePermissions.canAccess("pharmacy");
@@ -290,36 +280,146 @@ export function PharmacyPage() {
   );
   const columnOptions = useMemo(
     () => [
-      ...PHARMACY_COLUMN_OPTIONS.map((option) => ({ ...option, kind: "native" as const })),
+      ...PHARMACY_COLUMN_OPTIONS.filter(
+        (option) => option.key !== "supplier" || canViewSuppliers
+      ).map((option) => ({ ...option, kind: "native" as const })),
       ...customColumns.map((column) => ({
         key: column.key,
         label: column.label,
         kind: "custom" as const
       }))
     ],
-    [customColumns]
+    [canViewSuppliers, customColumns]
   );
   const columnOptionKeys = useMemo(() => new Set(columnOptions.map((option) => option.key)), [columnOptions]);
-  useEffect(() => {
-    setColumnVisibility((previous) => {
-      const next: Record<string, boolean> = {};
-      for (const option of columnOptions) {
-        if (previous[option.key] !== undefined) {
-          next[option.key] = previous[option.key];
-        } else if (option.key in DEFAULT_PHARMACY_COLUMN_VISIBILITY) {
-          next[option.key] = DEFAULT_PHARMACY_COLUMN_VISIBILITY[option.key as PharmacyColumnKey];
-        } else {
-          next[option.key] = false;
+
+  const defaultVisible = useMemo(() => {
+    const visible: Record<string, boolean> = {};
+    for (const option of columnOptions) {
+      if (option.key in DEFAULT_PHARMACY_COLUMN_VISIBILITY) {
+        visible[option.key] = DEFAULT_PHARMACY_COLUMN_VISIBILITY[option.key as PharmacyColumnKey];
+      } else {
+        visible[option.key] = false;
+      }
+    }
+    return visible;
+  }, [columnOptions]);
+
+  const defaultOrder = useMemo(() => columnOptions.map((option) => option.key), [columnOptions]);
+
+  const defaultWidths = useMemo(() => {
+    const widths: Record<string, number> = { ...DEFAULT_PHARMACY_COLUMN_WIDTHS };
+    for (const column of customColumns) {
+      widths[column.key] = 180;
+    }
+    return widths;
+  }, [customColumns]);
+
+  const { prefs, setVisible, setOrder, setWidth, reset } = useTablePrefs("pharmacy.items", {
+    v: 1,
+    visible: defaultVisible,
+    order: defaultOrder,
+    widths: defaultWidths
+  });
+
+  const columnVisibility = prefs.visible ?? defaultVisible;
+  const columnOrder = prefs.order ?? defaultOrder;
+  const columnWidths = { ...defaultWidths, ...(prefs.widths ?? {}) };
+
+  const toggleColumnVisibility = useCallback(
+    (key: string, optionKeys: Set<string>) => {
+      const isCurrentlyVisible = columnVisibility[key] !== false;
+      if (isCurrentlyVisible) {
+        const visibleCount = Array.from(optionKeys).filter(
+          (optionKey) => columnVisibility[optionKey] !== false
+        ).length;
+        if (visibleCount <= 1) {
+          return;
         }
       }
-      const hasChanges = Object.keys(previous).some((key) => !columnOptionKeys.has(key))
-        || Object.keys(next).some((key) => previous[key] !== next[key]);
-      if (hasChanges) {
-        persistValue(PHARMACY_COLUMN_VISIBILITY_STORAGE_KEY, next);
+      setVisible(key);
+    },
+    [columnVisibility, setVisible]
+  );
+
+  const resetColumnVisibility = useCallback(() => {
+    void reset();
+  }, [reset]);
+
+  const resolveColumnWidth = useCallback(
+    (key: string, fallback: number) => {
+      const width = columnWidths[key];
+      return typeof width === "number" ? width : fallback;
+    },
+    [columnWidths]
+  );
+
+  const getColumnStyle = useCallback(
+    (key: string, fallback: number) => {
+      const width = resolveColumnWidth(key, fallback);
+      const widthRem = `${width / 16}rem`;
+      return { width: widthRem, minWidth: 0, maxWidth: widthRem };
+    },
+    [resolveColumnWidth]
+  );
+
+  const columnMeta = useMemo(() => {
+    const meta: Record<string, { label: string; headerClass?: string; cellClass?: string; width: number }> = {
+      name: { label: "Nom", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.name },
+      barcode: { label: "Code-barres", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.barcode },
+      dosage: { label: "Dosage", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.dosage },
+      packaging: { label: "Conditionnement", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.packaging },
+      quantity: { label: "Quantité", headerClass: "text-center", cellClass: "text-center", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.quantity },
+      low_stock_threshold: { label: "Seuil faible", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.low_stock_threshold },
+      expiration: { label: "Expiration", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.expiration },
+      location: { label: "Localisation", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.location },
+      category: { label: "Catégorie", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.category },
+      supplier: { label: "Fournisseur", headerClass: "hidden lg:table-cell", cellClass: "hidden lg:table-cell", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.supplier }
+    };
+    if (!canViewSuppliers) {
+      delete meta.supplier;
+    }
+    for (const column of customColumns) {
+      meta[column.key] = {
+        label: column.label,
+        headerClass: "hidden lg:table-cell",
+        cellClass: "hidden lg:table-cell",
+        width: 180
+      };
+    }
+    return meta;
+  }, [canViewSuppliers, customColumns]);
+
+  const orderedColumns = useMemo(() => {
+    const filtered = columnOrder.filter((key) => columnOptionKeys.has(key));
+    const missing = Array.from(columnOptionKeys).filter((key) => !filtered.includes(key));
+    return [...filtered, ...missing];
+  }, [columnOptionKeys, columnOrder]);
+
+  const visibleColumns = useMemo(
+    () => orderedColumns.filter((key) => columnVisibility[key] !== false),
+    [orderedColumns, columnVisibility]
+  );
+
+  const sensors = useSensors(
+    useSensor(MouseSensor, { activationConstraint: { distance: 6 } }),
+    useSensor(TouchSensor, { activationConstraint: { delay: 150, tolerance: 5 } })
+  );
+
+  const handleDragEnd = useCallback(
+    (event: { active: { id: string }; over?: { id: string } | null }) => {
+      if (!event.over || event.active.id === event.over.id) {
+        return;
       }
-      return hasChanges ? next : previous;
-    });
-  }, [columnOptions, columnOptionKeys]);
+      const activeIndex = orderedColumns.indexOf(event.active.id);
+      const overIndex = orderedColumns.indexOf(event.over.id);
+      if (activeIndex === -1 || overIndex === -1) {
+        return;
+      }
+      setOrder(arrayMove(orderedColumns, activeIndex, overIndex));
+    },
+    [orderedColumns, setOrder]
+  );
 
   const renderCustomValue = (value: unknown) => {
     if (value === null || value === undefined || value === "") {
@@ -333,6 +433,11 @@ export function PharmacyPage() {
     }
     return String(value);
   };
+
+  const customColumnMap = useMemo(
+    () => new Map(customColumns.map((column) => [column.key, column])),
+    [customColumns]
+  );
 
   const existingBarcodes = useMemo<ExistingSkuEntry[]>(
     () =>
@@ -749,7 +854,7 @@ export function PharmacyPage() {
             visibility={columnVisibility}
             onToggle={(key) => toggleColumnVisibility(key, columnOptionKeys)}
             onReset={resetColumnVisibility}
-            description="Personnalisez les colonnes visibles dans le tableau."
+            description="Personnalisez les colonnes visibles dans le tableau. Vos préférences sont enregistrées pour ce site."
           />
           {canEdit ? (
             <button
@@ -826,33 +931,32 @@ export function PharmacyPage() {
         className="min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-slate-800"
         style={tableMaxHeight ? { maxHeight: `${tableMaxHeight}px` } : undefined}
       >
-        <table ref={tableRef} className="w-full divide-y divide-slate-800">
-          <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
-            <tr>
-              {columnVisibility.name !== false ? <th className="px-4 py-3 text-left">Nom</th> : null}
-              {columnVisibility.barcode !== false ? <th className="px-4 py-3 text-left">Code-barres</th> : null}
-              {columnVisibility.dosage !== false ? <th className="px-4 py-3 text-left">Dosage</th> : null}
-              {columnVisibility.packaging !== false ? <th className="px-4 py-3 text-left">Conditionnement</th> : null}
-              {columnVisibility.quantity !== false ? <th className="px-4 py-3 text-left">Quantité</th> : null}
-              {columnVisibility.low_stock_threshold !== false ? (
-                <th className="px-4 py-3 text-left">Seuil faible</th>
-              ) : null}
-              {columnVisibility.expiration !== false ? <th className="px-4 py-3 text-left">Expiration</th> : null}
-              {columnVisibility.location !== false ? <th className="px-4 py-3 text-left">Localisation</th> : null}
-              {columnVisibility.supplier !== false ? (
-                <th className="hidden px-4 py-3 text-left lg:table-cell">Fournisseur</th>
-              ) : null}
-              {columnVisibility.category !== false ? <th className="px-4 py-3 text-left">Catégorie</th> : null}
-              {customColumns.map((column) =>
-                columnVisibility[column.key] === true ? (
-                  <th key={column.key} className="px-4 py-3 text-left">
-                    {column.label}
-                  </th>
-                ) : null
-              )}
-              {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
-            </tr>
-          </thead>
+        <table ref={tableRef} className="w-full table-fixed divide-y divide-slate-800">
+          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
+            <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
+              <SortableContext items={visibleColumns} strategy={horizontalListSortingStrategy}>
+                <tr>
+                  {visibleColumns.map((columnKey) => {
+                    const meta = columnMeta[columnKey];
+                    if (!meta) {
+                      return null;
+                    }
+                    return (
+                      <SortableHeaderCell
+                        key={columnKey}
+                        id={columnKey}
+                        label={meta.label}
+                        width={resolveColumnWidth(columnKey, meta.width)}
+                        onResize={(value) => setWidth(columnKey, value)}
+                        className={meta.headerClass}
+                      />
+                    );
+                  })}
+                  {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
+                </tr>
+              </SortableContext>
+            </thead>
+          </DndContext>
           <tbody className="divide-y divide-slate-900">
             {filteredItems.map((item) => {
               const { isOutOfStock, isLowStock, expirationStatus } = getPharmacyAlerts(item);
@@ -866,116 +970,162 @@ export function PharmacyPage() {
                     selected?.id === item.id && formMode === "edit" ? "ring-1 ring-indigo-500" : ""
                   }`}
                 >
-                  {columnVisibility.name !== false ? (
-                    <td className="px-4 py-3 font-medium">{highlightMatch(item.name, normalizedSearch)}</td>
-                  ) : null}
-                  {columnVisibility.barcode !== false ? (
-                    <td className="px-4 py-3 text-slate-300">
-                      {item.barcode ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100">
-                            {highlightMatch(item.barcode, normalizedSearch)}
-                          </code>
-                          {barcodeDownloadUrl ? (
-                            <a
-                              href={barcodeDownloadUrl}
-                              target="_blank"
-                              rel="noreferrer"
-                              className="text-[10px] font-semibold uppercase tracking-wide text-indigo-300 hover:text-indigo-200"
-                              title="Télécharger le code-barres (PNG)"
-                            >
-                              PNG
-                            </a>
-                          ) : null}
-                        </div>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </td>
-                  ) : null}
-                  {columnVisibility.dosage !== false ? (
-                    <td className="px-4 py-3 text-slate-300">{item.dosage ?? "-"}</td>
-                  ) : null}
-                  {columnVisibility.packaging !== false ? (
-                    <td className="px-4 py-3 text-slate-300">{item.packaging ?? "-"}</td>
-                  ) : null}
-                  {columnVisibility.quantity !== false ? (
-                    <td className="px-4 py-3 font-semibold">
-                      {item.quantity}
-                      {isOutOfStock ? (
-                        <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-200">
-                          Rupture
-                        </span>
-                      ) : isLowStock ? (
-                        <span className="ml-2 inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                          Faible stock
-                        </span>
-                      ) : null}
-                    </td>
-                  ) : null}
-                  {columnVisibility.low_stock_threshold !== false ? (
-                    <td className="px-4 py-3 text-slate-300">
-                      {item.low_stock_threshold > 0 ? item.low_stock_threshold : "-"}
-                    </td>
-                  ) : null}
-                  {columnVisibility.expiration !== false ? (
-                    <td
-                      className={`px-4 py-3 ${
-                        expirationStatus === "expired"
-                          ? "text-red-300"
-                          : expirationStatus === "expiring-soon"
-                            ? "text-amber-200"
-                            : "text-slate-300"
-                      }`}
-                    >
-                      {formatDate(item.expiration_date)}
-                      {expirationStatus === "expired" ? (
-                        <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
-                          Expiré
-                        </span>
-                      ) : null}
-                      {expirationStatus === "expiring-soon" ? (
-                        <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
-                          Bientôt périmé
-                        </span>
-                      ) : null}
-                    </td>
-                  ) : null}
-                  {columnVisibility.location !== false ? (
-                    <td className="px-4 py-3 text-slate-300">{item.location ?? "-"}</td>
-                  ) : null}
-                  {columnVisibility.supplier !== false ? (
-                    <td className="hidden px-4 py-3 text-slate-300 lg:table-cell">
-                      {item.supplier_name ? (
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span className="font-medium text-slate-200">{item.supplier_name}</span>
-                          {item.supplier_email ? null : (
-                            <span className="inline-flex items-center rounded border border-slate-600/60 bg-slate-800/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
-                              Email manquant
-                            </span>
+                  {visibleColumns.map((columnKey) => {
+                    const meta = columnMeta[columnKey];
+                    if (!meta) {
+                      return null;
+                    }
+                    const style = getColumnStyle(columnKey, meta.width);
+                    const sharedClass = `px-4 py-3 text-slate-300 ${meta.cellClass ?? ""}`.trim();
+                    if (columnKey === "name") {
+                      return (
+                        <td key={columnKey} style={style} className="px-4 py-3 font-medium text-slate-100">
+                          {highlightMatch(item.name, normalizedSearch)}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "barcode") {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {item.barcode ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <code className="rounded bg-slate-900 px-2 py-1 text-xs text-slate-100">
+                                {highlightMatch(item.barcode, normalizedSearch)}
+                              </code>
+                              {barcodeDownloadUrl ? (
+                                <a
+                                  href={barcodeDownloadUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-[10px] font-semibold uppercase tracking-wide text-indigo-300 hover:text-indigo-200"
+                                  title="Télécharger le code-barres (PNG)"
+                                >
+                                  PNG
+                                </a>
+                              ) : null}
+                            </div>
+                          ) : (
+                            <span className="text-slate-500">—</span>
                           )}
-                        </div>
-                      ) : item.supplier_id ? (
-                        <span className="inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
-                          Fournisseur introuvable
-                        </span>
-                      ) : (
-                        <span className="text-slate-500">—</span>
-                      )}
-                    </td>
-                  ) : null}
-                  {columnVisibility.category !== false ? (
-                    <td className="px-4 py-3 text-slate-300">
-                      {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
-                    </td>
-                  ) : null}
-                  {customColumns.map((column) =>
-                    columnVisibility[column.key] === true ? (
-                      <td key={column.key} className="px-4 py-3 text-slate-300">
-                        {renderCustomValue(item.extra?.[column.fieldKey])}
-                      </td>
-                    ) : null
-                  )}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "dosage") {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {item.dosage ?? "-"}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "packaging") {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {item.packaging ?? "-"}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "quantity") {
+                      return (
+                        <td
+                          key={columnKey}
+                          style={style}
+                          className={`px-4 py-3 font-semibold ${meta.cellClass ?? ""} ${
+                            isOutOfStock ? "text-red-300" : isLowStock ? "text-amber-200" : "text-slate-100"
+                          }`}
+                        >
+                          {item.quantity}
+                          {isOutOfStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-200">
+                              Rupture
+                            </span>
+                          ) : isLowStock ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                              Faible stock
+                            </span>
+                          ) : null}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "low_stock_threshold") {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {item.low_stock_threshold > 0 ? item.low_stock_threshold : "-"}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "expiration") {
+                      return (
+                        <td
+                          key={columnKey}
+                          style={style}
+                          className={`px-4 py-3 ${
+                            expirationStatus === "expired"
+                              ? "text-red-300"
+                              : expirationStatus === "expiring-soon"
+                                ? "text-amber-200"
+                                : "text-slate-300"
+                          }`}
+                        >
+                          {formatDate(item.expiration_date)}
+                          {expirationStatus === "expired" ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-red-500/40 bg-red-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-red-300">
+                              Expiré
+                            </span>
+                          ) : null}
+                          {expirationStatus === "expiring-soon" ? (
+                            <span className="ml-2 inline-flex items-center rounded border border-orange-400/40 bg-orange-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-orange-200">
+                              Bientôt périmé
+                            </span>
+                          ) : null}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "location") {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {item.location ?? "-"}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "supplier") {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {item.supplier_name ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="font-medium text-slate-200">{item.supplier_name}</span>
+                              {item.supplier_email ? null : (
+                                <span className="inline-flex items-center rounded border border-slate-600/60 bg-slate-800/70 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-300">
+                                  Email manquant
+                                </span>
+                              )}
+                            </div>
+                          ) : item.supplier_id ? (
+                            <span className="inline-flex items-center rounded border border-amber-500/40 bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-200">
+                              Fournisseur introuvable
+                            </span>
+                          ) : (
+                            <span className="text-slate-500">—</span>
+                          )}
+                        </td>
+                      );
+                    }
+                    if (columnKey === "category") {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {item.category_id ? categoryNames.get(item.category_id) ?? "-" : "-"}
+                        </td>
+                      );
+                    }
+                    const customColumn = customColumnMap.get(columnKey);
+                    if (customColumn) {
+                      return (
+                        <td key={columnKey} style={style} className={sharedClass}>
+                          {renderCustomValue(item.extra?.[customColumn.fieldKey])}
+                        </td>
+                      );
+                    }
+                    return null;
+                  })}
                   {canEdit ? (
                     <td className="px-4 py-3 text-xs text-slate-200">
                       <div className="flex flex-wrap gap-2">
@@ -1524,6 +1674,62 @@ export function PharmacyPage() {
         className="space-y-6"
       />
     </>
+  );
+}
+
+function SortableHeaderCell({
+  id,
+  label,
+  width,
+  onResize,
+  className
+}: {
+  id: string;
+  label: string;
+  width: number;
+  onResize: (value: number) => void;
+  className?: string;
+}) {
+  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id });
+  const widthRem = `${width / 16}rem`;
+  const style = {
+    width: widthRem,
+    maxWidth: widthRem,
+    transform: CSS.Transform.toString(transform),
+    transition,
+    opacity: isDragging ? 0.6 : 1
+  };
+  return (
+    <th
+      ref={setNodeRef}
+      style={style}
+      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 ${className ?? ""}`}
+    >
+      <div className="flex items-center justify-between gap-2">
+        <div className="flex items-center gap-2">
+          <button
+            type="button"
+            className="cursor-grab text-slate-500 hover:text-slate-200"
+            title={`Déplacer la colonne ${label}`}
+            aria-label={`Déplacer la colonne ${label}`}
+            {...attributes}
+            {...listeners}
+          >
+            ⋮⋮
+          </button>
+          <span>{label}</span>
+        </div>
+        <AppTextInput
+          type="range"
+          min={120}
+          max={320}
+          value={width}
+          onChange={(event) => onResize(Number(event.target.value))}
+          className="h-1 w-24 cursor-ew-resize appearance-none rounded-full bg-slate-700"
+          title={`Ajuster la largeur de la colonne ${label}`}
+        />
+      </div>
+    </th>
   );
 }
 

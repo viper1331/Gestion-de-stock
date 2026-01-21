@@ -40,6 +40,7 @@ from backend.api import (
     user_layouts,
     sites as sites_api,
     ui_menu,
+    ui_table_prefs,
 )
 from backend.api.site_context import SiteContextMiddleware
 from backend.core.logging_config import (
@@ -142,6 +143,7 @@ app.include_router(messages.router, prefix="/messages", tags=["messages"])
 app.include_router(user_layouts.router, prefix="/user-layouts", tags=["user-layouts"])
 app.include_router(user_layouts.router, prefix="/ui/layouts", tags=["user-layouts"])
 app.include_router(ui_menu.router, prefix="/ui", tags=["ui"])
+app.include_router(ui_table_prefs.router, prefix="/ui", tags=["ui"])
 app.include_router(sites_api.router, prefix="/sites", tags=["sites"])
 
 app.mount("/media", StaticFiles(directory=MEDIA_ROOT), name="media")
