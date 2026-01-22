@@ -831,7 +831,9 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
                     item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
                     quantity_ordered INTEGER NOT NULL,
-                    quantity_received INTEGER NOT NULL DEFAULT 0
+                    quantity_received INTEGER NOT NULL DEFAULT 0,
+                    sku TEXT,
+                    unit TEXT
                 );
                 CREATE TABLE IF NOT EXISTS purchase_suggestions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -938,7 +940,9 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     purchase_order_id INTEGER NOT NULL REFERENCES pharmacy_purchase_orders(id) ON DELETE CASCADE,
                     pharmacy_item_id INTEGER NOT NULL REFERENCES pharmacy_items(id) ON DELETE CASCADE,
                     quantity_ordered INTEGER NOT NULL,
-                    quantity_received INTEGER NOT NULL DEFAULT 0
+                    quantity_received INTEGER NOT NULL DEFAULT 0,
+                    sku TEXT,
+                    unit TEXT
                 );
                 """
     )
