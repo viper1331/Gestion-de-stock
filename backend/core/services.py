@@ -2410,6 +2410,7 @@ def ensure_site_database_ready(site_key: str) -> None:
         with _migration_lock():
             db.init_databases()
             _apply_schema_migrations_for_site(site_key)
+    logger.info("[DB] schema migrated/ok for site %s", site_key)
 
 
 def is_missing_table_error(exc: sqlite3.OperationalError) -> bool:
@@ -5686,7 +5687,13 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
     with db.get_users_connection() as conn:
         if payload.broadcast:
             cur = conn.execute(
-                "SELECT username FROM users WHERE status = 'active' ORDER BY username COLLATE NOCASE"
+                """
+                SELECT username
+                FROM users
+                WHERE status = 'active' AND is_active = 1 AND username != ?
+                ORDER BY username COLLATE NOCASE
+                """,
+                (sender.username,),
             )
             recipients = [row["username"] for row in cur.fetchall()]
         else:
@@ -5697,13 +5704,15 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
             raise ValueError("Aucun destinataire sélectionné")
 
         placeholders = ", ".join("?" for _ in recipients)
+        valid_params = [*recipients, sender.username]
         cur = conn.execute(
             f"""
             SELECT username
             FROM users
-            WHERE status = 'active' AND username IN ({placeholders})
+            WHERE status = 'active' AND is_active = 1 AND username IN ({placeholders})
+              AND username != ?
             """,
-            recipients,
+            valid_params,
         )
         valid_recipients = [row["username"] for row in cur.fetchall()]
         if not valid_recipients:
@@ -10789,11 +10798,12 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT * FROM pharmacy_items ORDER BY name COLLATE NOCASE")
         rows = cur.fetchall()
-        has_supplier_id = _table_has_column(conn, "pharmacy_items", "supplier_id")
-        supplier_ids = (
-            sorted({row["supplier_id"] for row in rows if row["supplier_id"] is not None})
-            if has_supplier_id
-            else []
+        supplier_ids = sorted(
+            {
+                row["supplier_id"]
+                for row in rows
+                if "supplier_id" in row.keys() and row["supplier_id"] is not None
+            }
         )
         suppliers_by_id: dict[int, sqlite3.Row] = {}
         if supplier_ids:
@@ -10815,17 +10825,17 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 expiration_date=row["expiration_date"],
                 location=row["location"],
                 category_id=row["category_id"],
-                supplier_id=row["supplier_id"] if has_supplier_id else None,
+                supplier_id=row["supplier_id"] if "supplier_id" in row.keys() else None,
                 supplier_name=(
                     suppliers_by_id.get(row["supplier_id"])["name"]
-                    if has_supplier_id
+                    if "supplier_id" in row.keys()
                     and row["supplier_id"] is not None
                     and row["supplier_id"] in suppliers_by_id
                     else None
                 ),
                 supplier_email=(
                     suppliers_by_id.get(row["supplier_id"])["email"]
-                    if has_supplier_id
+                    if "supplier_id" in row.keys()
                     and row["supplier_id"] is not None
                     and row["supplier_id"] in suppliers_by_id
                     else None
