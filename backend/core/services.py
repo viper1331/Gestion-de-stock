@@ -641,12 +641,19 @@ def _resolve_pharmacy_supplier_id(
     return supplier_id
 
 
+def _row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
+    try:
+        return row[key]
+    except (KeyError, IndexError):
+        return default
+
+
 def _resolve_remise_supplier_id(
     conn: sqlite3.Connection,
     row: sqlite3.Row,
     extra: dict[str, Any],
 ) -> int | None:
-    supplier_id = row["supplier_id"]
+    supplier_id = _row_get(row, "supplier_id")
     if supplier_id is None:
         supplier_id = _resolve_supplier_id_from_name(
             conn,
@@ -681,12 +688,17 @@ def _get_reorder_candidates(
     candidates_by_item: dict[int, dict[str, Any]] = {}
 
     if module_key == "clothing":
+        supplier_column = (
+            "supplier_id" if _table_has_column(conn, "items", "supplier_id") else "NULL AS supplier_id"
+        )
         rows = conn.execute(
             """
-            SELECT id, name, sku, size, quantity, low_stock_threshold, supplier_id, track_low_stock
+            SELECT id, name, sku, size, quantity, low_stock_threshold, {supplier_column}, track_low_stock
             FROM items
             WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
-            """
+            """.format(
+                supplier_column=supplier_column
+            )
         ).fetchall()
         for row in rows:
             if "track_low_stock" in row.keys() and not bool(row["track_low_stock"]):
@@ -706,6 +718,11 @@ def _get_reorder_candidates(
         return list(candidates_by_item.values())
 
     if module_key == "pharmacy":
+        supplier_column = (
+            "supplier_id"
+            if _table_has_column(conn, "pharmacy_items", "supplier_id")
+            else "NULL AS supplier_id"
+        )
         low_stock_rows = conn.execute(
             """
             SELECT id,
@@ -715,11 +732,13 @@ def _get_reorder_candidates(
                    dosage,
                    quantity,
                    low_stock_threshold,
-                   supplier_id,
+                   {supplier_column},
                    extra_json
             FROM pharmacy_items
             WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
-            """
+            """.format(
+                supplier_column=supplier_column
+            )
         ).fetchall()
         for row in low_stock_rows:
             extra = _parse_extra_json(row["extra_json"])
@@ -747,11 +766,13 @@ def _get_reorder_candidates(
                        quantity,
                        low_stock_threshold,
                        expiration_date,
-                       supplier_id,
+                       {supplier_column},
                        extra_json
                 FROM pharmacy_items
                 WHERE expiration_date IS NOT NULL
-                """
+                """.format(
+                    supplier_column=supplier_column
+                )
             ).fetchall()
             today = date.today()
             for row in expiry_rows:
@@ -799,12 +820,19 @@ def _get_reorder_candidates(
         return list(candidates_by_item.values())
 
     if module_key == "inventory_remise":
+        supplier_column = (
+            "supplier_id"
+            if _table_has_column(conn, "remise_items", "supplier_id")
+            else "NULL AS supplier_id"
+        )
         low_stock_rows = conn.execute(
             """
-            SELECT id, name, sku, size, quantity, low_stock_threshold, supplier_id, track_low_stock, extra_json
+            SELECT id, name, sku, size, quantity, low_stock_threshold, {supplier_column}, track_low_stock, extra_json
             FROM remise_items
             WHERE quantity < low_stock_threshold AND low_stock_threshold > 0
-            """
+            """.format(
+                supplier_column=supplier_column
+            )
         ).fetchall()
         for row in low_stock_rows:
             if "track_low_stock" in row.keys() and not bool(row["track_low_stock"]):
@@ -832,13 +860,15 @@ def _get_reorder_candidates(
                        size,
                        quantity,
                        low_stock_threshold,
-                       supplier_id,
+                       {supplier_column},
                        track_low_stock,
                        extra_json,
                        expiration_date
                 FROM remise_items
                 WHERE expiration_date IS NOT NULL
-                """
+                """.format(
+                    supplier_column=supplier_column
+                )
             ).fetchall()
             today = date.today()
             for row in expiry_rows:
@@ -970,14 +1000,14 @@ def _get_purchase_suggestion_lines(
             id=row["id"],
             suggestion_id=row["suggestion_id"],
             item_id=row["item_id"],
-            sku=row["sku"],
+            sku=_row_get(row, "sku"),
             label=row["label"],
             variant_label=_resolve_variant_label(
                 module_key, item_row, custom_fields_by_scope=custom_fields_by_scope
             ),
             qty_suggested=row["qty_suggested"],
             qty_final=row["qty_final"],
-            unit=row["unit"],
+            unit=_row_get(row, "unit"),
             reason=row["reason"],
             reason_codes=reason_codes,
             expiry_date=row["expiry_date"] if "expiry_date" in row.keys() else None,
@@ -2624,6 +2654,8 @@ def _ensure_remise_item_columns(
         execute(
             "ALTER TABLE remise_items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 1"
         )
+    if "supplier_id" not in remise_item_columns:
+        execute("ALTER TABLE remise_items ADD COLUMN supplier_id INTEGER")
     if "expiration_date" not in remise_item_columns:
         execute("ALTER TABLE remise_items ADD COLUMN expiration_date TEXT")
     if "extra_json" not in remise_item_columns:
@@ -2992,7 +3024,9 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
                 item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
                 quantity_ordered INTEGER NOT NULL,
-                quantity_received INTEGER NOT NULL DEFAULT 0
+                quantity_received INTEGER NOT NULL DEFAULT 0,
+                sku TEXT,
+                unit TEXT
             );
             CREATE INDEX IF NOT EXISTS idx_purchase_order_items_item ON purchase_order_items(item_id);
             CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
@@ -3052,6 +3086,10 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN expiry_days_left INTEGER")
         if "reason_label" not in suggestion_line_columns:
             execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN reason_label TEXT")
+        if "sku" not in suggestion_line_columns:
+            execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN sku TEXT")
+        if "unit" not in suggestion_line_columns:
+            execute("ALTER TABLE purchase_suggestion_lines ADD COLUMN unit TEXT")
 
         backup_settings_info = execute("PRAGMA table_info(backup_settings)").fetchall()
         backup_settings_columns = {row["name"] for row in backup_settings_info}
@@ -3146,6 +3184,10 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute(
                 "ALTER TABLE purchase_order_items ADD COLUMN quantity_received INTEGER NOT NULL DEFAULT 0"
             )
+        if "sku" not in poi_columns:
+            execute("ALTER TABLE purchase_order_items ADD COLUMN sku TEXT")
+        if "unit" not in poi_columns:
+            execute("ALTER TABLE purchase_order_items ADD COLUMN unit TEXT")
 
         dotation_info = execute("PRAGMA table_info(dotations)").fetchall()
         dotation_columns = {row["name"] for row in dotation_info}
@@ -3215,6 +3257,10 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute(
                 "ALTER TABLE pharmacy_purchase_order_items ADD COLUMN quantity_received INTEGER NOT NULL DEFAULT 0"
             )
+        if "sku" not in pharmacy_poi_columns:
+            execute("ALTER TABLE pharmacy_purchase_order_items ADD COLUMN sku TEXT")
+        if "unit" not in pharmacy_poi_columns:
+            execute("ALTER TABLE pharmacy_purchase_order_items ADD COLUMN unit TEXT")
 
         execute(
             "CREATE INDEX IF NOT EXISTS idx_pharmacy_purchase_orders_status ON pharmacy_purchase_orders(status)"
@@ -3426,10 +3472,18 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 purchase_order_id INTEGER NOT NULL REFERENCES remise_purchase_orders(id) ON DELETE CASCADE,
                 remise_item_id INTEGER NOT NULL REFERENCES remise_items(id) ON DELETE CASCADE,
                 quantity_ordered INTEGER NOT NULL,
-                quantity_received INTEGER NOT NULL DEFAULT 0
+                quantity_received INTEGER NOT NULL DEFAULT 0,
+                sku TEXT,
+                unit TEXT
             );
             """
         )
+        remise_poi_info = execute("PRAGMA table_info(remise_purchase_order_items)").fetchall()
+        remise_poi_columns = {row["name"] for row in remise_poi_info}
+        if "sku" not in remise_poi_columns:
+            execute("ALTER TABLE remise_purchase_order_items ADD COLUMN sku TEXT")
+        if "unit" not in remise_poi_columns:
+            execute("ALTER TABLE remise_purchase_order_items ADD COLUMN unit TEXT")
         executemany(
             """
             INSERT OR IGNORE INTO vehicle_types (code, label, is_active)
@@ -3538,12 +3592,23 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
         (supplier_id, note),
     )
     order_id = po_cur.lastrowid
+    item_row = conn.execute(
+        "SELECT sku, size FROM items WHERE id = ?",
+        (item_id,),
+    ).fetchone()
+    has_sku = _table_has_column(conn, "purchase_order_items", "sku")
+    has_unit = _table_has_column(conn, "purchase_order_items", "unit")
+    columns = ["purchase_order_id", "item_id", "quantity_ordered"]
+    values: list[object] = [order_id, item_id, shortage]
+    if has_sku:
+        columns.append("sku")
+        values.append(item_row["sku"] if item_row else None)
+    if has_unit:
+        columns.append("unit")
+        values.append(item_row["size"] if item_row and item_row["size"] else None)
     conn.execute(
-        """
-        INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered)
-        VALUES (?, ?, ?)
-        """,
-        (order_id, item_id, shortage),
+        f"INSERT INTO purchase_order_items ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+        values,
     )
 
 
@@ -5668,7 +5733,18 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
             (message_id,),
         ).fetchone()
         created_at = created_row["created_at"] if created_row else None
-        archive_recipients = sorted(valid_recipients, key=str.casefold)
+        recipients_rows = conn.execute(
+            """
+            SELECT recipient_username
+            FROM message_recipients
+            WHERE message_id = ?
+            ORDER BY recipient_username COLLATE NOCASE
+            """,
+            (message_id,),
+        ).fetchall()
+        archive_recipients = [
+            row["recipient_username"] for row in recipients_rows
+        ] or sorted(valid_recipients, key=str.casefold)
 
     _archive_message_safe(
         message_id=message_id,
@@ -8381,16 +8457,24 @@ def _build_purchase_order_detail(
     *,
     site_key: str | None = None,
 ) -> models.PurchaseOrderDetail:
+    has_line_sku = _table_has_column(conn, "purchase_order_items", "sku")
+    has_line_unit = _table_has_column(conn, "purchase_order_items", "unit")
+    sku_expr = "i.sku AS sku"
+    unit_expr = "COALESCE(NULLIF(TRIM(i.size), ''), 'Unité') AS unit"
+    if has_line_sku:
+        sku_expr = "COALESCE(NULLIF(TRIM(poi.sku), ''), i.sku) AS sku"
+    if has_line_unit:
+        unit_expr = "COALESCE(NULLIF(TRIM(poi.unit), ''), NULLIF(TRIM(i.size), ''), 'Unité') AS unit"
     items_cur = conn.execute(
-        """
+        f"""
         SELECT poi.id,
                poi.purchase_order_id,
                poi.item_id,
                poi.quantity_ordered,
                poi.quantity_received,
                i.name AS item_name,
-               i.sku AS sku,
-               COALESCE(NULLIF(TRIM(i.size), ''), 'Unité') AS unit
+               {sku_expr},
+               {unit_expr}
         FROM purchase_order_items AS poi
         JOIN items AS i ON i.id = poi.item_id
         WHERE poi.purchase_order_id = ?
@@ -8504,18 +8588,30 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                 (payload.supplier_id, status, payload.note),
             )
             order_id = cur.lastrowid
+            has_line_sku = _table_has_column(conn, "purchase_order_items", "sku")
+            has_line_unit = _table_has_column(conn, "purchase_order_items", "unit")
             for item_id, quantity in aggregated.items():
-                item_cur = conn.execute(
-                    "SELECT 1 FROM items WHERE id = ?", (item_id,)
-                )
-                if item_cur.fetchone() is None:
+                item_row = conn.execute(
+                    "SELECT sku, size FROM items WHERE id = ?", (item_id,)
+                ).fetchone()
+                if item_row is None:
                     raise ValueError("Article introuvable")
+                columns = [
+                    "purchase_order_id",
+                    "item_id",
+                    "quantity_ordered",
+                    "quantity_received",
+                ]
+                values: list[object] = [order_id, item_id, quantity, 0]
+                if has_line_sku:
+                    columns.append("sku")
+                    values.append(item_row["sku"])
+                if has_line_unit:
+                    columns.append("unit")
+                    values.append(item_row["size"] if item_row["size"] else None)
                 conn.execute(
-                    """
-                    INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered, quantity_received)
-                    VALUES (?, ?, ?, 0)
-                    """,
-                    (order_id, item_id, quantity),
+                    f"INSERT INTO purchase_order_items ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                    values,
                 )
             conn.commit()
         except Exception:
@@ -9868,16 +9964,24 @@ def _build_remise_purchase_order_detail(
     site_key: str | None = None,
     suppliers_map: dict[int, models.Supplier] | None = None,
 ) -> models.RemisePurchaseOrderDetail:
+    has_line_sku = _table_has_column(conn, "remise_purchase_order_items", "sku")
+    has_line_unit = _table_has_column(conn, "remise_purchase_order_items", "unit")
+    sku_expr = "ri.sku AS sku"
+    unit_expr = "COALESCE(NULLIF(TRIM(ri.size), ''), 'Unité') AS unit"
+    if has_line_sku:
+        sku_expr = "COALESCE(NULLIF(TRIM(rpoi.sku), ''), ri.sku) AS sku"
+    if has_line_unit:
+        unit_expr = "COALESCE(NULLIF(TRIM(rpoi.unit), ''), NULLIF(TRIM(ri.size), ''), 'Unité') AS unit"
     items_cur = conn.execute(
-        """
+        f"""
         SELECT rpoi.id,
                rpoi.purchase_order_id,
                rpoi.remise_item_id,
                rpoi.quantity_ordered,
                rpoi.quantity_received,
                ri.name AS item_name,
-               ri.sku AS sku,
-               COALESCE(NULLIF(TRIM(ri.size), ''), 'Unité') AS unit
+               {sku_expr},
+               {unit_expr}
         FROM remise_purchase_order_items AS rpoi
         JOIN remise_items AS ri ON ri.id = rpoi.remise_item_id
         WHERE rpoi.purchase_order_id = ?
@@ -10054,18 +10158,30 @@ def create_remise_purchase_order(
                 (payload.supplier_id, status, payload.note),
             )
             order_id = cur.lastrowid
+            has_line_sku = _table_has_column(conn, "remise_purchase_order_items", "sku")
+            has_line_unit = _table_has_column(conn, "remise_purchase_order_items", "unit")
             for remise_item_id, quantity in aggregated.items():
-                item_cur = conn.execute(
-                    "SELECT 1 FROM remise_items WHERE id = ?", (remise_item_id,)
-                )
-                if item_cur.fetchone() is None:
+                item_row = conn.execute(
+                    "SELECT sku, size FROM remise_items WHERE id = ?", (remise_item_id,)
+                ).fetchone()
+                if item_row is None:
                     raise ValueError("Article introuvable")
+                columns = [
+                    "purchase_order_id",
+                    "remise_item_id",
+                    "quantity_ordered",
+                    "quantity_received",
+                ]
+                values: list[object] = [order_id, remise_item_id, quantity, 0]
+                if has_line_sku:
+                    columns.append("sku")
+                    values.append(item_row["sku"])
+                if has_line_unit:
+                    columns.append("unit")
+                    values.append(item_row["size"] if item_row["size"] else None)
                 conn.execute(
-                    """
-                    INSERT INTO remise_purchase_order_items (purchase_order_id, remise_item_id, quantity_ordered, quantity_received)
-                    VALUES (?, ?, ?, 0)
-                    """,
-                    (order_id, remise_item_id, quantity),
+                    f"INSERT INTO remise_purchase_order_items ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                    values,
                 )
             conn.commit()
         except Exception:
@@ -11420,16 +11536,24 @@ def _build_pharmacy_purchase_order_detail(
     *,
     site_key: str | None = None,
 ) -> models.PharmacyPurchaseOrderDetail:
+    has_line_sku = _table_has_column(conn, "pharmacy_purchase_order_items", "sku")
+    has_line_unit = _table_has_column(conn, "pharmacy_purchase_order_items", "unit")
+    sku_expr = "NULLIF(TRIM(pi.barcode), '') AS sku"
+    unit_expr = "COALESCE(NULLIF(TRIM(pi.packaging), ''), 'Unité') AS unit"
+    if has_line_sku:
+        sku_expr = "COALESCE(NULLIF(TRIM(poi.sku), ''), NULLIF(TRIM(pi.barcode), '')) AS sku"
+    if has_line_unit:
+        unit_expr = "COALESCE(NULLIF(TRIM(poi.unit), ''), NULLIF(TRIM(pi.packaging), ''), 'Unité') AS unit"
     items_cur = conn.execute(
-        """
+        f"""
         SELECT poi.id,
                poi.purchase_order_id,
                poi.pharmacy_item_id,
                poi.quantity_ordered,
                poi.quantity_received,
                pi.name AS pharmacy_item_name,
-               NULLIF(TRIM(pi.barcode), '') AS sku,
-               COALESCE(NULLIF(TRIM(pi.packaging), ''), 'Unité') AS unit
+               {sku_expr},
+               {unit_expr}
         FROM pharmacy_purchase_order_items AS poi
         JOIN pharmacy_items AS pi ON pi.id = poi.pharmacy_item_id
         WHERE poi.purchase_order_id = ?
@@ -11541,23 +11665,30 @@ def create_pharmacy_purchase_order(
                 (payload.supplier_id, status, payload.note),
             )
             order_id = cur.lastrowid
+            has_line_sku = _table_has_column(conn, "pharmacy_purchase_order_items", "sku")
+            has_line_unit = _table_has_column(conn, "pharmacy_purchase_order_items", "unit")
             for item_id, quantity in aggregated.items():
-                item_cur = conn.execute(
-                    "SELECT 1 FROM pharmacy_items WHERE id = ?", (item_id,)
-                )
-                if item_cur.fetchone() is None:
+                item_row = conn.execute(
+                    "SELECT barcode, packaging, dosage FROM pharmacy_items WHERE id = ?", (item_id,)
+                ).fetchone()
+                if item_row is None:
                     raise ValueError("Article pharmaceutique introuvable")
+                columns = [
+                    "purchase_order_id",
+                    "pharmacy_item_id",
+                    "quantity_ordered",
+                    "quantity_received",
+                ]
+                values: list[object] = [order_id, item_id, quantity, 0]
+                if has_line_sku:
+                    columns.append("sku")
+                    values.append(item_row["barcode"] if item_row["barcode"] else None)
+                if has_line_unit:
+                    columns.append("unit")
+                    values.append(item_row["packaging"] or item_row["dosage"])
                 conn.execute(
-                    """
-                    INSERT INTO pharmacy_purchase_order_items (
-                        purchase_order_id,
-                        pharmacy_item_id,
-                        quantity_ordered,
-                        quantity_received
-                    )
-                    VALUES (?, ?, ?, 0)
-                    """,
-                    (order_id, item_id, quantity),
+                    f"INSERT INTO pharmacy_purchase_order_items ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                    values,
                 )
             conn.commit()
         except Exception:
