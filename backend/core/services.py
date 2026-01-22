@@ -2047,6 +2047,9 @@ def list_link_categories(module: str, *, include_inactive: bool = True) -> list[
     ensure_database_ready()
     module = _validate_link_module(module)
     with db.get_stock_connection() as conn:
+        if not _table_exists(conn, "link_categories"):
+            _ensure_link_tables(conn)
+        _seed_default_link_categories(conn)
         rows = _fetch_link_categories(conn, module, active_only=not include_inactive)
         return [
             models.LinkCategory(
@@ -5665,25 +5668,14 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
             (message_id,),
         ).fetchone()
         created_at = created_row["created_at"] if created_row else None
-        archive_recipients = [
-            row["recipient_username"]
-            for row in conn.execute(
-                """
-                SELECT recipient_username
-                FROM message_recipients
-                WHERE message_id = ?
-                ORDER BY recipient_username COLLATE NOCASE
-                """,
-                (message_id,),
-            ).fetchall()
-        ]
+        archive_recipients = sorted(valid_recipients, key=str.casefold)
 
     _archive_message_safe(
         message_id=message_id,
         created_at=created_at,
         sender_username=sender.username,
         sender_role=sender.role,
-        recipients=archive_recipients or valid_recipients,
+        recipients=archive_recipients,
         category=category,
         content=content,
     )
@@ -10681,7 +10673,12 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT * FROM pharmacy_items ORDER BY name COLLATE NOCASE")
         rows = cur.fetchall()
-        supplier_ids = sorted({row["supplier_id"] for row in rows if row["supplier_id"] is not None})
+        has_supplier_id = _table_has_column(conn, "pharmacy_items", "supplier_id")
+        supplier_ids = (
+            sorted({row["supplier_id"] for row in rows if row["supplier_id"] is not None})
+            if has_supplier_id
+            else []
+        )
         suppliers_by_id: dict[int, sqlite3.Row] = {}
         if supplier_ids:
             placeholders = ", ".join("?" for _ in supplier_ids)
@@ -10702,15 +10699,19 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 expiration_date=row["expiration_date"],
                 location=row["location"],
                 category_id=row["category_id"],
-                supplier_id=row["supplier_id"] if "supplier_id" in row.keys() else None,
+                supplier_id=row["supplier_id"] if has_supplier_id else None,
                 supplier_name=(
                     suppliers_by_id.get(row["supplier_id"])["name"]
-                    if row["supplier_id"] is not None and row["supplier_id"] in suppliers_by_id
+                    if has_supplier_id
+                    and row["supplier_id"] is not None
+                    and row["supplier_id"] in suppliers_by_id
                     else None
                 ),
                 supplier_email=(
                     suppliers_by_id.get(row["supplier_id"])["email"]
-                    if row["supplier_id"] is not None and row["supplier_id"] in suppliers_by_id
+                    if has_supplier_id
+                    and row["supplier_id"] is not None
+                    and row["supplier_id"] in suppliers_by_id
                     else None
                 ),
                 extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
