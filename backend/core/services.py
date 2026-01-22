@@ -3643,9 +3643,23 @@ def _prepare_vehicle_item_sku(
     return None, False
 
 
-def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row) -> None:
+def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row) -> bool:
     remise_item_id = source["id"]
-    sku_value, sku_relinked = _prepare_vehicle_item_sku(conn, source["sku"], remise_item_id)
+    raw_sku = source["sku"]
+    normalized_sku = raw_sku.strip() if isinstance(raw_sku, str) else ""
+    if not normalized_sku:
+        site_key = db.get_current_site_key()
+        logger.warning(
+            "[SYNC] skipping remise item without sku remise_item_id=%s name=%s site_key=%s",
+            remise_item_id,
+            source["name"],
+            site_key,
+        )
+        return True
+
+    sku_value, sku_relinked = _prepare_vehicle_item_sku(
+        conn, normalized_sku, remise_item_id
+    )
 
     existing_rows = conn.execute(
         "SELECT id, category_id FROM vehicle_items WHERE remise_item_id = ?",
@@ -3658,6 +3672,8 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
                 (remise_item_id,),
             ).fetchall()
         if not existing_rows:
+            if sku_value is None:
+                return False
             conn.execute(
                 """
                 INSERT INTO vehicle_items (
@@ -3676,7 +3692,7 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
                 """,
                 (source["name"], sku_value, source["size"], source["supplier_id"], remise_item_id),
             )
-            return
+            return False
 
     template_assignments = ["name = ?", "size = ?"]
     template_params: list[object] = [source["name"], source["size"]]
@@ -3699,16 +3715,17 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
         assigned_params,
     )
 
-    conn.execute(
-        "UPDATE vehicle_items SET sku = ? WHERE remise_item_id = ? AND category_id IS NULL",
-        (sku_value, remise_item_id),
-    )
+    if sku_value is not None:
+        conn.execute(
+            "UPDATE vehicle_items SET sku = ? WHERE remise_item_id = ? AND category_id IS NULL",
+            (sku_value, remise_item_id),
+        )
 
     template_row = conn.execute(
         "SELECT id FROM vehicle_items WHERE remise_item_id = ? AND category_id IS NULL",
         (remise_item_id,),
     ).fetchone()
-    if template_row is None:
+    if template_row is None and sku_value is not None:
         conn.execute(
             """
             INSERT INTO vehicle_items (
@@ -3727,6 +3744,7 @@ def _sync_vehicle_item_from_remise(conn: sqlite3.Connection, source: sqlite3.Row
             """,
             (source["name"], sku_value, source["size"], source["supplier_id"], remise_item_id),
         )
+    return False
 
 
 def _sync_vehicle_inventory_with_remise(conn: sqlite3.Connection) -> None:
@@ -3734,9 +3752,17 @@ def _sync_vehicle_inventory_with_remise(conn: sqlite3.Connection) -> None:
         "SELECT id, name, sku, supplier_id, size FROM remise_items"
     ).fetchall()
     seen_ids: list[int] = []
+    skipped = 0
     for row in remise_rows:
-        _sync_vehicle_item_from_remise(conn, row)
+        if _sync_vehicle_item_from_remise(conn, row):
+            skipped += 1
         seen_ids.append(row["id"])
+    if skipped:
+        logger.warning(
+            "[SYNC] skipped %s remise items without sku site_key=%s",
+            skipped,
+            db.get_current_site_key(),
+        )
     if seen_ids:
         placeholders = ", ".join("?" for _ in seen_ids)
         conn.execute(

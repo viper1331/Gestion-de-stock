@@ -1,3 +1,4 @@
+import logging
 import pytest
 from uuid import uuid4
 
@@ -69,3 +70,31 @@ def test_assign_from_remise_rejects_missing_view(temp_backend_db):
                 quantity=1,
             )
         )
+
+
+def test_sync_skips_remise_item_without_sku(temp_backend_db, caplog):
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            "INSERT INTO remise_items (name, sku) VALUES (?, ?)",
+            ("Sans SKU", ""),
+        )
+        remise_row = conn.execute(
+            "SELECT id FROM remise_items WHERE name = ?",
+            ("Sans SKU",),
+        ).fetchone()
+        assert remise_row is not None
+        remise_item_id = remise_row["id"]
+
+        with caplog.at_level(logging.WARNING):
+            services._sync_vehicle_inventory_with_remise(conn)
+
+        synced = conn.execute(
+            "SELECT 1 FROM vehicle_items WHERE remise_item_id = ?",
+            (remise_item_id,),
+        ).fetchone()
+
+    assert synced is None
+    assert any(
+        "[SYNC] skipping remise item without sku" in record.message
+        for record in caplog.records
+    )

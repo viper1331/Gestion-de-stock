@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 _DEFAULT_OUTBOX_INTERVAL_SECONDS = 3
 _DEFAULT_OUTBOX_BATCH_SIZE = 20
+_DB_READY_CHECKED = False
 
 
 @dataclass(frozen=True)
@@ -65,6 +66,14 @@ def ensure_email_delivery_ready() -> None:
     if smtp_required:
         raise RuntimeError(message)
     logger.error(message)
+
+
+def _ensure_db_ready_once() -> None:
+    global _DB_READY_CHECKED
+    if _DB_READY_CHECKED:
+        return
+    services.ensure_database_ready()
+    _DB_READY_CHECKED = True
 
 
 def enqueue_email(
@@ -184,7 +193,7 @@ def build_purchase_order_email(
 
 
 def run_outbox_once(max_batch: int | None = None) -> OutboxRunResult:
-    services.ensure_database_ready()
+    _ensure_db_ready_once()
     batch_size = max_batch or _DEFAULT_OUTBOX_BATCH_SIZE
     sent = 0
     failed = 0
