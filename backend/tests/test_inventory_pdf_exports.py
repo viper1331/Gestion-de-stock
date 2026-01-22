@@ -11,6 +11,7 @@ if str(ROOT) not in sys.path:
 
 from backend.app import app
 from backend.core import db, models, security, services
+from backend.tests.auth_helpers import login_headers
 
 
 client = TestClient(app)
@@ -37,15 +38,7 @@ def _create_user(username: str, password: str, role: str = "user") -> int:
 
 
 def _login_headers(username: str, password: str) -> dict[str, str]:
-    response = client.post(
-        "/auth/login",
-        json={"username": username, "password": password, "remember_me": False},
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    assert payload.get("access_token"), payload
-    token = payload["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    return login_headers(client, username, password)
 
 
 def _grant_module_permission(user_id: int, module: str, *, can_view: bool) -> None:

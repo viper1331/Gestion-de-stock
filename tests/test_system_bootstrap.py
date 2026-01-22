@@ -6,8 +6,9 @@ from pathlib import Path
 import pytest
 from fastapi.testclient import TestClient
 
-from backend.core import db, security, services
+from backend.core import db, services
 from backend.core.system_config import rebuild_cors_middleware
+from backend.tests.auth_helpers import login_headers
 
 
 @pytest.fixture()
@@ -25,9 +26,8 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
         yield client_instance
 
 
-def _admin_auth_headers() -> dict[str, str]:
-    token = security.create_access_token("admin", {"role": "admin"})
-    return {"Authorization": f"Bearer {token}"}
+def _admin_auth_headers(client: TestClient) -> dict[str, str]:
+    return login_headers(client, "admin", "admin123")
 
 
 def test_cors_preflight_allows_login(client: TestClient) -> None:
@@ -96,7 +96,7 @@ def test_core_init_creates_backup_settings_table(
 
 
 def test_backup_settings_and_link_categories_endpoints(client: TestClient) -> None:
-    headers = {**_admin_auth_headers(), "X-Site-Key": "GSM"}
+    headers = {**_admin_auth_headers(client), "X-Site-Key": "GSM"}
 
     response = client.put(
         "/admin/backup/settings",

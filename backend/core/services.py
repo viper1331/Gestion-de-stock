@@ -14,6 +14,7 @@ import secrets
 import shutil
 import threading
 import time
+import unicodedata
 from collections import defaultdict
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -4945,6 +4946,26 @@ def _normalize_email(value: str) -> str:
     return value.strip().lower()
 
 
+def _generate_pending_username(display_name: str | None) -> str:
+    base_source = display_name or "user"
+    normalized = unicodedata.normalize("NFKD", base_source)
+    ascii_only = "".join(char for char in normalized if not unicodedata.combining(char))
+    slug = re.sub(r"[^a-zA-Z0-9]+", "-", ascii_only).strip("-").lower()
+    if not slug:
+        slug = "user"
+    with db.get_users_connection() as conn:
+        for _ in range(50):
+            suffix = secrets.token_hex(2)
+            candidate = f"pending-{slug}-{suffix}"
+            exists = conn.execute(
+                "SELECT 1 FROM users WHERE username = ?",
+                (candidate,),
+            ).fetchone()
+            if not exists:
+                return candidate
+    raise ValueError("Impossible de générer un identifiant unique")
+
+
 _RESET_TOKEN_PEPPER_CACHE: str | None = None
 
 
@@ -5644,13 +5665,25 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
             (message_id,),
         ).fetchone()
         created_at = created_row["created_at"] if created_row else None
+        archive_recipients = [
+            row["recipient_username"]
+            for row in conn.execute(
+                """
+                SELECT recipient_username
+                FROM message_recipients
+                WHERE message_id = ?
+                ORDER BY recipient_username COLLATE NOCASE
+                """,
+                (message_id,),
+            ).fetchall()
+        ]
 
     _archive_message_safe(
         message_id=message_id,
         created_at=created_at,
         sender_username=sender.username,
         sender_role=sender.role,
-        recipients=valid_recipients,
+        recipients=archive_recipients or valid_recipients,
         category=category,
         content=content,
     )
@@ -8218,6 +8251,12 @@ def delete_supplier(site_key: str | int | None, supplier_id: int) -> None:
         conn.commit()
 
 
+SUPPLIER_NOT_FOUND_ACTIVE_SITE_MESSAGE = "Fournisseur introuvable sur le site actif."
+SUPPLIER_EMAIL_MISSING_MESSAGE = (
+    "Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi."
+)
+
+
 class SupplierResolutionError(ValueError):
     def __init__(self, code: str, message: str) -> None:
         super().__init__(message)
@@ -8236,7 +8275,7 @@ def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
         if row is None:
             raise SupplierResolutionError(
                 "SUPPLIER_NOT_FOUND",
-                "Fournisseur introuvable",
+                SUPPLIER_NOT_FOUND_ACTIVE_SITE_MESSAGE,
             )
         if "is_active" in row.keys() and not row["is_active"]:
             raise SupplierResolutionError(
@@ -8301,7 +8340,7 @@ def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> model
     if supplier is None:
         raise SupplierResolutionError(
             "SUPPLIER_NOT_FOUND",
-            "Fournisseur introuvable",
+            SUPPLIER_NOT_FOUND_ACTIVE_SITE_MESSAGE,
         )
     return supplier
 
@@ -8309,7 +8348,7 @@ def get_supplier_for_order(site_id: str | int, supplier_id: int | None) -> model
 def require_supplier_email(supplier: models.Supplier) -> str:
     raw_email = str(supplier.email or "").strip()
     if not raw_email:
-        raise SupplierResolutionError("SUPPLIER_EMAIL_MISSING", "Email fournisseur manquant")
+        raise SupplierResolutionError("SUPPLIER_EMAIL_MISSING", SUPPLIER_EMAIL_MISSING_MESSAGE)
     normalized = _normalize_email(raw_email)
     if len(normalized) < 5 or "@" not in normalized:
         raise SupplierResolutionError("SUPPLIER_EMAIL_INVALID", "Email fournisseur invalide")

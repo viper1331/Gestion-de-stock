@@ -1,9 +1,7 @@
 import sys
 from pathlib import Path
-import urllib.parse
 from unittest.mock import patch
 
-import pyotp
 from fastapi.testclient import TestClient
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -11,7 +9,8 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from backend.app import app
-from backend.core import db, security, services, two_factor_crypto
+from backend.core import db, security, services
+from backend.tests.auth_helpers import login_headers
 
 client = TestClient(app)
 
@@ -38,56 +37,30 @@ def _reset_tables() -> None:
         conn.commit()
 
 
-def _create_user(username: str, password: str, *, role: str, email: str) -> None:
+def _create_user(
+    username: str, password: str, *, role: str, email: str | None = None
+) -> str:
     services.ensure_database_ready()
+    resolved_email = email or f"{username}@example.com"
     with db.get_users_connection() as conn:
         conn.execute("DELETE FROM users WHERE username = ?", (username,))
+        conn.execute(
+            "DELETE FROM users WHERE email_normalized = ?",
+            (resolved_email.lower(),),
+        )
         conn.execute(
             """
             INSERT INTO users (username, email, email_normalized, password, role, is_active, status)
             VALUES (?, ?, ?, ?, ?, 1, 'active')
             """,
-            (username, email, email.lower(), security.hash_password(password), role),
+            (username, resolved_email, resolved_email.lower(), security.hash_password(password), role),
         )
         conn.commit()
+    return resolved_email
 
 
 def _login_headers(username: str, password: str) -> dict[str, str]:
-    response = client.post(
-        "/auth/login",
-        json={"username": username, "password": password, "remember_me": False},
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    if payload.get("status") == "totp_enroll_required":
-        parsed = urllib.parse.urlparse(payload["otpauth_uri"])
-        secret = urllib.parse.parse_qs(parsed.query)["secret"][0]
-        code = pyotp.TOTP(secret).now()
-        confirm = client.post(
-            "/auth/totp/enroll/confirm",
-            json={"challenge_token": payload["challenge_token"], "code": code},
-        )
-        assert confirm.status_code == 200, confirm.text
-        token = confirm.json()["access_token"]
-        return {"Authorization": f"Bearer {token}"}
-    if payload.get("status") == "2fa_required" and payload.get("method") == "totp":
-        with db.get_users_connection() as conn:
-            row = conn.execute(
-                "SELECT two_factor_secret_enc FROM users WHERE username = ?",
-                (username,),
-            ).fetchone()
-        assert row and row["two_factor_secret_enc"], "Missing 2FA secret for user"
-        secret = two_factor_crypto.decrypt_secret(str(row["two_factor_secret_enc"]))
-        code = pyotp.TOTP(secret).now()
-        verify = client.post(
-            "/auth/totp/verify",
-            json={"challenge_token": payload["challenge_id"], "code": code},
-        )
-        assert verify.status_code == 200, verify.text
-        token = verify.json()["access_token"]
-        return {"Authorization": f"Bearer {token}"}
-    token = payload["access_token"]
-    return {"Authorization": f"Bearer {token}"}
+    return login_headers(client, username, password)
 
 
 def _create_supplier(headers: dict[str, str], *, name: str, email: str | None, module: str) -> int:
@@ -126,7 +99,7 @@ def _create_pharmacy_item() -> int:
 
 def test_send_remise_order_uses_supplier_email() -> None:
     _reset_tables()
-    _create_user("email_send_admin", "password", role="admin", email="admin@example.com")
+    _create_user("email_send_admin", "password", role="admin")
     headers = _login_headers("email_send_admin", "password")
 
     supplier_id = _create_supplier(
@@ -164,7 +137,7 @@ def test_send_remise_order_uses_supplier_email() -> None:
 
 def test_send_pharmacy_order_uses_supplier_email() -> None:
     _reset_tables()
-    _create_user("email_send_admin", "password", role="admin", email="admin@example.com")
+    _create_user("email_send_admin", "password", role="admin")
     headers = _login_headers("email_send_admin", "password")
 
     supplier_id = _create_supplier(
@@ -201,7 +174,7 @@ def test_send_pharmacy_order_uses_supplier_email() -> None:
 
 def test_send_order_supplier_deleted_returns_error() -> None:
     _reset_tables()
-    _create_user("email_send_admin", "password", role="admin", email="admin@example.com")
+    _create_user("email_send_admin", "password", role="admin")
     headers = _login_headers("email_send_admin", "password")
 
     supplier_id = _create_supplier(
@@ -234,12 +207,12 @@ def test_send_order_supplier_deleted_returns_error() -> None:
         json={},
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "Fournisseur introuvable"
+    assert response.json()["detail"] == "Fournisseur introuvable sur le site actif."
 
 
 def test_send_order_supplier_missing_email_returns_error() -> None:
     _reset_tables()
-    _create_user("email_send_admin", "password", role="admin", email="admin@example.com")
+    _create_user("email_send_admin", "password", role="admin")
     headers = _login_headers("email_send_admin", "password")
 
     supplier_id = _create_supplier(
@@ -268,4 +241,7 @@ def test_send_order_supplier_missing_email_returns_error() -> None:
         headers=headers,
     )
     assert response.status_code == 400
-    assert response.json()["detail"] == "Email fournisseur manquant"
+    assert (
+        response.json()["detail"]
+        == "Email fournisseur manquant. Ajoutez un email au fournisseur pour activer l'envoi."
+    )
