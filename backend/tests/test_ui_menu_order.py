@@ -1,13 +1,12 @@
 from __future__ import annotations
 
 from pathlib import Path
-import urllib.parse
 
 from fastapi.testclient import TestClient
-import pyotp
 
 from backend.app import app
-from backend.core import db, security, services, two_factor_crypto
+from backend.core import db, security, services
+from backend.tests.auth_helpers import login_token
 
 
 def _create_user(username: str, role: str = "user") -> None:
@@ -49,38 +48,7 @@ def _init_test_dbs(tmp_path: Path, monkeypatch) -> None:
 
 def _login_token(username: str, password: str) -> str:
     client = TestClient(app)
-    response = client.post(
-        "/auth/login",
-        json={"username": username, "password": password, "remember_me": False},
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    if payload.get("status") == "totp_enroll_required":
-        parsed = urllib.parse.urlparse(payload["otpauth_uri"])
-        secret = urllib.parse.parse_qs(parsed.query)["secret"][0]
-        code = pyotp.TOTP(secret).now()
-        confirm = client.post(
-            "/auth/totp/enroll/confirm",
-            json={"challenge_token": payload["challenge_token"], "code": code},
-        )
-        assert confirm.status_code == 200, confirm.text
-        return confirm.json()["access_token"]
-    if payload.get("status") == "2fa_required" and payload.get("method") == "totp":
-        with db.get_users_connection() as conn:
-            row = conn.execute(
-                "SELECT two_factor_secret_enc FROM users WHERE username = ?",
-                (username,),
-            ).fetchone()
-        assert row and row["two_factor_secret_enc"], "Missing 2FA secret for user"
-        secret = two_factor_crypto.decrypt_secret(str(row["two_factor_secret_enc"]))
-        code = pyotp.TOTP(secret).now()
-        verify = client.post(
-            "/auth/totp/verify",
-            json={"challenge_token": payload["challenge_id"], "code": code},
-        )
-        assert verify.status_code == 200, verify.text
-        return verify.json()["access_token"]
-    raise AssertionError(f"Unexpected login response: {payload}")
+    return login_token(client, username, password)
 
 
 def test_save_menu_order_roundtrip_per_user_site(tmp_path, monkeypatch) -> None:

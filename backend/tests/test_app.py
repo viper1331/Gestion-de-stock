@@ -17,16 +17,15 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
-import pyotp
-import urllib.parse
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
 from backend.app import app
-from backend.core import db, models, security, services, two_factor_crypto
+from backend.core import db, models, security, services
 from backend.core.storage import MEDIA_ROOT
+from backend.tests.auth_helpers import login_headers
 from backend.services import barcode as barcode_service, update_service
 from backend.services.backup_manager import create_backup_archive, restore_backup_from_zip
 from backend.services.backup_scheduler import backup_scheduler
@@ -99,41 +98,7 @@ def _create_user(username: str, password: str, role: str = "user") -> int:
 
 
 def _login_headers(username: str, password: str) -> dict[str, str]:
-    response = client.post(
-        "/auth/login",
-        json={"username": username, "password": password, "remember_me": False},
-    )
-    assert response.status_code == 200, response.text
-    payload = response.json()
-    if payload.get("status") == "totp_enroll_required":
-        parsed = urllib.parse.urlparse(payload["otpauth_uri"])
-        secret = urllib.parse.parse_qs(parsed.query)["secret"][0]
-        code = pyotp.TOTP(secret).now()
-        confirm = client.post(
-            "/auth/totp/enroll/confirm",
-            json={"challenge_token": payload["challenge_token"], "code": code},
-        )
-        assert confirm.status_code == 200, confirm.text
-        token = confirm.json()["access_token"]
-        return {"Authorization": f"Bearer {token}"}
-    if payload.get("status") == "2fa_required" and payload.get("method") == "totp":
-        with db.get_users_connection() as conn:
-            row = conn.execute(
-                "SELECT two_factor_secret_enc FROM users WHERE username = ?",
-                (username,),
-            ).fetchone()
-        assert row and row["two_factor_secret_enc"], "Missing 2FA secret for user"
-        secret = two_factor_crypto.decrypt_secret(str(row["two_factor_secret_enc"]))
-        code = pyotp.TOTP(secret).now()
-        verify = client.post(
-            "/auth/totp/verify",
-            json={"challenge_token": payload["challenge_id"], "code": code},
-        )
-        assert verify.status_code == 200, verify.text
-        token = verify.json()["access_token"]
-        return {"Authorization": f"Bearer {token}"}
-    raise AssertionError(f"Unexpected login response: {payload}")
-    return {"Authorization": f"Bearer {token}"}
+    return login_headers(client, username, password)
 
 
 def _configure_barcode_assets(

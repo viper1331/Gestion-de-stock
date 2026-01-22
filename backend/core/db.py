@@ -323,6 +323,7 @@ def init_databases() -> None:
             _ensure_user_session_columns(conn)
             _ensure_two_factor_columns(conn)
             _ensure_two_factor_challenge_columns(conn)
+            _ensure_user_table_prefs_schema(conn)
         _init_core_database()
         _sync_user_site_preferences()
         for site_key in SITE_KEYS:
@@ -330,6 +331,7 @@ def init_databases() -> None:
             site_path.parent.mkdir(parents=True, exist_ok=True)
             with _managed_connection(site_path) as conn:
                 _init_stock_schema(conn)
+        _ensure_stock_db_path_alias()
 
 
 def _init_core_database() -> None:
@@ -674,6 +676,56 @@ def _ensure_two_factor_challenge_columns(conn: sqlite3.Connection) -> None:
         )
     if "secret_enc" not in columns:
         conn.execute("ALTER TABLE two_factor_challenges ADD COLUMN secret_enc TEXT")
+
+
+def _ensure_user_table_prefs_schema(conn: sqlite3.Connection) -> None:
+    try:
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(user_table_prefs)").fetchall()
+        }
+    except sqlite3.OperationalError:
+        return
+    if not columns or "site_key" in columns:
+        return
+    logger.info("[DB] Migration user_table_prefs pour multi-sites")
+    conn.execute("ALTER TABLE user_table_prefs RENAME TO user_table_prefs_old")
+    conn.execute(
+        """
+        CREATE TABLE user_table_prefs (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            user_id INTEGER NOT NULL,
+            site_key TEXT NOT NULL,
+            table_key TEXT NOT NULL,
+            prefs_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(user_id, site_key, table_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO user_table_prefs (user_id, site_key, table_key, prefs_json, updated_at)
+        SELECT user_id, ?, table_key, prefs_json, updated_at
+        FROM user_table_prefs_old
+        """,
+        (DEFAULT_SITE_KEY,),
+    )
+    conn.execute("DROP TABLE user_table_prefs_old")
+
+
+def _ensure_stock_db_path_alias() -> None:
+    if STOCK_DB_PATH.exists():
+        return
+    STOCK_DB_PATH.parent.mkdir(parents=True, exist_ok=True)
+    jll_path = get_site_db_path(DEFAULT_SITE_KEY)
+    if jll_path.exists() and jll_path != STOCK_DB_PATH:
+        try:
+            STOCK_DB_PATH.symlink_to(jll_path)
+            return
+        except OSError:
+            logger.warning("[DB] Impossible de créer un alias vers %s", jll_path)
+    with _managed_connection(STOCK_DB_PATH) as conn:
+        _init_stock_schema(conn)
 
 
 def _sync_user_site_preferences() -> None:
