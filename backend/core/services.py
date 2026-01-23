@@ -630,7 +630,7 @@ def _resolve_pharmacy_supplier_id(
     row: sqlite3.Row,
     extra: dict[str, Any],
 ) -> int | None:
-    supplier_id = row["supplier_id"] if "supplier_id" in row.keys() else None
+    supplier_id = _row_get(row, "supplier_id")
     if supplier_id is None:
         supplier_id = extra.get("supplier_id") if isinstance(extra.get("supplier_id"), int) else None
     if supplier_id is None:
@@ -641,11 +641,12 @@ def _resolve_pharmacy_supplier_id(
     return supplier_id
 
 
+def _row_has(row: sqlite3.Row, key: str) -> bool:
+    return hasattr(row, "keys") and key in row.keys()
+
+
 def _row_get(row: sqlite3.Row, key: str, default: Any = None) -> Any:
-    try:
-        return row[key]
-    except (KeyError, IndexError):
-        return default
+    return row[key] if _row_has(row, key) else default
 
 
 def _resolve_remise_supplier_id(
@@ -1100,11 +1101,11 @@ def _resolve_variant_label(
 
 
 def _is_supplier_inactive(row: sqlite3.Row) -> bool:
-    if "is_active" in row.keys() and not row["is_active"]:
+    if _row_has(row, "is_active") and not row["is_active"]:
         return True
-    if "is_deleted" in row.keys() and row["is_deleted"]:
+    if _row_has(row, "is_deleted") and row["is_deleted"]:
         return True
-    if "deleted_at" in row.keys() and row["deleted_at"]:
+    if _row_has(row, "deleted_at") and row["deleted_at"]:
         return True
     return False
 
@@ -1114,16 +1115,16 @@ def _resolve_suggestion_supplier_payload(
 ) -> tuple[str | None, str | None, str]:
     if row is None:
         return None, None, "missing"
-    display = row["name"]
+    display = _row_get(row, "name")
     if _is_supplier_inactive(row):
         return display, None, "inactive"
-    email = str(row["email"] or "").strip()
+    email = str(_row_get(row, "email") or "").strip()
     if not email:
         return display, None, "no_email"
     normalized_email = _normalize_email(email)
     if len(normalized_email) < 5 or "@" not in normalized_email:
         return display, None, "no_email"
-    return display, row["email"], "ok"
+    return display, _row_get(row, "email"), "ok"
 
 
 def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
@@ -1163,8 +1164,15 @@ def migrate_legacy_suppliers_to_site(site_key: str | int | None) -> None:
             site_count = site.execute("SELECT COUNT(1) FROM suppliers").fetchone()[0]
             if legacy_count <= 0 or site_count > 0:
                 return
+            legacy_columns = {
+                row["name"] for row in legacy.execute("PRAGMA table_info(suppliers)").fetchall()
+            }
+            contact_expr = "contact_name" if "contact_name" in legacy_columns else "NULL AS contact_name"
+            phone_expr = "phone" if "phone" in legacy_columns else "NULL AS phone"
+            address_expr = "address" if "address" in legacy_columns else "NULL AS address"
+            email_expr = "email" if "email" in legacy_columns else "NULL AS email"
             rows = legacy.execute(
-                "SELECT id, name, contact_name, phone, email, address FROM suppliers"
+                f"SELECT id, name, {contact_expr}, {phone_expr}, {email_expr}, {address_expr} FROM suppliers"
             ).fetchall()
             if rows:
                 site.executemany(
@@ -1176,10 +1184,10 @@ def migrate_legacy_suppliers_to_site(site_key: str | int | None) -> None:
                         (
                             row["id"],
                             row["name"],
-                            row["contact_name"],
-                            row["phone"],
-                            row["email"],
-                            row["address"],
+                            _row_get(row, "contact_name"),
+                            _row_get(row, "phone"),
+                            _row_get(row, "email"),
+                            _row_get(row, "address"),
                         )
                         for row in rows
                     ],
@@ -3229,6 +3237,16 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             ON pharmacy_items(supplier_id)
             """
         )
+
+        if _table_exists(conn, "suppliers"):
+            suppliers_info = execute("PRAGMA table_info(suppliers)").fetchall()
+            suppliers_columns = {row["name"] for row in suppliers_info}
+            if "contact_name" not in suppliers_columns:
+                execute("ALTER TABLE suppliers ADD COLUMN contact_name TEXT")
+            if "phone" not in suppliers_columns:
+                execute("ALTER TABLE suppliers ADD COLUMN phone TEXT")
+            if "address" not in suppliers_columns:
+                execute("ALTER TABLE suppliers ADD COLUMN address TEXT")
 
         pharmacy_po_info = execute("PRAGMA table_info(pharmacy_purchase_orders)").fetchall()
         pharmacy_po_columns = {row["name"] for row in pharmacy_po_info}
@@ -5716,10 +5734,9 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
                 """
                 SELECT username
                 FROM users
-                WHERE status = 'active' AND is_active = 1 AND username != ?
+                WHERE status = 'active' AND is_active = 1
                 ORDER BY username COLLATE NOCASE
                 """,
-                (sender.username,),
             )
             recipients = [row["username"] for row in cur.fetchall()]
         else:
@@ -5730,13 +5747,16 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
             raise ValueError("Aucun destinataire sélectionné")
 
         placeholders = ", ".join("?" for _ in recipients)
-        valid_params = [*recipients, sender.username]
+        exclude_sender_clause = "" if payload.broadcast else "AND username != ?"
+        valid_params: list[str] = [*recipients]
+        if not payload.broadcast:
+            valid_params.append(sender.username)
         cur = conn.execute(
             f"""
             SELECT username
             FROM users
             WHERE status = 'active' AND is_active = 1 AND username IN ({placeholders})
-              AND username != ?
+              {exclude_sender_clause}
             """,
             valid_params,
         )
@@ -5768,25 +5788,27 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
             (message_id,),
         ).fetchone()
         created_at = created_row["created_at"] if created_row else None
-        recipients_rows = conn.execute(
-            """
-            SELECT recipient_username
-            FROM message_recipients
-            WHERE message_id = ?
-            ORDER BY recipient_username COLLATE NOCASE
-            """,
-            (message_id,),
-        ).fetchall()
-        archive_recipients = [
-            row["recipient_username"] for row in recipients_rows
-        ] or sorted(valid_recipients, key=str.casefold)
+        if payload.broadcast:
+            resolved_recipient_usernames = [
+                row["username"]
+                for row in conn.execute(
+                    """
+                    SELECT username
+                    FROM users
+                    WHERE status = 'active' AND is_active = 1
+                    ORDER BY username COLLATE NOCASE
+                    """
+                ).fetchall()
+            ]
+        else:
+            resolved_recipient_usernames = sorted(valid_recipients, key=str.casefold)
 
     _archive_message_safe(
         message_id=message_id,
         created_at=created_at,
         sender_username=sender.username,
         sender_role=sender.role,
-        recipients=archive_recipients,
+        recipients=resolved_recipient_usernames,
         category=category,
         content=content,
     )
@@ -8259,11 +8281,11 @@ def list_suppliers(
             suppliers.append(
                 models.Supplier(
                     id=row["id"],
-                    name=row["name"],
-                    contact_name=row["contact_name"],
-                    phone=row["phone"],
-                    email=row["email"],
-                    address=row["address"],
+                    name=_row_get(row, "name", ""),
+                    contact_name=_row_get(row, "contact_name"),
+                    phone=_row_get(row, "phone"),
+                    email=_row_get(row, "email"),
+                    address=_row_get(row, "address"),
                     modules=modules,
                 )
             )
@@ -8285,11 +8307,11 @@ def get_supplier(site_key: str | int | None, supplier_id: int) -> models.Supplie
         modules = modules_map.get(row["id"]) or ["suppliers"]
         return models.Supplier(
             id=row["id"],
-            name=row["name"],
-            contact_name=row["contact_name"],
-            phone=row["phone"],
-            email=row["email"],
-            address=row["address"],
+            name=_row_get(row, "name", ""),
+            contact_name=_row_get(row, "contact_name"),
+            phone=_row_get(row, "phone"),
+            email=_row_get(row, "email"),
+            address=_row_get(row, "address"),
             modules=modules,
         )
 
@@ -8399,11 +8421,11 @@ def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
         modules = modules_map.get(row["id"]) or ["suppliers"]
         return models.Supplier(
             id=row["id"],
-            name=row["name"],
-            contact_name=row["contact_name"],
-            phone=row["phone"],
-            email=row["email"],
-            address=row["address"],
+            name=_row_get(row, "name", ""),
+            contact_name=_row_get(row, "contact_name"),
+            phone=_row_get(row, "phone"),
+            email=_row_get(row, "email"),
+            address=_row_get(row, "address"),
             modules=modules,
         )
 
@@ -8422,11 +8444,11 @@ def resolve_supplier_for_order(
     modules = modules_map.get(row["id"]) or ["suppliers"]
     return models.Supplier(
         id=row["id"],
-        name=row["name"],
-        contact_name=row["contact_name"],
-        phone=row["phone"],
-        email=row["email"],
-        address=row["address"],
+        name=_row_get(row, "name", ""),
+        contact_name=_row_get(row, "contact_name"),
+        phone=_row_get(row, "phone"),
+        email=_row_get(row, "email"),
+        address=_row_get(row, "address"),
         modules=modules,
     )
 
@@ -8525,15 +8547,15 @@ def _build_purchase_order_detail(
             quantity_ordered=item_row["quantity_ordered"],
             quantity_received=item_row["quantity_received"],
             item_name=item_row["item_name"],
-            sku=item_row["sku"],
-            unit=item_row["unit"],
+            sku=_row_get(item_row, "sku"),
+            unit=_row_get(item_row, "unit"),
         )
         for item_row in items_cur.fetchall()
     ]
     resolved_email = None
     supplier_has_email = False
     supplier_missing_reason = None
-    supplier_id = order_row["supplier_id"]
+    supplier_id = _row_get(order_row, "supplier_id")
     supplier = resolve_supplier_for_order(conn, site_key or db.get_current_site_key(), supplier_id)
     if supplier_id is None:
         supplier_missing_reason = "SUPPLIER_MISSING"
@@ -10032,8 +10054,8 @@ def _build_remise_purchase_order_detail(
             quantity_ordered=item_row["quantity_ordered"],
             quantity_received=item_row["quantity_received"],
             item_name=item_row["item_name"],
-            sku=item_row["sku"],
-            unit=item_row["unit"],
+            sku=_row_get(item_row, "sku"),
+            unit=_row_get(item_row, "unit"),
         )
         for item_row in items_cur.fetchall()
     ]
@@ -10042,7 +10064,7 @@ def _build_remise_purchase_order_detail(
     supplier_has_email = False
     supplier_missing_reason = None
     supplier_missing = False
-    supplier_id = order_row["supplier_id"]
+    supplier_id = _row_get(order_row, "supplier_id")
     supplier = None
     if supplier_id is None:
         supplier_missing_reason = "SUPPLIER_MISSING"
@@ -10104,11 +10126,11 @@ def list_remise_purchase_orders() -> list[models.RemisePurchaseOrderDetail]:
             suppliers_map = {
                 supplier_row["id"]: models.Supplier(
                     id=supplier_row["id"],
-                    name=supplier_row["name"],
-                    contact_name=supplier_row["contact_name"],
-                    phone=supplier_row["phone"],
-                    email=supplier_row["email"],
-                    address=supplier_row["address"],
+                    name=_row_get(supplier_row, "name", ""),
+                    contact_name=_row_get(supplier_row, "contact_name"),
+                    phone=_row_get(supplier_row, "phone"),
+                    email=_row_get(supplier_row, "email"),
+                    address=_row_get(supplier_row, "address"),
                     modules=modules_map.get(supplier_row["id"]) or ["suppliers"],
                 )
                 for supplier_row in supplier_rows
@@ -10151,11 +10173,11 @@ def get_remise_purchase_order(order_id: int) -> models.RemisePurchaseOrderDetail
                 suppliers_map = {
                     supplier_row["id"]: models.Supplier(
                         id=supplier_row["id"],
-                        name=supplier_row["name"],
-                        contact_name=supplier_row["contact_name"],
-                        phone=supplier_row["phone"],
-                        email=supplier_row["email"],
-                        address=supplier_row["address"],
+                        name=_row_get(supplier_row, "name", ""),
+                        contact_name=_row_get(supplier_row, "contact_name"),
+                        phone=_row_get(supplier_row, "phone"),
+                        email=_row_get(supplier_row, "email"),
+                        address=_row_get(supplier_row, "address"),
                         modules=modules_map.get(supplier_row["id"]) or ["suppliers"],
                     )
                 }
@@ -10826,9 +10848,9 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
         rows = cur.fetchall()
         supplier_ids = sorted(
             {
-                row["supplier_id"]
+                supplier_id
                 for row in rows
-                if "supplier_id" in row.keys() and row["supplier_id"] is not None
+                if (supplier_id := _row_get(row, "supplier_id")) is not None
             }
         )
         suppliers_by_id: dict[int, sqlite3.Row] = {}
@@ -10851,22 +10873,20 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 expiration_date=row["expiration_date"],
                 location=row["location"],
                 category_id=row["category_id"],
-                supplier_id=row["supplier_id"] if "supplier_id" in row.keys() else None,
+                supplier_id=_row_get(row, "supplier_id"),
                 supplier_name=(
-                    suppliers_by_id.get(row["supplier_id"])["name"]
-                    if "supplier_id" in row.keys()
-                    and row["supplier_id"] is not None
-                    and row["supplier_id"] in suppliers_by_id
+                    suppliers_by_id.get(_row_get(row, "supplier_id"))["name"]
+                    if _row_get(row, "supplier_id") is not None
+                    and _row_get(row, "supplier_id") in suppliers_by_id
                     else None
                 ),
                 supplier_email=(
-                    suppliers_by_id.get(row["supplier_id"])["email"]
-                    if "supplier_id" in row.keys()
-                    and row["supplier_id"] is not None
-                    and row["supplier_id"] in suppliers_by_id
+                    suppliers_by_id.get(_row_get(row, "supplier_id"))["email"]
+                    if _row_get(row, "supplier_id") is not None
+                    and _row_get(row, "supplier_id") in suppliers_by_id
                     else None
                 ),
-                extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
+                extra=_parse_extra_json(_row_get(row, "extra_json")),
             )
             for row in rows
         ]
@@ -11605,15 +11625,15 @@ def _build_pharmacy_purchase_order_detail(
             quantity_ordered=item_row["quantity_ordered"],
             quantity_received=item_row["quantity_received"],
             pharmacy_item_name=item_row["pharmacy_item_name"],
-            sku=item_row["sku"],
-            unit=item_row["unit"],
+            sku=_row_get(item_row, "sku"),
+            unit=_row_get(item_row, "unit"),
         )
         for item_row in items_cur.fetchall()
     ]
     resolved_email = None
     supplier_has_email = False
     supplier_missing_reason = None
-    supplier_id = order_row["supplier_id"]
+    supplier_id = _row_get(order_row, "supplier_id")
     supplier = resolve_supplier_for_order(conn, site_key or db.get_current_site_key(), supplier_id)
     if supplier_id is None:
         supplier_missing_reason = "SUPPLIER_MISSING"
