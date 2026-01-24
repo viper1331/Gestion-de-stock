@@ -1144,6 +1144,112 @@ def _table_has_column(conn: sqlite3.Connection, table_name: str, column_name: st
     return column_name in columns
 
 
+@dataclass(frozen=True)
+class _ReportModuleConfig:
+    module_key: str
+    inventory_module: str | None
+    items_table: str | None
+    movements_table: str | None
+    movement_item_column: str | None
+    orders_table: str | None
+
+
+_REPORT_MODULES: dict[str, _ReportModuleConfig] = {
+    "clothing": _ReportModuleConfig(
+        module_key="clothing",
+        inventory_module="default",
+        items_table="items",
+        movements_table="movements",
+        movement_item_column="item_id",
+        orders_table="purchase_orders",
+    ),
+    "pharmacy": _ReportModuleConfig(
+        module_key="pharmacy",
+        inventory_module="pharmacy",
+        items_table="pharmacy_items",
+        movements_table="pharmacy_movements",
+        movement_item_column="pharmacy_item_id",
+        orders_table="pharmacy_purchase_orders",
+    ),
+    "inventory_remise": _ReportModuleConfig(
+        module_key="inventory_remise",
+        inventory_module="inventory_remise",
+        items_table="remise_items",
+        movements_table="remise_movements",
+        movement_item_column="item_id",
+        orders_table="remise_purchase_orders",
+    ),
+    "vehicle_inventory": _ReportModuleConfig(
+        module_key="vehicle_inventory",
+        inventory_module="vehicle_inventory",
+        items_table="vehicle_items",
+        movements_table="vehicle_movements",
+        movement_item_column="item_id",
+        orders_table=None,
+    ),
+}
+
+
+def _resolve_report_module(module: str) -> _ReportModuleConfig | None:
+    normalized = (module or "").strip().lower()
+    return _REPORT_MODULES.get(normalized)
+
+
+def _auto_report_bucket(start: date, end: date) -> str:
+    delta_days = max(0, (end - start).days)
+    if delta_days <= 31:
+        return "day"
+    if delta_days <= 120:
+        return "week"
+    return "month"
+
+
+def _iter_report_buckets(start: date, end: date, bucket: str) -> list[date]:
+    if start > end:
+        start, end = end, start
+    if bucket == "week":
+        current = start - timedelta(days=start.weekday())
+    elif bucket == "month":
+        current = date(start.year, start.month, 1)
+    else:
+        current = start
+    buckets: list[date] = []
+    while current <= end:
+        buckets.append(current)
+        if bucket == "day":
+            current += timedelta(days=1)
+        elif bucket == "week":
+            current += timedelta(weeks=1)
+        else:
+            next_month = current.month + 1
+            year = current.year + (next_month - 1) // 12
+            month = ((next_month - 1) % 12) + 1
+            current = date(year, month, 1)
+    return buckets
+
+
+def _bucket_key(value: datetime, bucket: str) -> str:
+    target_date = value.date()
+    if bucket == "week":
+        target_date = target_date - timedelta(days=target_date.weekday())
+    elif bucket == "month":
+        target_date = date(target_date.year, target_date.month, 1)
+    return target_date.isoformat()
+
+
+def _should_include_reason(
+    reason: str | None, *, include_dotation: bool, include_adjustment: bool
+) -> bool:
+    if not reason:
+        return True
+    lowered = reason.lower()
+    if not include_dotation and "dotation" in lowered:
+        return False
+    if not include_adjustment and "ajust" in lowered:
+        return False
+    return True
+
+
 def migrate_legacy_suppliers_to_site(site_key: str | int | None) -> None:
     normalized_site_key = sites.normalize_site_key(str(site_key)) if site_key else db.DEFAULT_SITE_KEY
     if not normalized_site_key:
@@ -10487,6 +10593,352 @@ def list_collaborators() -> list[models.Collaborator]:
             )
             for row in cur.fetchall()
         ]
+
+
+def get_reports_overview(
+    module: str,
+    *,
+    start: date,
+    end: date,
+    bucket: str | None = None,
+    include_dotation: bool = True,
+    include_adjustment: bool = True,
+) -> models.ReportOverview:
+    ensure_database_ready()
+    normalized_module = (module or "").strip().lower()
+    resolved = _resolve_report_module(normalized_module)
+    start_date = _ensure_date(start)
+    end_date = _ensure_date(end)
+    if start_date > end_date:
+        start_date, end_date = end_date, start_date
+    selected_bucket = bucket or _auto_report_bucket(start_date, end_date)
+    if selected_bucket not in {"day", "week", "month"}:
+        raise ValueError("Granularité invalide")
+
+    bucket_dates = _iter_report_buckets(start_date, end_date, selected_bucket)
+    bucket_keys = [entry.isoformat() for entry in bucket_dates]
+    empty_moves = [
+        models.ReportMoveSeriesPoint(t=key, **{"in": 0, "out": 0}) for key in bucket_keys
+    ]
+    empty_net = [models.ReportNetSeriesPoint(t=key, net=0) for key in bucket_keys]
+    empty_low_stock = [
+        models.ReportLowStockSeriesPoint(t=key, count=0) for key in bucket_keys
+    ]
+    empty_orders = [
+        models.ReportOrderSeriesPoint(
+            t=key, created=0, ordered=0, partial=0, received=0, cancelled=0
+        )
+        for key in bucket_keys
+    ]
+
+    if not resolved or not resolved.items_table or not resolved.movements_table:
+        return models.ReportOverview(
+            module=normalized_module or module,
+            range=models.ReportRange(
+                start=start_date.isoformat(),
+                end=end_date.isoformat(),
+                bucket=selected_bucket,
+            ),
+            kpis=models.ReportKpis(),
+            series=models.ReportSeries(
+                moves=empty_moves, net=empty_net, low_stock=empty_low_stock, orders=empty_orders
+            ),
+            tops=models.ReportTops(),
+            data_quality=models.ReportDataQuality(),
+        )
+
+    with db.get_stock_connection() as conn:
+        if not _table_exists(conn, resolved.items_table) or not _table_exists(
+            conn, resolved.movements_table
+        ):
+            return models.ReportOverview(
+                module=normalized_module or module,
+                range=models.ReportRange(
+                    start=start_date.isoformat(),
+                    end=end_date.isoformat(),
+                    bucket=selected_bucket,
+                ),
+                kpis=models.ReportKpis(),
+                series=models.ReportSeries(
+                    moves=empty_moves,
+                    net=empty_net,
+                    low_stock=empty_low_stock,
+                    orders=empty_orders,
+                ),
+                tops=models.ReportTops(),
+                data_quality=models.ReportDataQuality(),
+            )
+
+        movement_reason_filter = ""
+        if _table_has_column(conn, resolved.movements_table, "reason"):
+            clauses: list[str] = []
+            if not include_dotation:
+                clauses.append("(reason IS NULL OR lower(reason) NOT LIKE '%dotation%')")
+            if not include_adjustment:
+                clauses.append("(reason IS NULL OR lower(reason) NOT LIKE '%ajust%')")
+            if clauses:
+                movement_reason_filter = " AND " + " AND ".join(clauses)
+
+        movement_where = (
+            "date(created_at) BETWEEN ? AND ?" + movement_reason_filter
+        )
+        totals = conn.execute(
+            f"""
+            SELECT
+                COALESCE(SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END), 0) AS in_qty,
+                COALESCE(SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END), 0) AS out_qty
+            FROM {resolved.movements_table}
+            WHERE {movement_where}
+            """,
+            (start_date.isoformat(), end_date.isoformat()),
+        ).fetchone()
+        in_qty = int(totals["in_qty"] or 0)
+        out_qty = int(totals["out_qty"] or 0)
+        net_qty = in_qty - out_qty
+
+        moves_by_bucket: dict[str, dict[str, int]] = {
+            key: {"in": 0, "out": 0, "net": 0} for key in bucket_keys
+        }
+        rows = conn.execute(
+            f"""
+            SELECT created_at, delta, reason
+            FROM {resolved.movements_table}
+            WHERE date(created_at) BETWEEN ? AND ?
+            """,
+            (start_date.isoformat(), end_date.isoformat()),
+        ).fetchall()
+        for row in rows:
+            reason = row["reason"] if "reason" in row.keys() else None
+            if not _should_include_reason(
+                reason, include_dotation=include_dotation, include_adjustment=include_adjustment
+            ):
+                continue
+            created_at = _coerce_datetime(row["created_at"])
+            bucket_key = _bucket_key(created_at, selected_bucket)
+            if bucket_key not in moves_by_bucket:
+                moves_by_bucket[bucket_key] = {"in": 0, "out": 0, "net": 0}
+            delta = int(row["delta"] or 0)
+            if delta > 0:
+                moves_by_bucket[bucket_key]["in"] += delta
+            elif delta < 0:
+                moves_by_bucket[bucket_key]["out"] += abs(delta)
+            moves_by_bucket[bucket_key]["net"] += delta
+
+        ordered_move_keys = sorted(moves_by_bucket.keys())
+        moves_series = [
+            models.ReportMoveSeriesPoint(
+                t=key, **{"in": moves_by_bucket[key]["in"], "out": moves_by_bucket[key]["out"]}
+            )
+            for key in ordered_move_keys
+        ]
+        net_series = [
+            models.ReportNetSeriesPoint(t=key, net=moves_by_bucket[key]["net"])
+            for key in ordered_move_keys
+        ]
+
+        item_columns = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({resolved.items_table})").fetchall()
+        }
+        sku_column = "sku" if "sku" in item_columns else "barcode" if "barcode" in item_columns else None
+        name_column = "name" if "name" in item_columns else None
+        sku_select = sku_column if sku_column else "''"
+        name_select = name_column if name_column else "''"
+
+        top_out_rows = conn.execute(
+            f"""
+            SELECT {name_select} AS name, {sku_select} AS sku,
+                   SUM(CASE WHEN delta < 0 THEN -delta ELSE 0 END) AS qty
+            FROM {resolved.movements_table} AS m
+            JOIN {resolved.items_table} AS i
+              ON i.id = m.{resolved.movement_item_column}
+            WHERE {movement_where} AND delta < 0
+            GROUP BY i.id, name, sku
+            ORDER BY qty DESC
+            LIMIT 5
+            """,
+            (start_date.isoformat(), end_date.isoformat()),
+        ).fetchall()
+        top_in_rows = conn.execute(
+            f"""
+            SELECT {name_select} AS name, {sku_select} AS sku,
+                   SUM(CASE WHEN delta > 0 THEN delta ELSE 0 END) AS qty
+            FROM {resolved.movements_table} AS m
+            JOIN {resolved.items_table} AS i
+              ON i.id = m.{resolved.movement_item_column}
+            WHERE {movement_where} AND delta > 0
+            GROUP BY i.id, name, sku
+            ORDER BY qty DESC
+            LIMIT 5
+            """,
+            (start_date.isoformat(), end_date.isoformat()),
+        ).fetchall()
+        top_out = [
+            models.ReportTopItem(
+                sku=str(row["sku"] or ""),
+                name=str(row["name"] or ""),
+                qty=int(row["qty"] or 0),
+            )
+            for row in top_out_rows
+        ]
+        top_in = [
+            models.ReportTopItem(
+                sku=str(row["sku"] or ""),
+                name=str(row["name"] or ""),
+                qty=int(row["qty"] or 0),
+            )
+            for row in top_in_rows
+        ]
+
+        low_stock_count = 0
+        if "low_stock_threshold" in item_columns:
+            low_stock_where = ["quantity < low_stock_threshold", "low_stock_threshold > 0"]
+            if "track_low_stock" in item_columns:
+                low_stock_where.append("track_low_stock = 1")
+            low_stock_count = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.items_table}
+                    WHERE {" AND ".join(low_stock_where)}
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+        low_stock_series = [
+            models.ReportLowStockSeriesPoint(t=key, count=low_stock_count)
+            for key in bucket_keys
+        ]
+
+        orders_series = list(empty_orders)
+        open_orders = 0
+        if resolved.orders_table and _table_exists(conn, resolved.orders_table):
+            open_orders = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.orders_table}
+                    WHERE status IN ('PENDING', 'ORDERED', 'PARTIALLY_RECEIVED')
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+            orders_map: dict[str, models.ReportOrderSeriesPoint] = {
+                key: models.ReportOrderSeriesPoint(
+                    t=key, created=0, ordered=0, partial=0, received=0, cancelled=0
+                )
+                for key in bucket_keys
+            }
+            order_rows = conn.execute(
+                f"""
+                SELECT created_at, status
+                FROM {resolved.orders_table}
+                WHERE date(created_at) BETWEEN ? AND ?
+                """,
+                (start_date.isoformat(), end_date.isoformat()),
+            ).fetchall()
+            for row in order_rows:
+                created_at = _coerce_datetime(row["created_at"])
+                bucket_key = _bucket_key(created_at, selected_bucket)
+                if bucket_key not in orders_map:
+                    orders_map[bucket_key] = models.ReportOrderSeriesPoint(
+                        t=bucket_key, created=0, ordered=0, partial=0, received=0, cancelled=0
+                    )
+                target = orders_map[bucket_key]
+                target.created += 1
+                status = str(row["status"] or "").upper()
+                if status in {"PENDING", "ORDERED"}:
+                    target.ordered += 1
+                elif status == "PARTIALLY_RECEIVED":
+                    target.partial += 1
+                elif status == "RECEIVED":
+                    target.received += 1
+                elif status == "CANCELLED":
+                    target.cancelled += 1
+                else:
+                    target.ordered += 1
+            ordered_order_keys = sorted(orders_map.keys())
+            orders_series = [orders_map[key] for key in ordered_order_keys]
+
+        missing_sku = 0
+        if sku_column:
+            missing_sku = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.items_table}
+                    WHERE {sku_column} IS NULL OR TRIM({sku_column}) = ''
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+        missing_supplier = 0
+        if "supplier_id" in item_columns:
+            missing_supplier = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.items_table}
+                    WHERE supplier_id IS NULL
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+        missing_threshold = 0
+        if "low_stock_threshold" in item_columns:
+            threshold_where = ["low_stock_threshold IS NULL OR low_stock_threshold <= 0"]
+            if "track_low_stock" in item_columns:
+                threshold_where.append("track_low_stock = 1")
+            missing_threshold = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.items_table}
+                    WHERE {" AND ".join(threshold_where)}
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+
+        abnormal_movements = 0
+        if _table_has_column(conn, resolved.movements_table, "delta"):
+            abnormal_movements = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.movements_table}
+                    WHERE delta IS NULL OR delta = 0
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+
+    return models.ReportOverview(
+        module=normalized_module,
+        range=models.ReportRange(
+            start=start_date.isoformat(), end=end_date.isoformat(), bucket=selected_bucket
+        ),
+        kpis=models.ReportKpis(
+            in_qty=in_qty,
+            out_qty=out_qty,
+            net_qty=net_qty,
+            low_stock_count=low_stock_count,
+            open_orders=open_orders,
+        ),
+        series=models.ReportSeries(
+            moves=moves_series,
+            net=net_series,
+            low_stock=low_stock_series,
+            orders=orders_series,
+        ),
+        tops=models.ReportTops(out=top_out, **{"in": top_in}),
+        data_quality=models.ReportDataQuality(
+            missing_sku=missing_sku,
+            missing_supplier=missing_supplier,
+            missing_threshold=missing_threshold,
+            abnormal_movements=abnormal_movements,
+        ),
+    )
 
 
 def get_collaborator(collaborator_id: int) -> models.Collaborator:
