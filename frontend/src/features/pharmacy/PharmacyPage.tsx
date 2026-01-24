@@ -950,11 +950,14 @@ export function PharmacyPage() {
   const itemsBlock = (
     <section className="min-h-0 min-w-0 space-y-2">
       <div
-        className="min-h-0 w-full min-w-0 overflow-y-auto overflow-x-hidden rounded-lg border border-slate-800"
+        className="relative min-h-0 w-full min-w-0 max-h-[60vh] overflow-y-auto overflow-x-auto rounded-xl border border-slate-800"
         style={tableMaxHeight ? { maxHeight: `${tableMaxHeight}px` } : undefined}
         ref={containerRef}
       >
-        <table ref={tableRef} className="w-full table-fixed divide-y divide-slate-800">
+        <table
+          ref={tableRef}
+          className="w-full table-fixed border-separate border-spacing-0 divide-y divide-slate-800"
+        >
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
               <SortableContext items={visibleColumns} strategy={horizontalListSortingStrategy}>
@@ -976,7 +979,11 @@ export function PharmacyPage() {
                       />
                     );
                   })}
-                  {canEdit ? <th className="px-4 py-3 text-left">Actions</th> : null}
+                  {canEdit ? (
+                    <th className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 backdrop-blur">
+                      Actions
+                    </th>
+                  ) : null}
                 </tr>
               </SortableContext>
             </thead>
@@ -1729,7 +1736,7 @@ function SortableHeaderCell({
     <th
       ref={setNodeRef}
       style={style}
-      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 ${className ?? ""}`}
+      className={`sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 backdrop-blur ${className ?? ""}`}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
