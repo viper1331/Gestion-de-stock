@@ -11138,13 +11138,50 @@ def list_existing_barcodes(user: models.User) -> list[models.BarcodeValue]:
     ]
 
 
+def _collect_generated_catalog_keys(
+    conn: sqlite3.Connection,
+    skus: Iterable[str],
+    sources: list[tuple[str, str, str, str]],
+) -> set[tuple[str, str]]:
+    normalized_skus = {
+        sku.strip().casefold(): sku.strip()
+        for sku in skus
+        if sku and sku.strip()
+    }
+    if not normalized_skus or not sources:
+        return set()
+
+    lower_skus = list(normalized_skus.keys())
+    placeholders = ",".join(["?"] * len(lower_skus))
+    collected: set[tuple[str, str]] = set()
+
+    for module_key, table, sku_column, _ in sources:
+        query = f"""
+            SELECT {sku_column} AS sku
+            FROM {table}
+            WHERE LOWER({sku_column}) IN ({placeholders})
+        """
+        rows = conn.execute(query, lower_skus).fetchall()
+        for row in rows:
+            sku_value = (row["sku"] or "").strip()
+            if not sku_value:
+                continue
+            collected.add((module_key, sku_value.casefold()))
+
+    return collected
+
+
 def list_barcode_catalog(
-    user: models.User, module: str | None = None, q: str | None = None
+    user: models.User,
+    module: str | None = None,
+    q: str | None = None,
+    exclude_generated: bool = False,
 ) -> list[models.BarcodeCatalogEntry]:
     ensure_database_ready()
 
     normalized_module = (module or "all").strip().lower()
     search = (q or "").strip()
+    site_key = db.get_current_site_key()
 
     accessible_sources = [
         source
@@ -11160,6 +11197,15 @@ def list_barcode_catalog(
         ]
         if not accessible_sources:
             return []
+
+    generated_keys: set[tuple[str, str]] = set()
+    if exclude_generated:
+        assets = barcode_service.list_barcode_assets(site_key=site_key)
+        if assets:
+            with db.get_stock_connection() as conn:
+                generated_keys = _collect_generated_catalog_keys(
+                    conn, (asset.sku for asset in assets), accessible_sources
+                )
 
     entries: list[models.BarcodeCatalogEntry] = []
     like = f"%{search}%"
@@ -11213,6 +11259,8 @@ def list_barcode_catalog(
                 name_value = (row["name"] or "").strip()
                 if not sku_value or not name_value:
                     continue
+                if exclude_generated and (module_key, sku_value.casefold()) in generated_keys:
+                    continue
                 label = f"{name_value} ({sku_value})"
                 entries.append(
                     models.BarcodeCatalogEntry(
@@ -11246,7 +11294,7 @@ def _resolve_generated_barcode_metadata(
     conn: sqlite3.Connection,
     skus: Iterable[str],
     sources: list[tuple[str, str, str, str]],
-) -> dict[str, tuple[str, str]]:
+) -> dict[str, tuple[str, str, str]]:
     normalized_skus = {
         sku.strip().casefold(): sku.strip()
         for sku in skus
@@ -11257,7 +11305,7 @@ def _resolve_generated_barcode_metadata(
 
     lower_skus = list(normalized_skus.keys())
     placeholders = ",".join(["?"] * len(lower_skus))
-    resolved: dict[str, tuple[str, str]] = {}
+    resolved: dict[str, tuple[str, str, str]] = {}
 
     for module_key, table, sku_column, name_column in sources:
         query = f"""
@@ -11276,7 +11324,7 @@ def _resolve_generated_barcode_metadata(
                 continue
             name_value = (row["name"] or "").strip()
             label = f"{name_value} ({sku_value})" if name_value else sku_value
-            resolved[key] = (module_key, label)
+            resolved[key] = (module_key, label, name_value or sku_value)
 
     return resolved
 
@@ -11318,9 +11366,9 @@ def list_generated_barcodes(
         meta = resolved.get(resolved_key)
         if not meta:
             continue
-        module_key, label = meta
+        module_key, label, item_name = meta
         if search:
-            haystack = f"{label} {sku_value}".casefold()
+            haystack = f"{label} {item_name} {sku_value}".casefold()
             if search not in haystack:
                 continue
         entries.append(
@@ -11328,6 +11376,7 @@ def list_generated_barcodes(
                 sku=sku_value,
                 module=module_key,
                 label=label,
+                item_name=item_name,
                 created_at=asset.modified_at,
                 modified_at=asset.modified_at,
                 filename=asset.filename,

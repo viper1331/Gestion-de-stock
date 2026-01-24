@@ -72,10 +72,13 @@ async def list_existing_barcode_values(
 async def list_barcode_catalog(
     module: str = Query("all"),
     q: str | None = Query(default=None),
+    exclude_generated: bool = Query(default=False),
     user: models.User = Depends(get_current_user),
 ) -> list[models.BarcodeCatalogEntry]:
     _require_permission(user, action="view")
-    return services.list_barcode_catalog(user, module=module, q=q)
+    return services.list_barcode_catalog(
+        user, module=module, q=q, exclude_generated=exclude_generated
+    )
 
 
 @router.get("/assets/{filename}")
