@@ -8,11 +8,12 @@ from backend.core import models, services
 
 router = APIRouter()
 
-MODULE_KEY = "dotations"
+COLLABORATORS_MODULE_KEY = "collaborators"
+DOTATIONS_MODULE_KEY = "dotations"
 
 
-def _require_permission(user: models.User, *, action: str) -> None:
-    if not services.has_module_access(user, MODULE_KEY, action=action):
+def _require_permission(user: models.User, module_key: str, *, action: str) -> None:
+    if not services.has_module_access(user, module_key, action=action):
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
@@ -20,7 +21,7 @@ def _require_permission(user: models.User, *, action: str) -> None:
 async def list_collaborators(
     user: models.User = Depends(get_current_user),
 ) -> list[models.Collaborator]:
-    _require_permission(user, action="view")
+    _require_permission(user, COLLABORATORS_MODULE_KEY, action="view")
     return services.list_collaborators()
 
 
@@ -29,7 +30,7 @@ async def create_collaborator(
     payload: models.CollaboratorCreate,
     user: models.User = Depends(get_current_user),
 ) -> models.Collaborator:
-    _require_permission(user, action="edit")
+    _require_permission(user, COLLABORATORS_MODULE_KEY, action="edit")
     return services.create_collaborator(payload)
 
 
@@ -39,7 +40,7 @@ async def update_collaborator(
     payload: models.CollaboratorUpdate,
     user: models.User = Depends(get_current_user),
 ) -> models.Collaborator:
-    _require_permission(user, action="edit")
+    _require_permission(user, COLLABORATORS_MODULE_KEY, action="edit")
     try:
         return services.update_collaborator(collaborator_id, payload)
     except ValueError as exc:
@@ -51,7 +52,7 @@ async def delete_collaborator(
     collaborator_id: int,
     user: models.User = Depends(get_current_user),
 ) -> None:
-    _require_permission(user, action="edit")
+    _require_permission(user, COLLABORATORS_MODULE_KEY, action="edit")
     try:
         services.delete_collaborator(collaborator_id)
     except ValueError as exc:
@@ -67,7 +68,7 @@ async def bulk_import_collaborators(
     payload: models.CollaboratorBulkImportPayload,
     user: models.User = Depends(get_current_user),
 ) -> models.CollaboratorBulkImportResult:
-    _require_permission(user, action="edit")
+    _require_permission(user, COLLABORATORS_MODULE_KEY, action="edit")
     return services.bulk_import_collaborators(payload)
 
 
@@ -77,7 +78,7 @@ async def list_dotations(
     item_id: int | None = Query(default=None),
     user: models.User = Depends(get_current_user),
 ) -> list[models.Dotation]:
-    _require_permission(user, action="view")
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="view")
     return services.list_dotations(collaborator_id=collaborator_id, item_id=item_id)
 
 
@@ -86,7 +87,7 @@ async def create_dotation(
     payload: models.DotationCreate,
     user: models.User = Depends(get_current_user),
 ) -> models.Dotation:
-    _require_permission(user, action="edit")
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="edit")
     try:
         return services.create_dotation(payload)
     except ValueError as exc:
@@ -99,7 +100,7 @@ async def update_dotation(
     payload: models.DotationUpdate,
     user: models.User = Depends(get_current_user),
 ) -> models.Dotation:
-    _require_permission(user, action="edit")
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="edit")
     try:
         return services.update_dotation(dotation_id, payload)
     except ValueError as exc:
@@ -112,7 +113,7 @@ async def delete_dotation(
     restock: bool = Query(default=False, description="Réintègre les quantités au stock"),
     user: models.User = Depends(get_current_user),
 ) -> None:
-    _require_permission(user, action="edit")
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="edit")
     try:
         services.delete_dotation(dotation_id, restock=restock)
     except ValueError as exc:

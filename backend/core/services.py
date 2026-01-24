@@ -109,22 +109,193 @@ class PasswordResetRateLimitError(RuntimeError):
 class UsersDbNotReadyError(RuntimeError):
     pass
 
-_AVAILABLE_MODULE_DEFINITIONS: tuple[tuple[str, str], ...] = (
-    ("barcode", "Code-barres"),
-    ("clothing", "Habillement"),
-    ("suppliers", "Fournisseurs"),
-    ("dotations", "Dotations"),
-    ("pharmacy", "Pharmacie"),
-    ("vehicle_qrcodes", "QR véhicules"),
-    ("vehicle_inventory", "Inventaire véhicules"),
-    ("inventory_remise", "Inventaire remises"),
+@dataclass(frozen=True)
+class _ModuleDefinitionMeta:
+    key: str
+    label: str
+    category: str
+    is_admin_only: bool
+    sort_order: int
+
+
+_AVAILABLE_MODULE_DEFINITIONS: tuple[_ModuleDefinitionMeta, ...] = (
+    _ModuleDefinitionMeta(
+        key="barcode",
+        label="Codes-barres",
+        category="Outils",
+        is_admin_only=False,
+        sort_order=10,
+    ),
+    _ModuleDefinitionMeta(
+        key="clothing",
+        label="Inventaire habillement",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=20,
+    ),
+    _ModuleDefinitionMeta(
+        key="suppliers",
+        label="Fournisseurs",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=30,
+    ),
+    _ModuleDefinitionMeta(
+        key="purchase_suggestions",
+        label="Suggestions de commandes",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=40,
+    ),
+    _ModuleDefinitionMeta(
+        key="purchase_orders",
+        label="Bons de commande",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=50,
+    ),
+    _ModuleDefinitionMeta(
+        key="collaborators",
+        label="Collaborateurs",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=60,
+    ),
+    _ModuleDefinitionMeta(
+        key="dotations",
+        label="Dotations",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=70,
+    ),
+    _ModuleDefinitionMeta(
+        key="reports",
+        label="Rapports",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=80,
+    ),
+    _ModuleDefinitionMeta(
+        key="vehicle_inventory",
+        label="Inventaire véhicules",
+        category="Inventaires spécialisés",
+        is_admin_only=False,
+        sort_order=90,
+    ),
+    _ModuleDefinitionMeta(
+        key="vehicle_qr",
+        label="QR codes véhicules",
+        category="Inventaires spécialisés",
+        is_admin_only=False,
+        sort_order=100,
+    ),
+    _ModuleDefinitionMeta(
+        key="inventory_remise",
+        label="Inventaire remises",
+        category="Inventaires spécialisés",
+        is_admin_only=False,
+        sort_order=110,
+    ),
+    _ModuleDefinitionMeta(
+        key="pharmacy",
+        label="Pharmacie",
+        category="Pharmacie",
+        is_admin_only=False,
+        sort_order=120,
+    ),
+    _ModuleDefinitionMeta(
+        key="pharmacy_links",
+        label="Liens Pharmacie",
+        category="Pharmacie",
+        is_admin_only=False,
+        sort_order=130,
+    ),
+    _ModuleDefinitionMeta(
+        key="messages",
+        label="Messagerie",
+        category="Communication",
+        is_admin_only=False,
+        sort_order=140,
+    ),
+    _ModuleDefinitionMeta(
+        key="link_categories",
+        label="Configuration liens",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=200,
+    ),
+    _ModuleDefinitionMeta(
+        key="settings",
+        label="Paramètres",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=210,
+    ),
+    _ModuleDefinitionMeta(
+        key="advanced_settings",
+        label="Paramètres avancés",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=220,
+    ),
+    _ModuleDefinitionMeta(
+        key="pdf_config",
+        label="Configuration PDF",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=230,
+    ),
+    _ModuleDefinitionMeta(
+        key="users",
+        label="Utilisateurs",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=240,
+    ),
+    _ModuleDefinitionMeta(
+        key="permissions_admin",
+        label="Permissions",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=250,
+    ),
+    _ModuleDefinitionMeta(
+        key="updates",
+        label="Mises à jour",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=260,
+    ),
+    _ModuleDefinitionMeta(
+        key="system_config",
+        label="Configuration système",
+        category="Administration",
+        is_admin_only=True,
+        sort_order=270,
+    ),
 )
-_AVAILABLE_MODULE_KEYS: set[str] = {key for key, _ in _AVAILABLE_MODULE_DEFINITIONS}
+_AVAILABLE_MODULE_INDEX: dict[str, _ModuleDefinitionMeta] = {
+    entry.key: entry for entry in _AVAILABLE_MODULE_DEFINITIONS
+}
+_AVAILABLE_MODULE_KEYS: set[str] = {
+    entry.key for entry in _AVAILABLE_MODULE_DEFINITIONS if not entry.is_admin_only
+}
+
+_MODULE_KEY_ALIASES: dict[str, str] = {
+    "vehicle_qrcodes": "vehicle_qr",
+    "item_links": "pharmacy_links",
+}
+_MODULE_CANONICAL_ALIASES: dict[str, tuple[str, ...]] = {
+    "vehicle_qr": ("vehicle_qrcodes",),
+    "pharmacy_links": ("item_links",),
+}
 
 _MODULE_DEPENDENCIES: dict[str, tuple[str, ...]] = {
     "suppliers": ("clothing",),
+    "collaborators": ("clothing",),
     "dotations": ("clothing",),
-    "vehicle_qrcodes": ("vehicle_inventory",),
+    "vehicle_qr": ("vehicle_inventory",),
+    "pharmacy_links": ("pharmacy",),
 }
 
 _PURCHASE_SUGGESTION_MODULES: tuple[str, ...] = (
@@ -132,6 +303,23 @@ _PURCHASE_SUGGESTION_MODULES: tuple[str, ...] = (
     "pharmacy",
     "inventory_remise",
 )
+
+
+def normalize_module_key(module: str) -> str:
+    normalized = (module or "").strip().lower()
+    return _MODULE_KEY_ALIASES.get(normalized, normalized)
+
+
+def _module_lookup_keys(module: str) -> list[str]:
+    canonical = normalize_module_key(module)
+    aliases = _MODULE_CANONICAL_ALIASES.get(canonical, ())
+    return [canonical, *aliases]
+
+
+def _is_admin_only_module(module: str) -> bool:
+    canonical = normalize_module_key(module)
+    entry = _AVAILABLE_MODULE_INDEX.get(canonical)
+    return bool(entry and entry.is_admin_only)
 
 
 @dataclass(frozen=True)
@@ -8355,7 +8543,7 @@ def available_config_sections() -> Iterable[str]:
 def _get_module_title(module_key: str) -> str:
     from configparser import ConfigParser
 
-    titles = {key: label for key, label in _AVAILABLE_MODULE_DEFINITIONS}
+    titles = {entry.key: entry.label for entry in _AVAILABLE_MODULE_DEFINITIONS}
     config_path = Path(__file__).resolve().parent.parent / "config.ini"
     parser = ConfigParser()
     parser.read(config_path, encoding="utf-8")
@@ -8363,8 +8551,9 @@ def _get_module_title(module_key: str) -> str:
         for key, value in parser.items("modules"):
             trimmed = value.strip()
             if trimmed:
-                titles[key] = trimmed
-    return titles.get(module_key, module_key)
+                titles[normalize_module_key(key)] = trimmed
+    normalized = normalize_module_key(module_key)
+    return titles.get(normalized, normalized or module_key)
 
 
 def list_suppliers(
@@ -12525,24 +12714,38 @@ def receive_pharmacy_purchase_order(
 def list_available_modules() -> list[models.ModuleDefinition]:
     ensure_database_ready()
     definitions = [
-        models.ModuleDefinition(key=key, label=label)
-        for key, label in _AVAILABLE_MODULE_DEFINITIONS
+        models.ModuleDefinition(
+            key=entry.key,
+            label=entry.label,
+            category=entry.category,
+            is_admin_only=entry.is_admin_only,
+            sort_order=entry.sort_order,
+        )
+        for entry in _AVAILABLE_MODULE_DEFINITIONS
+        if not entry.is_admin_only
     ]
+    definition_keys = {entry.key for entry in definitions}
     with db.get_users_connection() as conn:
         cur = conn.execute(
             "SELECT DISTINCT module FROM module_permissions ORDER BY module COLLATE NOCASE"
         )
         for row in cur.fetchall():
-            module_key = row["module"]
-            if module_key in _AVAILABLE_MODULE_KEYS:
+            module_key = normalize_module_key(row["module"])
+            if not module_key or module_key in definition_keys:
+                continue
+            if _is_admin_only_module(module_key):
                 continue
             definitions.append(
                 models.ModuleDefinition(
                     key=module_key,
                     label=module_key.replace("_", " ").title(),
+                    category="Autres",
+                    is_admin_only=False,
+                    sort_order=999,
                 )
             )
-    return definitions
+            definition_keys.add(module_key)
+    return sorted(definitions, key=lambda entry: (entry.category, entry.sort_order, entry.label))
 
 
 def list_module_permissions() -> list[models.ModulePermission]:
@@ -12551,16 +12754,26 @@ def list_module_permissions() -> list[models.ModulePermission]:
         cur = conn.execute(
             "SELECT * FROM module_permissions ORDER BY user_id, module COLLATE NOCASE"
         )
-        return [
-            models.ModulePermission(
-                id=row["id"],
-                user_id=row["user_id"],
-                module=row["module"],
-                can_view=bool(row["can_view"]),
-                can_edit=bool(row["can_edit"]),
-            )
-            for row in cur.fetchall()
-        ]
+        rows = cur.fetchall()
+    merged: dict[tuple[int, str], models.ModulePermission] = {}
+    for row in rows:
+        module_key = normalize_module_key(row["module"])
+        if not module_key or _is_admin_only_module(module_key):
+            continue
+        key = (row["user_id"], module_key)
+        existing = merged.get(key)
+        if existing:
+            existing.can_view = existing.can_view or bool(row["can_view"])
+            existing.can_edit = existing.can_edit or bool(row["can_edit"])
+            continue
+        merged[key] = models.ModulePermission(
+            id=row["id"],
+            user_id=row["user_id"],
+            module=module_key,
+            can_view=bool(row["can_view"]),
+            can_edit=bool(row["can_edit"]),
+        )
+    return sorted(merged.values(), key=lambda entry: (entry.user_id, entry.module))
 
 
 def list_module_permissions_for_user(user_id: int) -> list[models.ModulePermission]:
@@ -12570,16 +12783,25 @@ def list_module_permissions_for_user(user_id: int) -> list[models.ModulePermissi
             "SELECT * FROM module_permissions WHERE user_id = ? ORDER BY module COLLATE NOCASE",
             (user_id,),
         )
-        return [
-            models.ModulePermission(
-                id=row["id"],
-                user_id=row["user_id"],
-                module=row["module"],
-                can_view=bool(row["can_view"]),
-                can_edit=bool(row["can_edit"]),
-            )
-            for row in cur.fetchall()
-        ]
+        rows = cur.fetchall()
+    merged: dict[str, models.ModulePermission] = {}
+    for row in rows:
+        module_key = normalize_module_key(row["module"])
+        if not module_key or _is_admin_only_module(module_key):
+            continue
+        existing = merged.get(module_key)
+        if existing:
+            existing.can_view = existing.can_view or bool(row["can_view"])
+            existing.can_edit = existing.can_edit or bool(row["can_edit"])
+            continue
+        merged[module_key] = models.ModulePermission(
+            id=row["id"],
+            user_id=row["user_id"],
+            module=module_key,
+            can_view=bool(row["can_view"]),
+            can_edit=bool(row["can_edit"]),
+        )
+    return sorted(merged.values(), key=lambda entry: entry.module)
 
 
 def get_module_permission_for_user(
@@ -12587,19 +12809,29 @@ def get_module_permission_for_user(
 ) -> Optional[models.ModulePermission]:
     ensure_database_ready()
     with db.get_users_connection() as conn:
+        lookup_keys = _module_lookup_keys(module)
+        if not lookup_keys:
+            return None
+        params = ",".join("?" for _ in lookup_keys)
         cur = conn.execute(
-            "SELECT * FROM module_permissions WHERE user_id = ? AND module = ?",
-            (user_id, module),
+            f"SELECT * FROM module_permissions WHERE user_id = ? AND module IN ({params})",
+            (user_id, *lookup_keys),
         )
-        row = cur.fetchone()
-        if row is None:
+        rows = cur.fetchall()
+        if not rows:
+            return None
+        module_key = normalize_module_key(module)
+        can_view = any(bool(row["can_view"]) for row in rows)
+        can_edit = any(bool(row["can_edit"]) for row in rows)
+        selected = next((row for row in rows if row["module"] == module_key), rows[0])
+        if _is_admin_only_module(module_key):
             return None
         return models.ModulePermission(
-            id=row["id"],
-            user_id=row["user_id"],
-            module=row["module"],
-            can_view=bool(row["can_view"]),
-            can_edit=bool(row["can_edit"]),
+            id=selected["id"],
+            user_id=selected["user_id"],
+            module=module_key,
+            can_view=can_view,
+            can_edit=can_edit,
         )
 
 
@@ -12607,11 +12839,16 @@ def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.M
     ensure_database_ready()
     if get_user_by_id(payload.user_id) is None:
         raise ValueError("Utilisateur introuvable")
+    normalized_module = normalize_module_key(payload.module)
+    if not normalized_module:
+        raise ValueError("Module introuvable")
+    if _is_admin_only_module(normalized_module):
+        raise ValueError("Module introuvable")
     with db.get_users_connection() as conn:
-        if payload.module not in _AVAILABLE_MODULE_KEYS:
+        if normalized_module not in _AVAILABLE_MODULE_KEYS:
             cur = conn.execute(
                 "SELECT 1 FROM module_permissions WHERE module = ? LIMIT 1",
-                (payload.module,),
+                (normalized_module,),
             )
             if cur.fetchone() is None:
                 raise ValueError("Module introuvable")
@@ -12625,13 +12862,19 @@ def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.M
             """,
             (
                 payload.user_id,
-                payload.module,
+                normalized_module,
                 int(payload.can_view),
                 int(payload.can_edit),
             ),
         )
+        aliases = _MODULE_CANONICAL_ALIASES.get(normalized_module, ())
+        if aliases:
+            conn.execute(
+                f"DELETE FROM module_permissions WHERE user_id = ? AND module IN ({','.join('?' for _ in aliases)})",
+                (payload.user_id, *aliases),
+            )
         conn.commit()
-    permission = get_module_permission_for_user(payload.user_id, payload.module)
+    permission = get_module_permission_for_user(payload.user_id, normalized_module)
     if permission is None:
         raise RuntimeError("Échec de l'enregistrement de la permission du module")
     return permission
@@ -12639,10 +12882,14 @@ def upsert_module_permission(payload: models.ModulePermissionUpsert) -> models.M
 
 def delete_module_permission_for_user(user_id: int, module: str) -> None:
     ensure_database_ready()
+    lookup_keys = _module_lookup_keys(module)
+    if not lookup_keys:
+        raise ValueError("Permission de module introuvable")
     with db.get_users_connection() as conn:
+        params = ",".join("?" for _ in lookup_keys)
         cur = conn.execute(
-            "DELETE FROM module_permissions WHERE user_id = ? AND module = ?",
-            (user_id, module),
+            f"DELETE FROM module_permissions WHERE user_id = ? AND module IN ({params})",
+            (user_id, *lookup_keys),
         )
         if cur.rowcount == 0:
             raise ValueError("Permission de module introuvable")
@@ -12667,12 +12914,13 @@ def has_module_access(user: models.User, module: str, *, action: str = "view") -
     ensure_database_ready()
     if user.role == "admin":
         return True
-    required_modules = [module, *_iter_module_dependencies(module)]
+    normalized_module = normalize_module_key(module)
+    required_modules = [normalized_module, *_iter_module_dependencies(normalized_module)]
     for required in required_modules:
         permission = get_module_permission_for_user(user.id, required)
         if permission is None:
             return False
-        if required == module:
+        if required == normalized_module:
             if action == "edit":
                 if not permission.can_edit:
                     return False

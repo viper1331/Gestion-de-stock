@@ -45,7 +45,7 @@ interface ResourceDraft {
 
 export function VehicleQrManagerPage() {
   const queryClient = useQueryClient();
-  const moduleTitle = useModuleTitle("vehicle_qrcodes");
+  const moduleTitle = useModuleTitle("vehicle_qr");
   const [search, setSearch] = useState("");
   const [sortBy, setSortBy] = useState<"vehicle" | "name">("vehicle");
   const [drafts, setDrafts] = useState<Record<string, ResourceDraft>>({});

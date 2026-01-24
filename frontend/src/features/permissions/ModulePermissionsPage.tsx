@@ -18,6 +18,9 @@ interface ModulePermissionEntry {
 interface ModuleDefinition {
   key: string;
   label: string;
+  category: string;
+  is_admin_only: boolean;
+  sort_order: number;
 }
 
 interface UserEntry {
@@ -85,6 +88,28 @@ export function ModulePermissionsPage() {
     enabled: user?.role === "admin"
   });
 
+  const orderedModules = useMemo(() => {
+    return [...availableModules].sort((a, b) => {
+      if (a.category !== b.category) {
+        return a.category.localeCompare(b.category, "fr");
+      }
+      if (a.sort_order !== b.sort_order) {
+        return a.sort_order - b.sort_order;
+      }
+      return a.label.localeCompare(b.label, "fr");
+    });
+  }, [availableModules]);
+
+  const groupedModules = useMemo(() => {
+    return orderedModules.reduce<Record<string, ModuleDefinition[]>>((acc, module) => {
+      if (!acc[module.category]) {
+        acc[module.category] = [];
+      }
+      acc[module.category].push(module);
+      return acc;
+    }, {});
+  }, [orderedModules]);
+
   useEffect(() => {
     if (user?.role !== "admin") {
       return;
@@ -148,11 +173,18 @@ export function ModulePermissionsPage() {
   }, [users]);
 
   const moduleLabelLookup = useMemo(() => {
-    return availableModules.reduce<Record<string, string>>((acc, entry) => {
+    return orderedModules.reduce<Record<string, string>>((acc, entry) => {
       acc[entry.key] = entry.label;
       return acc;
     }, {} as Record<string, string>);
-  }, [availableModules]);
+  }, [orderedModules]);
+
+  const moduleOrderLookup = useMemo(() => {
+    return orderedModules.reduce<Record<string, number>>((acc, entry, index) => {
+      acc[entry.key] = index;
+      return acc;
+    }, {} as Record<string, number>);
+  }, [orderedModules]);
 
   const groupedByUser = useMemo(() => {
     return permissions.reduce<Record<number, ModulePermissionEntry[]>>((acc, entry) => {
@@ -160,10 +192,17 @@ export function ModulePermissionsPage() {
         acc[entry.user_id] = [];
       }
       acc[entry.user_id].push(entry);
-      acc[entry.user_id].sort((a, b) => a.module.localeCompare(b.module));
+      acc[entry.user_id].sort((a, b) => {
+        const orderA = moduleOrderLookup[a.module] ?? Number.MAX_SAFE_INTEGER;
+        const orderB = moduleOrderLookup[b.module] ?? Number.MAX_SAFE_INTEGER;
+        if (orderA !== orderB) {
+          return orderA - orderB;
+        }
+        return a.module.localeCompare(b.module);
+      });
       return acc;
     }, {} as Record<number, ModulePermissionEntry[]>);
-  }, [permissions]);
+  }, [moduleOrderLookup, permissions]);
 
   if (user?.role !== "admin") {
     return (
@@ -261,17 +300,21 @@ export function ModulePermissionsPage() {
                 modules: Array.from(event.target.selectedOptions, (option) => option.value)
               }))
             }
-            disabled={isFetchingModules || availableModules.length === 0}
-            size={availableModules.length > 0 ? Math.min(availableModules.length, 6) : 6}
+            disabled={isFetchingModules || orderedModules.length === 0}
+            size={orderedModules.length > 0 ? Math.min(orderedModules.length, 6) : 6}
             className="mt-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             title="Sélectionnez un ou plusieurs modules à autoriser"
           >
-            {availableModules.map((module) => (
-              <option key={module.key} value={module.key}>
-                {module.label} ({module.key})
-              </option>
-            ))}
-          </select>
+          {Object.entries(groupedModules).map(([category, modules]) => (
+            <optgroup key={category} label={category}>
+              {modules.map((module) => (
+                <option key={module.key} value={module.key}>
+                  {module.label} ({module.key})
+                </option>
+              ))}
+            </optgroup>
+          ))}
+        </select>
           <span className="mt-1 text-[11px] font-normal normal-case text-slate-400">
             Maintenez Ctrl (Windows) ou ⌘ (macOS) pour sélectionner plusieurs modules.
           </span>

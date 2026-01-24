@@ -13,7 +13,7 @@ from backend.core import models, services
 
 router = APIRouter()
 
-MODULE_KEY = "clothing"
+MODULE_KEY = "reports"
 
 
 def _require_permission(user: models.User, *, action: str) -> None:

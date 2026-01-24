@@ -19,8 +19,8 @@ interface PharmacyItem {
 export function PharmacyLinksPage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
-  const canView = user?.role === "admin" || modulePermissions.canAccess("pharmacy");
-  const canEdit = user?.role === "admin" || modulePermissions.canAccess("pharmacy", "edit");
+  const canView = user?.role === "admin" || modulePermissions.canAccess("pharmacy_links");
+  const canEdit = user?.role === "admin" || modulePermissions.canAccess("pharmacy_links", "edit");
 
   const [searchValue, setSearchValue] = useState("");
   const [selectedId, setSelectedId] = useState<number | null>(null);

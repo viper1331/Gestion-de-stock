@@ -209,6 +209,7 @@ def test_permissions_filter_modules() -> None:
     _reset_tables()
     _create_user("suggest_admin", "password", role="admin")
     user_id = _create_user("suggest_user", "password", role="user")
+    _grant_module_permission(user_id, "purchase_suggestions", can_view=True, can_edit=False)
     _grant_module_permission(user_id, "pharmacy", can_view=True, can_edit=False)
     admin_headers = _login_headers("suggest_admin", "password")
     user_headers = _login_headers("suggest_user", "password")

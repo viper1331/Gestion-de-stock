@@ -5,6 +5,7 @@ import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
+import { useModulePermissions } from "../permissions/useModulePermissions";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
@@ -54,6 +55,7 @@ interface SendMessagePayload {
 
 export function MessagesPage() {
   const { user } = useAuth();
+  const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const queryClient = useQueryClient();
   const [category, setCategory] = useState<string>(CATEGORY_OPTIONS[0]);
   const [content, setContent] = useState<string>("");
@@ -64,6 +66,8 @@ export function MessagesPage() {
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"inbox" | "sent">("inbox");
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  const canView = user?.role === "admin" || modulePermissions.canAccess("messages");
+  const canEdit = user?.role === "admin" || modulePermissions.canAccess("messages", "edit");
 
   const { data: availableRecipients = [], isFetching: isFetchingRecipients } = useQuery({
     queryKey: ["messages", "recipients"],
@@ -71,7 +75,7 @@ export function MessagesPage() {
       const response = await api.get<MessageRecipient[]>("/messages/recipients");
       return response.data;
     },
-    enabled: Boolean(user)
+    enabled: Boolean(user) && canView
   });
 
   const {
@@ -88,7 +92,7 @@ export function MessagesPage() {
       });
       return response.data;
     },
-    enabled: Boolean(user)
+    enabled: Boolean(user) && canView
   });
 
   const {
@@ -104,7 +108,7 @@ export function MessagesPage() {
       });
       return response.data;
     },
-    enabled: Boolean(user) && activeTab === "sent",
+    enabled: Boolean(user) && canView && activeTab === "sent",
     refetchInterval: activeTab === "sent" ? 12000 : false
   });
 
@@ -176,13 +180,19 @@ export function MessagesPage() {
     Boolean(trimmedContent) &&
     isCategoryValid &&
     (broadcast || hasRecipients) &&
-    !sendMessage.isPending;
+    !sendMessage.isPending &&
+    canEdit;
   const sendScopeLabel = broadcast
     ? "Envoi à tous les utilisateurs"
     : `Envoi à ${recipients.length} destinataire(s)`;
 
   const handleSend = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (!canEdit) {
+      setError("Vous n'avez pas l'autorisation d'envoyer des messages.");
+      clearFeedbackLater();
+      return;
+    }
     if (!trimmedContent) {
       setError("Veuillez saisir un message.");
       clearFeedbackLater();
@@ -223,6 +233,29 @@ export function MessagesPage() {
   const inboxIsEmpty = inboxMessages.length === 0 && !isFetchingInbox;
   const sentIsEmpty = sentMessages.length === 0 && !isFetchingSent;
 
+  if (modulePermissions.isLoading && user?.role !== "admin") {
+    return (
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h2 className="text-2xl font-semibold text-white">Messagerie interne</h2>
+          <p className="text-sm text-slate-400">Chargement des permissions...</p>
+        </header>
+      </section>
+    );
+  }
+
+  if (!canView) {
+    return (
+      <section className="space-y-4">
+        <header className="space-y-1">
+          <h2 className="text-2xl font-semibold text-white">Messagerie interne</h2>
+          <p className="text-sm text-slate-400">Envoyez des messages aux autres utilisateurs.</p>
+        </header>
+        <p className="text-sm text-red-400">Accès refusé.</p>
+      </section>
+    );
+  }
+
   const pageContent = (
     <section className="space-y-6">
       <header className="space-y-2">
@@ -242,6 +275,7 @@ export function MessagesPage() {
                 className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
                 value={category}
                 onChange={(event) => setCategory(event.target.value)}
+                disabled={!canEdit}
               >
                 {CATEGORY_OPTIONS.map((option) => (
                   <option key={option} value={option}>
@@ -259,6 +293,7 @@ export function MessagesPage() {
                 onChange={(event) => setContent(event.target.value)}
                 placeholder="Écrivez votre message..."
                 ref={contentRef}
+                disabled={!canEdit}
               />
             </label>
 
@@ -268,6 +303,7 @@ export function MessagesPage() {
                 className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
                 checked={broadcast}
                 onChange={(event) => setBroadcast(event.target.checked)}
+                disabled={!canEdit}
               />
               Envoyer à tous
             </label>
@@ -287,7 +323,7 @@ export function MessagesPage() {
                         className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
                         checked={selectedRecipients.has(recipient.username)}
                         onChange={() => toggleRecipient(recipient.username)}
-                        disabled={broadcast}
+                        disabled={broadcast || !canEdit}
                       />
                       <span className="font-semibold text-white">{recipient.username}</span>
                       <span className={recipient.role === "admin" ? "text-red-400" : "text-indigo-300"}>
@@ -405,7 +441,7 @@ export function MessagesPage() {
                           type="button"
                           className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                           onClick={() => markRead.mutate(entry.id)}
-                          disabled={entry.is_read || markRead.isPending}
+                          disabled={!canEdit || entry.is_read || markRead.isPending}
                         >
                           Marquer comme lu
                         </button>
@@ -413,7 +449,7 @@ export function MessagesPage() {
                           type="button"
                           className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-red-400 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
                           onClick={() => archiveMessage.mutate(entry.id)}
-                          disabled={entry.is_archived || archiveMessage.isPending}
+                          disabled={!canEdit || entry.is_archived || archiveMessage.isPending}
                         >
                           Archiver
                         </button>
@@ -484,6 +520,7 @@ export function MessagesPage() {
     {
       id: "messages-main",
       title: "Messages",
+      permissions: ["messages"],
       required: true,
       defaultLayout: {
         lg: { x: 0, y: 0, w: 12, h: 24 },

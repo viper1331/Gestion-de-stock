@@ -31,17 +31,17 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
     },
     "module:clothing:purchase-orders": {
         "blocks": {
-            "purchase-orders-panel": ("clothing", "view"),
+            "purchase-orders-panel": ("purchase_orders", "view"),
         }
     },
     "module:purchasing:suggestions": {
         "blocks": {
-            "purchase-suggestions-panel": None,
+            "purchase-suggestions-panel": ("purchase_suggestions", "view"),
         }
     },
     "module:reports:clothing": {
         "blocks": {
-            "reports-main": ("clothing", "view"),
+            "reports-main": ("reports", "view"),
         }
     },
     "module:suppliers": {
@@ -51,8 +51,8 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
     },
     "module:clothing:collaborators": {
         "blocks": {
-            "collaborators-table": ("dotations", "view"),
-            "collaborators-form": ("dotations", "edit"),
+            "collaborators-table": ("collaborators", "view"),
+            "collaborators-form": ("collaborators", "edit"),
         }
     },
     "module:dotations": {
@@ -82,7 +82,7 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
     },
     "module:vehicle:qr": {
         "blocks": {
-            "vehicle-qr-main": ("vehicle_inventory", "view"),
+            "vehicle-qr-main": ("vehicle_qr", "view"),
         }
     },
     "module:vehicle:guide": {
@@ -137,7 +137,7 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
     },
     "system:messages": {
         "blocks": {
-            "messages-main": None,
+            "messages-main": ("messages", "view"),
         }
     },
     "module:pdf:studio": {

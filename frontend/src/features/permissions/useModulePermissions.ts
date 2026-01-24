@@ -6,7 +6,9 @@ import { api } from "../../lib/api";
 const MODULE_DEPENDENCIES: Record<string, string[]> = {
   suppliers: ["clothing"],
   dotations: ["clothing"],
-  vehicle_qrcodes: ["vehicle_inventory"]
+  collaborators: ["clothing"],
+  vehicle_qr: ["vehicle_inventory"],
+  pharmacy_links: ["pharmacy"]
 };
 
 function collectDependencies(module: string): string[] {
@@ -70,4 +72,3 @@ export function useModulePermissions(
 
   return { ...query, canAccess };
 }
-

@@ -18,6 +18,8 @@ import {
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { buildModuleTitleMap } from "../../lib/moduleTitles";
+import { fetchConfigEntries } from "../../lib/config";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
@@ -94,6 +96,9 @@ interface ReportOverview {
 interface ModuleDefinition {
   key: string;
   label: string;
+  category: string;
+  is_admin_only: boolean;
+  sort_order: number;
 }
 
 const PERIOD_OPTIONS = [
@@ -120,6 +125,14 @@ const formatDateInput = (value: Date) => value.toISOString().slice(0, 10);
 export function ReportsPage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
+  const canView = user?.role === "admin" || modulePermissions.canAccess("reports");
+
+  const { data: configEntries = [] } = useQuery({
+    queryKey: ["config", "global"],
+    queryFn: fetchConfigEntries,
+    enabled: Boolean(user)
+  });
+  const moduleTitleMap = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
 
   const [period, setPeriod] = useState<string>("30d");
   const [startDate, setStartDate] = useState<string>(() =>
@@ -137,18 +150,30 @@ export function ReportsPage() {
       const response = await api.get<ModuleDefinition[]>("/permissions/modules/available");
       return response.data;
     },
-    enabled: Boolean(user)
+    enabled: Boolean(user) && user?.role === "admin"
   });
 
   const accessibleModules = useMemo(() => {
     if (!user) {
       return [];
     }
+    if (!canView && user.role !== "admin") {
+      return [];
+    }
     if (user.role === "admin") {
       return availableModules;
     }
-    return availableModules.filter((entry) => modulePermissions.canAccess(entry.key));
-  }, [availableModules, modulePermissions, user]);
+    const permissionModules = (modulePermissions.data ?? [])
+      .filter((entry) => entry.can_view)
+      .map((entry) => ({
+        key: entry.module,
+        label: moduleTitleMap[entry.module] ?? entry.module,
+        category: "Modules",
+        is_admin_only: false,
+        sort_order: 999
+      }));
+    return permissionModules.sort((a, b) => a.label.localeCompare(b.label, "fr"));
+  }, [availableModules, canView, modulePermissions.data, moduleTitleMap, user]);
 
   const [selectedModule, setSelectedModule] = useState<string>("");
 

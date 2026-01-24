@@ -1,29 +1,17 @@
 from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.admin import require_admin
-from backend.api.auth import get_current_user
 from backend.core import models, services
 
 router = APIRouter()
 
 
-def _resolve_module_access(module: models.LinkCategoryModule) -> str:
-    if module == "vehicle_qr":
-        return "vehicle_qrcodes"
-    return "pharmacy"
-
-
 @router.get("/", response_model=list[models.LinkCategory])
 def list_link_categories(
     module: models.LinkCategoryModule = Query(..., description="Module ciblé"),
-    user: models.User = Depends(get_current_user),
+    _: object = Depends(require_admin),
 ) -> list[models.LinkCategory]:
-    include_inactive = user.role == "admin"
-    if user.role != "admin":
-        module_key = _resolve_module_access(module)
-        if not services.has_module_access(user, module_key, action="view"):
-            raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
-    return services.list_link_categories(module, include_inactive=include_inactive)
+    return services.list_link_categories(module, include_inactive=True)
 
 
 @router.post("/", response_model=models.LinkCategory, status_code=201)

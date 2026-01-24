@@ -14,7 +14,7 @@ from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 router = APIRouter()
 
-MODULE_KEY = "clothing"
+MODULE_KEY = "purchase_orders"
 
 
 def _require_permission(user: models.User, *, action: str) -> None:

@@ -20,15 +20,19 @@ const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
 const PATH_MODULE_MAP: Record<string, string | string[]> = {
   "/barcode": "barcode",
   "/inventory": "clothing",
-  "/reports": "clothing",
-  "/purchase-orders": "clothing",
-  "/purchase-suggestions": ["clothing", "pharmacy", "inventory_remise"],
+  "/reports": "reports",
+  "/purchase-orders": "purchase_orders",
+  "/purchase-suggestions": "purchase_suggestions",
   "/suppliers": "suppliers",
-  "/collaborators": "dotations",
+  "/collaborators": "collaborators",
   "/dotations": "dotations",
   "/vehicle-inventory": "vehicle_inventory",
+  "/vehicle-inventory/qr-codes": "vehicle_qr",
   "/remise-inventory": "inventory_remise",
-  "/pharmacy": "pharmacy"
+  "/pharmacy": "pharmacy",
+  "/messages": "messages",
+  "/operations/pharmacy-links": "pharmacy_links",
+  "/operations/vehicle-qr": "vehicle_qr"
 };
 
 function normalizeInternalPath(path: string): string | null {

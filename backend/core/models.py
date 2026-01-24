@@ -1575,3 +1575,6 @@ class ModulePermission(ModulePermissionBase):
 class ModuleDefinition(BaseModel):
     key: str = Field(..., min_length=1, max_length=64)
     label: str = Field(..., min_length=1, max_length=128)
+    category: str = Field(..., min_length=1, max_length=64)
+    is_admin_only: bool = False
+    sort_order: int = Field(0, ge=0)

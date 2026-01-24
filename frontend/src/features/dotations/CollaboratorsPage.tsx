@@ -94,8 +94,8 @@ export function CollaboratorsPage() {
   const pasteRef = useRef<HTMLTextAreaElement | null>(null);
 
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
-  const canView = user?.role === "admin" || modulePermissions.canAccess("dotations");
-  const canEdit = user?.role === "admin" || modulePermissions.canAccess("dotations", "edit");
+  const canView = user?.role === "admin" || modulePermissions.canAccess("collaborators");
+  const canEdit = user?.role === "admin" || modulePermissions.canAccess("collaborators", "edit");
 
   const { data: collaborators = [], isFetching } = useQuery({
     queryKey: ["dotations", "collaborators"],
@@ -360,7 +360,7 @@ export function CollaboratorsPage() {
     const tableBlock: EditablePageBlock = {
       id: "collaborators-table",
       title: "Liste des collaborateurs",
-      permissions: ["dotations"],
+      permissions: ["collaborators"],
       required: true,
       variant: "plain",
       defaultLayout: {
@@ -444,7 +444,7 @@ export function CollaboratorsPage() {
       layoutBlocks.push({
         id: "collaborators-form",
         title: "Fiche collaborateur",
-        permissions: ["dotations"],
+        permissions: ["collaborators"],
         variant: "plain",
         defaultLayout: {
           lg: { x: 8, y: 0, w: 4, h: 14 },
