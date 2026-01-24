@@ -181,25 +181,7 @@ export function ReportsPage() {
 
   const canView = user?.role === "admin" || accessibleModules.length > 0;
 
-  const orderStatusData = useMemo(() => {
-    const totals = (data?.series.orders ?? []).reduce(
-      (acc, entry) => ({
-        ordered: acc.ordered + entry.ordered,
-        partial: acc.partial + entry.partial,
-        received: acc.received + entry.received,
-        cancelled: acc.cancelled + entry.cancelled
-      }),
-      { ordered: 0, partial: 0, received: 0, cancelled: 0 }
-    );
-    return [
-      { name: "Commandé", value: totals.ordered },
-      { name: "Partiel", value: totals.partial },
-      { name: "Reçu", value: totals.received },
-      { name: "Annulé", value: totals.cancelled }
-    ];
-  }, [data?.series.orders]);
-
-  const { data, isFetching, refetch } = useQuery({
+  const { data: reportData, isFetching, isLoading, error, refetch } = useQuery({
     queryKey: [
       "reports",
       "overview",
@@ -225,6 +207,24 @@ export function ReportsPage() {
     },
     enabled: Boolean(canView && selectedModule)
   });
+
+  const orderStatusData = useMemo(() => {
+    const totals = (reportData?.series.orders ?? []).reduce(
+      (acc, entry) => ({
+        ordered: acc.ordered + entry.ordered,
+        partial: acc.partial + entry.partial,
+        received: acc.received + entry.received,
+        cancelled: acc.cancelled + entry.cancelled
+      }),
+      { ordered: 0, partial: 0, received: 0, cancelled: 0 }
+    );
+    return [
+      { name: "Commandé", value: totals.ordered },
+      { name: "Partiel", value: totals.partial },
+      { name: "Reçu", value: totals.received },
+      { name: "Annulé", value: totals.cancelled }
+    ];
+  }, [reportData?.series.orders]);
 
   useEffect(() => {
     if (!refetch || !canView) {
@@ -348,13 +348,24 @@ export function ReportsPage() {
         ) : null}
       </div>
 
+      {isLoading ? (
+        <div className="rounded-xl border border-slate-800/80 bg-slate-900/70 p-4 text-sm text-slate-300">
+          Chargement des rapports...
+        </div>
+      ) : null}
+      {error ? (
+        <div className="rounded-xl border border-red-500/40 bg-red-500/10 p-4 text-sm text-red-200">
+          Erreur lors du chargement des rapports.
+        </div>
+      ) : null}
+
       <div className="grid gap-4 md:grid-cols-5">
         {[
-          { label: "Entrées", value: data?.kpis.in_qty ?? 0, accent: "text-emerald-300" },
-          { label: "Sorties", value: data?.kpis.out_qty ?? 0, accent: "text-rose-300" },
-          { label: "Net", value: data?.kpis.net_qty ?? 0, accent: "text-indigo-300" },
-          { label: "Sous seuil", value: data?.kpis.low_stock_count ?? 0, accent: "text-amber-300" },
-          { label: "BC en cours", value: data?.kpis.open_orders ?? 0, accent: "text-sky-300" }
+          { label: "Entrées", value: reportData?.kpis.in_qty ?? 0, accent: "text-emerald-300" },
+          { label: "Sorties", value: reportData?.kpis.out_qty ?? 0, accent: "text-rose-300" },
+          { label: "Net", value: reportData?.kpis.net_qty ?? 0, accent: "text-indigo-300" },
+          { label: "Sous seuil", value: reportData?.kpis.low_stock_count ?? 0, accent: "text-amber-300" },
+          { label: "BC en cours", value: reportData?.kpis.open_orders ?? 0, accent: "text-sky-300" }
         ].map((kpi) => (
           <div
             key={kpi.label}
@@ -371,7 +382,7 @@ export function ReportsPage() {
           <h3 className="text-sm font-semibold text-slate-200">Mouvements entrées / sorties</h3>
           <div className="mt-3 h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data?.series.moves ?? []}>
+              <BarChart data={reportData?.series.moves ?? []}>
                 <XAxis dataKey="t" stroke="#94a3b8" fontSize={12} />
                 <YAxis stroke="#94a3b8" fontSize={12} />
                 <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#1e293b" }} />
@@ -386,7 +397,7 @@ export function ReportsPage() {
           <h3 className="text-sm font-semibold text-slate-200">Net flow</h3>
           <div className="mt-3 h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data?.series.net ?? []}>
+              <LineChart data={reportData?.series.net ?? []}>
                 <XAxis dataKey="t" stroke="#94a3b8" fontSize={12} />
                 <YAxis stroke="#94a3b8" fontSize={12} />
                 <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#1e293b" }} />
@@ -399,7 +410,7 @@ export function ReportsPage() {
           <h3 className="text-sm font-semibold text-slate-200">BC créés</h3>
           <div className="mt-3 h-64">
             <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={data?.series.orders ?? []}>
+              <BarChart data={reportData?.series.orders ?? []}>
                 <XAxis dataKey="t" stroke="#94a3b8" fontSize={12} />
                 <YAxis stroke="#94a3b8" fontSize={12} />
                 <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#1e293b" }} />
@@ -438,7 +449,7 @@ export function ReportsPage() {
           <h3 className="text-sm font-semibold text-slate-200">Tendance sous seuil</h3>
           <div className="mt-3 h-56">
             <ResponsiveContainer width="100%" height="100%">
-              <LineChart data={data?.series.low_stock ?? []}>
+              <LineChart data={reportData?.series.low_stock ?? []}>
                 <XAxis dataKey="t" stroke="#94a3b8" fontSize={12} />
                 <YAxis stroke="#94a3b8" fontSize={12} />
                 <Tooltip contentStyle={{ backgroundColor: "#0f172a", borderColor: "#1e293b" }} />
@@ -453,10 +464,10 @@ export function ReportsPage() {
             <ResponsiveContainer width="100%" height="100%">
               <BarChart
                 data={[
-                  { name: "Sans SKU", value: data?.data_quality.missing_sku ?? 0 },
-                  { name: "Sans fournisseur", value: data?.data_quality.missing_supplier ?? 0 },
-                  { name: "Sans seuil", value: data?.data_quality.missing_threshold ?? 0 },
-                  { name: "Mouv. anormaux", value: data?.data_quality.abnormal_movements ?? 0 }
+                  { name: "Sans SKU", value: reportData?.data_quality.missing_sku ?? 0 },
+                  { name: "Sans fournisseur", value: reportData?.data_quality.missing_supplier ?? 0 },
+                  { name: "Sans seuil", value: reportData?.data_quality.missing_threshold ?? 0 },
+                  { name: "Mouv. anormaux", value: reportData?.data_quality.abnormal_movements ?? 0 }
                 ]}
               >
                 <XAxis dataKey="name" stroke="#94a3b8" fontSize={11} />
@@ -482,14 +493,14 @@ export function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(data?.tops.out ?? []).map((row) => (
+                {(reportData?.tops.out ?? []).map((row) => (
                   <tr key={`${row.sku}-${row.name}`} className="rounded-lg bg-slate-950/70">
                     <td className="px-2 py-2">{row.name || "—"}</td>
                     <td className="px-2 py-2 text-slate-400">{row.sku || "—"}</td>
                     <td className="px-2 py-2 text-right text-rose-300">{formatNumber(row.qty)}</td>
                   </tr>
                 ))}
-                {(data?.tops.out ?? []).length === 0 ? (
+                {(reportData?.tops.out ?? []).length === 0 ? (
                   <tr>
                     <td colSpan={3} className="px-2 py-4 text-center text-slate-500">
                       Aucune sortie enregistrée.
@@ -512,14 +523,14 @@ export function ReportsPage() {
                 </tr>
               </thead>
               <tbody>
-                {(data?.tops.in ?? []).map((row) => (
+                {(reportData?.tops.in ?? []).map((row) => (
                   <tr key={`${row.sku}-${row.name}`} className="rounded-lg bg-slate-950/70">
                     <td className="px-2 py-2">{row.name || "—"}</td>
                     <td className="px-2 py-2 text-slate-400">{row.sku || "—"}</td>
                     <td className="px-2 py-2 text-right text-emerald-300">{formatNumber(row.qty)}</td>
                   </tr>
                 ))}
-                {(data?.tops.in ?? []).length === 0 ? (
+                {(reportData?.tops.in ?? []).length === 0 ? (
                   <tr>
                     <td colSpan={3} className="px-2 py-4 text-center text-slate-500">
                       Aucune entrée enregistrée.
