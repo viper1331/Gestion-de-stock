@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi.responses import JSONResponse
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -14,6 +15,47 @@ MODULE_KEY = "clothing"
 def _require_permission(user: models.User, *, action: str) -> None:
     if not services.has_module_access(user, MODULE_KEY, action=action):
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
+
+def _require_permission_for_module(user: models.User, module_key: str, *, action: str) -> None:
+    if not services.has_module_access(user, module_key, action=action):
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
+
+def _resolve_barcode_module(module: str) -> tuple[str, str]:
+    normalized = module.strip().lower()
+    if normalized == "clothing":
+        return "clothing", "clothing"
+    if normalized == "remise":
+        return "inventory_remise", "remise"
+    if normalized == "pharmacy":
+        return "pharmacy", "pharmacy"
+    raise ValueError("Module invalide")
+
+
+@router.get("/by-barcode", response_model=models.BarcodeLookupItem)
+async def find_item_by_barcode(
+    module: str = Query(..., description="Module source (clothing, remise, pharmacy)"),
+    barcode: str = Query(..., description="Code-barres scanné"),
+    user: models.User = Depends(get_current_user),
+) -> models.BarcodeLookupItem:
+    try:
+        module_key, service_module = _resolve_barcode_module(module)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    _require_permission_for_module(user, module_key, action="view")
+    try:
+        matches = services.find_items_by_barcode(service_module, barcode)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not matches:
+        raise HTTPException(status_code=404, detail="Code-barres introuvable")
+    if len(matches) > 1:
+        return JSONResponse(
+            status_code=409,
+            content={"matches": [match.model_dump() for match in matches]},
+        )
+    return matches[0]
 
 
 @router.get("/", response_model=list[models.Item])
@@ -69,4 +111,3 @@ async def fetch_movements(item_id: int, user: models.User = Depends(get_current_
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.fetch_movements(item_id)
-

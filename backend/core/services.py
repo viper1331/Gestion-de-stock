@@ -6873,6 +6873,38 @@ def list_remise_items(search: str | None = None) -> list[models.Item]:
     return _list_inventory_items_internal("inventory_remise", search)
 
 
+def find_items_by_barcode(module: str, barcode: str) -> list[models.BarcodeLookupItem]:
+    ensure_database_ready()
+    normalized_input = barcode.strip().replace(" ", "")
+    if not normalized_input:
+        raise ValueError("Le code-barres ne peut pas être vide")
+    normalized = normalized_input.upper()
+
+    if module == "clothing":
+        table = "items"
+        column = "sku"
+    elif module == "remise":
+        table = "remise_items"
+        column = "sku"
+    elif module == "pharmacy":
+        table = "pharmacy_items"
+        column = "barcode"
+    else:
+        raise ValueError("Module invalide")
+
+    query = (
+        f"SELECT id, name FROM {table} "
+        f"WHERE UPPER(REPLACE(TRIM({column}), ' ', '')) = ? "
+        "ORDER BY name COLLATE NOCASE"
+    )
+    with db.get_stock_connection() as conn:
+        if module == "remise":
+            _ensure_remise_item_columns(conn)
+        rows = conn.execute(query, (normalized,)).fetchall()
+
+    return [models.BarcodeLookupItem(id=row["id"], name=row["name"]) for row in rows]
+
+
 def attach_vehicle_item_image(item_id: int, stream: BinaryIO, filename: str | None) -> models.Item:
     ensure_database_ready()
     config = _get_inventory_config("vehicle_inventory")

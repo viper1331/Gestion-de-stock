@@ -1,9 +1,15 @@
-import { FormEvent, useState } from "react";
+import { FormEvent, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
+import {
+  formatPurchaseOrderItemLabel,
+  type BarcodeLookupItem,
+  type PurchaseOrderItemLabelData,
+  usePurchaseOrderBarcodeScan
+} from "../purchasing/usePurchaseOrderBarcodeScan";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 
@@ -17,6 +23,13 @@ interface Supplier {
 interface PharmacyItemOption {
   id: number;
   name: string;
+  barcode?: string | null;
+  dosage?: string | null;
+  packaging?: string | null;
+  quantity?: number | null;
+  supplier_id?: number | null;
+  supplier_name?: string | null;
+  extra?: Record<string, unknown>;
 }
 
 interface PharmacyPurchaseOrderItem {
@@ -91,6 +104,9 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const selectedDraftSupplier = suppliers.find((supplier) => supplier.id === draftSupplier);
   const selectedEditSupplier = suppliers.find((supplier) => supplier.id === editSupplier);
+  const suppliersById = useMemo(() => {
+    return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
+  }, [suppliers]);
 
   const renderSupplierDetails = (supplier?: Supplier) => {
     if (!supplier) {
@@ -144,6 +160,47 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
       return response.data;
     }
   });
+
+  const handleAddItemLine = (match: BarcodeLookupItem) => {
+    setDraftLines((prev) => {
+      const existingIndex = prev.findIndex((line) => line.pharmacyItemId === match.id);
+      if (existingIndex >= 0) {
+        const next = [...prev];
+        next[existingIndex] = {
+          ...next[existingIndex],
+          quantity: next[existingIndex].quantity + 1
+        };
+        return next;
+      }
+      return [...prev, { pharmacyItemId: match.id, quantity: 1 }];
+    });
+  };
+
+  const {
+    barcodeInput,
+    setBarcodeInput,
+    inputRef,
+    conflictMatches,
+    isResolving: isResolvingBarcode,
+    handleKeyDown: handleBarcodeKeyDown,
+    submitBarcode,
+    selectConflictMatch,
+    clearConflictMatches
+  } = usePurchaseOrderBarcodeScan({
+    module: "pharmacy",
+    onAddItem: handleAddItemLine
+  });
+
+  const formatItemLabel = (item: PharmacyItemOption) => {
+    const supplierName =
+      item.supplier_name ?? (item.supplier_id ? suppliersById.get(item.supplier_id) : undefined);
+    return formatPurchaseOrderItemLabel(item as PurchaseOrderItemLabelData, supplierName);
+  };
+
+  const formatConflictLabel = (match: BarcodeLookupItem) => {
+    const item = pharmacyItems.find((candidate) => candidate.id === match.id);
+    return item ? formatItemLabel(item) : match.name;
+  };
 
   const createOrder = useMutation({
     mutationFn: async (payload: {
@@ -653,6 +710,34 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                     <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
                       Lignes de commande
                     </p>
+                    <div className="space-y-1">
+                      <label
+                        className="text-xs font-semibold text-slate-300"
+                        htmlFor="pharmacy-barcode-input"
+                      >
+                        Scanner / saisir un code-barres
+                      </label>
+                      <div className="flex gap-2">
+                        <AppTextInput
+                          id="pharmacy-barcode-input"
+                          ref={inputRef}
+                          value={barcodeInput}
+                          onChange={(event) => setBarcodeInput(event.target.value)}
+                          onKeyDown={handleBarcodeKeyDown}
+                          placeholder="Scanner / saisir un code-barres"
+                          noSpellcheck
+                          className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                        />
+                        <button
+                          type="button"
+                          onClick={submitBarcode}
+                          disabled={isResolvingBarcode}
+                          className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                        >
+                          Ajouter
+                        </button>
+                      </div>
+                    </div>
                     {draftLines.map((line, index) => (
                       <div key={index} className="flex gap-2">
                         <select
@@ -672,7 +757,7 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                           <option value="">Sélectionnez un article</option>
                           {pharmacyItems.map((item) => (
                             <option key={item.id} value={item.id}>
-                              {item.name}
+                              {formatItemLabel(item)}
                             </option>
                           ))}
                         </select>
@@ -728,6 +813,41 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
           </div>
         ) : null}
       </div>
+
+      {conflictMatches ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4">
+          <div className="w-full max-w-lg rounded-lg border border-slate-800 bg-slate-900 p-6 shadow-xl">
+            <div className="flex items-start justify-between gap-4">
+              <div>
+                <h4 className="text-lg font-semibold text-white">Choisir un article</h4>
+                <p className="text-xs text-slate-400">
+                  Plusieurs articles correspondent à ce code-barres.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={clearConflictMatches}
+                className="text-sm text-slate-400 hover:text-slate-200"
+              >
+                Fermer
+              </button>
+            </div>
+            <ul className="mt-4 space-y-2 text-sm text-slate-200">
+              {conflictMatches.map((match) => (
+                <li key={match.id}>
+                  <button
+                    type="button"
+                    onClick={() => selectConflictMatch(match)}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-left text-sm text-slate-100 hover:border-indigo-400 hover:bg-slate-800"
+                  >
+                    {formatConflictLabel(match)}
+                  </button>
+                </li>
+              ))}
+            </ul>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 }

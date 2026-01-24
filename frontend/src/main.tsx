@@ -2,6 +2,7 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { RouterProvider } from "react-router-dom";
+import { Toaster } from "sonner";
 
 import { SpellcheckSettingsProvider } from "./app/spellcheckSettings";
 import { ThemeProvider } from "./app/theme";
@@ -18,6 +19,7 @@ ReactDOM.createRoot(document.getElementById("root") as HTMLElement).render(
       <ThemeProvider>
         <SpellcheckSettingsProvider>
           <RouterProvider router={router} />
+          <Toaster richColors position="top-right" closeButton />
         </SpellcheckSettingsProvider>
       </ThemeProvider>
     </QueryClientProvider>
