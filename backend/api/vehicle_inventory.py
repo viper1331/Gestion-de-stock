@@ -42,7 +42,7 @@ logger = logging.getLogger("inventory_debug")
 
 router = APIRouter()
 
-QR_MODULE_KEY = "vehicle_qrcodes"
+QR_MODULE_KEY = "vehicle_qr"
 FALLBACK_MODULE_KEY = "vehicle_inventory"
 
 
@@ -58,7 +58,7 @@ def _require_permission(user: models.User, *, action: str) -> None:
         return
     if services.has_module_access(user, FALLBACK_MODULE_KEY, action=action):
         return
-        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
 @router.get("/", response_model=list[models.Item])

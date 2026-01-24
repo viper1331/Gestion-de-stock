@@ -8,19 +8,12 @@ import { AppTextInput } from "./AppTextInput";
 type LinkModule = "vehicle_qr" | "pharmacy";
 
 interface LinkCategory {
-  id: number;
-  module: LinkModule;
-  key: string;
+  category_key: string;
   label: string;
   placeholder: string | null;
   help_text: string | null;
   is_required: boolean;
   sort_order: number;
-  is_active: boolean;
-}
-
-interface LinkValue {
-  category_key: string;
   url: string;
 }
 
@@ -52,35 +45,24 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
   const [drafts, setDrafts] = useState<Record<string, string>>({});
   const [status, setStatus] = useState<string | null>(null);
 
-  const { data: categories = [], isLoading: isLoadingCategories } = useQuery({
-    queryKey: ["link-categories", module],
-    queryFn: async () => {
-      const response = await api.get<LinkCategory[]>("/link-categories", {
-        params: { module }
-      });
-      return response.data;
-    }
-  });
-
   const { data: linkValues = [], isLoading: isLoadingLinks } = useQuery({
     queryKey: ["item-links", module, itemId],
     queryFn: async () => {
-      const response = await api.get<LinkValue[]>(getLinksEndpoint(module, itemId));
+      const response = await api.get<LinkCategory[]>(getLinksEndpoint(module, itemId));
       return response.data;
     },
     enabled: Boolean(itemId)
   });
 
   const activeCategories = useMemo(() => {
-    return [...categories]
-      .filter((category) => category.is_active)
+    return [...linkValues]
       .sort((a, b) => {
         if (a.sort_order !== b.sort_order) {
           return a.sort_order - b.sort_order;
         }
         return a.label.localeCompare(b.label, "fr");
       });
-  }, [categories]);
+  }, [linkValues]);
 
   useEffect(() => {
     if (!activeCategories.length) {
@@ -90,7 +72,7 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
     const linkMap = new Map(linkValues.map((entry) => [entry.category_key, entry.url ?? ""]));
     const next: Record<string, string> = {};
     activeCategories.forEach((category) => {
-      next[category.key] = linkMap.get(category.key) ?? "";
+      next[category.category_key] = linkMap.get(category.category_key) ?? "";
     });
     setDrafts(next);
   }, [activeCategories, linkValues, itemId]);
@@ -98,13 +80,13 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
   const errors = useMemo(() => {
     const next: Record<string, string> = {};
     activeCategories.forEach((category) => {
-      const value = drafts[category.key] ?? "";
+      const value = drafts[category.category_key] ?? "";
       if (category.is_required && !value.trim()) {
-        next[category.key] = "Lien requis";
+        next[category.category_key] = "Lien requis";
         return;
       }
       if (!isValidUrl(value)) {
-        next[category.key] = "URL invalide (HTTP/HTTPS)";
+        next[category.category_key] = "URL invalide (HTTP/HTTPS)";
       }
     });
     return next;
@@ -116,8 +98,8 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
     mutationFn: async () => {
       const payload = {
         links: activeCategories.map((category) => ({
-          category_key: category.key,
-          url: drafts[category.key] ?? ""
+          category_key: category.category_key,
+          url: drafts[category.category_key] ?? ""
         }))
       };
       await api.put(getLinksEndpoint(module, itemId), payload);
@@ -145,7 +127,7 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
     }));
   };
 
-  const isLoading = isLoadingCategories || isLoadingLinks;
+  const isLoading = isLoadingLinks;
 
   if (isLoading) {
     return <p className="text-sm text-slate-500 dark:text-slate-400">Chargement des liens...</p>;
@@ -162,7 +144,7 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
   return (
     <div className="flex min-w-0 flex-col gap-4">
       {activeCategories.map((category) => (
-        <label key={category.id} className="text-sm font-semibold text-slate-700 dark:text-slate-200">
+        <label key={category.category_key} className="text-sm font-semibold text-slate-700 dark:text-slate-200">
           <span className="flex items-center gap-2">
             {category.label}
             {category.is_required && (
@@ -173,8 +155,8 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
           </span>
           <AppTextInput
             type="url"
-            value={drafts[category.key] ?? ""}
-            onChange={(event) => handleChange(category.key, event.target.value)}
+            value={drafts[category.category_key] ?? ""}
+            onChange={(event) => handleChange(category.category_key, event.target.value)}
             placeholder={category.placeholder ?? "https://..."}
             disabled={readonly}
             className="mt-1 w-full rounded-lg border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none disabled:cursor-not-allowed disabled:bg-slate-100 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-100 dark:disabled:bg-slate-900"
@@ -184,8 +166,10 @@ export function CustomLinksEditor({ module, itemId, readonly = false }: CustomLi
               {category.help_text}
             </p>
           )}
-          {errors[category.key] && (
-            <p className="mt-1 text-xs font-normal text-rose-500">{errors[category.key]}</p>
+          {errors[category.category_key] && (
+            <p className="mt-1 text-xs font-normal text-rose-500">
+              {errors[category.category_key]}
+            </p>
           )}
         </label>
       ))}

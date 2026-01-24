@@ -256,7 +256,7 @@ export function AppLayout() {
               label: "Rapports",
               tooltip: "Analyser les rapports d'habillement",
               icon: "📈",
-              module: "clothing"
+              module: "reports"
             },
             {
               id: "clothing_purchase_orders",
@@ -264,7 +264,7 @@ export function AppLayout() {
               label: "Bons de commande",
               tooltip: "Gérer les bons de commande d'habillement",
               icon: "🧾",
-              module: "clothing"
+              module: "purchase_orders"
             },
             {
               id: "purchase_suggestions",
@@ -272,7 +272,7 @@ export function AppLayout() {
               label: "Suggestions de commandes",
               tooltip: "Préparer les bons de commande selon les seuils",
               icon: "💡",
-              modules: ["clothing", "pharmacy", "inventory_remise"]
+              module: "purchase_suggestions"
             },
             {
               id: "suppliers",
@@ -288,7 +288,7 @@ export function AppLayout() {
               label: "Collaborateurs",
               tooltip: "Suivre les collaborateurs et leurs dotations",
               icon: "👥",
-              module: "dotations"
+              module: "collaborators"
             },
             {
               id: "dotations",
@@ -317,10 +317,10 @@ export function AppLayout() {
             {
               id: "vehicle_qrcodes",
               to: "/vehicle-inventory/qr-codes",
-              label: moduleTitles.vehicle_qrcodes,
+              label: moduleTitles.vehicle_qr,
               tooltip: "Partager les fiches matériel via QR codes",
               icon: "🔖",
-              modules: ["vehicle_qrcodes", "vehicle_inventory"]
+              module: "vehicle_qr"
             },
             {
               id: "remise_inventory",
@@ -359,7 +359,8 @@ export function AppLayout() {
               to: "/messages",
               label: "Messagerie",
               tooltip: "Ouvrir la messagerie interne",
-              icon: "✉️"
+              icon: "✉️",
+              module: "messages"
             }
           ]
         },
@@ -375,7 +376,7 @@ export function AppLayout() {
               label: "QR codes véhicules",
               tooltip: "Gérer les liens et QR codes véhicules",
               icon: "🔖",
-              modules: ["vehicle_qrcodes", "vehicle_inventory"]
+              module: "vehicle_qr"
             },
             {
               id: "operations_pharmacy_links",
@@ -383,7 +384,7 @@ export function AppLayout() {
               label: "Liens Pharmacie",
               tooltip: "Gérer les liens associés aux articles pharmacie",
               icon: "💊",
-              module: "pharmacy"
+              module: "pharmacy_links"
             },
             {
               id: "operations_link_categories",
@@ -407,6 +408,7 @@ export function AppLayout() {
               label: "Paramètres",
               tooltip: "Configurer les paramètres généraux",
               icon: "⚙️",
+              adminOnly: true
             },
             {
               id: "admin_settings",

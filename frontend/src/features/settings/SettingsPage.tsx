@@ -68,12 +68,18 @@ const ENTRY_DESCRIPTIONS: Record<string, string> = {
     "Durée d'inactivité en minutes avant la déconnexion automatique. Définissez 0 ou laissez vide pour désactiver.",
   "modules.barcode": "Titre principal affiché sur la page des codes-barres.",
   "modules.clothing": "Titre principal affiché sur l'inventaire habillement.",
+  "modules.collaborators": "Titre principal affiché sur la page des collaborateurs.",
   "modules.dotations": "Titre principal affiché sur la page des dotations.",
   "modules.inventory_remise": "Titre principal affiché sur l'inventaire remises.",
+  "modules.messages": "Titre principal affiché sur la messagerie interne.",
   "modules.pharmacy": "Titre principal affiché sur l'inventaire pharmacie.",
+  "modules.pharmacy_links": "Titre principal affiché sur la gestion des liens pharmacie.",
+  "modules.purchase_orders": "Titre principal affiché sur les bons de commande.",
+  "modules.purchase_suggestions": "Titre principal affiché sur les suggestions de commandes.",
+  "modules.reports": "Titre principal affiché sur la page des rapports.",
   "modules.suppliers": "Titre principal affiché sur la page fournisseurs.",
   "modules.vehicle_inventory": "Titre principal affiché sur l'inventaire véhicules.",
-  "modules.vehicle_qrcodes": "Titre principal affiché sur la gestion des QR codes véhicules."
+  "modules.vehicle_qr": "Titre principal affiché sur la gestion des QR codes véhicules."
 };
 
 const MODULE_TITLE_ENTRIES: ConfigEntry[] = Object.entries(MODULE_TITLE_DEFAULTS).map(

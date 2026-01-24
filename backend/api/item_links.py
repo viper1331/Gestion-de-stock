@@ -5,21 +5,18 @@ from backend.core import models, services
 
 router = APIRouter()
 
-QR_MODULE_KEY = "vehicle_qrcodes"
-FALLBACK_MODULE_KEY = "vehicle_inventory"
-PHARMACY_MODULE_KEY = "pharmacy"
+QR_MODULE_KEY = "vehicle_qr"
+PHARMACY_LINKS_MODULE_KEY = "pharmacy_links"
 
 
 def _require_vehicle_qr_access(user: models.User, *, action: str) -> None:
     if services.has_module_access(user, QR_MODULE_KEY, action=action):
         return
-    if services.has_module_access(user, FALLBACK_MODULE_KEY, action=action):
-        return
     raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
 def _require_pharmacy_access(user: models.User, *, action: str) -> None:
-    if not services.has_module_access(user, PHARMACY_MODULE_KEY, action=action):
+    if not services.has_module_access(user, PHARMACY_LINKS_MODULE_KEY, action=action):
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 

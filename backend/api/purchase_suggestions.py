@@ -11,6 +11,12 @@ from backend.core import db, models, services
 router = APIRouter()
 
 _SUGGESTION_MODULES: set[str] = {"clothing", "pharmacy", "inventory_remise"}
+MODULE_KEY = "purchase_suggestions"
+
+
+def _require_permission(user: models.User, *, action: str) -> None:
+    if not services.has_module_access(user, MODULE_KEY, action=action):
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
 def _allowed_modules(user: models.User, *, action: str) -> list[str]:
@@ -49,6 +55,7 @@ async def list_suggestions(
     module: str | None = None,
     user: models.User = Depends(get_current_user),
 ) -> list[models.PurchaseSuggestionDetail]:
+    _require_permission(user, action="view")
     allowed = _allowed_modules(user, action="view")
     if module:
         requested = _validate_modules([module], allowed)
@@ -69,6 +76,7 @@ async def refresh_suggestions(
     payload: models.PurchaseSuggestionRefreshPayload,
     user: models.User = Depends(get_current_user),
 ) -> list[models.PurchaseSuggestionDetail]:
+    _require_permission(user, action="edit")
     allowed = _allowed_modules(user, action="edit")
     if not allowed:
         raise HTTPException(status_code=403, detail="Accès refusé.")
@@ -88,6 +96,7 @@ async def update_suggestion(
     payload: models.PurchaseSuggestionUpdatePayload,
     user: models.User = Depends(get_current_user),
 ) -> models.PurchaseSuggestionDetail:
+    _require_permission(user, action="edit")
     suggestion = services.get_purchase_suggestion(suggestion_id)
     allowed = _allowed_modules(user, action="edit")
     if suggestion.module_key not in allowed:
@@ -102,6 +111,7 @@ async def update_suggestion(
 async def convert_suggestion(
     suggestion_id: int, user: models.User = Depends(get_current_user)
 ) -> models.PurchaseSuggestionConvertResult:
+    _require_permission(user, action="edit")
     suggestion = services.get_purchase_suggestion(suggestion_id)
     allowed = _allowed_modules(user, action="edit")
     if suggestion.module_key not in allowed:

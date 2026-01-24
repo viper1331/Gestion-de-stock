@@ -18,7 +18,7 @@ interface Supplier {
 export function PurchaseOrdersPage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
-  const canView = user?.role === "admin" || modulePermissions.canAccess("clothing");
+  const canView = user?.role === "admin" || modulePermissions.canAccess("purchase_orders");
   const canViewSuppliers = user?.role === "admin" || modulePermissions.canAccess("suppliers");
 
   const { data: suppliers = [], isFetching } = useQuery({
@@ -65,7 +65,7 @@ export function PurchaseOrdersPage() {
       {
         id: "purchase-orders-panel",
         title: "Bons de commande",
-        permissions: ["clothing"],
+        permissions: ["purchase_orders"],
         required: true,
         variant: "plain",
         defaultLayout: {

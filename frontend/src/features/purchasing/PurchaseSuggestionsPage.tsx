@@ -282,6 +282,7 @@ export function PurchaseSuggestionsPage() {
   const clothingTitle = useModuleTitle("clothing");
   const pharmacyTitle = useModuleTitle("pharmacy");
   const remiseTitle = useModuleTitle("inventory_remise");
+  const canAccessSuggestions = user?.role === "admin" || modulePermissions.canAccess("purchase_suggestions");
 
   const baseModuleOptions = useMemo(
     () => [
@@ -296,8 +297,11 @@ export function PurchaseSuggestionsPage() {
     if (user?.role === "admin") {
       return baseModuleOptions;
     }
+    if (!canAccessSuggestions) {
+      return [];
+    }
     return baseModuleOptions.filter((option) => modulePermissions.canAccess(option.value));
-  }, [baseModuleOptions, modulePermissions, user]);
+  }, [baseModuleOptions, canAccessSuggestions, modulePermissions, user]);
 
   const moduleOptions = useMemo(() => {
     if (visibleModules.length <= 1) {
@@ -321,8 +325,7 @@ export function PurchaseSuggestionsPage() {
     }
   }, [moduleFilter, moduleOptions]);
 
-  const canView =
-    user?.role === "admin" || visibleModules.length > 0;
+  const canView = Boolean(canAccessSuggestions) && (user?.role === "admin" || visibleModules.length > 0);
 
   const { data: suggestions = [], isFetching } = useQuery({
     queryKey: ["purchase-suggestions", { status: statusFilter, module: moduleFilter }],
@@ -434,6 +437,7 @@ export function PurchaseSuggestionsPage() {
       {
         id: "purchase-suggestions-panel",
         title: "Suggestions de commandes",
+        permissions: ["purchase_suggestions"],
         required: true,
         variant: "plain",
         defaultLayout: {

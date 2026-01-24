@@ -105,7 +105,7 @@ def test_link_category_crud_admin_vs_user() -> None:
     assert matches and matches[0]["is_active"] is False
 
     user_id = _create_user("link_user", "password123", role="user")
-    _grant_module_permission(user_id, "vehicle_qrcodes", can_view=True, can_edit=True)
+    _grant_module_permission(user_id, "vehicle_qr", can_view=True, can_edit=True)
     user_headers = _login_headers("link_user", "password123")
     denied = client.post("/link-categories", json=payload, headers=user_headers)
     assert denied.status_code == 403, denied.text
