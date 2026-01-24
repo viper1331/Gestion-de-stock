@@ -1354,6 +1354,11 @@ class BarcodeValue(BaseModel):
     sku: str = Field(..., min_length=1, max_length=64)
 
 
+class BarcodeLookupItem(BaseModel):
+    id: int
+    name: str = Field(..., min_length=1, max_length=256)
+
+
 class BarcodeCatalogEntry(BaseModel):
     sku: str = Field(..., min_length=1, max_length=64)
     label: str = Field(..., min_length=1, max_length=256)
