@@ -13,6 +13,8 @@ import {
 } from "../purchasing/usePurchaseOrderBarcodeScan";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
+import { DraggableModal } from "components/DraggableModal";
+import { PurchaseOrderCreateModal } from "components/PurchaseOrderCreateModal";
 
 interface Supplier {
   id: number;
@@ -69,7 +71,7 @@ interface CreateOrderPayload {
 
 interface ReceiveOrderPayload {
   orderId: number;
-  items: Array<{ quantity: number } & Partial<Record<ItemIdKey, number>>>;
+  lines: Array<{ line_id: number; qty: number }>;
 }
 
 interface UpdateOrderPayload {
@@ -141,6 +143,7 @@ export function PurchaseOrdersPanel({
   const [draftLines, setDraftLines] = useState<DraftLine[]>([{ itemId: "", quantity: 1 }]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<PurchaseOrderDetail | null>(null);
   const [editSupplier, setEditSupplier] = useState<number | "">("");
   const [editStatus, setEditStatus] = useState<string>("ORDERED");
@@ -149,6 +152,9 @@ export function PurchaseOrdersPanel({
   const [sendModalOrder, setSendModalOrder] = useState<PurchaseOrderDetail | null>(null);
   const [overrideEmail, setOverrideEmail] = useState<string>("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [receiveModalOrder, setReceiveModalOrder] = useState<PurchaseOrderDetail | null>(null);
+  const [receiveQuantities, setReceiveQuantities] = useState<Record<number, number>>({});
+  const [receiveFormError, setReceiveFormError] = useState<string | null>(null);
   const selectedDraftSupplier = useMemo(
     () => suppliers.find((supplier) => supplier.id === draftSupplier),
     [draftSupplier, suppliers]
@@ -157,6 +163,7 @@ export function PurchaseOrdersPanel({
     () => suppliers.find((supplier) => supplier.id === editSupplier),
     [editSupplier, suppliers]
   );
+  const createFormId = `purchase-order-create-${itemIdField}`;
   const suppliersById = useMemo(() => {
     return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
   }, [suppliers]);
@@ -311,6 +318,7 @@ export function PurchaseOrdersPanel({
     },
     onSuccess: async () => {
       setMessage("Bon de commande créé.");
+      setIsCreateModalOpen(false);
       setDraftLines([{ itemId: "", quantity: 1 }]);
       setDraftSupplier("");
       setDraftStatus("ORDERED");
@@ -345,8 +353,8 @@ export function PurchaseOrdersPanel({
   });
 
   const receiveOrder = useMutation({
-    mutationFn: async ({ orderId, items }: ReceiveOrderPayload) => {
-      await api.post(`${purchaseOrdersPath}/${orderId}/receive`, { items });
+    mutationFn: async ({ orderId, lines }: ReceiveOrderPayload) => {
+      await api.post(`${purchaseOrdersPath}/${orderId}/receive`, { lines });
     },
     onSuccess: async () => {
       setMessage("Réception enregistrée.");
@@ -426,6 +434,15 @@ export function PurchaseOrdersPanel({
     setDraftLines((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  const handleOpenCreateModal = () => {
+    setError(null);
+    setIsCreateModalOpen(true);
+  };
+
+  const handleCloseCreateModal = () => {
+    setIsCreateModalOpen(false);
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
@@ -449,6 +466,73 @@ export function PurchaseOrdersPanel({
       items: normalizedLines
     };
     await createOrder.mutateAsync(payload);
+  };
+
+  const handleOpenReceiveModal = (order: PurchaseOrderDetail) => {
+    setReceiveFormError(null);
+    setReceiveModalOrder(order);
+    setReceiveQuantities(
+      order.items.reduce<Record<number, number>>((acc, line) => {
+        acc[line.id] = 0;
+        return acc;
+      }, {})
+    );
+  };
+
+  const handleCloseReceiveModal = () => {
+    setReceiveFormError(null);
+    setReceiveModalOrder(null);
+    setReceiveQuantities({});
+  };
+
+  const handleSubmitPartialReceive = async () => {
+    if (!receiveModalOrder) {
+      return;
+    }
+    const payloadLines = receiveModalOrder.items
+      .map((line) => {
+        const remaining = line.quantity_ordered - line.quantity_received;
+        const qty = receiveQuantities[line.id] ?? 0;
+        return {
+          line_id: line.id,
+          qty,
+          remaining
+        };
+      })
+      .filter((line) => line.qty > 0);
+
+    const invalidLine = payloadLines.find((line) => line.qty > line.remaining);
+    if (invalidLine) {
+      setReceiveFormError("La quantité ne peut pas dépasser le restant à recevoir.");
+      return;
+    }
+    if (payloadLines.length === 0) {
+      setReceiveFormError("Renseignez au moins une quantité à réceptionner.");
+      return;
+    }
+    setReceiveFormError(null);
+    try {
+      await receiveOrder.mutateAsync({
+        orderId: receiveModalOrder.id,
+        lines: payloadLines.map(({ line_id, qty }) => ({ line_id, qty }))
+      });
+      handleCloseReceiveModal();
+    } catch {
+      // Les erreurs API sont gérées par la mutation
+    }
+  };
+
+  const handleFillRemaining = () => {
+    if (!receiveModalOrder) {
+      return;
+    }
+    setReceiveQuantities(
+      receiveModalOrder.items.reduce<Record<number, number>>((acc, line) => {
+        const remaining = line.quantity_ordered - line.quantity_received;
+        acc[line.id] = Math.max(0, remaining);
+        return acc;
+      }, {})
+    );
   };
 
   const handleEditOrder = (order: PurchaseOrderDetail) => {
@@ -540,6 +624,13 @@ export function PurchaseOrdersPanel({
           <h3 className="text-lg font-semibold text-white">{title}</h3>
           <p className="text-sm text-slate-400">{description}</p>
         </div>
+        <button
+          type="button"
+          onClick={handleOpenCreateModal}
+          className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+        >
+          Créer un bon de commande
+        </button>
       </header>
 
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
@@ -562,19 +653,16 @@ export function PurchaseOrdersPanel({
                 {orders.map((order) => {
                   const outstanding = order.items
                     .map((line) => {
-                      const itemId = resolveItemId(line);
-                      if (itemId === null) return null;
+                      const remaining = line.quantity_ordered - line.quantity_received;
+                      if (remaining <= 0) {
+                        return null;
+                      }
                       return {
-                        [itemIdField]: itemId,
-                        quantity: line.quantity_ordered - line.quantity_received
-                      } satisfies { quantity: number } & Partial<Record<ItemIdKey, number>>;
+                        line_id: line.id,
+                        qty: remaining
+                      };
                     })
-                    .filter(
-                      (
-                        line
-                      ): line is { quantity: number } & Partial<Record<ItemIdKey, number>> =>
-                        line !== null && line.quantity > 0
-                    );
+                    .filter((line): line is { line_id: number; qty: number } => line !== null);
                   const canReceive = outstanding.length > 0;
                   return (
                     <tr key={order.id}>
@@ -645,7 +733,7 @@ export function PurchaseOrdersPanel({
                           <button
                             type="button"
                             onClick={() =>
-                              receiveOrder.mutate({ orderId: order.id, items: outstanding })
+                              receiveOrder.mutate({ orderId: order.id, lines: outstanding })
                             }
                             disabled={!canReceive}
                             className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
@@ -656,6 +744,14 @@ export function PurchaseOrdersPanel({
                             }
                           >
                             Réceptionner tout
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReceiveModal(order)}
+                            disabled={!canReceive}
+                            className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Réception partielle
                           </button>
                           <button
                             type="button"
@@ -718,249 +814,323 @@ export function PurchaseOrdersPanel({
           ) : null}
         </div>
 
-        <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          {editingOrder ? (
-            <>
-              <h4 className="text-sm font-semibold text-white">
-                Modifier le bon de commande #{editingOrder.id}
-              </h4>
-              <form className="mt-4 space-y-4" onSubmit={handleEditSubmit}>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-supplier">
-                    Fournisseur
-                  </label>
-                  <select
-                    id="edit-po-supplier"
-                    value={editSupplier}
-                    onChange={(event) =>
-                      setEditSupplier(event.target.value ? Number(event.target.value) : "")
-                    }
-                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  >
-                    <option value="">Aucun</option>
-                    {suppliers.map((supplier) => (
-                      <option key={supplier.id} value={supplier.id}>
-                        {supplier.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {renderSupplierDetails(selectedEditSupplier)}
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-status">
-                    Statut
-                  </label>
-                  <select
-                    id="edit-po-status"
-                    value={editStatus}
-                    onChange={(event) => setEditStatus(event.target.value)}
-                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  >
-                    {ORDER_STATUSES.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-note">
-                    Note
-                  </label>
-                  <AppTextArea
-                    id="edit-po-note"
-                    value={editNote}
-                    onChange={(event) => setEditNote(event.target.value)}
-                    rows={3}
-                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                    placeholder="Informations complémentaires"
-                  />
-                </div>
-
-                <div className="flex justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={handleCancelEdit}
-                    className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-                  >
-                    Annuler
-                  </button>
-                  <button
-                    type="submit"
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-                    disabled={updateOrder.isPending}
-                  >
-                    Mettre à jour
-                  </button>
-                </div>
-              </form>
-            </>
-          ) : (
-            <>
-              <h4 className="text-sm font-semibold text-white">Créer un bon de commande</h4>
-              <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="po-supplier">
-                    Fournisseur
-                  </label>
-                  <select
-                    id="po-supplier"
-                    value={draftSupplier}
-                    onChange={(event) =>
-                      setDraftSupplier(event.target.value ? Number(event.target.value) : "")
-                    }
-                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  >
-                    <option value="">Aucun</option>
-                    {suppliers.map((supplier) => (
-                      <option key={supplier.id} value={supplier.id}>
-                        {supplier.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {renderSupplierDetails(selectedDraftSupplier)}
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="po-status">
-                    Statut initial
-                  </label>
-                  <select
-                    id="po-status"
-                    value={draftStatus}
-                    onChange={(event) => setDraftStatus(event.target.value)}
-                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  >
-                    {ORDER_STATUSES.map((option) => (
-                      <option key={option.value} value={option.value}>
-                        {option.label}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="po-note">
-                    Note
-                  </label>
-                  <AppTextArea
-                    id="po-note"
-                    value={draftNote}
-                    onChange={(event) => setDraftNote(event.target.value)}
-                    rows={3}
-                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                    placeholder="Informations complémentaires"
-                  />
-                </div>
-
-                <div className="space-y-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                    Lignes de commande
-                  </p>
-                  <div className="space-y-1">
-                    <label
-                      className="text-xs font-semibold text-slate-300"
-                      htmlFor="po-barcode-input"
-                    >
-                      Scanner / saisir un code-barres
-                    </label>
-                    <div className="flex gap-2">
-                      <AppTextInput
-                        id="po-barcode-input"
-                        ref={inputRef}
-                        value={barcodeInput}
-                        onChange={(event) => setBarcodeInput(event.target.value)}
-                        onKeyDown={handleBarcodeKeyDown}
-                        placeholder="Scanner / saisir un code-barres"
-                        noSpellcheck
-                        className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                      />
-                      <button
-                        type="button"
-                        onClick={submitBarcode}
-                        disabled={isResolvingBarcode}
-                        className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                      >
-                        Ajouter
-                      </button>
-                    </div>
-                  </div>
-                  {draftLines.map((line, index) => (
-                    <div key={index} className="flex gap-2">
-                      <select
-                        value={line.itemId}
-                        onChange={(event) =>
-                          setDraftLines((prev) => {
-                            const next = [...prev];
-                            next[index] = {
-                              ...next[index],
-                              itemId: event.target.value ? Number(event.target.value) : ""
-                            };
-                            return next;
-                          })
-                        }
-                        className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                      >
-                        <option value="">Sélectionnez un article</option>
-                        {items.map((item) => (
-                          <option key={item.id} value={item.id}>
-                            {formatItemLabel(item)}
-                          </option>
-                        ))}
-                      </select>
-                      <AppTextInput
-                        type="number"
-                        min={1}
-                        value={line.quantity}
-                        onChange={(event) =>
-                          setDraftLines((prev) => {
-                            const next = [...prev];
-                            next[index] = {
-                              ...next[index],
-                              quantity: Number(event.target.value)
-                            };
-                            return next;
-                          })
-                        }
-                        className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                      />
-                      {draftLines.length > 1 ? (
-                        <button
-                          type="button"
-                          onClick={() => handleRemoveLine(index)}
-                          className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
-                          title="Supprimer la ligne"
-                        >
-                          Retirer
-                        </button>
-                      ) : null}
-                    </div>
+        {editingOrder ? (
+          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
+            <h4 className="text-sm font-semibold text-white">
+              Modifier le bon de commande #{editingOrder.id}
+            </h4>
+            <form className="mt-4 space-y-4" onSubmit={handleEditSubmit}>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-supplier">
+                  Fournisseur
+                </label>
+                <select
+                  id="edit-po-supplier"
+                  value={editSupplier}
+                  onChange={(event) =>
+                    setEditSupplier(event.target.value ? Number(event.target.value) : "")
+                  }
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                >
+                  <option value="">Aucun</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
                   ))}
-                  <button
-                    type="button"
-                    onClick={handleAddLine}
-                    className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
-                  >
-                    Ajouter une ligne
-                  </button>
-                </div>
+                </select>
+              </div>
+              {renderSupplierDetails(selectedEditSupplier)}
 
-                <div className="flex justify-end">
-                  <button
-                    type="submit"
-                    className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-                    disabled={createOrder.isPending}
-                  >
-                    Enregistrer
-                  </button>
-                </div>
-              </form>
-            </>
-          )}
-        </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-status">
+                  Statut
+                </label>
+                <select
+                  id="edit-po-status"
+                  value={editStatus}
+                  onChange={(event) => setEditStatus(event.target.value)}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                >
+                  {ORDER_STATUSES.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="edit-po-note">
+                  Note
+                </label>
+                <AppTextArea
+                  id="edit-po-note"
+                  value={editNote}
+                  onChange={(event) => setEditNote(event.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  placeholder="Informations complémentaires"
+                />
+              </div>
+
+              <div className="flex justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+                  disabled={updateOrder.isPending}
+                >
+                  Mettre à jour
+                </button>
+              </div>
+            </form>
+          </div>
+        ) : null}
       </div>
+
+      <PurchaseOrderCreateModal
+        open={isCreateModalOpen}
+        title="Créer un bon de commande"
+        onClose={handleCloseCreateModal}
+        onSubmit={handleSubmit}
+        isSubmitting={createOrder.isPending}
+        formId={createFormId}
+      >
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="po-supplier">
+            Fournisseur
+          </label>
+          <select
+            id="po-supplier"
+            value={draftSupplier}
+            onChange={(event) =>
+              setDraftSupplier(event.target.value ? Number(event.target.value) : "")
+            }
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          >
+            <option value="">Aucun</option>
+            {suppliers.map((supplier) => (
+              <option key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {renderSupplierDetails(selectedDraftSupplier)}
+
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="po-status">
+            Statut initial
+          </label>
+          <select
+            id="po-status"
+            value={draftStatus}
+            onChange={(event) => setDraftStatus(event.target.value)}
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          >
+            {ORDER_STATUSES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="po-note">
+            Note
+          </label>
+          <AppTextArea
+            id="po-note"
+            value={draftNote}
+            onChange={(event) => setDraftNote(event.target.value)}
+            rows={3}
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            placeholder="Informations complémentaires"
+          />
+        </div>
+
+        <div className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Lignes de commande
+          </p>
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-300" htmlFor="po-barcode-input">
+              Scanner / saisir un code-barres
+            </label>
+            <div className="flex gap-2">
+              <AppTextInput
+                id="po-barcode-input"
+                ref={inputRef}
+                value={barcodeInput}
+                onChange={(event) => setBarcodeInput(event.target.value)}
+                onKeyDown={handleBarcodeKeyDown}
+                placeholder="Scanner / saisir un code-barres"
+                noSpellcheck
+                className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={submitBarcode}
+                disabled={isResolvingBarcode}
+                className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Ajouter
+              </button>
+            </div>
+          </div>
+          {draftLines.map((line, index) => (
+            <div key={index} className="flex gap-2">
+              <select
+                value={line.itemId}
+                onChange={(event) =>
+                  setDraftLines((prev) => {
+                    const next = [...prev];
+                    next[index] = {
+                      ...next[index],
+                      itemId: event.target.value ? Number(event.target.value) : ""
+                    };
+                    return next;
+                  })
+                }
+                className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              >
+                <option value="">Sélectionnez un article</option>
+                {items.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {formatItemLabel(item)}
+                  </option>
+                ))}
+              </select>
+              <AppTextInput
+                type="number"
+                min={1}
+                value={line.quantity}
+                onChange={(event) =>
+                  setDraftLines((prev) => {
+                    const next = [...prev];
+                    next[index] = {
+                      ...next[index],
+                      quantity: Number(event.target.value)
+                    };
+                    return next;
+                  })
+                }
+                className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+              {draftLines.length > 1 ? (
+                <button
+                  type="button"
+                  onClick={() => handleRemoveLine(index)}
+                  className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+                  title="Supprimer la ligne"
+                >
+                  Retirer
+                </button>
+              ) : null}
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={handleAddLine}
+            className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            Ajouter une ligne
+          </button>
+        </div>
+      </PurchaseOrderCreateModal>
+
+      <DraggableModal
+        open={Boolean(receiveModalOrder)}
+        title={
+          receiveModalOrder
+            ? `Réception partielle · Bon de commande #${receiveModalOrder.id}`
+            : "Réception partielle"
+        }
+        onClose={handleCloseReceiveModal}
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleFillRemaining}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              Tout le restant
+            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleCloseReceiveModal}
+                className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitPartialReceive}
+                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+                disabled={receiveOrder.isPending}
+              >
+                Valider réception
+              </button>
+            </div>
+          </div>
+        }
+      >
+        {receiveModalOrder ? (
+          <div className="space-y-4 text-sm text-slate-200">
+            <p className="text-xs text-slate-400">
+              Fournisseur: {receiveModalOrder.supplier_name ?? "Non renseigné"}
+            </p>
+            {receiveFormError ? (
+              <p className="text-xs text-red-400">{receiveFormError}</p>
+            ) : null}
+            <div className="space-y-3">
+              {receiveModalOrder.items.map((line) => {
+                const remaining = line.quantity_ordered - line.quantity_received;
+                const itemId = resolveItemId(line);
+                return (
+                  <div
+                    key={line.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2"
+                  >
+                    <div>
+                      <p className="font-semibold">
+                        {line.item_name ?? (itemId ? `#${itemId}` : "Article")}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Reçu: {line.quantity_received}/{line.quantity_ordered} · Restant:{" "}
+                        {Math.max(0, remaining)}
+                      </p>
+                    </div>
+                    <AppTextInput
+                      type="number"
+                      min={0}
+                      max={Math.max(0, remaining)}
+                      value={receiveQuantities[line.id] ?? 0}
+                      onChange={(event) =>
+                        setReceiveQuantities((prev) => ({
+                          ...prev,
+                          [line.id]: Number(event.target.value)
+                        }))
+                      }
+                      disabled={remaining <= 0}
+                      className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+      </DraggableModal>
 
       {conflictMatches ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4">

@@ -12,6 +12,8 @@ import {
 } from "../purchasing/usePurchaseOrderBarcodeScan";
 import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
+import { DraggableModal } from "components/DraggableModal";
+import { PurchaseOrderCreateModal } from "components/PurchaseOrderCreateModal";
 
 interface Supplier {
   id: number;
@@ -95,6 +97,7 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const [draftNote, setDraftNote] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<PharmacyPurchaseOrderDetail | null>(null);
   const [editSupplier, setEditSupplier] = useState<number | "">("");
   const [editStatus, setEditStatus] = useState<string>("ORDERED");
@@ -102,8 +105,12 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const [downloadingId, setDownloadingId] = useState<number | null>(null);
   const [sendingId, setSendingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
+  const [receiveModalOrder, setReceiveModalOrder] = useState<PharmacyPurchaseOrderDetail | null>(null);
+  const [receiveQuantities, setReceiveQuantities] = useState<Record<number, number>>({});
+  const [receiveFormError, setReceiveFormError] = useState<string | null>(null);
   const selectedDraftSupplier = suppliers.find((supplier) => supplier.id === draftSupplier);
   const selectedEditSupplier = suppliers.find((supplier) => supplier.id === editSupplier);
+  const createFormId = "pharmacy-purchase-order-create";
   const suppliersById = useMemo(() => {
     return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
   }, [suppliers]);
@@ -213,6 +220,7 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
     },
     onSuccess: async () => {
       setMessage("Bon de commande créé.");
+      setIsCreateModalOpen(false);
       setDraftLines([{ pharmacyItemId: "", quantity: 1 }]);
       setDraftSupplier("");
       setDraftStatus("ORDERED");
@@ -242,12 +250,12 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const receiveOrder = useMutation({
     mutationFn: async ({
       orderId,
-      items
+      lines
     }: {
       orderId: number;
-      items: Array<{ pharmacy_item_id: number; quantity: number }>;
+      lines: Array<{ line_id: number; qty: number }>;
     }) => {
-      await api.post(`/pharmacy/orders/${orderId}/receive`, { items });
+      await api.post(`/pharmacy/orders/${orderId}/receive`, { lines });
     },
     onSuccess: async () => {
       setMessage("Réception enregistrée.");
@@ -308,6 +316,15 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
     setDraftLines((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  const handleOpenCreateModal = () => {
+    setError(null);
+    setIsCreateModalOpen(true);
+  };
+
+  const handleCloseCreateModal = () => {
+    setIsCreateModalOpen(false);
+  };
+
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     setError(null);
@@ -324,6 +341,73 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
       note: draftNote.trim() ? draftNote.trim() : null,
       items: normalizedLines
     });
+  };
+
+  const handleOpenReceiveModal = (order: PharmacyPurchaseOrderDetail) => {
+    setReceiveFormError(null);
+    setReceiveModalOrder(order);
+    setReceiveQuantities(
+      order.items.reduce<Record<number, number>>((acc, line) => {
+        acc[line.id] = 0;
+        return acc;
+      }, {})
+    );
+  };
+
+  const handleCloseReceiveModal = () => {
+    setReceiveFormError(null);
+    setReceiveModalOrder(null);
+    setReceiveQuantities({});
+  };
+
+  const handleSubmitPartialReceive = async () => {
+    if (!receiveModalOrder) {
+      return;
+    }
+    const payloadLines = receiveModalOrder.items
+      .map((line) => {
+        const remaining = line.quantity_ordered - line.quantity_received;
+        const qty = receiveQuantities[line.id] ?? 0;
+        return {
+          line_id: line.id,
+          qty,
+          remaining
+        };
+      })
+      .filter((line) => line.qty > 0);
+
+    const invalidLine = payloadLines.find((line) => line.qty > line.remaining);
+    if (invalidLine) {
+      setReceiveFormError("La quantité ne peut pas dépasser le restant à recevoir.");
+      return;
+    }
+    if (payloadLines.length === 0) {
+      setReceiveFormError("Renseignez au moins une quantité à réceptionner.");
+      return;
+    }
+    setReceiveFormError(null);
+    try {
+      await receiveOrder.mutateAsync({
+        orderId: receiveModalOrder.id,
+        lines: payloadLines.map(({ line_id, qty }) => ({ line_id, qty }))
+      });
+      handleCloseReceiveModal();
+    } catch {
+      // Les erreurs API sont gérées par la mutation
+    }
+  };
+
+  const handleFillRemaining = () => {
+    if (!receiveModalOrder) {
+      return;
+    }
+    setReceiveQuantities(
+      receiveModalOrder.items.reduce<Record<number, number>>((acc, line) => {
+        const remaining = line.quantity_ordered - line.quantity_received;
+        acc[line.id] = Math.max(0, remaining);
+        return acc;
+      }, {})
+    );
   };
 
   const handleEditOrder = (order: PharmacyPurchaseOrderDetail) => {
@@ -409,6 +493,15 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
             Centralisez les commandes auprès des fournisseurs et mettez à jour les stocks lors des réceptions.
           </p>
         </div>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={handleOpenCreateModal}
+            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+          >
+            Créer un bon de commande
+          </button>
+        ) : null}
       </header>
 
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
@@ -430,11 +523,14 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
               <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
                 {orders.map((order) => {
                   const outstanding = order.items
-                    .map((line) => ({
-                      pharmacy_item_id: line.pharmacy_item_id,
-                      quantity: line.quantity_ordered - line.quantity_received
-                    }))
-                    .filter((line) => line.quantity > 0);
+                    .map((line) => {
+                      const remaining = line.quantity_ordered - line.quantity_received;
+                      if (remaining <= 0) {
+                        return null;
+                      }
+                      return { line_id: line.id, qty: remaining };
+                    })
+                    .filter((line): line is { line_id: number; qty: number } => line !== null);
                   const canReceive = outstanding.length > 0;
                   const canSendToSupplier = Boolean(order.supplier_id && order.supplier_email);
                   const sendTooltip = order.supplier_id
@@ -500,7 +596,7 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                           <button
                             type="button"
                             onClick={() =>
-                              receiveOrder.mutate({ orderId: order.id, items: outstanding })
+                              receiveOrder.mutate({ orderId: order.id, lines: outstanding })
                             }
                             disabled={!canEdit || !canReceive}
                             className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
@@ -511,6 +607,14 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                             }
                           >
                             Réceptionner tout
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleOpenReceiveModal(order)}
+                            disabled={!canEdit || !canReceive}
+                            className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                          >
+                            Réception partielle
                           </button>
                           {canEdit ? (
                             <button
@@ -568,251 +672,319 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
           {isLoading ? <p className="text-sm text-slate-400">Chargement...</p> : null}
         </div>
 
-        {canEdit ? (
+        {canEdit && editingOrder ? (
           <div className="min-w-0 rounded-lg border border-slate-800 bg-slate-900 p-4">
-            {editingOrder ? (
-              <>
-                <h4 className="text-sm font-semibold text-white">
-                  Modifier le bon de commande #{editingOrder.id}
-                </h4>
-                <form className="mt-4 space-y-4" onSubmit={handleEditSubmit}>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-supplier">
-                    Fournisseur
-                  </label>
-                  <select
-                      id="pharmacy-edit-order-supplier"
-                      value={editSupplier}
-                      onChange={(event) =>
-                        setEditSupplier(event.target.value ? Number(event.target.value) : "")
-                      }
-                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                    >
-                      <option value="">Aucun</option>
-                    {suppliers.map((supplier) => (
-                      <option key={supplier.id} value={supplier.id}>
-                        {supplier.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {renderSupplierDetails(selectedEditSupplier)}
+            <h4 className="text-sm font-semibold text-white">
+              Modifier le bon de commande #{editingOrder.id}
+            </h4>
+            <form className="mt-4 space-y-4" onSubmit={handleEditSubmit}>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-supplier">
+                  Fournisseur
+                </label>
+                <select
+                  id="pharmacy-edit-order-supplier"
+                  value={editSupplier}
+                  onChange={(event) =>
+                    setEditSupplier(event.target.value ? Number(event.target.value) : "")
+                  }
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                >
+                  <option value="">Aucun</option>
+                  {suppliers.map((supplier) => (
+                    <option key={supplier.id} value={supplier.id}>
+                      {supplier.name}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              {renderSupplierDetails(selectedEditSupplier)}
 
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-status">
-                    Statut
-                  </label>
-                    <select
-                      id="pharmacy-edit-order-status"
-                      value={editStatus}
-                      onChange={(event) => setEditStatus(event.target.value)}
-                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                    >
-                      {ORDER_STATUSES.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-status">
+                  Statut
+                </label>
+                <select
+                  id="pharmacy-edit-order-status"
+                  value={editStatus}
+                  onChange={(event) => setEditStatus(event.target.value)}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                >
+                  {ORDER_STATUSES.map((option) => (
+                    <option key={option.value} value={option.value}>
+                      {option.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
 
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-note">
-                      Note
-                    </label>
-                    <AppTextArea
-                      id="pharmacy-edit-order-note"
-                      value={editNote}
-                      onChange={(event) => setEditNote(event.target.value)}
-                      rows={3}
-                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                      placeholder="Informations complémentaires"
-                    />
-                  </div>
+              <div className="space-y-1">
+                <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-edit-order-note">
+                  Note
+                </label>
+                <AppTextArea
+                  id="pharmacy-edit-order-note"
+                  value={editNote}
+                  onChange={(event) => setEditNote(event.target.value)}
+                  rows={3}
+                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  placeholder="Informations complémentaires"
+                />
+              </div>
 
-                  <div className="flex justify-between gap-2">
-                    <button
-                      type="button"
-                      onClick={handleCancelEdit}
-                      className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-                    >
-                      Annuler
-                    </button>
-                    <button
-                      type="submit"
-                      className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-                      disabled={updateOrder.isPending}
-                    >
-                      Mettre à jour
-                    </button>
-                  </div>
-                </form>
-              </>
-            ) : (
-              <>
-                <h4 className="text-sm font-semibold text-white">Créer un bon de commande</h4>
-                <form className="mt-4 space-y-4" onSubmit={handleSubmit}>
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-supplier">
-                    Fournisseur
-                  </label>
-                  <select
-                      id="pharmacy-order-supplier"
-                      value={draftSupplier}
-                      onChange={(event) =>
-                        setDraftSupplier(event.target.value ? Number(event.target.value) : "")
-                      }
-                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                    >
-                      <option value="">Aucun</option>
-                    {suppliers.map((supplier) => (
-                      <option key={supplier.id} value={supplier.id}>
-                        {supplier.name}
-                      </option>
-                    ))}
-                  </select>
-                </div>
-                {renderSupplierDetails(selectedDraftSupplier)}
-
-                <div className="space-y-1">
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-status">
-                    Statut initial
-                  </label>
-                    <select
-                      id="pharmacy-order-status"
-                      value={draftStatus}
-                      onChange={(event) => setDraftStatus(event.target.value)}
-                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                    >
-                      {ORDER_STATUSES.map((option) => (
-                        <option key={option.value} value={option.value}>
-                          {option.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-
-                  <div className="space-y-1">
-                    <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-note">
-                      Note
-                    </label>
-                    <AppTextArea
-                      id="pharmacy-order-note"
-                      value={draftNote}
-                      onChange={(event) => setDraftNote(event.target.value)}
-                      rows={3}
-                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                      placeholder="Informations complémentaires"
-                    />
-                  </div>
-
-                  <div className="space-y-3">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Lignes de commande
-                    </p>
-                    <div className="space-y-1">
-                      <label
-                        className="text-xs font-semibold text-slate-300"
-                        htmlFor="pharmacy-barcode-input"
-                      >
-                        Scanner / saisir un code-barres
-                      </label>
-                      <div className="flex gap-2">
-                        <AppTextInput
-                          id="pharmacy-barcode-input"
-                          ref={inputRef}
-                          value={barcodeInput}
-                          onChange={(event) => setBarcodeInput(event.target.value)}
-                          onKeyDown={handleBarcodeKeyDown}
-                          placeholder="Scanner / saisir un code-barres"
-                          noSpellcheck
-                          className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                        />
-                        <button
-                          type="button"
-                          onClick={submitBarcode}
-                          disabled={isResolvingBarcode}
-                          className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                        >
-                          Ajouter
-                        </button>
-                      </div>
-                    </div>
-                    {draftLines.map((line, index) => (
-                      <div key={index} className="flex gap-2">
-                        <select
-                          value={line.pharmacyItemId}
-                          onChange={(event) =>
-                            setDraftLines((prev) => {
-                              const next = [...prev];
-                              next[index] = {
-                                ...next[index],
-                                pharmacyItemId: event.target.value ? Number(event.target.value) : ""
-                              };
-                              return next;
-                            })
-                          }
-                          className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                        >
-                          <option value="">Sélectionnez un article</option>
-                          {pharmacyItems.map((item) => (
-                            <option key={item.id} value={item.id}>
-                              {formatItemLabel(item)}
-                            </option>
-                          ))}
-                        </select>
-                        <AppTextInput
-                          type="number"
-                          min={1}
-                          value={line.quantity}
-                          onChange={(event) =>
-                            setDraftLines((prev) => {
-                              const next = [...prev];
-                              next[index] = {
-                                ...next[index],
-                                quantity: Number(event.target.value)
-                              };
-                              return next;
-                            })
-                          }
-                          className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                        />
-                        {draftLines.length > 1 ? (
-                          <button
-                            type="button"
-                            onClick={() => handleRemoveLine(index)}
-                            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
-                            title="Supprimer la ligne"
-                          >
-                            Retirer
-                          </button>
-                        ) : null}
-                      </div>
-                    ))}
-                    <button
-                      type="button"
-                      onClick={handleAddLine}
-                      className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
-                    >
-                      Ajouter une ligne
-                    </button>
-                  </div>
-
-                  <div className="flex justify-end">
-                    <button
-                      type="submit"
-                      className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-                      disabled={createOrder.isPending}
-                    >
-                      Enregistrer
-                    </button>
-                  </div>
-                </form>
-              </>
-            )}
+              <div className="flex justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={handleCancelEdit}
+                  className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+                  disabled={updateOrder.isPending}
+                >
+                  Mettre à jour
+                </button>
+              </div>
+            </form>
           </div>
         ) : null}
       </div>
+
+      <PurchaseOrderCreateModal
+        open={isCreateModalOpen}
+        title="Créer un bon de commande"
+        onClose={handleCloseCreateModal}
+        onSubmit={handleSubmit}
+        isSubmitting={createOrder.isPending}
+        formId={createFormId}
+      >
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-supplier">
+            Fournisseur
+          </label>
+          <select
+            id="pharmacy-order-supplier"
+            value={draftSupplier}
+            onChange={(event) =>
+              setDraftSupplier(event.target.value ? Number(event.target.value) : "")
+            }
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          >
+            <option value="">Aucun</option>
+            {suppliers.map((supplier) => (
+              <option key={supplier.id} value={supplier.id}>
+                {supplier.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        {renderSupplierDetails(selectedDraftSupplier)}
+
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-status">
+            Statut initial
+          </label>
+          <select
+            id="pharmacy-order-status"
+            value={draftStatus}
+            onChange={(event) => setDraftStatus(event.target.value)}
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          >
+            {ORDER_STATUSES.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </div>
+
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-order-note">
+            Note
+          </label>
+          <AppTextArea
+            id="pharmacy-order-note"
+            value={draftNote}
+            onChange={(event) => setDraftNote(event.target.value)}
+            rows={3}
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            placeholder="Informations complémentaires"
+          />
+        </div>
+
+        <div className="space-y-3">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Lignes de commande
+          </p>
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-barcode-input">
+              Scanner / saisir un code-barres
+            </label>
+            <div className="flex gap-2">
+              <AppTextInput
+                id="pharmacy-barcode-input"
+                ref={inputRef}
+                value={barcodeInput}
+                onChange={(event) => setBarcodeInput(event.target.value)}
+                onKeyDown={handleBarcodeKeyDown}
+                placeholder="Scanner / saisir un code-barres"
+                noSpellcheck
+                className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+              <button
+                type="button"
+                onClick={submitBarcode}
+                disabled={isResolvingBarcode}
+                className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                Ajouter
+              </button>
+            </div>
+          </div>
+          {draftLines.map((line, index) => (
+            <div key={index} className="flex gap-2">
+              <select
+                value={line.pharmacyItemId}
+                onChange={(event) =>
+                  setDraftLines((prev) => {
+                    const next = [...prev];
+                    next[index] = {
+                      ...next[index],
+                      pharmacyItemId: event.target.value ? Number(event.target.value) : ""
+                    };
+                    return next;
+                  })
+                }
+                className="flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              >
+                <option value="">Sélectionnez un article</option>
+                {pharmacyItems.map((item) => (
+                  <option key={item.id} value={item.id}>
+                    {formatItemLabel(item)}
+                  </option>
+                ))}
+              </select>
+              <AppTextInput
+                type="number"
+                min={1}
+                value={line.quantity}
+                onChange={(event) =>
+                  setDraftLines((prev) => {
+                    const next = [...prev];
+                    next[index] = {
+                      ...next[index],
+                      quantity: Number(event.target.value)
+                    };
+                    return next;
+                  })
+                }
+                className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              />
+              {draftLines.length > 1 ? (
+                <button
+                  type="button"
+                  onClick={() => handleRemoveLine(index)}
+                  className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+                  title="Supprimer la ligne"
+                >
+                  Retirer
+                </button>
+              ) : null}
+            </div>
+          ))}
+          <button
+            type="button"
+            onClick={handleAddLine}
+            className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            Ajouter une ligne
+          </button>
+        </div>
+      </PurchaseOrderCreateModal>
+
+      <DraggableModal
+        open={Boolean(receiveModalOrder)}
+        title={
+          receiveModalOrder
+            ? `Réception partielle · Bon de commande #${receiveModalOrder.id}`
+            : "Réception partielle"
+        }
+        onClose={handleCloseReceiveModal}
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <button
+              type="button"
+              onClick={handleFillRemaining}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              Tout le restant
+            </button>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleCloseReceiveModal}
+                className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={handleSubmitPartialReceive}
+                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
+                disabled={receiveOrder.isPending}
+              >
+                Valider réception
+              </button>
+            </div>
+          </div>
+        }
+      >
+        {receiveModalOrder ? (
+          <div className="space-y-4 text-sm text-slate-200">
+            {receiveFormError ? (
+              <p className="text-xs text-red-400">{receiveFormError}</p>
+            ) : null}
+            <div className="space-y-3">
+              {receiveModalOrder.items.map((line) => {
+                const remaining = line.quantity_ordered - line.quantity_received;
+                return (
+                  <div
+                    key={line.id}
+                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2"
+                  >
+                    <div>
+                      <p className="font-semibold">
+                        {line.pharmacy_item_name ?? `#${line.pharmacy_item_id}`}
+                      </p>
+                      <p className="text-xs text-slate-400">
+                        Reçu: {line.quantity_received}/{line.quantity_ordered} · Restant:{" "}
+                        {Math.max(0, remaining)}
+                      </p>
+                    </div>
+                    <AppTextInput
+                      type="number"
+                      min={0}
+                      max={Math.max(0, remaining)}
+                      value={receiveQuantities[line.id] ?? 0}
+                      onChange={(event) =>
+                        setReceiveQuantities((prev) => ({
+                          ...prev,
+                          [line.id]: Number(event.target.value)
+                        }))
+                      }
+                      disabled={remaining <= 0}
+                      className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                    />
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ) : null}
+      </DraggableModal>
 
       {conflictMatches ? (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4">
