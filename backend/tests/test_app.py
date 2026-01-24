@@ -372,12 +372,13 @@ def test_manual_purchase_order_flow() -> None:
     assert order_resp.status_code == 201, order_resp.text
     order_data = order_resp.json()
     order_id = order_data["id"]
+    line_id = order_data["items"][0]["id"]
     assert order_data["items"][0]["quantity_ordered"] == 5
     assert order_data["items"][0]["quantity_received"] == 0
 
     receive_resp = client.post(
         f"/purchase-orders/{order_id}/receive",
-        json={"items": [{"item_id": item_id, "quantity": 3}]},
+        json={"lines": [{"line_id": line_id, "qty": 3}]},
         headers=headers,
     )
     assert receive_resp.status_code == 200, receive_resp.text
@@ -387,7 +388,7 @@ def test_manual_purchase_order_flow() -> None:
 
     final_resp = client.post(
         f"/purchase-orders/{order_id}/receive",
-        json={"items": [{"item_id": item_id, "quantity": 5}]},
+        json={"lines": [{"line_id": line_id, "qty": 2}]},
         headers=headers,
     )
     assert final_resp.status_code == 200, final_resp.text
@@ -437,13 +438,15 @@ def test_pharmacy_purchase_order_flow() -> None:
         headers=headers,
     )
     assert order_resp.status_code == 201, order_resp.text
-    order_id = order_resp.json()["id"]
+    order_data = order_resp.json()
+    order_id = order_data["id"]
+    line_id = order_data["items"][0]["id"]
 
     receive_resp = client.post(
         f"/pharmacy/orders/{order_id}/receive",
         json={
-            "items": [
-                {"pharmacy_item_id": pharmacy_item_id, "quantity": 12}
+            "lines": [
+                {"line_id": line_id, "qty": 12}
             ]
         },
         headers=headers,

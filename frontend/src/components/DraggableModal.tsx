@@ -1,5 +1,4 @@
-import { ReactNode, useCallback, useEffect, useId, useRef, useState } from "react";
-import { createPortal } from "react-dom";
+import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
 
 interface DraggableModalProps {
   open: boolean;
@@ -7,26 +6,10 @@ interface DraggableModalProps {
   onClose: () => void;
   children: ReactNode;
   footer?: ReactNode;
-  disableDragOnMobile?: boolean;
-  initialX?: number;
-  initialY?: number;
-  width?: number | string;
-  maxHeight?: number | string;
+  maxWidthClassName?: string;
 }
 
-type DragState = {
-  startX: number;
-  startY: number;
-  originX: number;
-  originY: number;
-};
-
-const DEFAULT_MODAL_WIDTH = "min(900px, 92vw)";
-const DEFAULT_MODAL_MAX_HEIGHT = "85vh";
-const MIN_VISIBLE_EDGE = 48;
-const MIN_VISIBLE_TITLEBAR = 56;
-
-const clampValue = (value: number, min: number, max: number) => Math.max(min, Math.min(value, max));
+const MODAL_PADDING = 16;
 
 export function DraggableModal({
   open,
@@ -34,77 +17,24 @@ export function DraggableModal({
   onClose,
   children,
   footer,
-  disableDragOnMobile = true,
-  initialX,
-  initialY,
-  width,
-  maxHeight
+  maxWidthClassName = "max-w-3xl"
 }: DraggableModalProps) {
-  const titleId = useId();
-  const modalRef = useRef<HTMLDivElement>(null);
-  const titleBarRef = useRef<HTMLDivElement>(null);
-  const dragState = useRef<DragState | null>(null);
-  const [position, setPosition] = useState({ x: initialX ?? 0, y: initialY ?? 0 });
+  const modalRef = useRef<HTMLDivElement | null>(null);
+  const [position, setPosition] = useState({ x: 0, y: 0 });
+  const [dimensions, setDimensions] = useState({ width: 0, height: 0 });
   const [isDragging, setIsDragging] = useState(false);
-  const [isMobile, setIsMobile] = useState(false);
+  const dragOffset = useRef({ x: 0, y: 0 });
 
-  const resolveWidth = width ?? DEFAULT_MODAL_WIDTH;
-  const resolveMaxHeight = maxHeight ?? DEFAULT_MODAL_MAX_HEIGHT;
-
-  const clampPosition = useCallback(
-    (nextX: number, nextY: number) => {
-      const modal = modalRef.current;
-      if (!modal) {
-        return { x: nextX, y: nextY };
-      }
-      const rect = modal.getBoundingClientRect();
-      const titleHeight = titleBarRef.current?.getBoundingClientRect().height ?? MIN_VISIBLE_TITLEBAR;
-      const minTitlebarVisible = Math.max(titleHeight, MIN_VISIBLE_TITLEBAR);
-      const minX = -(rect.width - MIN_VISIBLE_EDGE);
-      const maxX = window.innerWidth - MIN_VISIBLE_EDGE;
-      const minY = -(rect.height - minTitlebarVisible);
-      const maxY = window.innerHeight - minTitlebarVisible;
+  const clampPosition = useMemo(() => {
+    return (x: number, y: number) => {
+      const maxX = Math.max(MODAL_PADDING, window.innerWidth - dimensions.width - MODAL_PADDING);
+      const maxY = Math.max(MODAL_PADDING, window.innerHeight - dimensions.height - MODAL_PADDING);
       return {
-        x: clampValue(nextX, minX, maxX),
-        y: clampValue(nextY, minY, maxY)
+        x: Math.min(Math.max(MODAL_PADDING, x), maxX),
+        y: Math.min(Math.max(MODAL_PADDING, y), maxY)
       };
-    },
-    []
-  );
-
-  const centerModal = useCallback(() => {
-    const modal = modalRef.current;
-    if (!modal) {
-      return;
-    }
-    const rect = modal.getBoundingClientRect();
-    const nextX = initialX ?? (window.innerWidth - rect.width) / 2;
-    const nextY = initialY ?? (window.innerHeight - rect.height) / 2;
-    setPosition(clampPosition(nextX, nextY));
-  }, [clampPosition, initialX, initialY]);
-
-  useEffect(() => {
-    if (!disableDragOnMobile) {
-      setIsMobile(false);
-      return;
-    }
-    const media = window.matchMedia("(max-width: 640px)");
-    const updateMobile = () => setIsMobile(media.matches);
-    updateMobile();
-    media.addEventListener("change", updateMobile);
-    return () => media.removeEventListener("change", updateMobile);
-  }, [disableDragOnMobile]);
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const previousOverflow = document.body.style.overflow;
-    document.body.style.overflow = "hidden";
-    return () => {
-      document.body.style.overflow = previousOverflow;
     };
-  }, [open]);
+  }, [dimensions.height, dimensions.width]);
 
   useEffect(() => {
     if (!open) {
@@ -123,69 +53,50 @@ export function DraggableModal({
     if (!open) {
       return;
     }
-    if (isMobile) {
-      setPosition({ x: 0, y: 0 });
-      return;
-    }
-    requestAnimationFrame(() => {
-      centerModal();
-      modalRef.current?.focus();
-    });
-  }, [centerModal, isMobile, open]);
-
-  useEffect(() => {
-    if (!open || isMobile) {
-      return;
-    }
-    const handleResize = () => {
-      setPosition((current) => clampPosition(current.x, current.y));
+    const resizeHandler = () => {
+      setPosition((prev) => clampPosition(prev.x, prev.y));
     };
-    window.addEventListener("resize", handleResize);
-    return () => window.removeEventListener("resize", handleResize);
-  }, [clampPosition, isMobile, open]);
+    window.addEventListener("resize", resizeHandler);
+    return () => window.removeEventListener("resize", resizeHandler);
+  }, [clampPosition, open]);
 
   useEffect(() => {
-    if (!open || isMobile) {
+    if (!open) {
       return;
     }
-    const modal = modalRef.current;
-    if (!modal || typeof ResizeObserver === "undefined") {
-      return;
-    }
-    const observer = new ResizeObserver(() => {
-      setPosition((current) => clampPosition(current.x, current.y));
+    const raf = window.requestAnimationFrame(() => {
+      if (!modalRef.current) {
+        return;
+      }
+      const rect = modalRef.current.getBoundingClientRect();
+      setDimensions({ width: rect.width, height: rect.height });
+      setPosition(
+        clampPosition(
+          window.innerWidth / 2 - rect.width / 2,
+          window.innerHeight / 2 - rect.height / 2
+        )
+      );
     });
-    observer.observe(modal);
-    return () => observer.disconnect();
-  }, [clampPosition, isMobile, open]);
+    return () => window.cancelAnimationFrame(raf);
+  }, [clampPosition, open]);
 
   useEffect(() => {
     if (!isDragging) {
       return;
     }
-
-    const handlePointerMove = (event: PointerEvent) => {
-      if (!dragState.current) {
-        return;
-      }
-      const nextX = dragState.current.originX + (event.clientX - dragState.current.startX);
-      const nextY = dragState.current.originY + (event.clientY - dragState.current.startY);
+    const handleMouseMove = (event: MouseEvent) => {
+      const nextX = event.clientX - dragOffset.current.x;
+      const nextY = event.clientY - dragOffset.current.y;
       setPosition(clampPosition(nextX, nextY));
     };
-
-    const endDrag = () => {
-      dragState.current = null;
+    const handleMouseUp = () => {
       setIsDragging(false);
     };
-
-    window.addEventListener("pointermove", handlePointerMove);
-    window.addEventListener("pointerup", endDrag);
-    window.addEventListener("pointercancel", endDrag);
-
+    window.addEventListener("mousemove", handleMouseMove);
+    window.addEventListener("mouseup", handleMouseUp);
     return () => {
-      window.removeEventListener("pointermove", handlePointerMove);
-      window.removeEventListener("pointerup", endDrag);
-      window.removeEventListener("pointercancel", endDrag);
+      window.removeEventListener("mousemove", handleMouseMove);
+      window.removeEventListener("mouseup", handleMouseUp);
     };
   }, [clampPosition, isDragging]);
 
@@ -193,93 +104,49 @@ export function DraggableModal({
     return null;
   }
 
-  const handlePointerDown = (event: React.PointerEvent<HTMLDivElement>) => {
-    if (isMobile) {
-      return;
-    }
-    if (event.button !== 0) {
-      return;
-    }
-    event.preventDefault();
-    dragState.current = {
-      startX: event.clientX,
-      startY: event.clientY,
-      originX: position.x,
-      originY: position.y
-    };
-    setIsDragging(true);
-    event.currentTarget.setPointerCapture(event.pointerId);
-  };
-
-  const modalStyle = isMobile
-    ? {
-        left: 0,
-        top: 0,
-        width: "100vw",
-        height: "100vh",
-        maxHeight: "100vh"
-      }
-    : {
-        left: `${position.x}px`,
-        top: `${position.y}px`,
-        width: typeof resolveWidth === "number" ? `${resolveWidth}px` : resolveWidth,
-        maxHeight: typeof resolveMaxHeight === "number" ? `${resolveMaxHeight}px` : resolveMaxHeight
-      };
-
-  return createPortal(
-    <div className="fixed inset-0 z-40">
-      <div
-        className="fixed inset-0 bg-slate-950/70"
-        onClick={(event) => {
-          if (event.target === event.currentTarget) {
-            onClose();
-          }
-        }}
-      />
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+    >
       <div
         ref={modalRef}
-        role="dialog"
-        aria-modal="true"
-        aria-labelledby={titleId}
-        tabIndex={-1}
-        style={modalStyle}
-        className="fixed z-50 flex flex-col overflow-hidden rounded-lg border border-slate-800 bg-slate-900 shadow-2xl outline-none"
+        className={`absolute w-full ${maxWidthClassName} overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl`}
+        style={{ left: position.x, top: position.y }}
       >
         <div
-          ref={titleBarRef}
-          data-testid="modal-titlebar"
-          onPointerDown={handlePointerDown}
-          onDoubleClick={() => {
-            if (!isMobile) {
-              centerModal();
+          className="flex cursor-move items-center justify-between border-b border-slate-800 px-4 py-3"
+          onMouseDown={(event) => {
+            event.preventDefault();
+            if (!modalRef.current) {
+              return;
             }
+            const rect = modalRef.current.getBoundingClientRect();
+            dragOffset.current = {
+              x: event.clientX - rect.left,
+              y: event.clientY - rect.top
+            };
+            setIsDragging(true);
           }}
-          className={`flex items-center justify-between border-b border-slate-800 bg-slate-950 px-4 py-3 text-sm font-semibold text-white ${
-            isMobile ? "cursor-default" : "cursor-move"
-          }`}
         >
-          <h2 id={titleId}>{title}</h2>
+          <h4 className="text-sm font-semibold text-white">{title}</h4>
           <button
             type="button"
-            onPointerDown={(event) => event.stopPropagation()}
-            onClick={(event) => {
-              event.stopPropagation();
-              onClose();
-            }}
-            className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-200 hover:bg-slate-800"
-            aria-label="Fermer"
+            onClick={onClose}
+            className="text-sm text-slate-400 hover:text-slate-200"
           >
             ✕
           </button>
         </div>
-        <div className="min-h-0 flex-1 overflow-auto px-4 py-4">{children}</div>
+        <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
         {footer ? (
-          <div className="sticky bottom-0 border-t border-slate-800 bg-slate-950 px-4 py-3">
-            {footer}
-          </div>
+          <div className="border-t border-slate-800 bg-slate-900 px-4 py-3">{footer}</div>
         ) : null}
       </div>
-    </div>,
-    document.body
+    </div>
   );
 }

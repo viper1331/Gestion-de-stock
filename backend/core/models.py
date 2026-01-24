@@ -996,8 +996,14 @@ class PurchaseOrderReceiveItem(BaseModel):
     quantity: int = Field(..., gt=0)
 
 
+class PurchaseOrderReceiveLine(BaseModel):
+    line_id: int = Field(..., gt=0)
+    qty: int = Field(..., gt=0)
+
+
 class PurchaseOrderReceivePayload(BaseModel):
     items: list[PurchaseOrderReceiveItem] = Field(default_factory=list)
+    lines: list[PurchaseOrderReceiveLine] = Field(default_factory=list)
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -1138,8 +1144,14 @@ class RemisePurchaseOrderReceiveItem(BaseModel):
     quantity: int = Field(..., gt=0)
 
 
+class RemisePurchaseOrderReceiveLine(BaseModel):
+    line_id: int = Field(..., gt=0)
+    qty: int = Field(..., gt=0)
+
+
 class RemisePurchaseOrderReceivePayload(BaseModel):
     items: list[RemisePurchaseOrderReceiveItem] = Field(default_factory=list)
+    lines: list[RemisePurchaseOrderReceiveLine] = Field(default_factory=list)
 
 
 class RemisePurchaseOrderCreate(BaseModel):
@@ -1427,8 +1439,14 @@ class PharmacyPurchaseOrderReceiveItem(BaseModel):
     quantity: int = Field(..., gt=0)
 
 
+class PharmacyPurchaseOrderReceiveLine(BaseModel):
+    line_id: int = Field(..., gt=0)
+    qty: int = Field(..., gt=0)
+
+
 class PharmacyPurchaseOrderReceivePayload(BaseModel):
     items: list[PharmacyPurchaseOrderReceiveItem] = Field(default_factory=list)
+    lines: list[PharmacyPurchaseOrderReceiveLine] = Field(default_factory=list)
 
 
 class PharmacyPurchaseOrder(BaseModel):

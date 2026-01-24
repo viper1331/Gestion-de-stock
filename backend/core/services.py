@@ -9974,10 +9974,17 @@ def receive_purchase_order(
     order_id: int, payload: models.PurchaseOrderReceivePayload
 ) -> models.PurchaseOrderDetail:
     ensure_database_ready()
-    increments = _aggregate_positive_quantities(
-        (line.item_id, line.quantity) for line in payload.items
-    )
-    if not increments:
+    line_increments: dict[int, int] = {}
+    item_increments: dict[int, int] = {}
+    if payload.lines:
+        line_increments = _aggregate_positive_quantities(
+            (line.line_id, line.qty) for line in payload.lines
+        )
+    elif payload.items:
+        item_increments = _aggregate_positive_quantities(
+            (line.item_id, line.quantity) for line in payload.items
+        )
+    if not line_increments and not item_increments:
         raise ValueError("Aucune ligne de réception valide")
     with db.get_stock_connection() as conn:
         order_row = conn.execute(
@@ -9986,40 +9993,71 @@ def receive_purchase_order(
         ).fetchone()
         if order_row is None:
             raise ValueError("Bon de commande introuvable")
+        if order_row["status"] == "CANCELLED":
+            raise ValueError("Bon de commande annulé")
         try:
-            for item_id, increment in increments.items():
-                line = conn.execute(
-                    """
-                    SELECT id, quantity_ordered, quantity_received
-                    FROM purchase_order_items
-                    WHERE purchase_order_id = ? AND item_id = ?
-                    """,
-                    (order_id, item_id),
-                ).fetchone()
-                if line is None:
-                    raise ValueError("Article absent du bon de commande")
-                remaining = line["quantity_ordered"] - line["quantity_received"]
-                if remaining <= 0:
-                    continue
-                new_received = line["quantity_received"] + increment
-                if new_received > line["quantity_ordered"]:
-                    new_received = line["quantity_ordered"]
-                delta = new_received - line["quantity_received"]
-                if delta <= 0:
-                    continue
-                conn.execute(
-                    "UPDATE purchase_order_items SET quantity_received = ? WHERE id = ?",
-                    (new_received, line["id"]),
-                )
-                conn.execute(
-                    "UPDATE items SET quantity = quantity + ? WHERE id = ?",
-                    (delta, item_id),
-                )
-                conn.execute(
-                    "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
-                    (item_id, delta, f"Réception bon de commande #{order_id}"),
-                )
-                _maybe_create_auto_purchase_order(conn, item_id)
+            if line_increments:
+                for line_id, increment in line_increments.items():
+                    line = conn.execute(
+                        """
+                        SELECT id, item_id, quantity_ordered, quantity_received
+                        FROM purchase_order_items
+                        WHERE purchase_order_id = ? AND id = ?
+                        """,
+                        (order_id, line_id),
+                    ).fetchone()
+                    if line is None:
+                        raise ValueError("Ligne de commande introuvable")
+                    remaining = line["quantity_ordered"] - line["quantity_received"]
+                    if increment > remaining:
+                        raise ValueError("Quantité reçue supérieure au restant")
+                    if increment <= 0:
+                        continue
+                    new_received = line["quantity_received"] + increment
+                    conn.execute(
+                        "UPDATE purchase_order_items SET quantity_received = ? WHERE id = ?",
+                        (new_received, line["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                        (increment, line["item_id"]),
+                    )
+                    conn.execute(
+                        "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                        (line["item_id"], increment, f"Réception bon de commande #{order_id}"),
+                    )
+                    _maybe_create_auto_purchase_order(conn, line["item_id"])
+            else:
+                for item_id, increment in item_increments.items():
+                    line = conn.execute(
+                        """
+                        SELECT id, quantity_ordered, quantity_received
+                        FROM purchase_order_items
+                        WHERE purchase_order_id = ? AND item_id = ?
+                        """,
+                        (order_id, item_id),
+                    ).fetchone()
+                    if line is None:
+                        raise ValueError("Article absent du bon de commande")
+                    remaining = line["quantity_ordered"] - line["quantity_received"]
+                    if increment > remaining:
+                        raise ValueError("Quantité reçue supérieure au restant")
+                    if increment <= 0:
+                        continue
+                    new_received = line["quantity_received"] + increment
+                    conn.execute(
+                        "UPDATE purchase_order_items SET quantity_received = ? WHERE id = ?",
+                        (new_received, line["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                        (increment, item_id),
+                    )
+                    conn.execute(
+                        "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                        (item_id, increment, f"Réception bon de commande #{order_id}"),
+                    )
+                    _maybe_create_auto_purchase_order(conn, item_id)
             totals = conn.execute(
                 """
                 SELECT quantity_ordered, quantity_received
@@ -10323,10 +10361,17 @@ def receive_remise_purchase_order(
     order_id: int, payload: models.RemisePurchaseOrderReceivePayload
 ) -> models.RemisePurchaseOrderDetail:
     ensure_database_ready()
-    increments = _aggregate_positive_quantities(
-        (line.remise_item_id, line.quantity) for line in payload.items
-    )
-    if not increments:
+    line_increments: dict[int, int] = {}
+    item_increments: dict[int, int] = {}
+    if payload.lines:
+        line_increments = _aggregate_positive_quantities(
+            (line.line_id, line.qty) for line in payload.lines
+        )
+    elif payload.items:
+        item_increments = _aggregate_positive_quantities(
+            (line.remise_item_id, line.quantity) for line in payload.items
+        )
+    if not line_increments and not item_increments:
         raise ValueError("Aucune ligne de réception valide")
     with db.get_stock_connection() as conn:
         order_row = conn.execute(
@@ -10335,39 +10380,73 @@ def receive_remise_purchase_order(
         ).fetchone()
         if order_row is None:
             raise ValueError("Bon de commande introuvable")
+        if order_row["status"] == "CANCELLED":
+            raise ValueError("Bon de commande annulé")
         try:
-            for remise_item_id, increment in increments.items():
-                line = conn.execute(
-                    """
-                    SELECT id, quantity_ordered, quantity_received
-                    FROM remise_purchase_order_items
-                    WHERE purchase_order_id = ? AND remise_item_id = ?
-                    """,
-                    (order_id, remise_item_id),
-                ).fetchone()
-                if line is None:
-                    raise ValueError("Article absent du bon de commande")
-                remaining = line["quantity_ordered"] - line["quantity_received"]
-                if remaining <= 0:
-                    continue
-                new_received = line["quantity_received"] + increment
-                if new_received > line["quantity_ordered"]:
-                    new_received = line["quantity_ordered"]
-                delta = new_received - line["quantity_received"]
-                if delta <= 0:
-                    continue
-                conn.execute(
-                    "UPDATE remise_purchase_order_items SET quantity_received = ? WHERE id = ?",
-                    (new_received, line["id"]),
-                )
-                conn.execute(
-                    "UPDATE remise_items SET quantity = quantity + ? WHERE id = ?",
-                    (delta, remise_item_id),
-                )
-                conn.execute(
-                    "INSERT INTO remise_movements (item_id, delta, reason) VALUES (?, ?, ?)",
-                    (remise_item_id, delta, f"Réception bon de commande remise #{order_id}"),
-                )
+            if line_increments:
+                for line_id, increment in line_increments.items():
+                    line = conn.execute(
+                        """
+                        SELECT id, remise_item_id, quantity_ordered, quantity_received
+                        FROM remise_purchase_order_items
+                        WHERE purchase_order_id = ? AND id = ?
+                        """,
+                        (order_id, line_id),
+                    ).fetchone()
+                    if line is None:
+                        raise ValueError("Ligne de commande introuvable")
+                    remaining = line["quantity_ordered"] - line["quantity_received"]
+                    if increment > remaining:
+                        raise ValueError("Quantité reçue supérieure au restant")
+                    if increment <= 0:
+                        continue
+                    new_received = line["quantity_received"] + increment
+                    conn.execute(
+                        "UPDATE remise_purchase_order_items SET quantity_received = ? WHERE id = ?",
+                        (new_received, line["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE remise_items SET quantity = quantity + ? WHERE id = ?",
+                        (increment, line["remise_item_id"]),
+                    )
+                    conn.execute(
+                        "INSERT INTO remise_movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                        (
+                            line["remise_item_id"],
+                            increment,
+                            f"Réception bon de commande remise #{order_id}"
+                        ),
+                    )
+            else:
+                for remise_item_id, increment in item_increments.items():
+                    line = conn.execute(
+                        """
+                        SELECT id, quantity_ordered, quantity_received
+                        FROM remise_purchase_order_items
+                        WHERE purchase_order_id = ? AND remise_item_id = ?
+                        """,
+                        (order_id, remise_item_id),
+                    ).fetchone()
+                    if line is None:
+                        raise ValueError("Article absent du bon de commande")
+                    remaining = line["quantity_ordered"] - line["quantity_received"]
+                    if increment > remaining:
+                        raise ValueError("Quantité reçue supérieure au restant")
+                    if increment <= 0:
+                        continue
+                    new_received = line["quantity_received"] + increment
+                    conn.execute(
+                        "UPDATE remise_purchase_order_items SET quantity_received = ? WHERE id = ?",
+                        (new_received, line["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE remise_items SET quantity = quantity + ? WHERE id = ?",
+                        (increment, remise_item_id),
+                    )
+                    conn.execute(
+                        "INSERT INTO remise_movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                        (remise_item_id, increment, f"Réception bon de commande remise #{order_id}"),
+                    )
             totals = conn.execute(
                 """
                 SELECT quantity_ordered, quantity_received
@@ -11830,10 +11909,17 @@ def receive_pharmacy_purchase_order(
     order_id: int, payload: models.PharmacyPurchaseOrderReceivePayload
 ) -> models.PharmacyPurchaseOrderDetail:
     ensure_database_ready()
-    increments = _aggregate_positive_quantities(
-        (line.pharmacy_item_id, line.quantity) for line in payload.items
-    )
-    if not increments:
+    line_increments: dict[int, int] = {}
+    item_increments: dict[int, int] = {}
+    if payload.lines:
+        line_increments = _aggregate_positive_quantities(
+            (line.line_id, line.qty) for line in payload.lines
+        )
+    elif payload.items:
+        item_increments = _aggregate_positive_quantities(
+            (line.pharmacy_item_id, line.quantity) for line in payload.items
+        )
+    if not line_increments and not item_increments:
         raise ValueError("Aucune ligne de réception valide")
     with db.get_stock_connection() as conn:
         order_row = conn.execute(
@@ -11842,39 +11928,73 @@ def receive_pharmacy_purchase_order(
         ).fetchone()
         if order_row is None:
             raise ValueError("Bon de commande pharmacie introuvable")
+        if order_row["status"] == "CANCELLED":
+            raise ValueError("Bon de commande annulé")
         try:
-            for item_id, increment in increments.items():
-                line = conn.execute(
-                    """
-                    SELECT id, quantity_ordered, quantity_received
-                    FROM pharmacy_purchase_order_items
-                    WHERE purchase_order_id = ? AND pharmacy_item_id = ?
-                    """,
-                    (order_id, item_id),
-                ).fetchone()
-                if line is None:
-                    raise ValueError("Article pharmaceutique absent du bon de commande")
-                remaining = line["quantity_ordered"] - line["quantity_received"]
-                if remaining <= 0:
-                    continue
-                new_received = line["quantity_received"] + increment
-                if new_received > line["quantity_ordered"]:
-                    new_received = line["quantity_ordered"]
-                delta = new_received - line["quantity_received"]
-                if delta <= 0:
-                    continue
-                conn.execute(
-                    "UPDATE pharmacy_purchase_order_items SET quantity_received = ? WHERE id = ?",
-                    (new_received, line["id"]),
-                )
-                conn.execute(
-                    "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
-                    (delta, item_id),
-                )
-                conn.execute(
-                    "INSERT INTO pharmacy_movements (pharmacy_item_id, delta, reason) VALUES (?, ?, ?)",
-                    (item_id, delta, f"Réception bon de commande pharmacie #{order_id}"),
-                )
+            if line_increments:
+                for line_id, increment in line_increments.items():
+                    line = conn.execute(
+                        """
+                        SELECT id, pharmacy_item_id, quantity_ordered, quantity_received
+                        FROM pharmacy_purchase_order_items
+                        WHERE purchase_order_id = ? AND id = ?
+                        """,
+                        (order_id, line_id),
+                    ).fetchone()
+                    if line is None:
+                        raise ValueError("Ligne de commande introuvable")
+                    remaining = line["quantity_ordered"] - line["quantity_received"]
+                    if increment > remaining:
+                        raise ValueError("Quantité reçue supérieure au restant")
+                    if increment <= 0:
+                        continue
+                    new_received = line["quantity_received"] + increment
+                    conn.execute(
+                        "UPDATE pharmacy_purchase_order_items SET quantity_received = ? WHERE id = ?",
+                        (new_received, line["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
+                        (increment, line["pharmacy_item_id"]),
+                    )
+                    conn.execute(
+                        "INSERT INTO pharmacy_movements (pharmacy_item_id, delta, reason) VALUES (?, ?, ?)",
+                        (
+                            line["pharmacy_item_id"],
+                            increment,
+                            f"Réception bon de commande pharmacie #{order_id}"
+                        ),
+                    )
+            else:
+                for item_id, increment in item_increments.items():
+                    line = conn.execute(
+                        """
+                        SELECT id, quantity_ordered, quantity_received
+                        FROM pharmacy_purchase_order_items
+                        WHERE purchase_order_id = ? AND pharmacy_item_id = ?
+                        """,
+                        (order_id, item_id),
+                    ).fetchone()
+                    if line is None:
+                        raise ValueError("Article pharmaceutique absent du bon de commande")
+                    remaining = line["quantity_ordered"] - line["quantity_received"]
+                    if increment > remaining:
+                        raise ValueError("Quantité reçue supérieure au restant")
+                    if increment <= 0:
+                        continue
+                    new_received = line["quantity_received"] + increment
+                    conn.execute(
+                        "UPDATE pharmacy_purchase_order_items SET quantity_received = ? WHERE id = ?",
+                        (new_received, line["id"]),
+                    )
+                    conn.execute(
+                        "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
+                        (increment, item_id),
+                    )
+                    conn.execute(
+                        "INSERT INTO pharmacy_movements (pharmacy_item_id, delta, reason) VALUES (?, ?, ?)",
+                        (item_id, increment, f"Réception bon de commande pharmacie #{order_id}"),
+                    )
             totals = conn.execute(
                 """
                 SELECT quantity_ordered, quantity_received
