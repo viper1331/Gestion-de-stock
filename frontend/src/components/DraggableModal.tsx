@@ -7,6 +7,7 @@ interface DraggableModalProps {
   children: ReactNode;
   footer?: ReactNode;
   maxWidthClassName?: string;
+  bodyClassName?: string;
 }
 
 const MODAL_PADDING = 16;
@@ -17,7 +18,8 @@ export function DraggableModal({
   onClose,
   children,
   footer,
-  maxWidthClassName = "max-w-3xl"
+  maxWidthClassName = "max-w-3xl",
+  bodyClassName = "px-4 py-4"
 }: DraggableModalProps) {
   const modalRef = useRef<HTMLDivElement | null>(null);
   const [position, setPosition] = useState({ x: 0, y: 0 });
@@ -106,7 +108,7 @@ export function DraggableModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4"
+      className="fixed inset-0 z-50 flex items-center justify-center overflow-x-hidden bg-slate-950/80 px-4"
       onClick={(event) => {
         if (event.target === event.currentTarget) {
           onClose();
@@ -115,11 +117,11 @@ export function DraggableModal({
     >
       <div
         ref={modalRef}
-        className={`absolute w-full ${maxWidthClassName} overflow-hidden rounded-xl border border-slate-800 bg-slate-900 shadow-2xl`}
+        className={`absolute flex w-full min-w-0 max-h-[90vh] ${maxWidthClassName} flex-col overflow-hidden rounded-2xl border border-slate-800 bg-slate-900 shadow-2xl`}
         style={{ left: position.x, top: position.y }}
       >
         <div
-          className="flex cursor-move items-center justify-between border-b border-slate-800 px-4 py-3"
+          className="flex min-w-0 shrink-0 cursor-move items-center justify-between border-b border-slate-800 px-4 py-3"
           onMouseDown={(event) => {
             event.preventDefault();
             if (!modalRef.current) {
@@ -142,9 +144,13 @@ export function DraggableModal({
             ✕
           </button>
         </div>
-        <div className="max-h-[70vh] overflow-y-auto p-4">{children}</div>
+        <div className={`min-w-0 flex-1 overflow-y-auto overflow-x-hidden ${bodyClassName}`}>
+          {children}
+        </div>
         {footer ? (
-          <div className="border-t border-slate-800 bg-slate-900 px-4 py-3">{footer}</div>
+          <div className="shrink-0 border-t border-slate-800 bg-slate-900 px-4 py-3">
+            {footer}
+          </div>
         ) : null}
       </div>
     </div>
