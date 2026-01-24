@@ -28,6 +28,8 @@ export function PurchaseOrderCreateModal({
       open={open}
       title={title}
       onClose={onClose}
+      maxWidthClassName="max-w-[min(96vw,900px)]"
+      bodyClassName="px-6 py-4"
       footer={
         <div className="flex justify-end gap-2">
           <button
@@ -48,7 +50,7 @@ export function PurchaseOrderCreateModal({
         </div>
       }
     >
-      <form id={formId} className="space-y-4" onSubmit={onSubmit}>
+      <form id={formId} className="flex min-w-0 flex-col gap-4" onSubmit={onSubmit}>
         {children}
       </form>
     </DraggableModal>
