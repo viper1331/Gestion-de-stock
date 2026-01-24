@@ -125,7 +125,7 @@ const formatDateInput = (value: Date) => value.toISOString().slice(0, 10);
 export function ReportsPage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
-  const canView = user?.role === "admin" || modulePermissions.canAccess("reports");
+  const canViewPage = user?.role === "admin" || modulePermissions.canAccess("reports");
 
   const { data: configEntries = [] } = useQuery({
     queryKey: ["config", "global"],
@@ -157,7 +157,7 @@ export function ReportsPage() {
     if (!user) {
       return [];
     }
-    if (!canView && user.role !== "admin") {
+    if (!canViewPage && user.role !== "admin") {
       return [];
     }
     if (user.role === "admin") {
@@ -173,7 +173,7 @@ export function ReportsPage() {
         sort_order: 999
       }));
     return permissionModules.sort((a, b) => a.label.localeCompare(b.label, "fr"));
-  }, [availableModules, canView, modulePermissions.data, moduleTitleMap, user]);
+  }, [availableModules, canViewPage, modulePermissions.data, moduleTitleMap, user]);
 
   const [selectedModule, setSelectedModule] = useState<string>("");
 
@@ -204,7 +204,7 @@ export function ReportsPage() {
     setEndDate(end);
   }, [period]);
 
-  const canView = user?.role === "admin" || accessibleModules.length > 0;
+  const canViewSelectedModule = user?.role === "admin" || accessibleModules.length > 0;
 
   const { data: reportData, isFetching, isLoading, error, refetch } = useQuery({
     queryKey: [
@@ -230,7 +230,7 @@ export function ReportsPage() {
       });
       return response.data;
     },
-    enabled: Boolean(canView && selectedModule)
+    enabled: Boolean(canViewPage && selectedModule)
   });
 
   const orderStatusData = useMemo(() => {
@@ -252,7 +252,7 @@ export function ReportsPage() {
   }, [reportData?.series.orders]);
 
   useEffect(() => {
-    if (!refetch || !canView) {
+    if (!refetch || !canViewSelectedModule) {
       return;
     }
     const interval = Math.max(5, refreshInterval || 10) * 1000;
@@ -262,7 +262,15 @@ export function ReportsPage() {
       }
     }, interval);
     return () => window.clearInterval(timer);
-  }, [canView, refreshInterval, refetch, selectedModule, startDate, endDate, bucket]);
+  }, [
+    canViewSelectedModule,
+    refreshInterval,
+    refetch,
+    selectedModule,
+    startDate,
+    endDate,
+    bucket
+  ]);
 
   const content = (
     <section className="space-y-6">
@@ -601,7 +609,7 @@ export function ReportsPage() {
     );
   }
 
-  if (!canView) {
+  if (!canViewPage) {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
