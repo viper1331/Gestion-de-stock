@@ -895,8 +895,8 @@ export function InventoryModuleDashboard({
     <div className="flex min-h-0 flex-col gap-6 lg:flex-row lg:items-start">
       <div className="min-w-0 flex-1 space-y-4">
         <div className="min-w-0 rounded-lg border border-slate-800">
-          <div className="max-h-[400px] min-h-0 min-w-0 overflow-auto">
-            <table className="w-full min-w-full table-fixed divide-y divide-slate-800">
+          <div className="relative max-h-[60vh] min-h-0 min-w-0 overflow-y-auto overflow-x-auto rounded-xl">
+            <table className="w-full min-w-full table-fixed border-separate border-spacing-0 divide-y divide-slate-800">
               <DndContext
                 sensors={sensors}
                 collisionDetection={closestCenter}
@@ -922,7 +922,7 @@ export function InventoryModuleDashboard({
                           />
                         );
                       })}
-                      <th className="px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400">
+                      <th className="sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 px-4 py-3 text-right text-xs font-semibold uppercase tracking-wide text-slate-400 backdrop-blur">
                         Actions
                       </th>
                     </tr>
@@ -1413,7 +1413,7 @@ function SortableHeaderCell({
     <th
       ref={setNodeRef}
       style={style}
-      className={`px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 ${className ?? ""}`}
+      className={`sticky top-0 z-20 border-b border-white/10 bg-slate-950/95 px-4 py-3 text-left text-xs font-semibold uppercase tracking-wide text-slate-400 backdrop-blur ${className ?? ""}`}
     >
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-2">
