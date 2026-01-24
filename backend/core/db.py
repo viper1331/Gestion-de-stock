@@ -5,6 +5,8 @@ import contextvars
 import logging
 import os
 import sqlite3
+import sys
+import tempfile
 from collections.abc import Iterator
 from contextlib import contextmanager
 from pathlib import Path
@@ -12,7 +14,14 @@ from threading import RLock
 from typing import ContextManager
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_DIR = BASE_DIR / "data"
+# APP_DATA_DIR permet de rediriger les données (ex: vers un répertoire temporaire en tests).
+_env_data_dir = os.environ.get("APP_DATA_DIR")
+if _env_data_dir:
+    DATA_DIR = Path(_env_data_dir).expanduser()
+elif "pytest" in sys.modules:
+    DATA_DIR = Path(tempfile.mkdtemp(prefix="app_data_"))
+else:
+    DATA_DIR = BASE_DIR / "data"
 USERS_DB_PATH = DATA_DIR / "users.db"
 STOCK_DB_PATH = DATA_DIR / "stock.db"
 CORE_DB_PATH = DATA_DIR / "core.db"
