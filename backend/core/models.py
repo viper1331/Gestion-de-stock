@@ -748,6 +748,83 @@ class LowStockReport(BaseModel):
     shortage: int
 
 
+class ReportRange(BaseModel):
+    start: str
+    end: str
+    bucket: str
+
+
+class ReportKpis(BaseModel):
+    in_qty: int = 0
+    out_qty: int = 0
+    net_qty: int = 0
+    low_stock_count: int = 0
+    open_orders: int = 0
+
+
+class ReportMoveSeriesPoint(BaseModel):
+    t: str
+    in_qty: int = Field(default=0, alias="in")
+    out_qty: int = Field(default=0, alias="out")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ReportNetSeriesPoint(BaseModel):
+    t: str
+    net: int = 0
+
+
+class ReportLowStockSeriesPoint(BaseModel):
+    t: str
+    count: int = 0
+
+
+class ReportOrderSeriesPoint(BaseModel):
+    t: str
+    created: int = 0
+    ordered: int = 0
+    partial: int = 0
+    received: int = 0
+    cancelled: int = 0
+
+
+class ReportSeries(BaseModel):
+    moves: list[ReportMoveSeriesPoint] = Field(default_factory=list)
+    net: list[ReportNetSeriesPoint] = Field(default_factory=list)
+    low_stock: list[ReportLowStockSeriesPoint] = Field(default_factory=list)
+    orders: list[ReportOrderSeriesPoint] = Field(default_factory=list)
+
+
+class ReportTopItem(BaseModel):
+    sku: str = ""
+    name: str = ""
+    qty: int = 0
+
+
+class ReportTops(BaseModel):
+    out: list[ReportTopItem] = Field(default_factory=list)
+    in_: list[ReportTopItem] = Field(default_factory=list, alias="in")
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class ReportDataQuality(BaseModel):
+    missing_sku: int = 0
+    missing_supplier: int = 0
+    missing_threshold: int = 0
+    abnormal_movements: int = 0
+
+
+class ReportOverview(BaseModel):
+    module: str
+    range: ReportRange
+    kpis: ReportKpis
+    series: ReportSeries
+    tops: ReportTops
+    data_quality: ReportDataQuality
+
+
 class ConfigEntry(BaseModel):
     section: str
     key: str
