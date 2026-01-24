@@ -1383,6 +1383,7 @@ class BarcodeGeneratedEntry(BaseModel):
     sku: str = Field(..., min_length=1, max_length=64)
     module: str = Field(..., min_length=1, max_length=64)
     label: Optional[str] = Field(default=None, min_length=1, max_length=256)
+    item_name: str = Field(..., min_length=1, max_length=256)
     created_at: datetime
     filename: str = Field(..., min_length=1, max_length=256)
     asset_path: str = Field(..., min_length=1, max_length=512)

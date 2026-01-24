@@ -87,7 +87,8 @@ export function BarcodePage() {
         const response = await api.get<BarcodeCatalogEntry[]>("/barcode/catalog", {
           params: {
             module: nextModule,
-            q: nextQuery.trim() ? nextQuery.trim() : undefined
+            q: nextQuery.trim() ? nextQuery.trim() : undefined,
+            exclude_generated: true
           }
         });
         if (!isMountedRef.current) {
@@ -143,8 +144,10 @@ export function BarcodePage() {
               return null;
             }
             const objectUrl = URL.createObjectURL(assetResponse.data);
+            const resolvedName = entry.item_name || entry.label || entry.sku;
             return {
               sku: entry.sku,
+              itemName: resolvedName,
               filename: entry.filename,
               modifiedAt: entry.created_at ?? entry.modified_at ?? "",
               imageUrl: objectUrl
@@ -225,6 +228,7 @@ export function BarcodePage() {
       setImageUrl(url);
       setMessage("Code-barres généré.");
       void refreshGallery(moduleFilter, searchTerm);
+      void refreshCatalog(moduleFilter, searchTerm);
     } catch (err) {
       setError("Impossible de générer le code-barres.");
     } finally {
@@ -247,6 +251,7 @@ export function BarcodePage() {
       setImageUrl(null);
       setMessage("Code-barres supprimé.");
       void refreshGallery(moduleFilter, searchTerm);
+      void refreshCatalog(moduleFilter, searchTerm);
     } catch (err) {
       setError("Impossible de supprimer le fichier généré.");
     } finally {
@@ -274,13 +279,14 @@ export function BarcodePage() {
 
       setMessage("Code-barres supprimé.");
       void refreshGallery(moduleFilter, searchTerm);
+      void refreshCatalog(moduleFilter, searchTerm);
     } catch (err) {
       setError("Impossible de supprimer le fichier généré.");
     } finally {
         setDeletingSku(null);
       }
     },
-    [canEdit, imageUrl, moduleFilter, refreshGallery, searchTerm, sku]
+    [canEdit, imageUrl, moduleFilter, refreshCatalog, refreshGallery, searchTerm, sku]
   );
 
   const handleExportPdf = async () => {
@@ -553,7 +559,8 @@ export function BarcodePage() {
               >
                 <img src={entry.imageUrl} alt={`Code-barres ${entry.sku}`} className="mx-auto max-h-48 object-contain" />
                 <figcaption className="space-y-1 text-center text-sm text-slate-300">
-                  <div className="font-semibold text-white">{entry.sku}</div>
+                  <div className="text-base font-semibold text-white">{entry.itemName}</div>
+                  <div className="text-xs text-slate-400">{entry.sku}</div>
                   <div className="text-xs text-slate-400">{formatTimestamp(entry.modifiedAt)}</div>
                   <div className="flex justify-center gap-2 text-xs">
                     <a
@@ -618,6 +625,7 @@ export function BarcodePage() {
 
 type BarcodeSummary = {
   sku: string;
+  item_name: string;
   filename: string;
   module: string;
   label?: string | null;
@@ -636,6 +644,7 @@ type BarcodeCatalogEntry = {
 
 type BarcodeVisual = {
   sku: string;
+  itemName: string;
   filename: string;
   modifiedAt: string;
   imageUrl: string;
