@@ -3,10 +3,10 @@ from __future__ import annotations
 
 import io
 from datetime import datetime
+from html import escape
 from typing import Callable
 
 from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
-from reportlab.lib.utils import escape
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 from reportlab.platypus import Paragraph
