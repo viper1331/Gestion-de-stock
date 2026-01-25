@@ -20,6 +20,7 @@ export interface InventoryModuleConfig {
   purchaseOrdersItemsPath?: string;
   purchaseOrdersQueryKey?: readonly unknown[];
   purchaseOrdersItemsQueryKey?: readonly unknown[];
+  purchaseOrdersModuleKey?: string;
   purchaseOrdersTitle?: string;
   purchaseOrdersDescription?: string;
   purchaseOrdersDownloadPrefix?: string;
