@@ -3560,6 +3560,8 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             )
         if "supplier_id" not in pharmacy_columns:
             execute("ALTER TABLE pharmacy_items ADD COLUMN supplier_id INTEGER")
+        if "size_format" not in pharmacy_columns:
+            execute("ALTER TABLE pharmacy_items ADD COLUMN size_format TEXT")
         if "extra_json" not in pharmacy_columns:
             execute("ALTER TABLE pharmacy_items ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
         execute(
@@ -12052,18 +12054,45 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 supplier_ids,
             ).fetchall()
             suppliers_by_id = {row["id"]: row for row in supplier_rows}
+        category_ids = sorted(
+            {category_id for row in rows if (category_id := row["category_id"]) is not None}
+        )
+        sizes_map: dict[int, list[str]] = {}
+        if category_ids:
+            placeholders = ", ".join("?" for _ in category_ids)
+            size_rows = conn.execute(
+                f"""
+                SELECT category_id, name
+                FROM pharmacy_category_sizes
+                WHERE category_id IN ({placeholders})
+                ORDER BY name COLLATE NOCASE
+                """,
+                category_ids,
+            ).fetchall()
+            for size_row in size_rows:
+                sizes_map.setdefault(size_row["category_id"], []).append(size_row["name"])
+        category_sizes_map = {
+            category_id: ", ".join(sizes) if sizes else None
+            for category_id, sizes in sizes_map.items()
+        }
         return [
             models.PharmacyItem(
                 id=row["id"],
                 name=row["name"],
                 dosage=row["dosage"],
                 packaging=row["packaging"],
+                size_format=row["size_format"] if "size_format" in row.keys() else None,
                 barcode=row["barcode"],
                 quantity=row["quantity"],
                 low_stock_threshold=row["low_stock_threshold"],
                 expiration_date=row["expiration_date"],
                 location=row["location"],
                 category_id=row["category_id"],
+                category_sizes=(
+                    category_sizes_map.get(row["category_id"])
+                    if row["category_id"] is not None
+                    else None
+                ),
                 supplier_id=_row_get(row, "supplier_id"),
                 supplier_name=(
                     suppliers_by_id.get(_row_get(row, "supplier_id"))["name"]
@@ -12555,17 +12584,31 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
         row = cur.fetchone()
         if row is None:
             raise ValueError("Produit pharmaceutique introuvable")
+        category_sizes = None
+        if row["category_id"] is not None:
+            size_rows = conn.execute(
+                """
+                SELECT name
+                FROM pharmacy_category_sizes
+                WHERE category_id = ?
+                ORDER BY name COLLATE NOCASE
+                """,
+                (row["category_id"],),
+            ).fetchall()
+            category_sizes = ", ".join([size_row["name"] for size_row in size_rows]) or None
         return models.PharmacyItem(
             id=row["id"],
             name=row["name"],
             dosage=row["dosage"],
             packaging=row["packaging"],
+            size_format=row["size_format"] if "size_format" in row.keys() else None,
             barcode=row["barcode"],
             quantity=row["quantity"],
             low_stock_threshold=row["low_stock_threshold"],
             expiration_date=row["expiration_date"],
             location=row["location"],
             category_id=row["category_id"],
+            category_sizes=category_sizes,
             supplier_id=row["supplier_id"] if "supplier_id" in row.keys() else None,
             extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
         )
@@ -12589,6 +12632,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     name,
                     dosage,
                     packaging,
+                    size_format,
                     barcode,
                     quantity,
                     low_stock_threshold,
@@ -12598,12 +12642,13 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     supplier_id,
                     extra_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
                     payload.dosage,
                     payload.packaging,
+                    payload.size_format,
                     barcode,
                     payload.quantity,
                     payload.low_stock_threshold,

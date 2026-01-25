@@ -1863,6 +1863,47 @@ def test_pharmacy_category_crud() -> None:
     assert category_id not in remaining_ids
 
 
+def test_pharmacy_item_listing_includes_category_sizes() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    category_resp = client.post(
+        "/pharmacy/categories/",
+        json={"name": "Bandages", "sizes": ["10cm x 4m", "15cm x 4m"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    create_item = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Bandage compressif",
+            "dosage": None,
+            "packaging": None,
+            "size_format": "10CM X 4M",
+            "barcode": None,
+            "quantity": 3,
+            "low_stock_threshold": 1,
+            "expiration_date": None,
+            "location": None,
+            "category_id": category_id,
+            "supplier_id": None,
+            "extra": {},
+        },
+        headers=admin_headers,
+    )
+    assert create_item.status_code == 201, create_item.text
+    item_id = create_item.json()["id"]
+
+    listing = client.get("/pharmacy/", headers=admin_headers)
+    assert listing.status_code == 200, listing.text
+    entry = next((item for item in listing.json() if item["id"] == item_id), None)
+    assert entry is not None
+    assert entry["category_sizes"] == "10CM X 4M, 15CM X 4M"
+    assert entry["size_format"] == "10CM X 4M"
+
+
 def test_create_category_with_sizes() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

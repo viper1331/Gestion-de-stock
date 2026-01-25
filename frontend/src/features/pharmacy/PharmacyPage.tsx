@@ -35,12 +35,14 @@ interface PharmacyItem {
   name: string;
   dosage: string | null;
   packaging: string | null;
+  size_format: string | null;
   barcode: string | null;
   quantity: number;
   low_stock_threshold: number;
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
+  category_sizes?: string | null;
   supplier_id: number | null;
   supplier_name?: string | null;
   supplier_email?: string | null;
@@ -51,6 +53,7 @@ interface PharmacyPayload {
   name: string;
   dosage: string | null;
   packaging: string | null;
+  size_format: string | null;
   barcode: string | null;
   quantity: number;
   low_stock_threshold: number;
@@ -65,6 +68,7 @@ const EMPTY_PHARMACY_PAYLOAD: PharmacyPayload = {
   name: "",
   dosage: null,
   packaging: null,
+  size_format: null,
   barcode: null,
   quantity: 0,
   low_stock_threshold: DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
@@ -79,6 +83,7 @@ interface PharmacyFormDraft {
   name: string;
   dosage: string;
   packaging: string;
+  size_format: string;
   barcode: string;
   quantity: number;
   low_stock_threshold: number;
@@ -100,6 +105,7 @@ function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
     name: payload.name ?? "",
     dosage: payload.dosage ?? "",
     packaging: payload.packaging ?? "",
+    size_format: payload.size_format ?? "",
     barcode: payload.barcode ?? "",
     quantity: payload.quantity ?? 0,
     low_stock_threshold:
@@ -141,6 +147,7 @@ type PharmacyColumnKey =
   | "expiration"
   | "location"
   | "category"
+  | "size_format"
   | "supplier";
 
 const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
@@ -153,6 +160,7 @@ const DEFAULT_PHARMACY_COLUMN_VISIBILITY: Record<PharmacyColumnKey, boolean> = {
   expiration: true,
   location: true,
   category: false,
+  size_format: true,
   supplier: true
 };
 
@@ -166,6 +174,7 @@ const DEFAULT_PHARMACY_COLUMN_WIDTHS: Record<PharmacyColumnKey, number> = {
   expiration: 160,
   location: 160,
   category: 160,
+  size_format: 180,
   supplier: 180
 };
 
@@ -179,6 +188,7 @@ const PHARMACY_COLUMN_OPTIONS: { key: PharmacyColumnKey; label: string }[] = [
   { key: "expiration", label: "Expiration" },
   { key: "location", label: "Localisation" },
   { key: "category", label: "Catégorie" },
+  { key: "size_format", label: "Tailles / formats" },
   { key: "supplier", label: "Fournisseur" }
 ];
 
@@ -377,6 +387,11 @@ export function PharmacyPage() {
       expiration: { label: "Expiration", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.expiration },
       location: { label: "Localisation", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.location },
       category: { label: "Catégorie", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.category },
+      size_format: {
+        label: "Tailles / formats",
+        cellClass: "truncate",
+        width: DEFAULT_PHARMACY_COLUMN_WIDTHS.size_format
+      },
       supplier: { label: "Fournisseur", headerClass: "hidden lg:table-cell", cellClass: "hidden lg:table-cell", width: DEFAULT_PHARMACY_COLUMN_WIDTHS.supplier }
     };
     if (!canViewSuppliers) {
@@ -467,6 +482,10 @@ export function PharmacyPage() {
   }, [items, movementItemId]);
 
   const categoryNames = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories]);
+  const categorySizesById = useMemo(
+    () => new Map(categories.map((category) => [category.id, category.sizes ?? []])),
+    [categories]
+  );
   const selectedMovementItem = useMemo(
     () => (movementItemId === null ? null : items.find((item) => item.id === movementItemId) ?? null),
     [items, movementItemId]
@@ -660,6 +679,7 @@ export function PharmacyPage() {
         name: selected.name,
         dosage: selected.dosage,
         packaging: selected.packaging,
+        size_format: selected.size_format,
         barcode: selected.barcode,
         quantity: selected.quantity,
         low_stock_threshold: selected.low_stock_threshold,
@@ -680,6 +700,22 @@ export function PharmacyPage() {
   const selectedSupplierMissing =
     draft.supplier_id.trim().length > 0 &&
     !suppliers.some((supplier) => String(supplier.id) === draft.supplier_id);
+  const selectedCategorySizes = useMemo(() => {
+    const categoryId = draft.category_id.trim() ? Number(draft.category_id) : null;
+    if (!categoryId) {
+      return [];
+    }
+    const sizes = categorySizesById.get(categoryId) ?? [];
+    return sizes.map((size) => size.trim()).filter((size) => size.length > 0);
+  }, [categorySizesById, draft.category_id]);
+  const normalizedSizeFormat = draft.size_format.trim();
+  const sizeFormatMatchesCategory =
+    normalizedSizeFormat.length > 0 &&
+    selectedCategorySizes.some(
+      (size) => size.toLowerCase() === normalizedSizeFormat.toLowerCase()
+    );
+  const legacySizeFormatOption =
+    normalizedSizeFormat.length > 0 && !sizeFormatMatchesCategory ? normalizedSizeFormat : "";
 
   useEffect(() => {
     setDraft(createPharmacyFormDraft(formValues));
@@ -713,6 +749,17 @@ export function PharmacyPage() {
       }
       return next;
     });
+  };
+
+  const handleCategoryChange = (event: ChangeEvent<HTMLSelectElement>) => {
+    const nextCategoryId = event.target.value;
+    const sizes = nextCategoryId ? categorySizesById.get(Number(nextCategoryId)) ?? [] : [];
+    const normalizedSizes = sizes.map((size) => size.trim()).filter((size) => size.length > 0);
+    const currentSize = draft.size_format.trim();
+    const shouldReset =
+      currentSize.length > 0 &&
+      !normalizedSizes.some((size) => size.toLowerCase() === currentSize.toLowerCase());
+    updateDraft({ category_id: nextCategoryId, size_format: shouldReset ? "" : draft.size_format });
   };
 
   const handleBarcodeChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -779,6 +826,7 @@ export function PharmacyPage() {
       name: trimmedName,
       dosage: draft.dosage.trim() ? draft.dosage.trim() : null,
       packaging: draft.packaging.trim() ? draft.packaging.trim() : null,
+      size_format: draft.size_format.trim() ? draft.size_format.trim() : null,
       barcode: finalBarcode,
       quantity: normalizedQuantity,
       low_stock_threshold: normalizedThreshold,
@@ -1147,6 +1195,19 @@ export function PharmacyPage() {
                         </td>
                       );
                     }
+                    if (columnKey === "size_format") {
+                      const sizeFormat = item.size_format?.trim();
+                      return (
+                        <td
+                          key={columnKey}
+                          style={style}
+                          className={`${sharedClass} truncate`}
+                          title={sizeFormat || undefined}
+                        >
+                          {sizeFormat ? sizeFormat : <span className="text-slate-500">—</span>}
+                        </td>
+                      );
+                    }
                     const customColumn = customColumnMap.get(columnKey);
                     if (customColumn) {
                       return (
@@ -1350,7 +1411,7 @@ export function PharmacyPage() {
             <select
               id="pharmacy-category"
               value={draft.category_id}
-              onChange={(event) => updateDraft({ category_id: event.target.value })}
+              onChange={handleCategoryChange}
               className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
               title="Associez ce produit à une catégorie métier"
             >
@@ -1358,6 +1419,33 @@ export function PharmacyPage() {
               {categories.map((category) => (
                 <option key={category.id} value={category.id}>
                   {category.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="space-y-1">
+            <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-size-format">
+              Taille / format
+            </label>
+            <select
+              id="pharmacy-size-format"
+              value={draft.size_format}
+              onChange={(event) => updateDraft({ size_format: event.target.value })}
+              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+              title="Sélectionnez la taille ou le format défini sur la catégorie"
+              disabled={draft.category_id.trim().length === 0 || selectedCategorySizes.length === 0}
+            >
+              <option value="">
+                {draft.category_id.trim().length === 0 || selectedCategorySizes.length === 0
+                  ? "—"
+                  : "Sélectionner"}
+              </option>
+              {legacySizeFormatOption ? (
+                <option value={legacySizeFormatOption}>{`Ancien : ${legacySizeFormatOption}`}</option>
+              ) : null}
+              {selectedCategorySizes.map((size) => (
+                <option key={size} value={size}>
+                  {size}
                 </option>
               ))}
             </select>

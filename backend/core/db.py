@@ -928,7 +928,8 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     expiration_date DATE,
                     location TEXT,
                     category_id INTEGER REFERENCES pharmacy_categories(id) ON DELETE SET NULL,
-                    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
+                    supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                    size_format TEXT
                 );
                 CREATE TABLE IF NOT EXISTS pharmacy_movements (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
