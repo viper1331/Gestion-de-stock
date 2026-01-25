@@ -116,6 +116,8 @@ const BUCKET_OPTIONS = [
   { value: "month", label: "Mois" }
 ];
 
+const REPORTABLE_MODULES = new Set(["clothing", "inventory_remise", "pharmacy"]);
+
 const PIE_COLORS = ["#38bdf8", "#fbbf24", "#34d399", "#f87171"];
 
 const formatNumber = (value: number) => new Intl.NumberFormat("fr-FR").format(value);
@@ -153,15 +155,12 @@ export function ReportsPage() {
     enabled: Boolean(user) && user?.role === "admin"
   });
 
-  const accessibleModules = useMemo(() => {
+  const reportModules = useMemo(() => {
     if (!user) {
       return [];
     }
     if (!canViewPage && user.role !== "admin") {
       return [];
-    }
-    if (user.role === "admin") {
-      return availableModules;
     }
     const permissionModules = (modulePermissions.data ?? [])
       .filter((entry) => entry.can_view)
@@ -172,16 +171,34 @@ export function ReportsPage() {
         is_admin_only: false,
         sort_order: 999
       }));
-    return permissionModules.sort((a, b) => a.label.localeCompare(b.label, "fr"));
-  }, [availableModules, canViewPage, modulePermissions.data, moduleTitleMap, user]);
+    const baseModules =
+      user.role === "admin"
+        ? availableModules
+        : permissionModules.sort((a, b) => a.label.localeCompare(b.label, "fr"));
+    return baseModules
+      .filter((module) => REPORTABLE_MODULES.has(module.key))
+      .filter((module) => user.role === "admin" || modulePermissions.canAccess(module.key));
+  }, [
+    availableModules,
+    canViewPage,
+    modulePermissions.canAccess,
+    modulePermissions.data,
+    moduleTitleMap,
+    user
+  ]);
 
   const [selectedModule, setSelectedModule] = useState<string>("");
 
   useEffect(() => {
-    if (!selectedModule && accessibleModules.length > 0) {
-      setSelectedModule(accessibleModules[0]?.key ?? "");
+    if (!reportModules.length) {
+      return;
     }
-  }, [accessibleModules, selectedModule]);
+    if (!reportModules.some((module) => module.key === selectedModule)) {
+      const defaultModule =
+        reportModules.find((module) => module.key === "clothing") ?? reportModules[0];
+      setSelectedModule(defaultModule?.key ?? "");
+    }
+  }, [reportModules, selectedModule]);
 
   useEffect(() => {
     if (period === "custom") {
@@ -204,7 +221,10 @@ export function ReportsPage() {
     setEndDate(end);
   }, [period]);
 
-  const canViewSelectedModule = user?.role === "admin" || accessibleModules.length > 0;
+  const canViewSelectedModule =
+    Boolean(selectedModule) &&
+    REPORTABLE_MODULES.has(selectedModule) &&
+    (user?.role === "admin" || modulePermissions.canAccess(selectedModule));
 
   const { data: reportData, isFetching, isLoading, error, refetch } = useQuery({
     queryKey: [
@@ -230,7 +250,7 @@ export function ReportsPage() {
       });
       return response.data;
     },
-    enabled: Boolean(canViewPage && selectedModule)
+    enabled: Boolean(canViewPage && selectedModule) && canViewSelectedModule
   });
 
   const orderStatusData = useMemo(() => {
@@ -289,7 +309,7 @@ export function ReportsPage() {
             onChange={(event) => setSelectedModule(event.target.value)}
             className="mt-1 w-48 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
           >
-            {accessibleModules.map((module) => (
+            {reportModules.map((module) => (
               <option key={module.key} value={module.key}>
                 {module.label}
               </option>
@@ -621,13 +641,13 @@ export function ReportsPage() {
     );
   }
 
-  if (!isFetchingModules && accessibleModules.length === 0) {
+  if (!isFetchingModules && reportModules.length === 0) {
     return (
       <section className="space-y-4">
         <header className="space-y-1">
           <h2 className="text-2xl font-semibold text-white">Rapports</h2>
           <p className="text-sm text-slate-400">
-            Aucun module disponible pour votre compte.
+            Aucun module de rapport disponible (permissions).
           </p>
         </header>
       </section>
