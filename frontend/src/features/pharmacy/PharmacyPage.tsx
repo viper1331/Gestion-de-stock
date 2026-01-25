@@ -1,6 +1,7 @@
 import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
+import { toast } from "sonner";
 import {
   DndContext,
   MouseSensor,
@@ -43,6 +44,7 @@ interface PharmacyItem {
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
+  category_size_id?: number | null;
   category_sizes?: string | null;
   supplier_id: number | null;
   supplier_name?: string | null;
@@ -55,6 +57,7 @@ interface PharmacyPayload {
   dosage: string | null;
   packaging: string | null;
   size_format: string | null;
+  category_size_id: number | null;
   barcode: string | null;
   quantity: number;
   low_stock_threshold: number;
@@ -70,6 +73,7 @@ const EMPTY_PHARMACY_PAYLOAD: PharmacyPayload = {
   dosage: null,
   packaging: null,
   size_format: null,
+  category_size_id: null,
   barcode: null,
   quantity: 0,
   low_stock_threshold: DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD,
@@ -85,6 +89,7 @@ interface PharmacyFormDraft {
   dosage: string;
   packaging: string;
   size_format: string;
+  category_size_id: string;
   barcode: string;
   quantity: number;
   low_stock_threshold: number;
@@ -172,6 +177,7 @@ function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
     dosage: payload.dosage ?? "",
     packaging: payload.packaging ?? "",
     size_format: payload.size_format ?? "",
+    category_size_id: payload.category_size_id ? String(payload.category_size_id) : "",
     barcode: payload.barcode ?? "",
     quantity: payload.quantity ?? 0,
     low_stock_threshold:
@@ -187,7 +193,7 @@ function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
 interface PharmacyCategory {
   id: number;
   name: string;
-  sizes: string[];
+  sizes: Array<string | { id: number; name: string }>;
 }
 
 interface PharmacyMovement {
@@ -552,6 +558,18 @@ export function PharmacyPage() {
     () => new Map(categories.map((category) => [category.id, category.sizes ?? []])),
     [categories]
   );
+  const categorySizeLabelsById = useMemo(() => {
+    const map = new Map<number, string>();
+    for (const category of categories) {
+      for (const size of category.sizes ?? []) {
+        if (typeof size === "string") {
+          continue;
+        }
+        map.set(size.id, size.name);
+      }
+    }
+    return map;
+  }, [categories]);
   const selectedMovementItem = useMemo(
     () => (movementItemId === null ? null : items.find((item) => item.id === movementItemId) ?? null),
     [items, movementItemId]
@@ -645,6 +663,34 @@ export function PharmacyPage() {
     [items]
   );
 
+  const handleSaveError = useCallback(
+    (saveError: unknown, fallbackMessage: string) => {
+      let nextMessage = fallbackMessage;
+      let status: number | undefined;
+      if (isAxiosError(saveError)) {
+        status = saveError.response?.status;
+        const detail = saveError.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim().length > 0) {
+          nextMessage = detail;
+        } else if (status === 422) {
+          nextMessage = "Les données envoyées sont invalides.";
+        } else if (status === 500) {
+          nextMessage = "Une erreur serveur est survenue.";
+        }
+        if (status === 422 || status === 500) {
+          console.error("[Pharmacy] Save error", saveError.response?.data ?? saveError);
+          toast.error(nextMessage);
+        } else {
+          console.error("[Pharmacy] Save error", saveError);
+        }
+      } else {
+        console.error("[Pharmacy] Save error", saveError);
+      }
+      setError(nextMessage);
+    },
+    []
+  );
+
   const createItem = useMutation({
     mutationFn: async (payload: PharmacyPayload) => {
       await api.post("/pharmacy/", payload);
@@ -653,7 +699,7 @@ export function PharmacyPage() {
       setMessage("Médicament créé.");
       await queryClient.invalidateQueries({ queryKey: ["pharmacy"] });
     },
-    onError: () => setError("Impossible de créer l'élément."),
+    onError: (saveError) => handleSaveError(saveError, "Impossible de créer l'élément."),
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
@@ -667,7 +713,7 @@ export function PharmacyPage() {
       setFormMode("create");
       await queryClient.invalidateQueries({ queryKey: ["pharmacy"] });
     },
-    onError: () => setError("Impossible de mettre à jour l'élément."),
+    onError: (saveError) => handleSaveError(saveError, "Impossible de mettre à jour l'élément."),
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
@@ -746,6 +792,7 @@ export function PharmacyPage() {
         dosage: selected.dosage,
         packaging: selected.packaging,
         size_format: selected.size_format,
+        category_size_id: selected.category_size_id ?? null,
         barcode: selected.barcode,
         quantity: selected.quantity,
         low_stock_threshold: selected.low_stock_threshold,
@@ -769,19 +816,41 @@ export function PharmacyPage() {
   const selectedCategorySizes = useMemo(() => {
     const categoryId = draft.category_id.trim() ? Number(draft.category_id) : null;
     if (!categoryId) {
-      return [];
+      return [] as Array<{ id: number | null; label: string }>;
     }
     const sizes = categorySizesById.get(categoryId) ?? [];
-    return sizes.map((size) => size.trim()).filter((size) => size.length > 0);
+    return sizes
+      .map((size) =>
+        typeof size === "string"
+          ? { id: null, label: size.trim() }
+          : { id: size.id, label: size.name.trim() }
+      )
+      .filter((size) => size.label.length > 0);
   }, [categorySizesById, draft.category_id]);
   const normalizedSizeFormat = draft.size_format.trim();
   const sizeFormatMatchesCategory =
-    normalizedSizeFormat.length > 0 &&
-    selectedCategorySizes.some(
-      (size) => size.toLowerCase() === normalizedSizeFormat.toLowerCase()
-    );
+    draft.category_size_id.trim().length > 0
+      ? selectedCategorySizes.some(
+          (size) => size.id !== null && String(size.id) === draft.category_size_id
+        )
+      : normalizedSizeFormat.length > 0 &&
+        selectedCategorySizes.some(
+          (size) => size.label.toLowerCase() === normalizedSizeFormat.toLowerCase()
+        );
   const legacySizeFormatOption =
     normalizedSizeFormat.length > 0 && !sizeFormatMatchesCategory ? normalizedSizeFormat : "";
+
+  useEffect(() => {
+    if (draft.category_size_id.trim() || !normalizedSizeFormat) {
+      return;
+    }
+    const matchedSize = selectedCategorySizes.find(
+      (size) => size.label.toLowerCase() === normalizedSizeFormat.toLowerCase()
+    );
+    if (matchedSize?.id) {
+      updateDraft({ category_size_id: String(matchedSize.id) });
+    }
+  }, [draft.category_size_id, normalizedSizeFormat, selectedCategorySizes]);
 
   useEffect(() => {
     setDraft(createPharmacyFormDraft(formValues));
@@ -820,12 +889,18 @@ export function PharmacyPage() {
   const handleCategoryChange = (event: ChangeEvent<HTMLSelectElement>) => {
     const nextCategoryId = event.target.value;
     const sizes = nextCategoryId ? categorySizesById.get(Number(nextCategoryId)) ?? [] : [];
-    const normalizedSizes = sizes.map((size) => size.trim()).filter((size) => size.length > 0);
+    const normalizedSizes = sizes
+      .map((size) => (typeof size === "string" ? size.trim() : size.name.trim()))
+      .filter((size) => size.length > 0);
     const currentSize = draft.size_format.trim();
     const shouldReset =
       currentSize.length > 0 &&
       !normalizedSizes.some((size) => size.toLowerCase() === currentSize.toLowerCase());
-    updateDraft({ category_id: nextCategoryId, size_format: shouldReset ? "" : draft.size_format });
+    updateDraft({
+      category_id: nextCategoryId,
+      size_format: shouldReset ? "" : draft.size_format,
+      category_size_id: shouldReset ? "" : draft.category_size_id
+    });
   };
 
   const handleBarcodeChange = (event: ChangeEvent<HTMLInputElement>) => {
@@ -892,7 +967,8 @@ export function PharmacyPage() {
       name: trimmedName,
       dosage: draft.dosage.trim() ? draft.dosage.trim() : null,
       packaging: draft.packaging.trim() ? draft.packaging.trim() : null,
-      size_format: draft.size_format.trim() ? draft.size_format.trim() : null,
+      size_format: null,
+      category_size_id: null,
       barcode: finalBarcode,
       quantity: normalizedQuantity,
       low_stock_threshold: normalizedThreshold,
@@ -903,23 +979,41 @@ export function PharmacyPage() {
       extra: draft.extra
     };
 
+    const parsedCategorySizeId = draft.category_size_id.trim()
+      ? Number(draft.category_size_id)
+      : null;
+    const matchedSize = selectedCategorySizes.find((size) =>
+      size.id !== null
+        ? String(size.id) === draft.category_size_id
+        : size.label.toLowerCase() === normalizedSizeFormat.toLowerCase()
+    );
+    payload.category_size_id =
+      matchedSize?.id ?? (Number.isFinite(parsedCategorySizeId) ? parsedCategorySizeId : null);
+    payload.size_format = matchedSize?.label ?? (normalizedSizeFormat ? normalizedSizeFormat : null);
+
+    console.info("[Pharmacy] Submit payload", payload);
+
     setDraft((previous) => ({ ...previous, barcode: finalBarcode }));
     setMessage(null);
     setError(null);
 
-    if (formMode === "edit" && selected) {
-      await updateItem.mutateAsync({ id: selected.id, payload });
-    } else {
-      await createItem.mutateAsync(payload);
-      setDraft(
-        createPharmacyFormDraft({
-          ...EMPTY_PHARMACY_PAYLOAD,
-          extra: buildCustomFieldDefaults(activeCustomFields, {})
-        })
-      );
-      setIsBarcodeAuto(true);
+    try {
+      if (formMode === "edit" && selected) {
+        await updateItem.mutateAsync({ id: selected.id, payload });
+      } else {
+        await createItem.mutateAsync(payload);
+        setDraft(
+          createPharmacyFormDraft({
+            ...EMPTY_PHARMACY_PAYLOAD,
+            extra: buildCustomFieldDefaults(activeCustomFields, {})
+          })
+        );
+        setIsBarcodeAuto(true);
+      }
+      setIsItemModalOpen(false);
+    } catch (submitError) {
+      console.error("[Pharmacy] Submit failed", submitError);
     }
-    setIsItemModalOpen(false);
   };
 
   const headerBlock = (
@@ -1285,7 +1379,11 @@ export function PharmacyPage() {
                       );
                     }
                     if (columnKey === "size_format") {
-                      const sizeFormat = item.size_format?.trim();
+                      const sizeFormat =
+                        item.size_format?.trim() ??
+                        (item.category_size_id
+                          ? categorySizeLabelsById.get(item.category_size_id) ?? null
+                          : null);
                       return (
                         <td
                           key={columnKey}
@@ -1518,8 +1616,21 @@ export function PharmacyPage() {
             </label>
             <select
               id="pharmacy-size-format"
-              value={draft.size_format}
-              onChange={(event) => updateDraft({ size_format: event.target.value })}
+              value={draft.category_size_id.trim() ? draft.category_size_id : draft.size_format}
+              onChange={(event) => {
+                const value = event.target.value;
+                if (!value) {
+                  updateDraft({ size_format: "", category_size_id: "" });
+                  return;
+                }
+                const matchedSize = selectedCategorySizes.find((size) =>
+                  size.id !== null ? String(size.id) === value : size.label === value
+                );
+                updateDraft({
+                  size_format: matchedSize ? matchedSize.label : value,
+                  category_size_id: matchedSize?.id ? String(matchedSize.id) : ""
+                });
+              }}
               className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
               title="Sélectionnez la taille ou le format défini sur la catégorie"
               disabled={draft.category_id.trim().length === 0 || selectedCategorySizes.length === 0}
@@ -1533,8 +1644,8 @@ export function PharmacyPage() {
                 <option value={legacySizeFormatOption}>{`Ancien : ${legacySizeFormatOption}`}</option>
               ) : null}
               {selectedCategorySizes.map((size) => (
-                <option key={size} value={size}>
-                  {size}
+                <option key={size.id ?? size.label} value={size.id !== null ? String(size.id) : size.label}>
+                  {size.label}
                 </option>
               ))}
             </select>
@@ -1685,7 +1796,9 @@ export function PharmacyPage() {
               <li key={category.id} className="rounded border border-slate-800 bg-slate-900/70 p-2">
                 <p className="text-sm font-semibold text-white">{category.name}</p>
                 <p className="text-[11px] text-slate-400">
-                  {category.sizes.length > 0 ? category.sizes.join(", ") : "Aucune taille renseignée."}
+                  {category.sizes.length > 0
+                    ? category.sizes.map((size) => (typeof size === "string" ? size : size.name)).join(", ")
+                    : "Aucune taille renseignée."}
                 </p>
               </li>
             ))}
@@ -2106,7 +2219,8 @@ function PharmacyCategoryManager({
     setEditedSizes((previous) => {
       const next: Record<number, string> = {};
       for (const category of categories) {
-        next[category.id] = previous[category.id] ?? category.sizes.join(", ");
+        const labels = category.sizes.map((size) => (typeof size === "string" ? size : size.name));
+        next[category.id] = previous[category.id] ?? labels.join(", ");
       }
       return next;
     });
@@ -2185,12 +2299,18 @@ function PharmacyCategoryManager({
                 </button>
               </div>
             </div>
-            <label className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400" htmlFor={`category-sizes-${category.id}`}>
+            <label
+              className="mt-2 block text-[11px] font-semibold uppercase tracking-wide text-slate-400"
+              htmlFor={`category-sizes-${category.id}`}
+            >
               Tailles / formats
             </label>
             <AppTextInput
               id={`category-sizes-${category.id}`}
-              value={editedSizes[category.id] ?? category.sizes.join(", ")}
+              value={
+                editedSizes[category.id] ??
+                category.sizes.map((size) => (typeof size === "string" ? size : size.name)).join(", ")
+              }
               onChange={(event) =>
                 setEditedSizes((previous) => ({ ...previous, [category.id]: event.target.value }))
               }
