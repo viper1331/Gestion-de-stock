@@ -180,7 +180,7 @@ def render_purchase_order_pdf(
         block_font_size = theme.base_font_size - (1 * scale)
         block_padding = 6 * scale
         blocks = [
-            ("Acheteur", buyer_block),
+            ("Demandeur", buyer_block),
             ("Fournisseur", supplier_block),
             ("Livraison", delivery_block),
         ]
