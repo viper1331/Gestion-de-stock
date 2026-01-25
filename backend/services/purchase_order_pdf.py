@@ -5,8 +5,11 @@ import io
 from datetime import datetime
 from typing import Callable
 
+from reportlab.lib.styles import ParagraphStyle, getSampleStyleSheet
+from reportlab.lib.utils import escape
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
+from reportlab.platypus import Paragraph
 
 from backend.core import models
 from backend.services.pdf_config import (
@@ -70,6 +73,26 @@ def _wrap_text(value: str, max_width: float, font_name: str, font_size: float) -
     if current:
         lines.append(current)
     return lines or [value]
+
+
+def _clamp(value: float, min_value: float, max_value: float) -> float:
+    return max(min_value, min(value, max_value))
+
+
+def _measure_column_width(
+    values: list[str],
+    *,
+    label: str,
+    font_name: str,
+    font_size: float,
+    min_width: float,
+    max_width: float,
+    padding: float,
+) -> float:
+    widths = [pdfmetrics.stringWidth(value, font_name, font_size) for value in values if value]
+    widths.append(pdfmetrics.stringWidth(label, font_name, font_size))
+    natural = (max(widths) if widths else 0) + padding
+    return _clamp(natural, min_width, max_width)
 
 
 def _extract_item_name(item: object) -> str:
@@ -232,26 +255,97 @@ def render_purchase_order_pdf(
             y_position -= line_height
         return y_position - (6 * scale)
 
-    def table_columns() -> list[tuple[str, str, float, str]]:
+    def table_columns(items: list[models.PurchaseOrderLine]) -> list[dict[str, object]]:
+        table_width = width - margin_left - margin_right
+        padding = 14 * scale
+        font_size = theme.base_font_size - (1 * scale)
+        sku_values = [_format_value(getattr(item, "sku", None)) for item in items]
+        qty_values = [str(getattr(item, "quantity_ordered", 0)) for item in items]
+        unit_values = [_format_value(getattr(item, "unit", None)) for item in items]
+        received_values = [str(getattr(item, "quantity_received", 0)) for item in items]
+
+        sku_min = 90 * scale
+        sku_max = 160 * scale
+        qty_min = 50 * scale
+        qty_max = 80 * scale
+        unit_min = 60 * scale
+        unit_max = 100 * scale
+        received_min = 60 * scale
+        received_max = 100 * scale
+        designation_min = 220 * scale
+
+        sku_width = _measure_column_width(
+            sku_values,
+            label="SKU",
+            font_name=theme.font_family,
+            font_size=font_size,
+            min_width=sku_min,
+            max_width=sku_max,
+            padding=padding,
+        )
+        qty_width = _measure_column_width(
+            qty_values,
+            label="Quantité",
+            font_name=theme.font_family,
+            font_size=font_size,
+            min_width=qty_min,
+            max_width=qty_max,
+            padding=padding,
+        )
+        unit_width = _measure_column_width(
+            unit_values,
+            label="Unité",
+            font_name=theme.font_family,
+            font_size=font_size,
+            min_width=unit_min,
+            max_width=unit_max,
+            padding=padding,
+        )
+        received_width = 0.0
         if include_received:
-            return [
-                ("sku", "SKU", 0.18, "left"),
-                ("designation", "Désignation", 0.40, "left"),
-                ("quantity", "Quantité", 0.12, "right"),
-                ("unit", "Unité", 0.12, "left"),
-                ("received", "Réceptionné", 0.18, "right"),
-            ]
-        return [
-            ("sku", "SKU", 0.18, "left"),
-            ("designation", "Désignation", 0.52, "left"),
-            ("quantity", "Quantité", 0.15, "right"),
-            ("unit", "Unité", 0.15, "left"),
+            received_width = _measure_column_width(
+                received_values,
+                label="Réceptionné",
+                font_name=theme.font_family,
+                font_size=font_size,
+                min_width=received_min,
+                max_width=received_max,
+                padding=padding,
+            )
+
+        designation_width = table_width - (sku_width + qty_width + unit_width + received_width)
+        if designation_width < designation_min:
+            deficit = designation_min - designation_width
+            sku_width, deficit = _reduce_width(sku_width, sku_min, deficit)
+            unit_width, deficit = _reduce_width(unit_width, unit_min, deficit)
+            if include_received:
+                received_width, deficit = _reduce_width(received_width, received_min, deficit)
+            qty_width, _ = _reduce_width(qty_width, qty_min, deficit)
+            designation_width = table_width - (sku_width + qty_width + unit_width + received_width)
+
+        columns = [
+            {"key": "sku", "label": "SKU", "width": sku_width, "align": "left"},
+            {"key": "designation", "label": "Désignation", "width": designation_width, "align": "left"},
+            {"key": "quantity", "label": "Quantité", "width": qty_width, "align": "right"},
+            {"key": "unit", "label": "Unité", "width": unit_width, "align": "center"},
         ]
+        if include_received:
+            columns.append(
+                {"key": "received", "label": "Réceptionné", "width": received_width, "align": "right"}
+            )
+        return columns
+
+    def _reduce_width(width: float, min_width: float, deficit: float) -> tuple[float, float]:
+        if deficit <= 0:
+            return width, deficit
+        available = max(0.0, width - min_width)
+        reduction = min(deficit, available)
+        return width - reduction, deficit - reduction
+
+    table_width = width - margin_left - margin_right
 
     def draw_table_header(y_position: float) -> float:
         header_height = 18 * scale
-        columns = table_columns()
-        table_width = width - margin_left - margin_right
         pdf.setFillColor(theme.table_header_bg)
         pdf.rect(
             margin_left,
@@ -264,10 +358,14 @@ def render_purchase_order_pdf(
         pdf.setFillColor(theme.table_header_text)
         pdf.setFont(header_font, theme.base_font_size)
         x = margin_left
-        for _, label, ratio, align in columns:
-            col_width = ratio * table_width
+        for column in columns:
+            col_width = float(column["width"])
+            label = str(column["label"])
+            align = str(column["align"])
             if align == "right":
                 pdf.drawRightString(x + col_width - (4 * scale), y_position, label)
+            elif align == "center":
+                pdf.drawCentredString(x + col_width / 2, y_position, label)
             else:
                 pdf.drawString(x + (4 * scale), y_position, label)
             x += col_width
@@ -283,14 +381,28 @@ def render_purchase_order_pdf(
         pdf.setFillColor(theme.text_color)
         return y_position - header_height
 
+    cell_padding = 6 * scale
+    font_size = theme.base_font_size - (1 * scale)
+    styles = getSampleStyleSheet()
+    designation_style = ParagraphStyle(
+        "PurchaseOrderDesignation",
+        parent=styles["Normal"],
+        fontName=theme.font_family,
+        fontSize=font_size,
+        leading=12 * scale,
+        wordWrap="CJK",
+        spaceBefore=0,
+        spaceAfter=0,
+    )
+
+    columns = table_columns(list(purchase_order.items))
+
     y = start_page()
     y = draw_blocks(y)
     y = draw_note(y)
     y = ensure_space(y, 30 * scale)
     y = draw_table_header(y)
 
-    table_width = width - margin_left - margin_right
-    columns = table_columns()
     row_index = 0
 
     for item in purchase_order.items:
@@ -307,15 +419,25 @@ def render_purchase_order_pdf(
             "received": received,
         }
 
-        designation_column = next(col for col in columns if col[0] == "designation")
-        designation_width = designation_column[2] * table_width - (8 * scale)
-        designation_lines = _wrap_text(
-            designation,
-            designation_width,
-            theme.font_family,
-            theme.base_font_size - (1 * scale),
-        )
-        row_height = max(1, len(designation_lines)) * line_height + (6 * scale)
+        designation_column = next(col for col in columns if col["key"] == "designation")
+        designation_width = float(designation_column["width"]) - (2 * cell_padding)
+        designation_paragraph = Paragraph(escape(designation), designation_style)
+        _, designation_height = designation_paragraph.wrap(designation_width, 9999)
+
+        wrapped_cells: list[tuple[list[str], float, str]] = []
+        max_text_height = 0.0
+        for column in columns:
+            key = str(column["key"])
+            col_width = float(column["width"])
+            align = str(column["align"])
+            if key == "designation":
+                continue
+            value = str(row_values.get(key, ""))
+            lines = _wrap_text(value, col_width - (2 * cell_padding), theme.font_family, font_size)
+            max_text_height = max(max_text_height, len(lines) * line_height)
+            wrapped_cells.append((lines, col_width, align))
+
+        row_height = max(designation_height, max_text_height, line_height) + (2 * cell_padding)
         y = ensure_space(y, row_height + (12 * scale), on_new_page=draw_table_header)
 
         if row_index % 2 == 1:
@@ -331,21 +453,29 @@ def render_purchase_order_pdf(
             pdf.setFillColor(theme.text_color)
 
         x = margin_left
-        pdf.setFont(theme.font_family, theme.base_font_size - (1 * scale))
-        for key, _, ratio, align in columns:
-            col_width = ratio * table_width
+        pdf.setFont(theme.font_family, font_size)
+        content_top = y - cell_padding - (2 * scale)
+        for column in columns:
+            key = str(column["key"])
+            col_width = float(column["width"])
+            align = str(column["align"])
             if key == "designation":
-                text_y = y - (4 * scale)
-                for line in designation_lines:
-                    pdf.drawString(x + (4 * scale), text_y, line)
-                    text_y -= line_height
+                designation_paragraph.drawOn(
+                    pdf,
+                    x + cell_padding,
+                    content_top - designation_height,
+                )
             else:
-                value = row_values.get(key, "")
-                text_y = y - (4 * scale)
-                if align == "right":
-                    pdf.drawRightString(x + col_width - (4 * scale), text_y, value)
-                else:
-                    pdf.drawString(x + (4 * scale), text_y, value)
+                lines, _, _ = wrapped_cells.pop(0)
+                text_y = content_top
+                for line in lines:
+                    if align == "right":
+                        pdf.drawRightString(x + col_width - cell_padding, text_y, line)
+                    elif align == "center":
+                        pdf.drawCentredString(x + col_width / 2, text_y, line)
+                    else:
+                        pdf.drawString(x + cell_padding, text_y, line)
+                    text_y -= line_height
             x += col_width
 
         pdf.setStrokeColor(theme.border_color)
