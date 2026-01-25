@@ -11,6 +11,7 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
+import { AlertTriangle, Archive, Package, TimerReset, type LucideIcon } from "lucide-react";
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
@@ -93,6 +94,71 @@ interface SupplierOption {
   id: number;
   name: string;
   email: string | null;
+}
+
+type KpiAccent = "blue" | "green" | "amber" | "red";
+
+const KPI_ACCENT_STYLES: Record<
+  KpiAccent,
+  { border: string; ring: string; icon: string; iconBg: string; glow: string }
+> = {
+  blue: {
+    border: "border-blue-500/60",
+    ring: "ring-blue-500/20",
+    icon: "text-blue-400",
+    iconBg: "bg-blue-500/10",
+    glow: "shadow-[0_0_12px_rgba(59,130,246,0.12)]"
+  },
+  green: {
+    border: "border-emerald-500/60",
+    ring: "ring-emerald-500/20",
+    icon: "text-emerald-400",
+    iconBg: "bg-emerald-500/10",
+    glow: "shadow-[0_0_12px_rgba(16,185,129,0.12)]"
+  },
+  amber: {
+    border: "border-amber-500/60",
+    ring: "ring-amber-500/20",
+    icon: "text-amber-400",
+    iconBg: "bg-amber-500/10",
+    glow: "shadow-[0_0_12px_rgba(245,158,11,0.12)]"
+  },
+  red: {
+    border: "border-rose-500/60",
+    ring: "ring-rose-500/20",
+    icon: "text-rose-400",
+    iconBg: "bg-rose-500/10",
+    glow: "shadow-[0_0_12px_rgba(244,63,94,0.12)]"
+  }
+};
+
+interface KpiCardProps {
+  title: string;
+  value: number | string;
+  subtitle: string;
+  icon: LucideIcon;
+  accent: KpiAccent;
+}
+
+function KpiCard({ title, value, subtitle, icon: Icon, accent }: KpiCardProps) {
+  const styles = KPI_ACCENT_STYLES[accent];
+
+  return (
+    <div
+      className={`rounded-lg border border-slate-800 border-l-4 bg-slate-950 p-3 ring-1 ${styles.border} ${styles.ring} ${styles.glow}`}
+    >
+      <div className="flex items-start gap-3">
+        <span className={`mt-0.5 inline-flex rounded-lg p-2 ${styles.iconBg}`}>
+          <Icon className={`h-4 w-4 ${styles.icon}`} aria-hidden="true" />
+        </span>
+        <div className="min-w-0">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</p>
+          <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
+          <p className="text-xs text-slate-400">{subtitle}</p>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function createPharmacyFormDraft(payload: PharmacyPayload): PharmacyFormDraft {
@@ -921,28 +987,51 @@ export function PharmacyPage() {
   const statsBlock = (
     <section className="min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Références</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{items.length}</p>
-          <p className="text-xs text-slate-400">Articles en base pharmacie.</p>
-        </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Stock total</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{totalQuantity}</p>
-          <p className="text-xs text-slate-400">Quantité totale enregistrée.</p>
-        </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Alertes stock</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{lowStockItems.length}</p>
-          <p className="text-xs text-slate-400">Articles sous seuil.</p>
-        </div>
-        <div className="rounded-lg border border-slate-800 bg-slate-950 p-3">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Péremptions</p>
-          <p className="mt-2 text-2xl font-semibold text-white">
-            {expiredItems.length + expiringSoonItems.length}
-          </p>
-          <p className="text-xs text-slate-400">Expirés ou bientôt périmés.</p>
-        </div>
+        {(
+          [
+          {
+            key: "refs",
+            title: "Références",
+            icon: Package,
+            accent: "blue",
+            value: items.length,
+            subtitle: "Articles en base pharmacie."
+          },
+          {
+            key: "total",
+            title: "Stock total",
+            icon: Archive,
+            accent: "green",
+            value: totalQuantity,
+            subtitle: "Quantité totale enregistrée."
+          },
+          {
+            key: "low",
+            title: "Alertes stock",
+            icon: AlertTriangle,
+            accent: "amber",
+            value: lowStockItems.length,
+            subtitle: "Articles sous seuil."
+          },
+          {
+            key: "exp",
+            title: "Péremptions",
+            icon: TimerReset,
+            accent: "red",
+            value: expiredItems.length + expiringSoonItems.length,
+            subtitle: "Expirés ou bientôt périmés."
+          }
+          ] as Array<KpiCardProps & { key: string }>
+        ).map((kpi) => (
+          <KpiCard
+            key={kpi.key}
+            title={kpi.title}
+            icon={kpi.icon}
+            accent={kpi.accent}
+            value={kpi.value}
+            subtitle={kpi.subtitle}
+          />
+        ))}
       </div>
     </section>
   );
