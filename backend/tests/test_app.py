@@ -334,6 +334,246 @@ def test_no_auto_purchase_order_without_supplier() -> None:
         conn.commit()
 
 
+def test_low_stock_triggers_auto_purchase_order_remise() -> None:
+    headers = _login_headers("admin", "admin123")
+
+    supplier_resp = client.post(
+        "/suppliers/",
+        json={"name": f"Supplier-{uuid4().hex[:6]}"},
+        headers=headers,
+    )
+    assert supplier_resp.status_code == 201, supplier_resp.text
+    supplier_id = supplier_resp.json()["id"]
+
+    sku = f"REM-{uuid4().hex[:8]}"
+    create_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Gants Remise",
+            "sku": sku,
+            "quantity": 5,
+            "low_stock_threshold": 10,
+            "supplier_id": supplier_id,
+        },
+        headers=headers,
+    )
+    assert create_item_resp.status_code == 201, create_item_resp.text
+    item_id = create_item_resp.json()["id"]
+
+    movement = client.post(
+        f"/remise-inventory/{item_id}/movements",
+        json={"delta": -4, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert movement.status_code == 204, movement.text
+
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT po.id, po.auto_created, po.status, poi.quantity_ordered
+            FROM remise_purchase_orders AS po
+            JOIN remise_purchase_order_items AS poi ON poi.purchase_order_id = po.id
+            WHERE poi.remise_item_id = ?
+            """,
+            (item_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    auto_po = rows[0]
+    assert auto_po["auto_created"] == 1
+    assert auto_po["status"].upper() == "PENDING"
+    assert auto_po["quantity_ordered"] == 9
+
+    second_movement = client.post(
+        f"/remise-inventory/{item_id}/movements",
+        json={"delta": -1, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert second_movement.status_code == 204, second_movement.text
+
+    with db.get_stock_connection() as conn:
+        rows_after = conn.execute(
+            """
+            SELECT po.id, poi.quantity_ordered
+            FROM remise_purchase_orders AS po
+            JOIN remise_purchase_order_items AS poi ON poi.purchase_order_id = po.id
+            WHERE poi.remise_item_id = ?
+            """,
+            (item_id,),
+        ).fetchall()
+    assert len(rows_after) == 1
+    order_id = rows_after[0]["id"]
+    assert rows_after[0]["quantity_ordered"] == 10
+
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            "DELETE FROM remise_purchase_order_items WHERE purchase_order_id = ?",
+            (order_id,),
+        )
+        conn.execute("DELETE FROM remise_purchase_orders WHERE id = ?", (order_id,))
+        conn.execute("DELETE FROM remise_items WHERE id = ?", (item_id,))
+        conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        conn.commit()
+
+
+def test_no_auto_purchase_order_without_supplier_remise() -> None:
+    headers = _login_headers("admin", "admin123")
+
+    sku = f"REM-{uuid4().hex[:8]}"
+    create_item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Masques Remise",
+            "sku": sku,
+            "quantity": 2,
+            "low_stock_threshold": 5,
+        },
+        headers=headers,
+    )
+    assert create_item_resp.status_code == 201, create_item_resp.text
+    item_id = create_item_resp.json()["id"]
+
+    movement = client.post(
+        f"/remise-inventory/{item_id}/movements",
+        json={"delta": -4, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert movement.status_code == 204, movement.text
+
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM remise_purchase_order_items AS poi
+            JOIN remise_purchase_orders AS po ON po.id = poi.purchase_order_id
+            WHERE poi.remise_item_id = ?
+        """,
+            (item_id,),
+        ).fetchone()
+    assert rows["cnt"] == 0
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM remise_items WHERE id = ?", (item_id,))
+        conn.commit()
+
+
+def test_low_stock_triggers_auto_purchase_order_pharmacy() -> None:
+    headers = _login_headers("admin", "admin123")
+
+    supplier_resp = client.post(
+        "/suppliers/",
+        json={"name": f"Supplier-{uuid4().hex[:6]}", "modules": ["pharmacy"]},
+        headers=headers,
+    )
+    assert supplier_resp.status_code == 201, supplier_resp.text
+    supplier_id = supplier_resp.json()["id"]
+
+    create_item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Paracetamol",
+            "quantity": 5,
+            "low_stock_threshold": 10,
+            "supplier_id": supplier_id,
+        },
+        headers=headers,
+    )
+    assert create_item_resp.status_code == 201, create_item_resp.text
+    item_id = create_item_resp.json()["id"]
+
+    movement = client.post(
+        f"/pharmacy/{item_id}/movements",
+        json={"delta": -4, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert movement.status_code == 204, movement.text
+
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT po.id, po.auto_created, po.status, poi.quantity_ordered
+            FROM pharmacy_purchase_orders AS po
+            JOIN pharmacy_purchase_order_items AS poi ON poi.purchase_order_id = po.id
+            WHERE poi.pharmacy_item_id = ?
+            """,
+            (item_id,),
+        ).fetchall()
+    assert len(rows) == 1
+    auto_po = rows[0]
+    assert auto_po["auto_created"] == 1
+    assert auto_po["status"].upper() == "PENDING"
+    assert auto_po["quantity_ordered"] == 9
+
+    second_movement = client.post(
+        f"/pharmacy/{item_id}/movements",
+        json={"delta": -1, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert second_movement.status_code == 204, second_movement.text
+
+    with db.get_stock_connection() as conn:
+        rows_after = conn.execute(
+            """
+            SELECT po.id, poi.quantity_ordered
+            FROM pharmacy_purchase_orders AS po
+            JOIN pharmacy_purchase_order_items AS poi ON poi.purchase_order_id = po.id
+            WHERE poi.pharmacy_item_id = ?
+            """,
+            (item_id,),
+        ).fetchall()
+    assert len(rows_after) == 1
+    order_id = rows_after[0]["id"]
+    assert rows_after[0]["quantity_ordered"] == 10
+
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            "DELETE FROM pharmacy_purchase_order_items WHERE purchase_order_id = ?",
+            (order_id,),
+        )
+        conn.execute("DELETE FROM pharmacy_purchase_orders WHERE id = ?", (order_id,))
+        conn.execute("DELETE FROM pharmacy_items WHERE id = ?", (item_id,))
+        conn.execute("DELETE FROM suppliers WHERE id = ?", (supplier_id,))
+        conn.commit()
+
+
+def test_no_auto_purchase_order_without_supplier_pharmacy() -> None:
+    headers = _login_headers("admin", "admin123")
+
+    create_item_resp = client.post(
+        "/pharmacy/",
+        json={
+            "name": "Ibuprofen",
+            "quantity": 2,
+            "low_stock_threshold": 5,
+        },
+        headers=headers,
+    )
+    assert create_item_resp.status_code == 201, create_item_resp.text
+    item_id = create_item_resp.json()["id"]
+
+    movement = client.post(
+        f"/pharmacy/{item_id}/movements",
+        json={"delta": -4, "reason": "Utilisation"},
+        headers=headers,
+    )
+    assert movement.status_code == 204, movement.text
+
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT COUNT(*) AS cnt
+            FROM pharmacy_purchase_order_items AS poi
+            JOIN pharmacy_purchase_orders AS po ON po.id = poi.purchase_order_id
+            WHERE poi.pharmacy_item_id = ?
+        """,
+            (item_id,),
+        ).fetchone()
+    assert rows["cnt"] == 0
+
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM pharmacy_items WHERE id = ?", (item_id,))
+        conn.commit()
+
+
 def test_manual_purchase_order_flow() -> None:
     headers = _login_headers("admin", "admin123")
 

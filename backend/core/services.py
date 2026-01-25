@@ -352,7 +352,8 @@ _INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
             categories="pharmacy_categories",
             category_sizes="pharmacy_category_sizes",
             movements="pharmacy_movements",
-        )
+        ),
+        auto_purchase_orders=True,
     ),
     "vehicle_inventory": _InventoryModuleConfig(
         tables=_InventoryTables(
@@ -368,7 +369,8 @@ _INVENTORY_MODULE_CONFIGS: dict[str, _InventoryModuleConfig] = {
             categories="remise_categories",
             category_sizes="remise_category_sizes",
             movements="remise_movements",
-        )
+        ),
+        auto_purchase_orders=True,
     ),
 }
 
@@ -3563,6 +3565,10 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             )
         if "note" not in pharmacy_po_columns:
             execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN note TEXT")
+        if "auto_created" not in pharmacy_po_columns:
+            execute(
+                "ALTER TABLE pharmacy_purchase_orders ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0"
+            )
 
         pharmacy_poi_info = execute("PRAGMA table_info(pharmacy_purchase_order_items)").fetchall()
         pharmacy_poi_columns = {row["name"] for row in pharmacy_poi_info}
@@ -3851,16 +3857,108 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         _persist_after_commit(conn, "vehicle_inventory")
 
 
-def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) -> None:
-    cur = conn.execute(
-        "SELECT id, name, quantity, low_stock_threshold, supplier_id FROM items WHERE id = ?",
+@dataclass(frozen=True)
+class _AutoPurchaseOrderSpec:
+    items_table: str
+    orders_table: str
+    order_items_table: str
+    item_id_column: str
+    sku_columns: tuple[str, ...]
+    unit_columns: tuple[str, ...]
+    extra_json_column: str | None
+    supplier_resolver: Callable[
+        [sqlite3.Connection, sqlite3.Row, dict[str, Any]], int | None
+    ]
+
+
+_AUTO_PO_SPECS: dict[str, _AutoPurchaseOrderSpec] = {
+    "default": _AutoPurchaseOrderSpec(
+        items_table="items",
+        orders_table="purchase_orders",
+        order_items_table="purchase_order_items",
+        item_id_column="item_id",
+        sku_columns=("sku",),
+        unit_columns=("size",),
+        extra_json_column=None,
+        supplier_resolver=lambda _conn, row, _extra: _row_get(row, "supplier_id"),
+    ),
+    "inventory_remise": _AutoPurchaseOrderSpec(
+        items_table="remise_items",
+        orders_table="remise_purchase_orders",
+        order_items_table="remise_purchase_order_items",
+        item_id_column="remise_item_id",
+        sku_columns=("sku",),
+        unit_columns=("size",),
+        extra_json_column="extra_json",
+        supplier_resolver=_resolve_remise_supplier_id,
+    ),
+    "pharmacy": _AutoPurchaseOrderSpec(
+        items_table="pharmacy_items",
+        orders_table="pharmacy_purchase_orders",
+        order_items_table="pharmacy_purchase_order_items",
+        item_id_column="pharmacy_item_id",
+        sku_columns=("barcode",),
+        unit_columns=("packaging", "dosage"),
+        extra_json_column="extra_json",
+        supplier_resolver=_resolve_pharmacy_supplier_id,
+    ),
+}
+
+
+def _resolve_first_non_empty(row: sqlite3.Row, columns: Iterable[str]) -> str | None:
+    for column in columns:
+        value = row[column] if column in row.keys() else None
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return None
+
+
+def _fetch_auto_po_item(
+    conn: sqlite3.Connection, module: str, item_id: int
+) -> tuple[sqlite3.Row, dict[str, Any], _AutoPurchaseOrderSpec] | None:
+    spec = _AUTO_PO_SPECS.get(module)
+    if spec is None:
+        return None
+    columns = [
+        "id",
+        "name",
+        "quantity",
+        "low_stock_threshold",
+        "supplier_id",
+    ]
+    columns.extend(spec.sku_columns)
+    columns.extend(spec.unit_columns)
+    if spec.extra_json_column and _table_has_column(conn, spec.items_table, spec.extra_json_column):
+        columns.append(spec.extra_json_column)
+    row = conn.execute(
+        f"SELECT {', '.join(columns)} FROM {spec.items_table} WHERE id = ?",
         (item_id,),
-    )
-    item = cur.fetchone()
-    if item is None:
+    ).fetchone()
+    if row is None:
+        return None
+    extra = {}
+    if spec.extra_json_column and spec.extra_json_column in row.keys():
+        extra = _parse_extra_json(row[spec.extra_json_column])
+    return row, extra, spec
+
+
+def _maybe_create_auto_purchase_order(
+    conn: sqlite3.Connection, module: str, item_id: int
+) -> None:
+    fetched = _fetch_auto_po_item(conn, module, item_id)
+    if fetched is None:
         return
-    supplier_id = item["supplier_id"]
+    item, extra, spec = fetched
+    supplier_id = spec.supplier_resolver(conn, item, extra)
     if supplier_id is None:
+        logger.info(
+            "[AUTO_PO] skipped missing supplier module=%s item_id=%s",
+            module,
+            item_id,
+        )
         return
     threshold = item["low_stock_threshold"] or 0
     if threshold <= 0:
@@ -3871,18 +3969,16 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
         return
 
     existing = conn.execute(
-        """
+        f"""
         SELECT poi.id, poi.quantity_ordered, poi.quantity_received
-        FROM purchase_order_items AS poi
-        JOIN purchase_orders AS po ON po.id = poi.purchase_order_id
-        WHERE poi.item_id = ?
+        FROM {spec.order_items_table} AS poi
+        JOIN {spec.orders_table} AS po ON po.id = poi.purchase_order_id
+        WHERE poi.{spec.item_id_column} = ?
           AND po.auto_created = 1
-          AND UPPER(po.status) NOT IN ({placeholders})
+          AND UPPER(po.status) NOT IN ({", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)})
         ORDER BY po.created_at DESC
         LIMIT 1
-        """.format(
-            placeholders=", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)
-        ),
+        """,
         (item_id, *[status for status in _AUTO_PO_CLOSED_STATUSES]),
     ).fetchone()
 
@@ -3891,36 +3987,32 @@ def _maybe_create_auto_purchase_order(conn: sqlite3.Connection, item_id: int) ->
         if outstanding < shortage:
             new_total = existing["quantity_received"] + shortage
             conn.execute(
-                "UPDATE purchase_order_items SET quantity_ordered = ? WHERE id = ?",
+                f"UPDATE {spec.order_items_table} SET quantity_ordered = ? WHERE id = ?",
                 (new_total, existing["id"]),
             )
         return
 
     note = f"Commande automatique - {item['name']}"
     po_cur = conn.execute(
-        """
-        INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+        f"""
+        INSERT INTO {spec.orders_table} (supplier_id, status, note, auto_created, created_at)
         VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP)
         """,
         (supplier_id, note),
     )
     order_id = po_cur.lastrowid
-    item_row = conn.execute(
-        "SELECT sku, size FROM items WHERE id = ?",
-        (item_id,),
-    ).fetchone()
-    has_sku = _table_has_column(conn, "purchase_order_items", "sku")
-    has_unit = _table_has_column(conn, "purchase_order_items", "unit")
-    columns = ["purchase_order_id", "item_id", "quantity_ordered"]
+    has_sku = _table_has_column(conn, spec.order_items_table, "sku")
+    has_unit = _table_has_column(conn, spec.order_items_table, "unit")
+    columns = ["purchase_order_id", spec.item_id_column, "quantity_ordered"]
     values: list[object] = [order_id, item_id, shortage]
     if has_sku:
         columns.append("sku")
-        values.append(item_row["sku"] if item_row else None)
+        values.append(_resolve_first_non_empty(item, spec.sku_columns))
     if has_unit:
         columns.append("unit")
-        values.append(item_row["size"] if item_row and item_row["size"] else None)
+        values.append(_resolve_first_non_empty(item, spec.unit_columns))
     conn.execute(
-        f"INSERT INTO purchase_order_items ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+        f"INSERT INTO {spec.order_items_table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
         values,
     )
 
@@ -4346,6 +4438,7 @@ def _update_remise_quantity(
         "UPDATE remise_items SET quantity = ? WHERE id = ?",
         (updated, remise_item_id),
     )
+    _maybe_create_auto_purchase_order(conn, "inventory_remise", remise_item_id)
     logger.info(
         "[VEHICLE_INVENTORY] Delete rowcount step=update-remise-quantity remise_item_id=%s rowcount=%s",
         remise_item_id,
@@ -4376,6 +4469,7 @@ def _update_pharmacy_quantity(
         "UPDATE pharmacy_items SET quantity = ? WHERE id = ?",
         (updated, pharmacy_item_id),
     )
+    _maybe_create_auto_purchase_order(conn, "pharmacy", pharmacy_item_id)
     logger.info(
         "[VEHICLE_INVENTORY] Delete rowcount step=update-pharmacy-quantity pharmacy_item_id=%s rowcount=%s",
         pharmacy_item_id,
@@ -4750,7 +4844,7 @@ def _create_inventory_item_internal(
         )
         item_id = cur.lastrowid
         if config.auto_purchase_orders:
-            _maybe_create_auto_purchase_order(conn, item_id)
+            _maybe_create_auto_purchase_order(conn, module, item_id)
         _persist_after_commit(conn, *_inventory_modules_to_persist(module))
     return _get_inventory_item_internal(module, item_id)
 
@@ -4948,7 +5042,7 @@ def _update_inventory_item_internal(
             values,
         )
         if config.auto_purchase_orders and should_check_low_stock:
-            _maybe_create_auto_purchase_order(conn, item_id)
+            _maybe_create_auto_purchase_order(conn, module, item_id)
         if module == "vehicle_inventory" and should_restack_to_template and current_row is not None:
             template_id = _restack_vehicle_item_template(
                 conn,
@@ -5322,7 +5416,7 @@ def _record_inventory_movement_internal(
             (payload.delta, item_id),
         )
         if config.auto_purchase_orders:
-            _maybe_create_auto_purchase_order(conn, item_id)
+            _maybe_create_auto_purchase_order(conn, module, item_id)
         _persist_after_commit(conn, *_inventory_modules_to_persist(module))
 
 
@@ -10321,7 +10415,7 @@ def receive_purchase_order(
                         "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
                         (line["item_id"], increment, f"Réception bon de commande #{order_id}"),
                     )
-                    _maybe_create_auto_purchase_order(conn, line["item_id"])
+                    _maybe_create_auto_purchase_order(conn, "default", line["item_id"])
             else:
                 for item_id, increment in item_increments.items():
                     line = conn.execute(
@@ -10352,7 +10446,7 @@ def receive_purchase_order(
                         "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
                         (item_id, increment, f"Réception bon de commande #{order_id}"),
                     )
-                    _maybe_create_auto_purchase_order(conn, item_id)
+                    _maybe_create_auto_purchase_order(conn, "default", item_id)
             totals = conn.execute(
                 """
                 SELECT quantity_ordered, quantity_received
@@ -10712,6 +10806,9 @@ def receive_remise_purchase_order(
                             f"Réception bon de commande remise #{order_id}"
                         ),
                     )
+                    _maybe_create_auto_purchase_order(
+                        conn, "inventory_remise", line["remise_item_id"]
+                    )
             else:
                 for remise_item_id, increment in item_increments.items():
                     line = conn.execute(
@@ -10741,6 +10838,9 @@ def receive_remise_purchase_order(
                     conn.execute(
                         "INSERT INTO remise_movements (item_id, delta, reason) VALUES (?, ?, ?)",
                         (remise_item_id, increment, f"Réception bon de commande remise #{order_id}"),
+                    )
+                    _maybe_create_auto_purchase_order(
+                        conn, "inventory_remise", remise_item_id
                     )
             totals = conn.execute(
                 """
@@ -12177,6 +12277,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
             )
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
             raise ValueError("Ce code-barres est déjà utilisé") from exc
+        _maybe_create_auto_purchase_order(conn, "pharmacy", cur.lastrowid)
         _persist_after_commit(conn, "pharmacy")
         return get_pharmacy_item(cur.lastrowid)
 
@@ -12207,6 +12308,9 @@ def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> mo
     assignments = ", ".join(f"{col} = ?" for col in fields)
     values = list(fields.values())
     values.append(item_id)
+    should_check_low_stock = any(
+        key in fields for key in {"quantity", "low_stock_threshold", "supplier_id", "extra_json"}
+    )
     with db.get_stock_connection() as conn:
         cur = conn.execute("SELECT 1 FROM pharmacy_items WHERE id = ?", (item_id,))
         if cur.fetchone() is None:
@@ -12215,6 +12319,8 @@ def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> mo
             conn.execute(f"UPDATE pharmacy_items SET {assignments} WHERE id = ?", values)
         except sqlite3.IntegrityError as exc:  # pragma: no cover - handled via exception flow
             raise ValueError("Ce code-barres est déjà utilisé") from exc
+        if should_check_low_stock:
+            _maybe_create_auto_purchase_order(conn, "pharmacy", item_id)
         _persist_after_commit(conn, "pharmacy")
     return get_pharmacy_item(item_id)
 
@@ -12360,6 +12466,7 @@ def record_pharmacy_movement(item_id: int, payload: models.PharmacyMovementCreat
             "UPDATE pharmacy_items SET quantity = quantity + ? WHERE id = ?",
             (payload.delta, item_id),
         )
+        _maybe_create_auto_purchase_order(conn, "pharmacy", item_id)
         _persist_after_commit(conn, "pharmacy")
 
 
@@ -12457,6 +12564,7 @@ def _build_pharmacy_purchase_order_detail(
         status=order_row["status"],
         created_at=order_row["created_at"],
         note=order_row["note"],
+        auto_created=bool(_row_get(order_row, "auto_created", 0)),
         items=items,
     )
 
@@ -12655,6 +12763,9 @@ def receive_pharmacy_purchase_order(
                             f"Réception bon de commande pharmacie #{order_id}"
                         ),
                     )
+                    _maybe_create_auto_purchase_order(
+                        conn, "pharmacy", line["pharmacy_item_id"]
+                    )
             else:
                 for item_id, increment in item_increments.items():
                     line = conn.execute(
@@ -12685,6 +12796,7 @@ def receive_pharmacy_purchase_order(
                         "INSERT INTO pharmacy_movements (pharmacy_item_id, delta, reason) VALUES (?, ?, ?)",
                         (item_id, increment, f"Réception bon de commande pharmacie #{order_id}"),
                     )
+                    _maybe_create_auto_purchase_order(conn, "pharmacy", item_id)
             totals = conn.execute(
                 """
                 SELECT quantity_ordered, quantity_received

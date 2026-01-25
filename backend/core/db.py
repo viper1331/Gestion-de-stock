@@ -942,7 +942,8 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
                     status TEXT NOT NULL DEFAULT 'PENDING',
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    note TEXT
+                    note TEXT,
+                    auto_created INTEGER NOT NULL DEFAULT 0
                 );
                 CREATE TABLE IF NOT EXISTS pharmacy_purchase_order_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
