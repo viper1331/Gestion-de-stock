@@ -27,6 +27,7 @@ import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 import { DraggableModal } from "../../components/DraggableModal";
+import { StockMovementModal, type StockMovementItemOption } from "../../components/StockMovementModal";
 import { useTablePrefs } from "../../hooks/useTablePrefs";
 
 const DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD = 5;
@@ -267,6 +268,7 @@ export function PharmacyPage() {
   const [error, setError] = useState<string | null>(null);
   const [isExporting, setIsExporting] = useState(false);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
+  const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
   const containerRef = useRef<HTMLDivElement>(null);
   const tableRef = useRef<HTMLTableElement>(null);
   const [tableMaxHeight, setTableMaxHeight] = useState<number | null>(null);
@@ -522,6 +524,10 @@ export function PharmacyPage() {
   }, [items, movementItemId]);
 
   const categoryNames = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories]);
+  const supplierMap = useMemo(
+    () => new Map(suppliers.map((supplier) => [supplier.id, supplier.name])),
+    [suppliers]
+  );
   const categorySizesById = useMemo(
     () => new Map(categories.map((category) => [category.id, category.sizes ?? []])),
     [categories]
@@ -538,11 +544,6 @@ export function PharmacyPage() {
     }
     return map;
   }, [categories]);
-  const selectedMovementItem = useMemo(
-    () => (movementItemId === null ? null : items.find((item) => item.id === movementItemId) ?? null),
-    [items, movementItemId]
-  );
-
   const normalizedSearch = useMemo(() => normalizeSearchTerm(debouncedSearch), [debouncedSearch]);
   const filteredItems = useMemo(() => {
     if (!normalizedSearch) {
@@ -1058,6 +1059,19 @@ export function PharmacyPage() {
             <button
               type="button"
               onClick={() => {
+                setMovementItemId(null);
+                setIsMovementModalOpen(true);
+              }}
+              className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              title="Saisir un mouvement de stock"
+            >
+              Mouvement de stock
+            </button>
+          ) : null}
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => {
                 setSelected(null);
                 setFormMode("create");
                 setIsItemModalOpen(true);
@@ -1391,6 +1405,7 @@ export function PharmacyPage() {
                           type="button"
                           onClick={() => {
                             setMovementItemId(item.id);
+                            setIsMovementModalOpen(true);
                           }}
                           className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
                           title={`Enregistrer un mouvement pour ${item.name}`}
@@ -1422,30 +1437,6 @@ export function PharmacyPage() {
         </table>
       </div>
       {isFetching ? <p className="text-xs text-slate-400">Actualisation...</p> : null}
-    </section>
-  );
-
-  const sidePanelBlock = (
-    <section className="min-w-0 space-y-4">
-      {canEdit ? (
-        <section className="rounded-lg border border-slate-800 bg-slate-950 p-4">
-          <h4 className="text-sm font-semibold text-white">Mouvement de stock</h4>
-          <PharmacyMovementForm
-            items={items}
-            selectedItemId={movementItemId}
-            onSelectItem={setMovementItemId}
-            onSubmit={async (values) => {
-              if (movementItemId === null) {
-                return;
-              }
-              setError(null);
-              await recordMovement.mutateAsync({ itemId: movementItemId, payload: values });
-            }}
-            isSubmitting={recordMovement.isPending}
-          />
-          <PharmacyMovementHistory item={selectedMovementItem} />
-        </section>
-      ) : null}
     </section>
   );
 
@@ -1729,6 +1720,65 @@ export function PharmacyPage() {
       )}
     </DraggableModal>
   );
+
+  const movementItemOptions = useMemo<StockMovementItemOption[]>(
+    () =>
+      items.map((item) => {
+        const details: string[] = [];
+        const categoryName = item.category_id ? categoryNames.get(item.category_id) : null;
+        if (categoryName) {
+          details.push(categoryName);
+        }
+        if (item.size_format) {
+          details.push(item.size_format);
+        }
+        if (item.packaging) {
+          details.push(item.packaging);
+        }
+        if (item.dosage) {
+          details.push(item.dosage);
+        }
+        const supplierName =
+          item.supplier_name ?? (item.supplier_id ? supplierMap.get(item.supplier_id) : null);
+        if (supplierName) {
+          details.push(supplierName);
+        }
+        return {
+          id: item.id,
+          name: item.name,
+          sku: item.barcode,
+          details
+        };
+      }),
+    [categoryNames, items, supplierMap]
+  );
+  const movementModal = (
+    <StockMovementModal
+      moduleKey="pharmacy"
+      open={isMovementModalOpen}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          setIsMovementModalOpen(false);
+          setMovementItemId(null);
+        } else {
+          setIsMovementModalOpen(true);
+        }
+      }}
+      items={movementItemOptions}
+      initialItemId={movementItemId}
+      isSubmitting={recordMovement.isPending}
+      onSubmitMovement={async ({ itemId, delta, reason }) => {
+        setError(null);
+        await recordMovement.mutateAsync({ itemId, payload: { delta, reason } });
+      }}
+      onSubmitted={() => {
+        void queryClient.invalidateQueries({ queryKey: ["pharmacy"] });
+        if (movementItemId !== null) {
+          void queryClient.invalidateQueries({ queryKey: ["pharmacy-movements", movementItemId] });
+        }
+      }}
+    />
+  );
   const categoriesBlock = (
     <section className="min-w-0">
       <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
@@ -1874,20 +1924,6 @@ export function PharmacyPage() {
       render: () => <EditableBlock id="pharmacy-items">{itemsBlock}</EditableBlock>
     },
     {
-      id: "pharmacy-side-panel",
-      title: "Panneau pharmacie",
-      permissions: ["pharmacy"],
-      minH: 18,
-      variant: "plain",
-      defaultLayout: {
-        lg: { x: 8, y: 12, w: 4, h: 20 },
-        md: { x: 0, y: 36, w: 10, h: 20 },
-        sm: { x: 0, y: 36, w: 6, h: 20 },
-        xs: { x: 0, y: 36, w: 4, h: 20 }
-      },
-      render: () => <EditableBlock id="pharmacy-side-panel">{sidePanelBlock}</EditableBlock>
-    },
-    {
       id: "pharmacy-low-stock",
       title: "Alertes stock faible",
       permissions: ["pharmacy"],
@@ -1956,6 +1992,7 @@ export function PharmacyPage() {
   return (
     <>
       {itemModal}
+      {movementModal}
       <EditablePageLayout
         pageKey="module:pharmacy:inventory"
         blocks={blocks}
@@ -2023,145 +2060,6 @@ function SortableHeaderCell({
         />
       </div>
     </th>
-  );
-}
-
-function PharmacyMovementForm({
-  items,
-  selectedItemId,
-  onSelectItem,
-  onSubmit,
-  isSubmitting
-}: {
-  items: PharmacyItem[];
-  selectedItemId: number | null;
-  onSelectItem: (itemId: number | null) => void;
-  onSubmit: (payload: PharmacyMovementPayload) => Promise<void>;
-  isSubmitting: boolean;
-}) {
-  const [delta, setDelta] = useState(1);
-  const [reason, setReason] = useState("");
-
-  useEffect(() => {
-    setDelta(1);
-    setReason("");
-  }, [selectedItemId]);
-
-  const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
-    event.preventDefault();
-    if (selectedItemId === null) {
-      return;
-    }
-    await onSubmit({ delta, reason: reason.trim() ? reason.trim() : null });
-    setDelta(1);
-    setReason("");
-  };
-
-  return (
-    <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
-      <div className="space-y-1">
-        <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-item">
-          Article concerné
-        </label>
-        <select
-          id="pharmacy-movement-item"
-          value={selectedItemId ?? ""}
-          onChange={(event) => {
-            const value = event.target.value ? Number(event.target.value) : null;
-            onSelectItem(value);
-          }}
-          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-          title="Choisissez l'article à ajuster"
-        >
-          <option value="">Sélectionnez un article</option>
-          {items.map((item) => (
-            <option key={item.id} value={item.id}>
-              {item.name}
-            </option>
-          ))}
-        </select>
-      </div>
-      <div className="flex gap-3">
-        <div className="flex-1 space-y-1">
-          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-delta">
-            Variation
-          </label>
-          <AppTextInput
-            id="pharmacy-movement-delta"
-            type="number"
-            value={delta}
-            onChange={(event) => setDelta(Number(event.target.value))}
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-            title="Valeur positive ou négative à appliquer"
-          />
-        </div>
-        <div className="flex-1 space-y-1">
-          <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-movement-reason">
-            Motif
-          </label>
-          <AppTextInput
-            id="pharmacy-movement-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-            placeholder="Inventaire, casse..."
-            title="Précisez la raison du mouvement"
-          />
-        </div>
-      </div>
-      <button
-        type="submit"
-        disabled={selectedItemId === null || isSubmitting}
-        className="w-full rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-        title={selectedItemId === null ? "Sélectionnez un article" : "Valider ce mouvement"}
-      >
-        {isSubmitting ? "Enregistrement..." : "Valider le mouvement"}
-      </button>
-    </form>
-  );
-}
-
-function PharmacyMovementHistory({ item }: { item: PharmacyItem | null }) {
-  const { data: movements = [], isFetching } = useQuery({
-    queryKey: ["pharmacy-movements", item?.id ?? "none"],
-    queryFn: async () => {
-      if (!item) {
-        return [] as PharmacyMovement[];
-      }
-      const response = await api.get<PharmacyMovement[]>(`/pharmacy/${item.id}/movements`);
-      return response.data;
-    },
-    enabled: Boolean(item),
-    placeholderData: [] as PharmacyMovement[]
-  });
-
-  if (!item) {
-    return <p className="mt-3 text-xs text-slate-400">Sélectionnez un article pour consulter l'historique.</p>;
-  }
-
-  return (
-    <div className="mt-4 space-y-2">
-      <h5 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Derniers mouvements</h5>
-      {isFetching ? <p className="text-xs text-slate-500">Chargement...</p> : null}
-      <ul className="space-y-2 text-xs text-slate-200">
-        {movements.length === 0 ? <li className="text-slate-500">Aucun mouvement enregistré.</li> : null}
-        {movements.slice(0, 6).map((movement) => (
-          <li key={movement.id} className="rounded border border-slate-800 bg-slate-900/70 p-2">
-            <div className="flex items-center justify-between">
-              <span
-                className={`font-semibold ${movement.delta >= 0 ? "text-emerald-300" : "text-red-300"}`}
-              >
-                {movement.delta >= 0 ? `+${movement.delta}` : movement.delta}
-              </span>
-              <span className="text-[10px] text-slate-400">{formatMovementDate(movement.created_at)}</span>
-            </div>
-            {movement.reason ? (
-              <p className="mt-1 text-[11px] text-slate-300">{movement.reason}</p>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }
 
@@ -2308,17 +2206,6 @@ function parseSizesInput(value: string): string[] {
     result.push(trimmed);
   }
   return result;
-}
-
-function formatMovementDate(value: string) {
-  try {
-    return new Intl.DateTimeFormat("fr-FR", {
-      dateStyle: "short",
-      timeStyle: "short"
-    }).format(new Date(value));
-  } catch (error) {
-    return value;
-  }
 }
 
 function formatDate(value: string | null) {
