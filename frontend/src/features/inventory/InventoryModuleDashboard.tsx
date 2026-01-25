@@ -1518,7 +1518,7 @@ function ItemForm({
   useEffect(() => {
     setValues(initialValues);
     setIsSkuAuto(mode === "create" && initialValues.sku.trim().length === 0);
-  }, [initialValues, mode]);
+  }, [currentItemId, mode]);
 
   useEffect(() => {
     if (!supportsItemImages) {
@@ -1726,7 +1726,7 @@ function ItemForm({
         </label>
         <AppTextInput
           id="item-name"
-          value={values.name}
+          value={values.name ?? ""}
           onChange={handleNameChange}
           required
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
@@ -1739,7 +1739,7 @@ function ItemForm({
         </label>
         <AppTextInput
           id="item-sku"
-          value={values.sku}
+          value={values.sku ?? ""}
           onChange={handleSkuChange}
           className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
           title="Identifiant unique ou code-barres associé"
@@ -1845,7 +1845,7 @@ function ItemForm({
         </label>
         <AppTextInput
           id="item-size"
-          value={values.size}
+          value={values.size ?? ""}
           list={sizeOptionsId}
           onChange={(event) => setValues((prev) => ({ ...prev, size: event.target.value }))}
           placeholder={
