@@ -1,4 +1,4 @@
-import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { ChangeEvent, FormEvent, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import { toast } from "sonner";
@@ -12,7 +12,6 @@ import {
 } from "@dnd-kit/core";
 import { SortableContext, arrayMove, horizontalListSortingStrategy, useSortable } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { AlertTriangle, Archive, Package, TimerReset, type LucideIcon } from "lucide-react";
 
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
@@ -106,65 +105,34 @@ interface SupplierOption {
   email: string | null;
 }
 
-type KpiAccent = "blue" | "green" | "amber" | "red";
+type StatVariant = "info" | "success" | "warning" | "danger";
+type PulseLevel = "normal" | "fast";
 
-const KPI_ACCENT_STYLES: Record<
-  KpiAccent,
-  { border: string; ring: string; icon: string; iconBg: string; glow: string }
-> = {
-  blue: {
-    border: "border-blue-500/60",
-    ring: "ring-blue-500/20",
-    icon: "text-blue-400",
-    iconBg: "bg-blue-500/10",
-    glow: "shadow-[0_0_12px_rgba(59,130,246,0.12)]"
-  },
-  green: {
-    border: "border-emerald-500/60",
-    ring: "ring-emerald-500/20",
-    icon: "text-emerald-400",
-    iconBg: "bg-emerald-500/10",
-    glow: "shadow-[0_0_12px_rgba(16,185,129,0.12)]"
-  },
-  amber: {
-    border: "border-amber-500/60",
-    ring: "ring-amber-500/20",
-    icon: "text-amber-400",
-    iconBg: "bg-amber-500/10",
-    glow: "shadow-[0_0_12px_rgba(245,158,11,0.12)]"
-  },
-  red: {
-    border: "border-rose-500/60",
-    ring: "ring-rose-500/20",
-    icon: "text-rose-400",
-    iconBg: "bg-rose-500/10",
-    glow: "shadow-[0_0_12px_rgba(244,63,94,0.12)]"
-  }
-};
-
-interface KpiCardProps {
+function StatCard(props: {
   title: string;
   value: number | string;
   subtitle: string;
-  icon: LucideIcon;
-  accent: KpiAccent;
-}
-
-function KpiCard({ title, value, subtitle, icon: Icon, accent }: KpiCardProps) {
-  const styles = KPI_ACCENT_STYLES[accent];
+  icon: ReactNode;
+  variant: StatVariant;
+  pulse?: boolean;
+  pulseLevel?: PulseLevel;
+}) {
+  const { title, value, subtitle, icon, variant, pulse, pulseLevel = "normal" } = props;
 
   return (
     <div
-      className={`rounded-lg border border-slate-800 border-l-4 bg-slate-950 p-3 ring-1 ${styles.border} ${styles.ring} ${styles.glow}`}
+      className="stat-card p-4"
+      data-variant={variant}
+      data-pulse={pulse ? "true" : "false"}
+      data-pulse-level={pulseLevel}
     >
-      <div className="flex items-start gap-3">
-        <span className={`mt-0.5 inline-flex rounded-lg p-2 ${styles.iconBg}`}>
-          <Icon className={`h-4 w-4 ${styles.icon}`} aria-hidden="true" />
-        </span>
-        <div className="min-w-0">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">{title}</p>
-          <p className="mt-2 text-2xl font-semibold text-white">{value}</p>
-          <p className="text-xs text-slate-400">{subtitle}</p>
+      <div className="stat-glow" />
+      <div className="relative z-10 flex items-start gap-3">
+        <div className="mt-0.5 opacity-90">{icon}</div>
+        <div>
+          <div className="text-xs tracking-wide text-slate-300 uppercase">{title}</div>
+          <div className="text-3xl font-semibold text-white mt-1">{value}</div>
+          <div className="text-sm text-slate-400 mt-1">{subtitle}</div>
         </div>
       </div>
     </div>
@@ -1126,54 +1094,53 @@ export function PharmacyPage() {
     </section>
   );
 
+  const lowStockCount = lowStockItems.length;
+  const expiringCount = expiredItems.length + expiringSoonItems.length;
+  const lowStockPulseLevel: PulseLevel = lowStockCount >= 10 ? "fast" : "normal";
+
   const statsBlock = (
     <section className="min-w-0">
       <div className="grid gap-3 sm:grid-cols-2">
-        {(
-          [
-          {
-            key: "refs",
-            title: "Références",
-            icon: Package,
-            accent: "blue",
-            value: items.length,
-            subtitle: "Articles en base pharmacie."
-          },
-          {
-            key: "total",
-            title: "Stock total",
-            icon: Archive,
-            accent: "green",
-            value: totalQuantity,
-            subtitle: "Quantité totale enregistrée."
-          },
-          {
-            key: "low",
-            title: "Alertes stock",
-            icon: AlertTriangle,
-            accent: "amber",
-            value: lowStockItems.length,
-            subtitle: "Articles sous seuil."
-          },
-          {
-            key: "exp",
-            title: "Péremptions",
-            icon: TimerReset,
-            accent: "red",
-            value: expiredItems.length + expiringSoonItems.length,
-            subtitle: "Expirés ou bientôt périmés."
+        <StatCard
+          title="Références"
+          value={items.length}
+          subtitle="Articles en base pharmacie."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">📦</span>
           }
-          ] as Array<KpiCardProps & { key: string }>
-        ).map((kpi) => (
-          <KpiCard
-            key={kpi.key}
-            title={kpi.title}
-            icon={kpi.icon}
-            accent={kpi.accent}
-            value={kpi.value}
-            subtitle={kpi.subtitle}
-          />
-        ))}
+          variant="info"
+        />
+        <StatCard
+          title="Stock total"
+          value={totalQuantity}
+          subtitle="Quantité totale enregistrée."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">🧮</span>
+          }
+          variant="success"
+        />
+        <StatCard
+          title="Alertes stock"
+          value={lowStockCount}
+          subtitle="Articles sous seuil."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">⚠️</span>
+          }
+          variant="warning"
+          pulse={lowStockCount > 0}
+          pulseLevel={lowStockPulseLevel}
+        />
+        <StatCard
+          title="Péremptions"
+          value={expiringCount}
+          subtitle="Expirés ou bientôt périmés."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">⏳</span>
+          }
+          variant="danger"
+          pulse={expiringCount > 0}
+          pulseLevel="normal"
+        />
       </div>
     </section>
   );
