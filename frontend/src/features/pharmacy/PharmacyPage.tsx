@@ -615,6 +615,7 @@ export function PharmacyPage() {
       }),
     [items]
   );
+  const stockoutCount = useMemo(() => items.filter((item) => item.quantity === 0).length, [items]);
 
   const expiredItems = useMemo(
     () => items.filter((item) => getExpirationStatus(item.expiration_date) === "expired"),
@@ -1129,6 +1130,17 @@ export function PharmacyPage() {
           variant="warning"
           pulse={lowStockCount > 0}
           pulseLevel={lowStockPulseLevel}
+        />
+        <StatCard
+          title="Rupture de stock"
+          value={stockoutCount}
+          subtitle="Articles à 0 en stock."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">🛑</span>
+          }
+          variant="danger"
+          pulse={stockoutCount > 0}
+          pulseLevel="normal"
         />
         <StatCard
           title="Péremptions"
@@ -2335,7 +2347,7 @@ function formatDate(value: string | null) {
 type ExpirationStatus = "expired" | "expiring-soon" | null;
 
 function getPharmacyAlerts(item: PharmacyItem) {
-  const isOutOfStock = item.quantity <= 0;
+  const isOutOfStock = item.quantity === 0;
   const threshold = item.low_stock_threshold ?? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD;
   const hasThreshold = threshold > 0;
   const isLowStock = !isOutOfStock && hasThreshold && item.quantity <= threshold;
