@@ -9132,10 +9132,81 @@ def update_purchase_order(order_id: int, payload: models.PurchaseOrderUpdate) ->
     return get_purchase_order(order_id)
 
 
+def _resolve_user_display_name(user: models.User | None) -> str | None:
+    if not user:
+        return None
+    first_name = getattr(user, "first_name", None)
+    last_name = getattr(user, "last_name", None)
+    if first_name or last_name:
+        return " ".join(part for part in (first_name, last_name) if part)
+    display_name = getattr(user, "display_name", None)
+    if display_name:
+        return display_name
+    return getattr(user, "username", None)
+
+
+def _resolve_user_phone(user: models.User | None) -> str | None:
+    if not user:
+        return None
+    for attr in ("phone", "phone_number", "telephone"):
+        value = getattr(user, attr, None)
+        if value:
+            return value
+    return None
+
+
+def _resolve_contact_value(user: models.User | None) -> str | None:
+    if not user:
+        return None
+    parts = []
+    name = _resolve_user_display_name(user)
+    if name:
+        parts.append(name)
+    if user.email:
+        parts.append(user.email)
+    phone = _resolve_user_phone(user)
+    if phone:
+        parts.append(phone)
+    return " / ".join(parts) if parts else None
+
+
+def _resolve_site_address(site_info: models.SiteInfo | None) -> str | None:
+    if not site_info:
+        return None
+    address_parts = []
+    for attr in ("address", "street", "street_address"):
+        value = getattr(site_info, attr, None)
+        if value:
+            address_parts.append(str(value))
+    city_parts = []
+    for attr in ("postal_code", "zip_code", "postcode"):
+        value = getattr(site_info, attr, None)
+        if value:
+            city_parts.append(str(value))
+    for attr in ("city", "town"):
+        value = getattr(site_info, attr, None)
+        if value:
+            city_parts.append(str(value))
+    if city_parts:
+        address_parts.append(" ".join(city_parts))
+    for attr in ("country",):
+        value = getattr(site_info, attr, None)
+        if value:
+            address_parts.append(str(value))
+    if address_parts:
+        return ", ".join(address_parts)
+    if site_info.display_name and site_info.display_name != site_info.site_key:
+        return f"Site: {site_info.display_name} ({site_info.site_key})"
+    return f"Site: {site_info.site_key}"
+
+
 def _build_purchase_order_blocks(
     order: models.PurchaseOrderDetail
     | models.RemisePurchaseOrderDetail
     | models.PharmacyPurchaseOrderDetail,
+    *,
+    user: models.User | None = None,
+    site_info: models.SiteInfo | None = None,
 ) -> tuple[dict[str, str | None], dict[str, str | None], dict[str, str | None]]:
     supplier = None
     if order.supplier_id is not None:
@@ -9145,9 +9216,9 @@ def _build_purchase_order_blocks(
             )
     supplier_name = order.supplier_name or (supplier.name if supplier else None)
     buyer_block = {
-        "Nom": None,
-        "Téléphone": None,
-        "Email": None,
+        "Nom": _resolve_user_display_name(user),
+        "Téléphone": _resolve_user_phone(user),
+        "Email": user.email if user else None,
     }
     supplier_block = {
         "Nom": supplier_name,
@@ -9157,9 +9228,9 @@ def _build_purchase_order_blocks(
         "Adresse": supplier.address if supplier else None,
     }
     delivery_block: dict[str, str | None] = {
-        "Adresse": None,
+        "Adresse": _resolve_site_address(site_info),
         "Date souhaitée": None,
-        "Contact": None,
+        "Contact": _resolve_contact_value(user),
     }
     return buyer_block, supplier_block, delivery_block
 
@@ -9513,8 +9584,19 @@ def _render_remise_inventory_pdf(
     return buffer.getvalue()
 
 
-def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
-    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+def generate_purchase_order_pdf(
+    order: models.PurchaseOrderDetail,
+    *,
+    user: models.User | None = None,
+    site_key: str | None = None,
+) -> bytes:
+    resolved_site_key = sites.normalize_site_key(site_key) if site_key else db.get_current_site_key()
+    site_info = _get_site_info_for_email(resolved_site_key)
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(
+        order,
+        user=user,
+        site_info=site_info,
+    )
     return render_purchase_order_pdf(
         title="BON DE COMMANDE",
         purchase_order=order,
@@ -9525,8 +9607,19 @@ def generate_purchase_order_pdf(order: models.PurchaseOrderDetail) -> bytes:
     )
 
 
-def generate_purchase_order_reception_pdf(order: models.PurchaseOrderDetail) -> bytes:
-    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+def generate_purchase_order_reception_pdf(
+    order: models.PurchaseOrderDetail,
+    *,
+    user: models.User | None = None,
+    site_key: str | None = None,
+) -> bytes:
+    resolved_site_key = sites.normalize_site_key(site_key) if site_key else db.get_current_site_key()
+    site_info = _get_site_info_for_email(resolved_site_key)
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(
+        order,
+        user=user,
+        site_info=site_info,
+    )
     return render_purchase_order_pdf(
         title="BON DE COMMANDE",
         purchase_order=order,
@@ -9718,7 +9811,11 @@ def send_purchase_order_to_supplier(
     subject, body_text, body_html = notifications.build_purchase_order_email(
         order, site_info, sent_by_user
     )
-    pdf_bytes = generate_purchase_order_pdf(order)
+    pdf_bytes = generate_purchase_order_pdf(
+        order,
+        user=sent_by_user,
+        site_key=normalized_site_key,
+    )
     resolved = resolve_pdf_config("purchase_orders")
     filename = render_filename(
         resolved.config.filename.pattern,
@@ -9881,7 +9978,11 @@ def send_remise_purchase_order_to_supplier(
         order, site_info, sent_by_user
     )
     subject = f"Bon de commande REMISE - {site_info.display_name or site_info.site_key} - #{order.id}"
-    pdf_bytes = generate_remise_purchase_order_pdf(order)
+    pdf_bytes = generate_remise_purchase_order_pdf(
+        order,
+        user=sent_by_user,
+        site_key=normalized_site_key,
+    )
     resolved = resolve_pdf_config("remise_orders")
     filename = render_filename(
         resolved.config.filename.pattern,
@@ -10181,7 +10282,11 @@ def send_pharmacy_purchase_order_to_supplier(
     subject, body_text, body_html = notifications.build_purchase_order_email(
         order, site_info, sent_by_user
     )
-    pdf_bytes = generate_pharmacy_purchase_order_pdf(order)
+    pdf_bytes = generate_pharmacy_purchase_order_pdf(
+        order,
+        user=sent_by_user,
+        site_key=normalized_site_key,
+    )
     resolved = resolve_pdf_config("pharmacy_orders")
     filename = render_filename(
         resolved.config.filename.pattern,
@@ -10268,8 +10373,19 @@ def send_pharmacy_purchase_order_to_supplier(
     )
 
 
-def generate_remise_purchase_order_pdf(order: models.RemisePurchaseOrderDetail) -> bytes:
-    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+def generate_remise_purchase_order_pdf(
+    order: models.RemisePurchaseOrderDetail,
+    *,
+    user: models.User | None = None,
+    site_key: str | None = None,
+) -> bytes:
+    resolved_site_key = sites.normalize_site_key(site_key) if site_key else db.get_current_site_key()
+    site_info = _get_site_info_for_email(resolved_site_key)
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(
+        order,
+        user=user,
+        site_info=site_info,
+    )
     return render_purchase_order_pdf(
         title="BON DE COMMANDE",
         purchase_order=order,
@@ -10282,8 +10398,17 @@ def generate_remise_purchase_order_pdf(order: models.RemisePurchaseOrderDetail) 
 
 def generate_pharmacy_purchase_order_pdf(
     order: models.PharmacyPurchaseOrderDetail,
+    *,
+    user: models.User | None = None,
+    site_key: str | None = None,
 ) -> bytes:
-    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(order)
+    resolved_site_key = sites.normalize_site_key(site_key) if site_key else db.get_current_site_key()
+    site_info = _get_site_info_for_email(resolved_site_key)
+    buyer_block, supplier_block, delivery_block = _build_purchase_order_blocks(
+        order,
+        user=user,
+        site_info=site_info,
+    )
     return render_purchase_order_pdf(
         title="BON DE COMMANDE",
         purchase_order=order,

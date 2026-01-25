@@ -76,7 +76,11 @@ async def download_order_pdf(
         resolved = resolve_pdf_config("remise_orders")
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    pdf_bytes = services.generate_remise_purchase_order_pdf(order)
+    pdf_bytes = services.generate_remise_purchase_order_pdf(
+        order,
+        user=user,
+        site_key=db.get_current_site_key(),
+    )
     filename = render_filename(
         resolved.config.filename.pattern,
         module_key="remise_orders",
