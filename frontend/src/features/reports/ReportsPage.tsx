@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   Bar,
@@ -123,6 +123,62 @@ const PIE_COLORS = ["#38bdf8", "#fbbf24", "#34d399", "#f87171"];
 const formatNumber = (value: number) => new Intl.NumberFormat("fr-FR").format(value);
 
 const formatDateInput = (value: Date) => value.toISOString().slice(0, 10);
+
+type KpiTooltipConfig = {
+  label: string;
+  value: number;
+  accent: string;
+  title: string;
+  description: string;
+};
+
+type KpiTooltipCardProps = KpiTooltipConfig & {
+  includeDotation: boolean;
+  includeAdjustment: boolean;
+};
+
+function KpiTooltipCard({
+  label,
+  value,
+  accent,
+  title,
+  description,
+  includeDotation,
+  includeAdjustment
+}: KpiTooltipCardProps) {
+  const tooltipId = useId();
+  const extraLines = [
+    includeDotation ? "Inclut les dotations." : null,
+    includeAdjustment ? "Inclut les ajustements." : null
+  ].filter(Boolean) as string[];
+
+  return (
+    <div
+      className="group relative rounded-xl border border-slate-800/80 bg-slate-900/70 p-4 backdrop-blur focus:outline-none focus-within:border-indigo-400/60 focus-within:ring-2 focus-within:ring-indigo-500/40"
+      tabIndex={0}
+      aria-describedby={tooltipId}
+    >
+      <p className="text-xs uppercase tracking-wide text-slate-400">{label}</p>
+      <p className={`mt-2 text-2xl font-semibold ${accent}`}>{formatNumber(value)}</p>
+      <div
+        id={tooltipId}
+        role="tooltip"
+        className="pointer-events-none absolute bottom-full left-0 z-20 mb-2 w-64 max-w-[80vw] origin-bottom-left rounded-lg border border-slate-700/70 bg-slate-900 px-3 py-2 text-xs text-slate-100 opacity-0 shadow-lg transition-opacity duration-150 delay-0 group-hover:opacity-100 group-hover:delay-150 group-focus-within:opacity-100 group-focus-within:delay-150"
+      >
+        <div className="text-xs font-semibold text-slate-100">{title}</div>
+        <div className="mt-1 text-xs text-slate-200">{description}</div>
+        {extraLines.length ? (
+          <ul className="mt-2 list-disc space-y-1 pl-4 text-[11px] text-slate-300">
+            {extraLines.map((line) => (
+              <li key={line}>{line}</li>
+            ))}
+          </ul>
+        ) : null}
+        <span className="pointer-events-none absolute left-4 top-full h-2 w-2 -translate-y-1 rotate-45 border border-slate-700/70 bg-slate-900" />
+      </div>
+    </div>
+  );
+}
 
 export function ReportsPage() {
   const { user } = useAuth();
@@ -413,20 +469,54 @@ export function ReportsPage() {
       ) : null}
 
       <div className="grid gap-4 md:grid-cols-5">
-        {[
-          { label: "Entrées", value: reportData?.kpis.in_qty ?? 0, accent: "text-emerald-300" },
-          { label: "Sorties", value: reportData?.kpis.out_qty ?? 0, accent: "text-rose-300" },
-          { label: "Net", value: reportData?.kpis.net_qty ?? 0, accent: "text-indigo-300" },
-          { label: "Sous seuil", value: reportData?.kpis.low_stock_count ?? 0, accent: "text-amber-300" },
-          { label: "BC en cours", value: reportData?.kpis.open_orders ?? 0, accent: "text-sky-300" }
-        ].map((kpi) => (
-          <div
+        {([
+          {
+            label: "Entrées",
+            value: reportData?.kpis.in_qty ?? 0,
+            accent: "text-emerald-300",
+            title: "Entrées",
+            description:
+              "Total des mouvements d'entrée sur la période sélectionnée (réceptions, ajouts en stock)."
+          },
+          {
+            label: "Sorties",
+            value: reportData?.kpis.out_qty ?? 0,
+            accent: "text-rose-300",
+            title: "Sorties",
+            description:
+              "Total des mouvements de sortie sur la période sélectionnée (consommations, distributions, retraits)."
+          },
+          {
+            label: "Net",
+            value: reportData?.kpis.net_qty ?? 0,
+            accent: "text-indigo-300",
+            title: "Net",
+            description:
+              "Balance Entrées - Sorties sur la période. Positif = stock en hausse, négatif = stock en baisse."
+          },
+          {
+            label: "Sous seuil",
+            value: reportData?.kpis.low_stock_count ?? 0,
+            accent: "text-amber-300",
+            title: "Sous seuil",
+            description:
+              "Nombre d'articles actuellement sous le seuil mini. Basé sur l'état du stock au moment du calcul."
+          },
+          {
+            label: "BC en cours",
+            value: reportData?.kpis.open_orders ?? 0,
+            accent: "text-sky-300",
+            title: "BC en cours",
+            description:
+              "Nombre de bons de commande non clôturés (Commandé / Partiellement reçu / En attente)."
+          }
+        ] as KpiTooltipConfig[]).map((kpi) => (
+          <KpiTooltipCard
             key={kpi.label}
-            className="rounded-xl border border-slate-800/80 bg-slate-900/70 p-4 backdrop-blur"
-          >
-            <p className="text-xs uppercase tracking-wide text-slate-400">{kpi.label}</p>
-            <p className={`mt-2 text-2xl font-semibold ${kpi.accent}`}>{formatNumber(kpi.value)}</p>
-          </div>
+            {...kpi}
+            includeDotation={includeDotation}
+            includeAdjustment={includeAdjustment}
+          />
         ))}
       </div>
 
