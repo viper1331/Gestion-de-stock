@@ -138,6 +138,111 @@ def test_refresh_idempotent_grouping() -> None:
         assert len(lines) == 3
 
 
+def test_auto_reorder_groups_multiple_items_into_one_po_per_supplier() -> None:
+    _reset_tables()
+    _create_user("suggest_admin", "password", role="admin")
+    headers = _login_headers("suggest_admin", "password")
+
+    with db.get_stock_connection() as conn:
+        supplier_id = conn.execute(
+            "INSERT INTO suppliers (name) VALUES ('Fournisseur Unique')"
+        ).lastrowid
+        item_a = conn.execute(
+            """
+            INSERT INTO items (name, sku, quantity, low_stock_threshold, track_low_stock, supplier_id)
+            VALUES ('Blouson', 'CL-10', 1, 5, 1, ?)
+            """,
+            (supplier_id,),
+        ).lastrowid
+        item_b = conn.execute(
+            """
+            INSERT INTO items (name, sku, quantity, low_stock_threshold, track_low_stock, supplier_id)
+            VALUES ('Pantalon', 'CL-11', 0, 3, 1, ?)
+            """,
+            (supplier_id,),
+        ).lastrowid
+        conn.commit()
+
+    response = client.post(
+        "/purchasing/suggestions/refresh",
+        json={"module_keys": ["clothing"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    with db.get_stock_connection() as conn:
+        suggestions = conn.execute(
+            """
+            SELECT id, supplier_id
+            FROM purchase_suggestions
+            WHERE module_key = 'clothing' AND status = 'draft'
+            """
+        ).fetchall()
+        assert len(suggestions) == 1
+        assert suggestions[0]["supplier_id"] == supplier_id
+
+        lines = conn.execute(
+            """
+            SELECT item_id, qty_suggested
+            FROM purchase_suggestion_lines
+            WHERE suggestion_id = ?
+            """,
+            (suggestions[0]["id"],),
+        ).fetchall()
+        assert len(lines) == 2
+        qty_by_item = {row["item_id"]: row["qty_suggested"] for row in lines}
+        assert qty_by_item[item_a] == 4
+        assert qty_by_item[item_b] == 3
+
+
+def test_auto_reorder_creates_one_po_per_supplier() -> None:
+    _reset_tables()
+    _create_user("suggest_admin", "password", role="admin")
+    headers = _login_headers("suggest_admin", "password")
+
+    with db.get_stock_connection() as conn:
+        supplier_a = conn.execute(
+            "INSERT INTO suppliers (name) VALUES ('Fournisseur A')"
+        ).lastrowid
+        supplier_b = conn.execute(
+            "INSERT INTO suppliers (name) VALUES ('Fournisseur B')"
+        ).lastrowid
+        conn.execute(
+            """
+            INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, supplier_id, track_low_stock)
+            VALUES ('Pompe', 'RM-10', 1, 5, ?, 1)
+            """,
+            (supplier_a,),
+        )
+        conn.execute(
+            """
+            INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, supplier_id, track_low_stock)
+            VALUES ('Lampe', 'RM-11', 2, 6, ?, 1)
+            """,
+            (supplier_b,),
+        )
+        conn.commit()
+
+    response = client.post(
+        "/purchasing/suggestions/refresh",
+        json={"module_keys": ["inventory_remise"]},
+        headers=headers,
+    )
+    assert response.status_code == 200, response.text
+
+    with db.get_stock_connection() as conn:
+        suggestions = conn.execute(
+            """
+            SELECT supplier_id
+            FROM purchase_suggestions
+            WHERE module_key = 'inventory_remise' AND status = 'draft'
+            """
+        ).fetchall()
+        assert len(suggestions) == 2
+        supplier_ids = {row["supplier_id"] for row in suggestions}
+        assert supplier_ids == {supplier_a, supplier_b}
+
+
 def test_convert_suggestion_creates_purchase_order() -> None:
     _reset_tables()
     _create_user("suggest_admin", "password", role="admin")

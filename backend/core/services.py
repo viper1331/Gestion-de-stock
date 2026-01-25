@@ -1634,6 +1634,48 @@ def refresh_purchase_suggestions(
             candidates = _get_reorder_candidates(
                 conn, module_key, safety_buffer, expiry_soon_days
             )
+            supplier_ids = sorted(
+                {
+                    candidate["supplier_id"]
+                    for candidate in candidates
+                    if candidate.get("supplier_id") is not None
+                }
+            )
+            suppliers_by_id: dict[int, sqlite3.Row] = {}
+            if supplier_ids:
+                placeholders = ", ".join("?" for _ in supplier_ids)
+                supplier_rows = conn.execute(
+                    f"SELECT * FROM suppliers WHERE id IN ({placeholders})",
+                    supplier_ids,
+                ).fetchall()
+                suppliers_by_id = {row["id"]: row for row in supplier_rows}
+            for candidate in candidates:
+                supplier_id = candidate.get("supplier_id")
+                if supplier_id is None:
+                    logger.info(
+                        "[PURCHASE_SUGGESTIONS] missing supplier module=%s item_id=%s",
+                        module_key,
+                        candidate["item_id"],
+                    )
+                    continue
+                supplier_row = suppliers_by_id.get(supplier_id)
+                if supplier_row is None:
+                    logger.info(
+                        "[PURCHASE_SUGGESTIONS] supplier not found module=%s supplier_id=%s item_id=%s",
+                        module_key,
+                        supplier_id,
+                        candidate["item_id"],
+                    )
+                    candidate["supplier_id"] = None
+                    continue
+                if _is_supplier_inactive(supplier_row):
+                    logger.info(
+                        "[PURCHASE_SUGGESTIONS] supplier inactive module=%s supplier_id=%s item_id=%s",
+                        module_key,
+                        supplier_id,
+                        candidate["item_id"],
+                    )
+                    candidate["supplier_id"] = None
             grouped: dict[int | None, list[dict[str, Any]]] = defaultdict(list)
             for candidate in candidates:
                 grouped[candidate["supplier_id"]].append(candidate)
