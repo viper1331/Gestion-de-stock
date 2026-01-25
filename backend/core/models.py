@@ -1533,6 +1533,7 @@ class PharmacyPurchaseOrder(BaseModel):
     status: str
     created_at: datetime
     note: str | None = None
+    auto_created: bool = False
 
 
 class PharmacyPurchaseOrderDetail(PharmacyPurchaseOrder):

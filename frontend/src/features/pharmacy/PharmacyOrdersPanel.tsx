@@ -50,6 +50,7 @@ interface PharmacyPurchaseOrderDetail {
   status: string;
   created_at: string;
   note: string | null;
+  auto_created: boolean;
   items: PharmacyPurchaseOrderItem[];
 }
 
@@ -540,6 +541,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                     <tr key={order.id}>
                       <td className="px-4 py-3 text-slate-300">
                         {new Date(order.created_at).toLocaleString()}
+                        {order.auto_created ? (
+                          <span className="ml-2 rounded border border-indigo-500/40 bg-indigo-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
+                            Auto
+                          </span>
+                        ) : null}
                       </td>
                       <td className="px-4 py-3 text-slate-200">
                         <div className="flex flex-col">
