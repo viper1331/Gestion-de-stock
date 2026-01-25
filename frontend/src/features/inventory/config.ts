@@ -32,6 +32,7 @@ export interface InventoryModuleConfig {
   showLotMembershipColumn?: boolean;
   itemNoun?: InventoryItemNounConfig;
   barcodePrefix?: string;
+  barcodeModule?: "clothing" | "remise";
   exportPdfPath?: string;
   exportPdfFilenamePrefix?: string;
   customFieldScope?: string;
@@ -52,5 +53,6 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   searchPlaceholder: "Rechercher par nom ou SKU",
   supportsItemImages: false,
   supportsExpirationDate: false,
-  barcodePrefix: "HAB"
+  barcodePrefix: "HAB",
+  barcodeModule: "clothing"
 };
