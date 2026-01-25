@@ -92,6 +92,14 @@ interface PurchaseOrderEmailLogEntry {
   error_message?: string | null;
 }
 
+interface PurchaseOrderAutoRefreshResponse {
+  created: number;
+  updated: number;
+  skipped: number;
+  items_below_threshold: number;
+  purchase_order_id: number | null;
+}
+
 type ApiErrorResponse = { detail?: string };
 
 const ORDER_STATUSES: Array<{ value: string; label: string }> = [
@@ -113,6 +121,7 @@ interface PurchaseOrdersPanelProps {
   itemsPath?: string;
   ordersQueryKey?: QueryKey;
   itemsQueryKey?: QueryKey;
+  moduleKey?: string;
   title?: string;
   description?: string;
   downloadPrefix?: string;
@@ -125,6 +134,7 @@ export function PurchaseOrdersPanel({
   itemsPath = "/items",
   ordersQueryKey = ["purchase-orders"],
   itemsQueryKey = ["items"],
+  moduleKey = "purchase_orders",
   title = "Bons de commande",
   description = "Suivez les commandes fournisseurs et marquez les réceptions pour mettre à jour les stocks.",
   downloadPrefix = "bon_commande",
@@ -143,6 +153,7 @@ export function PurchaseOrdersPanel({
   const [draftLines, setDraftLines] = useState<DraftLine[]>([{ itemId: "", quantity: 1 }]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<PurchaseOrderDetail | null>(null);
   const [editSupplier, setEditSupplier] = useState<number | "">("");
@@ -167,6 +178,8 @@ export function PurchaseOrdersPanel({
   const suppliersById = useMemo(() => {
     return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
   }, [suppliers]);
+  const canRefresh =
+    user?.role === "admin" || modulePermissions.canAccess(moduleKey, "edit");
 
   const renderSupplierDetails = (supplier?: Supplier) => {
     if (!supplier) {
@@ -426,6 +439,50 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const refreshAutoOrders = useMutation<
+    PurchaseOrderAutoRefreshResponse,
+    AxiosError<ApiErrorResponse>
+  >({
+    mutationFn: async () => {
+      const response = await api.post<PurchaseOrderAutoRefreshResponse>(
+        "/purchase-orders/auto/refresh",
+        null,
+        { params: { module: moduleKey } }
+      );
+      return response.data;
+    },
+    onSuccess: async (data) => {
+      const totalOrders = data.created + data.updated;
+      const summary =
+        data.items_below_threshold > 0
+          ? `${data.items_below_threshold} article(s) sous seuil → ${totalOrders} BC généré${
+              totalOrders > 1 ? "s" : ""
+            } / mis à jour`
+          : null;
+      setMessage("Bons de commande mis à jour.");
+      setRefreshSummary(summary);
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      window.setTimeout(() => {
+        setMessage(null);
+        setRefreshSummary(null);
+      }, 4000);
+    },
+    onError: (refreshError) => {
+      if (refreshError.response?.data?.detail) {
+        setError(
+          refreshError.response.data.detail ?? "Impossible de rafraîchir les bons de commande."
+        );
+      } else {
+        setError("Impossible de rafraîchir les bons de commande.");
+      }
+    }
+  });
+
+  const handleRefresh = () => {
+    setError(null);
+    refreshAutoOrders.mutate();
+  };
+
   const handleAddLine = () => {
     setDraftLines((prev) => [...prev, { itemId: "", quantity: 1 }]);
   };
@@ -624,16 +681,32 @@ export function PurchaseOrdersPanel({
           <h3 className="text-lg font-semibold text-white">{title}</h3>
           <p className="text-sm text-slate-400">{description}</p>
         </div>
-        <button
-          type="button"
-          onClick={handleOpenCreateModal}
-          className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
-        >
-          Créer un bon de commande
-        </button>
+        <div className="flex flex-wrap gap-2">
+          {canRefresh ? (
+            <button
+              type="button"
+              onClick={handleRefresh}
+              disabled={refreshAutoOrders.isPending}
+              className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {refreshAutoOrders.isPending ? (
+                <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
+              ) : null}
+              Rafraîchir
+            </button>
+          ) : null}
+          <button
+            type="button"
+            onClick={handleOpenCreateModal}
+            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+          >
+            Créer un bon de commande
+          </button>
+        </div>
       </header>
 
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
+      {refreshSummary ? <p className="text-xs text-slate-400">{refreshSummary}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
 
       <div className="grid gap-6 lg:grid-cols-2">

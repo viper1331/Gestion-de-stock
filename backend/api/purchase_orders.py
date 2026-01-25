@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.api.admin import require_admin
@@ -28,6 +28,20 @@ async def list_orders(user: models.User = Depends(get_current_user)) -> list[mod
     if user.role not in {"admin", "user"}:
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     return services.list_purchase_orders()
+
+
+@router.post("/auto/refresh", response_model=models.PurchaseOrderAutoRefreshResponse)
+async def refresh_auto_orders(
+    module: str = Query(..., description="Module clé pour les BC auto"),
+    user: models.User = Depends(get_current_user),
+) -> models.PurchaseOrderAutoRefreshResponse:
+    try:
+        services.resolve_auto_purchase_order_module_key(module)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    if not services.has_module_access(user, module, action="edit"):
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    return services.refresh_auto_purchase_orders(module)
 
 
 @router.post("/", response_model=models.PurchaseOrderDetail, status_code=201)

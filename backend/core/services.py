@@ -3947,6 +3947,21 @@ _AUTO_PO_SPECS: dict[str, _AutoPurchaseOrderSpec] = {
 }
 
 
+_AUTO_PO_MODULE_ALIASES = {
+    "purchase_orders": "default",
+    "inventory_remise": "inventory_remise",
+    "pharmacy": "pharmacy",
+}
+
+
+def resolve_auto_purchase_order_module_key(module_key: str) -> str:
+    normalized = normalize_module_key(module_key)
+    resolved = _AUTO_PO_MODULE_ALIASES.get(normalized)
+    if resolved is None:
+        raise ValueError("Module de bons de commande automatique inconnu.")
+    return resolved
+
+
 def _resolve_first_non_empty(row: sqlite3.Row, columns: Iterable[str]) -> str | None:
     for column in columns:
         value = row[column] if column in row.keys() else None
@@ -4057,6 +4072,163 @@ def _maybe_create_auto_purchase_order(
         f"INSERT INTO {spec.order_items_table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
         values,
     )
+
+
+def refresh_auto_purchase_orders(module_key: str) -> models.PurchaseOrderAutoRefreshResponse:
+    resolved_module = resolve_auto_purchase_order_module_key(module_key)
+    with db.get_stock_connection() as conn:
+        spec = _AUTO_PO_SPECS[resolved_module]
+        item_columns = ["id", "name", "quantity", "low_stock_threshold"]
+        if _table_has_column(conn, spec.items_table, "track_low_stock"):
+            item_columns.append("track_low_stock")
+        if _table_has_column(conn, spec.items_table, "supplier_id"):
+            item_columns.append("supplier_id")
+        for column in (*spec.sku_columns, *spec.unit_columns):
+            if _table_has_column(conn, spec.items_table, column) and column not in item_columns:
+                item_columns.append(column)
+        if spec.extra_json_column and _table_has_column(conn, spec.items_table, spec.extra_json_column):
+            item_columns.append(spec.extra_json_column)
+
+        low_stock_where = ["quantity < low_stock_threshold", "low_stock_threshold > 0"]
+        if "track_low_stock" in item_columns:
+            low_stock_where.append("track_low_stock = 1")
+        rows = conn.execute(
+            f"SELECT {', '.join(item_columns)} FROM {spec.items_table} WHERE {' AND '.join(low_stock_where)}"
+        ).fetchall()
+
+        items_by_supplier: dict[int | None, list[dict[str, Any]]] = defaultdict(list)
+        items_below_threshold = 0
+        skipped = 0
+        for row in rows:
+            extra: dict[str, Any] = {}
+            if spec.extra_json_column and spec.extra_json_column in row.keys():
+                extra = _parse_extra_json(row[spec.extra_json_column])
+            supplier_id = spec.supplier_resolver(conn, row, extra)
+            threshold = row["low_stock_threshold"] or 0
+            quantity = row["quantity"] or 0
+            shortage = threshold - quantity
+            if shortage <= 0:
+                continue
+            items_below_threshold += 1
+            items_by_supplier[supplier_id].append(
+                {
+                    "item_id": row["id"],
+                    "name": row["name"],
+                    "shortage": shortage,
+                    "sku": _resolve_first_non_empty(row, spec.sku_columns),
+                    "unit": _resolve_first_non_empty(row, spec.unit_columns),
+                }
+            )
+
+        has_sku = _table_has_column(conn, spec.order_items_table, "sku")
+        has_unit = _table_has_column(conn, spec.order_items_table, "unit")
+        open_orders = conn.execute(
+            f"""
+            SELECT id, supplier_id, created_at
+            FROM {spec.orders_table}
+            WHERE auto_created = 1
+              AND UPPER(status) NOT IN ({", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)})
+            ORDER BY created_at DESC
+            """,
+            _AUTO_PO_CLOSED_STATUSES,
+        ).fetchall()
+
+        existing_orders: dict[int | None, int] = {}
+        for row in open_orders:
+            supplier_id = row["supplier_id"]
+            if supplier_id not in existing_orders:
+                existing_orders[supplier_id] = row["id"]
+
+        created = 0
+        updated = 0
+        touched_orders: set[int] = set()
+        for supplier_id, items in items_by_supplier.items():
+            order_id = existing_orders.get(supplier_id)
+            if order_id is None:
+                note = "Commande automatique - Stock sous seuil"
+                cur = conn.execute(
+                    f"""
+                    INSERT INTO {spec.orders_table} (supplier_id, status, note, auto_created, created_at)
+                    VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP)
+                    """,
+                    (supplier_id, note),
+                )
+                order_id = int(cur.lastrowid)
+                created += 1
+            else:
+                updated += 1
+            touched_orders.add(order_id)
+
+            existing_lines = conn.execute(
+                f"""
+                SELECT id, {spec.item_id_column} AS item_id, quantity_ordered, quantity_received
+                FROM {spec.order_items_table}
+                WHERE purchase_order_id = ?
+                """,
+                (order_id,),
+            ).fetchall()
+            existing_by_item = {row["item_id"]: row for row in existing_lines}
+            current_item_ids = {item["item_id"] for item in items}
+            for item in items:
+                existing_line = existing_by_item.get(item["item_id"])
+                if existing_line:
+                    target_qty = existing_line["quantity_received"] + item["shortage"]
+                    if existing_line["quantity_ordered"] != target_qty:
+                        conn.execute(
+                            f"UPDATE {spec.order_items_table} SET quantity_ordered = ? WHERE id = ?",
+                            (target_qty, existing_line["id"]),
+                        )
+                    continue
+                columns = ["purchase_order_id", spec.item_id_column, "quantity_ordered"]
+                values: list[object] = [order_id, item["item_id"], item["shortage"]]
+                if has_sku:
+                    columns.append("sku")
+                    values.append(item["sku"])
+                if has_unit:
+                    columns.append("unit")
+                    values.append(item["unit"])
+                conn.execute(
+                    f"INSERT INTO {spec.order_items_table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                    values,
+                )
+
+            for line in existing_lines:
+                if line["item_id"] not in current_item_ids:
+                    conn.execute(
+                        f"DELETE FROM {spec.order_items_table} WHERE id = ?",
+                        (line["id"],),
+                    )
+
+        for row in open_orders:
+            order_id = row["id"]
+            if order_id in touched_orders:
+                continue
+            supplier_id = row["supplier_id"]
+            if supplier_id in items_by_supplier:
+                continue
+            conn.execute(
+                f"DELETE FROM {spec.order_items_table} WHERE purchase_order_id = ?",
+                (order_id,),
+            )
+            updated += 1
+            touched_orders.add(order_id)
+
+        order_id = next(iter(touched_orders)) if len(touched_orders) == 1 else None
+        logger.info(
+            "[AUTO_PO] refresh module=%s created=%s updated=%s items=%s skipped=%s",
+            module_key,
+            created,
+            updated,
+            items_below_threshold,
+            skipped,
+        )
+        return models.PurchaseOrderAutoRefreshResponse(
+            created=created,
+            updated=updated,
+            skipped=skipped,
+            items_below_threshold=items_below_threshold,
+            purchase_order_id=order_id,
+        )
 
 
 def _prepare_vehicle_item_sku(

@@ -1132,6 +1132,14 @@ class PurchaseOrderSendResponse(BaseModel):
     message_id: str | None = None
 
 
+class PurchaseOrderAutoRefreshResponse(BaseModel):
+    created: int
+    updated: int
+    skipped: int
+    items_below_threshold: int
+    purchase_order_id: int | None = None
+
+
 class PurchaseSuggestionLine(BaseModel):
     id: int
     suggestion_id: int

@@ -1298,6 +1298,7 @@ export function InventoryModuleDashboard({
       itemsPath={config.purchaseOrdersItemsPath}
       ordersQueryKey={config.purchaseOrdersQueryKey}
       itemsQueryKey={config.purchaseOrdersItemsQueryKey}
+      moduleKey={config.purchaseOrdersModuleKey}
       title={config.purchaseOrdersTitle}
       description={config.purchaseOrdersDescription}
       downloadPrefix={config.purchaseOrdersDownloadPrefix}
