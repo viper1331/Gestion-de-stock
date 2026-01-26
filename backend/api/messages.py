@@ -5,12 +5,11 @@ from backend.api.auth import get_current_user
 from backend.core import models, services
 
 router = APIRouter()
-MODULE_KEY = "messages"
 
 
 def _require_permission(user: models.User, *, action: str) -> None:
-    if not services.has_module_access(user, MODULE_KEY, action=action):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
+    """Messagerie est un module cœur accessible à tout utilisateur authentifié."""
+    return None
 
 
 @router.get("/recipients", response_model=list[models.MessageRecipientInfo])

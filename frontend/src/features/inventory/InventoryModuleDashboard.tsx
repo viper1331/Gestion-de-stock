@@ -19,6 +19,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { ColumnManager } from "../../components/ColumnManager";
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
 import { DraggableModal } from "../../components/DraggableModal";
+import { StockMovementModal, type StockMovementItemOption } from "../../components/StockMovementModal";
 import { api } from "../../lib/api";
 import { buildCustomFieldDefaults, CustomFieldDefinition, sortCustomFields } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
@@ -208,6 +209,8 @@ export function InventoryModuleDashboard({
   const [selectedItem, setSelectedItem] = useState<Item | null>(null);
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
+  const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
+  const [movementItemId, setMovementItemId] = useState<number | null>(null);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"items" | "stats">("items");
@@ -234,6 +237,7 @@ export function InventoryModuleDashboard({
   );
   const searchPlaceholder = config.searchPlaceholder ?? "Rechercher par nom ou SKU";
   const barcodePrefix = config.barcodePrefix ?? "SKU";
+  const barcodeModule = config.barcodeModule ?? "clothing";
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
@@ -253,6 +257,10 @@ export function InventoryModuleDashboard({
     setIsItemModalOpen(false);
     setFormMode("create");
     setSelectedItem(null);
+  };
+  const closeMovementModal = () => {
+    setIsMovementModalOpen(false);
+    setMovementItemId(null);
   };
 
   const {
@@ -316,6 +324,15 @@ export function InventoryModuleDashboard({
     }
   });
   const suppliers = suppliersQuery.data ?? [];
+
+  useEffect(() => {
+    if (movementItemId === null) {
+      return;
+    }
+    if (!items.some((item) => item.id === movementItemId)) {
+      setMovementItemId(null);
+    }
+  }, [items, movementItemId]);
 
   const existingSkus = useMemo<ExistingSkuEntry[]>(
     () =>
@@ -954,6 +971,17 @@ export function InventoryModuleDashboard({
         <button
           type="button"
           onClick={() => {
+            setMovementItemId(null);
+            setIsMovementModalOpen(true);
+          }}
+          className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          title="Saisir un mouvement de stock"
+        >
+          Mouvement de stock
+        </button>
+        <button
+          type="button"
+          onClick={() => {
             if (isSidebarOpen) {
               closeSidebar();
             } else {
@@ -1252,8 +1280,8 @@ export function InventoryModuleDashboard({
                           <button
                             type="button"
                             onClick={() => {
-                              setSelectedItem(item);
-                              openSidebar();
+                              setMovementItemId(item.id);
+                              setIsMovementModalOpen(true);
                             }}
                             className="rounded bg-slate-800 px-2 py-1 hover:bg-slate-700"
                             title={`Saisir un mouvement de stock pour ${item.name}`}
@@ -1284,24 +1312,6 @@ export function InventoryModuleDashboard({
 
       {isSidebarOpen ? (
         <aside className="min-w-0 space-y-6 lg:w-1/3">
-          <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-            <h3 className="text-sm font-semibold text-white">Mouvement de stock</h3>
-            <MovementForm
-              item={selectedItem}
-              onSubmit={async (values) => {
-                if (!selectedItem) {
-                  return;
-                }
-                setMessage(null);
-                setError(null);
-                await recordMovement.mutateAsync({ itemId: selectedItem.id, ...values });
-              }}
-              isSubmitting={recordMovement.isPending}
-              itemNoun={itemNoun}
-            />
-            <MovementHistory item={selectedItem} config={config} />
-          </div>
-
           <div className="rounded-lg border border-slate-800 bg-slate-900 p-4">
             <h3 className="text-sm font-semibold text-white">Catégories</h3>
             <CategoryManager
@@ -1466,6 +1476,63 @@ export function InventoryModuleDashboard({
     </DraggableModal>
   );
 
+  const categoryMap = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories]);
+  const supplierMap = useMemo(() => new Map(suppliers.map((supplier) => [supplier.id, supplier.name])), [suppliers]);
+  const movementItemOptions = useMemo<StockMovementItemOption[]>(
+    () =>
+      items.map((item) => {
+        const details: string[] = [];
+        const categoryName = item.category_id ? categoryMap.get(item.category_id) : null;
+        if (categoryName) {
+          details.push(categoryName);
+        }
+        if (item.size) {
+          details.push(item.size);
+        }
+        const supplierName = item.supplier_id ? supplierMap.get(item.supplier_id) : null;
+        if (supplierName) {
+          details.push(supplierName);
+        }
+        return {
+          id: item.id,
+          name: item.name,
+          sku: item.sku,
+          details
+        };
+      }),
+    [categoryMap, items, supplierMap]
+  );
+  const movementModal = (
+    <StockMovementModal
+      moduleKey={barcodeModule}
+      open={isMovementModalOpen}
+      onOpenChange={(nextOpen) => {
+        if (!nextOpen) {
+          closeMovementModal();
+        } else {
+          setIsMovementModalOpen(true);
+        }
+      }}
+      items={movementItemOptions}
+      initialItemId={movementItemId}
+      isSubmitting={recordMovement.isPending}
+      onSubmitMovement={async ({ itemId, delta, reason }) => {
+        setMessage(null);
+        setError(null);
+        await recordMovement.mutateAsync({ itemId, delta, reason: reason ?? "" });
+      }}
+      onSubmitted={() => {
+        void queryClient.invalidateQueries({ queryKey: ["items"] });
+        if (movementItemId !== null) {
+          void queryClient.invalidateQueries({
+            queryKey: ["movements", config.queryKeyPrefix, movementItemId]
+          });
+        }
+        void queryClient.invalidateQueries({ queryKey: ["reports"] });
+      }}
+    />
+  );
+
   const ordersContent = config.showPurchaseOrders ? (
     <PurchaseOrdersPanel
       suppliers={suppliers}
@@ -1489,6 +1556,7 @@ export function InventoryModuleDashboard({
         <>
           {tableContent}
           {itemModal}
+          {movementModal}
         </>
       ),
       orders: ordersContent ?? undefined,
@@ -1536,6 +1604,7 @@ export function InventoryModuleDashboard({
       render: () => (
         <EditableBlock id="inventory-main">
           {tableContent}
+          {movementModal}
         </EditableBlock>
       )
     });
@@ -2133,136 +2202,6 @@ function ItemForm({
   );
 }
 
-function MovementForm({
-  item,
-  onSubmit,
-  isSubmitting,
-  itemNoun
-}: {
-  item: Item | null;
-  onSubmit: (values: { delta: number; reason: string }) => Promise<void>;
-  isSubmitting: boolean;
-  itemNoun: InventoryItemNounForms;
-}) {
-  const [delta, setDelta] = useState(1);
-  const [reason, setReason] = useState("");
-
-  useEffect(() => {
-    setDelta(1);
-    setReason("");
-  }, [item?.id]);
-
-  const handleSubmit = async (event: FormEvent) => {
-    event.preventDefault();
-    if (!item) {
-      return;
-    }
-    await onSubmit({ delta, reason });
-    setDelta(1);
-    setReason("");
-  };
-
-  return (
-    <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
-      <p className="text-xs text-slate-400">
-        {item
-          ? `Ajuster le stock de "${item.name}" (quantité actuelle : ${item.quantity}).`
-          : `Sélectionnez ${itemNoun.indefinite} pour appliquer un mouvement.`}
-      </p>
-      <div className="flex gap-3">
-        <div className="flex-1 space-y-1">
-          <label className="text-xs font-semibold text-slate-300" htmlFor="movement-delta">
-            Variation
-          </label>
-          <AppTextInput
-            id="movement-delta"
-            type="number"
-            value={delta}
-            onChange={(event) => setDelta(Number(event.target.value))}
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-            title="Indiquez la variation positive ou négative à appliquer"
-          />
-        </div>
-        <div className="flex-1 space-y-1">
-          <label className="text-xs font-semibold text-slate-300" htmlFor="movement-reason">
-            Motif
-          </label>
-          <AppTextInput
-            id="movement-reason"
-            value={reason}
-            onChange={(event) => setReason(event.target.value)}
-            placeholder="Inventaire, sortie..."
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-            title="Précisez la raison du mouvement pour le suivi"
-          />
-        </div>
-      </div>
-      <button
-        type="submit"
-        disabled={!item || isSubmitting}
-        className="w-full rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-        title={item ? "Valider ce mouvement de stock" : `Sélectionnez d'abord ${itemNoun.indefinite}`}
-      >
-        {isSubmitting ? "Enregistrement..." : "Valider le mouvement"}
-      </button>
-    </form>
-  );
-}
-
-function MovementHistory({
-  item,
-  config
-}: {
-  item: Item | null;
-  config: InventoryModuleConfig;
-}) {
-  const { data: movements = [], isFetching } = useQuery({
-    queryKey: ["movements", config.queryKeyPrefix, item?.id ?? "none"],
-    queryFn: async () => {
-      if (!item) {
-        return [] as Movement[];
-      }
-      const response = await api.get<Movement[]>(`${config.basePath}/${item.id}/movements`);
-      return response.data;
-    },
-    enabled: Boolean(item),
-    placeholderData: [] as Movement[]
-  });
-
-  if (!item) {
-    return <p className="mt-3 text-xs text-slate-400">Aucun historique à afficher.</p>;
-  }
-
-  return (
-    <div className="mt-4 space-y-2">
-      <h4 className="text-xs font-semibold uppercase tracking-wide text-slate-400">Derniers mouvements</h4>
-      {isFetching ? <p className="text-xs text-slate-400">Chargement...</p> : null}
-      <ul className="space-y-2 text-xs text-slate-200">
-        {movements.length === 0 ? (
-          <li className="text-slate-500">Aucun mouvement enregistré.</li>
-        ) : null}
-        {movements.slice(0, 6).map((movement) => (
-          <li key={movement.id} className="rounded border border-slate-800 bg-slate-950 p-2">
-            <div className="flex items-center justify-between">
-              <span
-                className={`font-semibold ${
-                  movement.delta >= 0 ? "text-emerald-300" : "text-red-300"
-                }`}
-              >
-                {movement.delta >= 0 ? `+${movement.delta}` : movement.delta}
-              </span>
-              <span className="text-[10px] text-slate-400">{formatDate(movement.created_at)}</span>
-            </div>
-            {movement.reason ? (
-              <p className="mt-1 text-[11px] text-slate-300">{movement.reason}</p>
-            ) : null}
-          </li>
-        ))}
-      </ul>
-    </div>
-  );
-}
-
 function CategoryManager({
   categories,
   onCreate,
@@ -2518,17 +2457,6 @@ function formatExpirationDate(value: string | null) {
 
   try {
     return new Intl.DateTimeFormat("fr-FR", { dateStyle: "medium" }).format(new Date(value));
-  } catch (error) {
-    return value;
-  }
-}
-
-function formatDate(value: string) {
-  try {
-    return new Intl.DateTimeFormat("fr-FR", {
-      dateStyle: "short",
-      timeStyle: "short"
-    }).format(new Date(value));
   } catch (error) {
     return value;
   }

@@ -33,6 +33,7 @@ export interface InventoryModuleConfig {
   showLotMembershipColumn?: boolean;
   itemNoun?: InventoryItemNounConfig;
   barcodePrefix?: string;
+  barcodeModule?: "clothing" | "remise";
   exportPdfPath?: string;
   exportPdfFilenamePrefix?: string;
   customFieldScope?: string;
@@ -57,4 +58,5 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   supportsExpirationDate: false,
   barcodePrefix: "HAB",
   statsPath: "/items/stats"
+  barcodeModule: "clothing"
 };

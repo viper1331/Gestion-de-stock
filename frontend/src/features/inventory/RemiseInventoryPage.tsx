@@ -33,6 +33,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   showLotMembershipColumn: true,
   searchPlaceholder: "Rechercher une remise par nom ou SKU",
   barcodePrefix: "IS",
+  barcodeModule: "remise",
   exportPdfPath: "/remise-inventory/export/pdf",
   exportPdfFilenamePrefix: "inventaire_remises",
   customFieldScope: "remise_items",
