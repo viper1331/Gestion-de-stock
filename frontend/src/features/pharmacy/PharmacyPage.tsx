@@ -994,6 +994,19 @@ export function PharmacyPage() {
           <p className="text-sm text-slate-400">Gérez vos médicaments et consommables médicaux.</p>
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          {canEdit ? (
+            <button
+              type="button"
+              onClick={() => {
+                setMovementItemId(null);
+                setIsMovementModalOpen(true);
+              }}
+              className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              title="Saisir un mouvement de stock"
+            >
+              Nouveau mouvement
+            </button>
+          ) : null}
           <button
             type="button"
             onClick={async () => {
@@ -1162,32 +1175,23 @@ export function PharmacyPage() {
     <section className="min-w-0 space-y-3">
       <div>
         <h3 className="text-sm font-semibold text-white">Mouvements de stock</h3>
-        <p className="text-xs text-slate-400">Enregistrez des entrées, sorties ou corrections.</p>
+        <p className="text-xs text-slate-400">
+          Enregistrez des entrées, sorties ou corrections depuis l'action d'en-tête.
+        </p>
       </div>
-      <button
-        type="button"
-        onClick={() => {
-          setMovementItemId(null);
-          setIsMovementModalOpen(true);
-        }}
-        className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-        title="Saisir un mouvement de stock"
-      >
-        Nouveau mouvement
-      </button>
     </section>
   );
 
   const itemsBlock = (
     <section className="min-h-0 min-w-0 space-y-2">
       <div
-        className="relative min-h-0 w-full min-w-0 max-h-[60vh] overflow-y-auto overflow-x-auto rounded-xl border border-slate-800"
+        className="relative min-h-0 w-full min-w-0 max-h-[60vh] overflow-y-auto overflow-x-hidden rounded-xl border border-slate-800"
         style={tableMaxHeight ? { maxHeight: `${tableMaxHeight}px` } : undefined}
         ref={containerRef}
       >
         <table
           ref={tableRef}
-          className="w-full table-fixed border-separate border-spacing-0 divide-y divide-slate-800"
+          className="min-w-0 w-full table-fixed border-separate border-spacing-0 divide-y divide-slate-800"
         >
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={handleDragEnd}>
             <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
