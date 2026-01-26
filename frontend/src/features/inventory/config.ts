@@ -57,6 +57,6 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   supportsItemImages: false,
   supportsExpirationDate: false,
   barcodePrefix: "HAB",
-  statsPath: "/items/stats"
+  statsPath: "/items/stats",
   barcodeModule: "clothing"
 };
