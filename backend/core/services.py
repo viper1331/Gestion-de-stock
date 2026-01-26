@@ -4911,6 +4911,26 @@ def _restack_vehicle_item_template(
     return template_id
 
 
+def _validate_sku_requirements(name: str | None, quantity: int | None, supplier_id: int | None) -> None:
+    trimmed_name = name.strip() if isinstance(name, str) else ""
+    if not trimmed_name:
+        raise ValueError("Nom obligatoire")
+    if quantity is None or quantity < 0:
+        raise ValueError("Quantité obligatoire")
+    if supplier_id is None:
+        raise ValueError("Fournisseur obligatoire")
+
+
+def _sku_requires_validation(new_sku: str | None, current_sku: str | None) -> bool:
+    if new_sku is None:
+        return False
+    normalized_new = new_sku.strip()
+    if not normalized_new:
+        return False
+    normalized_current = current_sku.strip() if isinstance(current_sku, str) else ""
+    return normalized_new.casefold() != normalized_current.casefold()
+
+
 def _create_inventory_item_internal(
     module: str, payload: models.ItemCreate
 ) -> models.Item:
@@ -5070,6 +5090,8 @@ def _create_inventory_item_internal(
                 _update_pharmacy_quantity(conn, pharmacy_item_id, -payload.quantity)
             else:
                 _update_remise_quantity(conn, remise_item_id, -payload.quantity)
+        if sku and str(sku).strip():
+            _validate_sku_requirements(name, payload.quantity, supplier_id)
         columns = [
             "name",
             "sku",
@@ -5184,6 +5206,19 @@ def _update_inventory_item_internal(
     with db.get_stock_connection() as conn:
         if module == "inventory_remise":
             _ensure_remise_item_columns(conn)
+        if module != "vehicle_inventory" and _sku_requires_validation(fields.get("sku"), None):
+            current_row = conn.execute(
+                f"SELECT sku FROM {config.tables.items} WHERE id = ?",
+                (item_id,),
+            ).fetchone()
+            if current_row is None:
+                raise ValueError("Article introuvable")
+            if _sku_requires_validation(fields.get("sku"), current_row["sku"]):
+                _validate_sku_requirements(
+                    fields.get("name"),
+                    fields.get("quantity"),
+                    fields.get("supplier_id"),
+                )
         current_row: sqlite3.Row | None = None
         if module == "vehicle_inventory":
             _ensure_vehicle_item_columns(conn)
