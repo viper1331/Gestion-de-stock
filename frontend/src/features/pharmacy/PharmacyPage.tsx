@@ -266,6 +266,16 @@ export function PharmacyPage() {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [barcodeTouchedByScan, setBarcodeTouchedByScan] = useState(false);
+  const [barcodeScanErrors, setBarcodeScanErrors] = useState<{
+    name: string | null;
+    quantity: string | null;
+    supplier: string | null;
+  }>({
+    name: null,
+    quantity: null,
+    supplier: null
+  });
   const [isExporting, setIsExporting] = useState(false);
   const [movementItemId, setMovementItemId] = useState<number | null>(null);
   const [isMovementModalOpen, setIsMovementModalOpen] = useState(false);
@@ -825,6 +835,8 @@ export function PharmacyPage() {
   useEffect(() => {
     setDraft(createPharmacyFormDraft(formValues));
     setIsBarcodeAuto(!(formValues.barcode && formValues.barcode.trim().length > 0));
+    setBarcodeTouchedByScan(false);
+    setBarcodeScanErrors({ name: null, quantity: null, supplier: null });
   }, [formValues]);
 
   const buildBarcodeSource = (data: PharmacyFormDraft) =>
@@ -877,6 +889,7 @@ export function PharmacyPage() {
     const normalized = normalizeSkuInput(event.target.value);
     setDraft((previous) => ({ ...previous, barcode: normalized }));
     setIsBarcodeAuto(normalized.length === 0);
+    setBarcodeTouchedByScan(true);
   };
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
@@ -906,6 +919,19 @@ export function PharmacyPage() {
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
     const trimmedName = draft.name.trim();
+    if (barcodeTouchedByScan) {
+      const quantityValid = Number.isInteger(draft.quantity) && draft.quantity >= 0;
+      const supplierValid = draft.supplier_id.trim().length > 0;
+      const nextErrors = {
+        name: trimmedName.length > 0 ? null : "Nom obligatoire",
+        quantity: quantityValid ? null : "Quantité obligatoire",
+        supplier: supplierValid ? null : "Fournisseur obligatoire"
+      };
+      setBarcodeScanErrors(nextErrors);
+      if (nextErrors.name || nextErrors.quantity || nextErrors.supplier) {
+        return;
+      }
+    }
     if (!trimmedName) {
       setError("Le nom est obligatoire.");
       return;
@@ -1521,6 +1547,12 @@ export function PharmacyPage() {
           className="space-y-3"
           onSubmit={handleSubmit}
         >
+          {barcodeTouchedByScan &&
+          (barcodeScanErrors.name || barcodeScanErrors.quantity || barcodeScanErrors.supplier) ? (
+            <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
+              SKU scanné : avant de valider, renseignez au minimum le nom, la quantité et un fournisseur.
+            </div>
+          ) : null}
           <div className="space-y-1">
             <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-name">
               Nom
@@ -1528,11 +1560,24 @@ export function PharmacyPage() {
             <AppTextInput
               id="pharmacy-name"
               value={draft.name}
-              onChange={(event) => updateDraft({ name: event.target.value }, true)}
+              onChange={(event) => {
+                const nextName = event.target.value;
+                updateDraft({ name: nextName }, true);
+                if (barcodeScanErrors.name && nextName.trim().length > 0) {
+                  setBarcodeScanErrors((previous) => ({ ...previous, name: null }));
+                }
+              }}
               required
-              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              className={`w-full rounded-md bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none ${
+                barcodeScanErrors.name
+                  ? "border border-red-500 focus:border-red-500"
+                  : "border border-slate-800 focus:border-indigo-500"
+              }`}
               title="Nom du médicament ou du consommable"
             />
+            {barcodeScanErrors.name ? (
+              <p className="text-xs text-red-400">{barcodeScanErrors.name}</p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-dosage">
@@ -1639,8 +1684,18 @@ export function PharmacyPage() {
               <select
                 id="pharmacy-supplier"
                 value={draft.supplier_id}
-                onChange={(event) => updateDraft({ supplier_id: event.target.value })}
-                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                onChange={(event) => {
+                  const nextSupplier = event.target.value;
+                  updateDraft({ supplier_id: nextSupplier });
+                  if (barcodeScanErrors.supplier && nextSupplier.trim().length > 0) {
+                    setBarcodeScanErrors((previous) => ({ ...previous, supplier: null }));
+                  }
+                }}
+                className={`w-full rounded-md bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none ${
+                  barcodeScanErrors.supplier
+                    ? "border border-red-500 focus:border-red-500"
+                    : "border border-slate-800 focus:border-indigo-500"
+                }`}
                 title="Associez un fournisseur à cet article"
                 disabled={createItem.isPending || updateItem.isPending}
               >
@@ -1660,6 +1715,9 @@ export function PharmacyPage() {
                 {draft.supplier_id.trim() ? ` (ID ${draft.supplier_id})` : "."}
               </div>
             )}
+            {barcodeScanErrors.supplier ? (
+              <p className="text-xs text-red-400">{barcodeScanErrors.supplier}</p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-quantity">
@@ -1673,11 +1731,26 @@ export function PharmacyPage() {
               onChange={(event) => {
                 const { value } = event.target;
                 updateDraft({ quantity: value === "" ? Number.NaN : Number(value) }, false);
+                const nextQuantity = value === "" ? Number.NaN : Number(value);
+                if (
+                  barcodeScanErrors.quantity &&
+                  Number.isInteger(nextQuantity) &&
+                  nextQuantity >= 0
+                ) {
+                  setBarcodeScanErrors((previous) => ({ ...previous, quantity: null }));
+                }
               }}
-              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+              className={`w-full rounded-md bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none ${
+                barcodeScanErrors.quantity
+                  ? "border border-red-500 focus:border-red-500"
+                  : "border border-slate-800 focus:border-indigo-500"
+              }`}
               required
               title="Quantité disponible en stock"
             />
+            {barcodeScanErrors.quantity ? (
+              <p className="text-xs text-red-400">{barcodeScanErrors.quantity}</p>
+            ) : null}
           </div>
           <div className="space-y-1">
             <label className="text-xs font-semibold text-slate-300" htmlFor="pharmacy-low-stock-threshold">

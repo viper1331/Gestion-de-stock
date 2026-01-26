@@ -80,7 +80,10 @@ async def create_item(payload: models.ItemCreate, user: models.User = Depends(ge
     _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
-    return services.create_item(payload)
+    try:
+        return services.create_item(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.put("/{item_id}", response_model=models.Item)
@@ -91,7 +94,9 @@ async def update_item(item_id: int, payload: models.ItemUpdate, user: models.Use
     try:
         return services.update_item(item_id, payload)
     except ValueError as exc:
-        raise HTTPException(status_code=404, detail=str(exc)) from exc
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.delete("/{item_id}", status_code=204)

@@ -1771,6 +1771,16 @@ function ItemForm({
     url: initialImageUrl,
     isLocal: false
   });
+  const [skuTouchedByScan, setSkuTouchedByScan] = useState(false);
+  const [skuScanErrors, setSkuScanErrors] = useState<{
+    name: string | null;
+    quantity: string | null;
+    supplier: string | null;
+  }>({
+    name: null,
+    quantity: null,
+    supplier: null
+  });
   const [isSkuAuto, setIsSkuAuto] = useState<boolean>(
     mode === "create" && initialValues.sku.trim().length === 0
   );
@@ -1789,6 +1799,8 @@ function ItemForm({
   useEffect(() => {
     setValues(initialValues);
     setIsSkuAuto(mode === "create" && initialValues.sku.trim().length === 0);
+    setSkuTouchedByScan(false);
+    setSkuScanErrors({ name: null, quantity: null, supplier: null });
   }, [currentItemId, mode]);
 
   useEffect(() => {
@@ -1878,16 +1890,34 @@ function ItemForm({
       }
       return updated;
     });
+    if (skuScanErrors.name && nextName.trim().length > 0) {
+      setSkuScanErrors((prev) => ({ ...prev, name: null }));
+    }
   };
 
   const handleSkuChange = (event: ChangeEvent<HTMLInputElement>) => {
     const normalized = normalizeSkuInput(event.target.value);
     setValues((prev) => ({ ...prev, sku: normalized }));
     setIsSkuAuto(normalized.length === 0);
+    setSkuTouchedByScan(true);
   };
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
+    if (skuTouchedByScan) {
+      const trimmedName = values.name.trim();
+      const quantityValid = Number.isInteger(values.quantity) && values.quantity >= 0;
+      const supplierValid = values.supplier_id !== null;
+      const nextErrors = {
+        name: trimmedName.length > 0 ? null : "Nom obligatoire",
+        quantity: quantityValid ? null : "Quantité obligatoire",
+        supplier: supplierValid ? null : "Fournisseur obligatoire"
+      };
+      setSkuScanErrors(nextErrors);
+      if (nextErrors.name || nextErrors.quantity || nextErrors.supplier) {
+        return;
+      }
+    }
     const finalSku = ensureUniqueSku({
       desiredSku: values.sku,
       prefix: barcodePrefix,
@@ -1938,8 +1968,16 @@ function ItemForm({
     }
   };
 
+  const hasSkuScanErrors =
+    skuTouchedByScan && (skuScanErrors.name || skuScanErrors.quantity || skuScanErrors.supplier);
+
   return (
     <form id={formId} className="mt-3 space-y-3" onSubmit={handleSubmit}>
+      {hasSkuScanErrors ? (
+        <div className="rounded-md border border-amber-500/40 bg-amber-500/10 px-4 py-2 text-sm text-amber-200">
+          SKU scanné : avant de valider, renseignez au minimum le nom, la quantité et un fournisseur.
+        </div>
+      ) : null}
       {supportsItemImages ? (
         <div className="space-y-2">
           <label className="text-xs font-semibold text-slate-300" htmlFor="item-image">
@@ -2000,9 +2038,12 @@ function ItemForm({
           value={values.name ?? ""}
           onChange={handleNameChange}
           required
-          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          className={`w-full rounded-md bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none ${
+            skuScanErrors.name ? "border border-red-500 focus:border-red-500" : "border border-slate-800 focus:border-indigo-500"
+          }`}
           title={`Saisissez le nom complet ${itemNoun.de}`}
         />
+        {skuScanErrors.name ? <p className="text-xs text-red-400">{skuScanErrors.name}</p> : null}
       </div>
       <div className="space-y-1">
         <label className="text-xs font-semibold text-slate-300" htmlFor="item-sku">
@@ -2025,10 +2066,23 @@ function ItemForm({
             id="item-quantity"
             type="number"
             value={values.quantity}
-            onChange={(event) => setValues((prev) => ({ ...prev, quantity: Number(event.target.value) }))}
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            onChange={(event) => {
+              const nextQuantity = Number(event.target.value);
+              setValues((prev) => ({ ...prev, quantity: nextQuantity }));
+              if (skuScanErrors.quantity && Number.isInteger(nextQuantity) && nextQuantity >= 0) {
+                setSkuScanErrors((prev) => ({ ...prev, quantity: null }));
+              }
+            }}
+            className={`w-full rounded-md bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none ${
+              skuScanErrors.quantity
+                ? "border border-red-500 focus:border-red-500"
+                : "border border-slate-800 focus:border-indigo-500"
+            }`}
             title="Quantité physique disponible en stock"
           />
+          {skuScanErrors.quantity ? (
+            <p className="text-xs text-red-400">{skuScanErrors.quantity}</p>
+          ) : null}
         </div>
         <div className="flex-1 space-y-1">
           <label className="text-xs font-semibold text-slate-300" htmlFor="item-threshold">
@@ -2166,13 +2220,18 @@ function ItemForm({
         <select
           id="item-supplier"
           value={values.supplier_id ?? ""}
-          onChange={(event) =>
-            setValues((prev) => ({
-              ...prev,
-              supplier_id: event.target.value ? Number(event.target.value) : null
-            }))
-          }
-          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+          onChange={(event) => {
+            const nextSupplier = event.target.value ? Number(event.target.value) : null;
+            setValues((prev) => ({ ...prev, supplier_id: nextSupplier }));
+            if (skuScanErrors.supplier && nextSupplier !== null) {
+              setSkuScanErrors((prev) => ({ ...prev, supplier: null }));
+            }
+          }}
+          className={`w-full rounded-md bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:outline-none ${
+            skuScanErrors.supplier
+              ? "border border-red-500 focus:border-red-500"
+              : "border border-slate-800 focus:border-indigo-500"
+          }`}
           title={`Associez ${itemNoun.definite} à un fournisseur pour activer les commandes`}
         >
           <option value="">Aucun</option>
@@ -2182,6 +2241,9 @@ function ItemForm({
             </option>
           ))}
         </select>
+        {skuScanErrors.supplier ? (
+          <p className="text-xs text-red-400">{skuScanErrors.supplier}</p>
+        ) : null}
       </div>
       {customFieldDefinitions.length > 0 ? (
         <div className="rounded-md border border-slate-800 bg-slate-950 px-3 py-2">
