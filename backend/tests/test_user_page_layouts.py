@@ -16,6 +16,8 @@ def _create_user(
     password: str,
     role: str = "user",
     with_permissions: bool = True,
+    module: str = "clothing",
+    can_edit: bool = True,
 ) -> None:
     services.ensure_database_ready()
     with db.get_users_connection() as conn:
@@ -32,12 +34,12 @@ def _create_user(
         ).fetchone()["id"]
         conn.execute(
             "DELETE FROM module_permissions WHERE user_id = ? AND module = ?",
-            (user_id, "clothing"),
+            (user_id, module),
         )
         if with_permissions:
             conn.execute(
-                "INSERT INTO module_permissions (user_id, module, can_view, can_edit) VALUES (?, ?, 1, 1)",
-                (user_id, "clothing"),
+                "INSERT INTO module_permissions (user_id, module, can_view, can_edit) VALUES (?, ?, 1, ?)",
+                (user_id, module, 1 if can_edit else 0),
             )
         conn.commit()
 
@@ -76,6 +78,39 @@ def test_user_layout_roundtrip() -> None:
     get_data = get_response.json()
     assert get_data["hiddenBlocks"] == ["inventory-orders"]
     assert get_data["layout"]["lg"][1]["i"] == "inventory-orders"
+
+
+def test_pharmacy_layout_roundtrip() -> None:
+    _create_user("pharmacy-layout-user", "layout-pass", module="pharmacy")
+    headers = _login_headers("pharmacy-layout-user", "layout-pass")
+
+    payload: dict[str, Any] = {
+        "layout": {
+            "lg": [
+                {"i": "pharmacy-header", "x": 0, "y": 0, "w": 12, "h": 4},
+                {"i": "pharmacy-items", "x": 0, "y": 4, "w": 12, "h": 12},
+                {"i": "pharmacy-movements", "x": 0, "y": 16, "w": 12, "h": 6},
+            ]
+        },
+        "hiddenBlocks": ["pharmacy-movements"],
+    }
+
+    response = client.put(
+        "/user-layouts/module:pharmacy:inventory", json=payload, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["pageKey"] == "module:pharmacy:inventory"
+    assert data["layout"]["lg"][0]["i"] == "pharmacy-header"
+    assert data["hiddenBlocks"] == ["pharmacy-movements"]
+
+    get_response = client.get(
+        "/user-layouts/module:pharmacy:inventory", headers=headers
+    )
+    assert get_response.status_code == 200, get_response.text
+    get_data = get_response.json()
+    assert get_data["hiddenBlocks"] == ["pharmacy-movements"]
+    assert get_data["layout"]["lg"][1]["i"] == "pharmacy-items"
 
 
 def test_unknown_block_is_rejected() -> None:
@@ -145,3 +180,61 @@ def test_layout_strips_blocks_without_permissions() -> None:
     data = response.json()
     assert data["layout"]["lg"] == []
     assert data["hiddenBlocks"] == []
+
+
+def test_pharmacy_layout_strips_blocks_without_permissions() -> None:
+    _create_user(
+        "pharmacy-layout-user-2", "layout-pass", with_permissions=False, module="pharmacy"
+    )
+    headers = _login_headers("pharmacy-layout-user-2", "layout-pass")
+
+    payload = {
+        "layout": {
+            "lg": [
+                {"i": "pharmacy-header", "x": 0, "y": 0, "w": 12, "h": 4},
+                {"i": "pharmacy-items", "x": 0, "y": 4, "w": 12, "h": 12},
+            ]
+        },
+        "hiddenBlocks": ["pharmacy-items"],
+    }
+
+    response = client.put(
+        "/user-layouts/module:pharmacy:inventory", json=payload, headers=headers
+    )
+    assert response.status_code == 200, response.text
+    data = response.json()
+    assert data["layout"]["lg"] == []
+    assert data["hiddenBlocks"] == []
+
+
+def test_user_layouts_are_site_scoped() -> None:
+    _create_user(
+        "layout-site-user",
+        "layout-pass",
+        role="admin",
+        with_permissions=False,
+        module="pharmacy",
+    )
+    headers = _login_headers("layout-site-user", "layout-pass")
+
+    payload = {
+        "layout": {
+            "lg": [{"i": "pharmacy-header", "x": 0, "y": 0, "w": 12, "h": 4}]
+        },
+        "hiddenBlocks": [],
+    }
+
+    response = client.put(
+        "/user-layouts/module:pharmacy:inventory",
+        json=payload,
+        headers={**headers, "X-Site-Key": "JLL"},
+    )
+    assert response.status_code == 200, response.text
+
+    other_site_response = client.get(
+        "/user-layouts/module:pharmacy:inventory",
+        headers={**headers, "X-Site-Key": "GSM"},
+    )
+    assert other_site_response.status_code == 200, other_site_response.text
+    other_site_data = other_site_response.json()
+    assert other_site_data["layout"] == {}
