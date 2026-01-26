@@ -1337,6 +1337,12 @@ class DotationUpdate(BaseModel):
     is_degraded: Optional[bool] = None
 
 
+class DotationScanAddPayload(BaseModel):
+    employee_id: int = Field(..., gt=0)
+    barcode: str = Field(..., min_length=1, max_length=64)
+    quantity: int = Field(default=1, gt=0)
+
+
 class PharmacyItemBase(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     dosage: Optional[str] = Field(default=None, max_length=64)

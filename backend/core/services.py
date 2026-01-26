@@ -11996,6 +11996,27 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
         return get_dotation(cur.lastrowid)
 
 
+def scan_add_dotation(*, employee_id: int, barcode: str, quantity: int = 1) -> models.Dotation:
+    normalized = barcode.strip()
+    if not normalized:
+        raise ValueError("Le code-barres ne peut pas être vide")
+    matches = find_items_by_barcode("clothing", normalized)
+    if not matches:
+        raise ValueError("Aucun article trouvé pour ce code.")
+    if len(matches) > 1:
+        raise ValueError("Plusieurs articles correspondent à ce code.")
+    payload = models.DotationCreate(
+        collaborator_id=employee_id,
+        item_id=matches[0].id,
+        quantity=quantity,
+        notes=None,
+        perceived_at=date.today(),
+        is_lost=False,
+        is_degraded=False,
+    )
+    return create_dotation(payload)
+
+
 def update_dotation(dotation_id: int, payload: models.DotationUpdate) -> models.Dotation:
     ensure_database_ready()
     with db.get_stock_connection() as conn:

@@ -94,6 +94,28 @@ async def create_dotation(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@router.post("/scan_add", response_model=models.Dotation, status_code=201)
+async def scan_add_dotation(
+    payload: models.DotationScanAddPayload,
+    user: models.User = Depends(get_current_user),
+) -> models.Dotation:
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="edit")
+    if not payload.employee_id:
+        raise HTTPException(status_code=400, detail="Collaborateur manquant")
+    if not payload.barcode.strip():
+        raise HTTPException(status_code=400, detail="Code-barres manquant")
+    try:
+        return services.scan_add_dotation(
+            employee_id=payload.employee_id,
+            barcode=payload.barcode,
+            quantity=payload.quantity,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "Aucun article" in detail or "introuvable" in detail else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
 @router.put("/dotations/{dotation_id}", response_model=models.Dotation)
 async def update_dotation(
     dotation_id: int,
