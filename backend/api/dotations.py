@@ -17,6 +17,12 @@ def _require_permission(user: models.User, module_key: str, *, action: str) -> N
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
+def _require_clothing_module(module: str) -> None:
+    normalized = services.normalize_module_key(module)
+    if normalized != "clothing":
+        raise HTTPException(status_code=400, detail="Module non supporté")
+
+
 @router.get("/collaborators", response_model=list[models.Collaborator])
 async def list_collaborators(
     user: models.User = Depends(get_current_user),
@@ -140,3 +146,24 @@ async def delete_dotation(
         services.delete_dotation(dotation_id, restock=restock)
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/dotations/beneficiaries", response_model=list[models.DotationBeneficiary])
+async def list_dotation_beneficiaries(
+    module: str = Query(default="clothing"),
+    user: models.User = Depends(get_current_user),
+) -> list[models.DotationBeneficiary]:
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="view")
+    _require_clothing_module(module)
+    return services.list_dotation_beneficiaries()
+
+
+@router.get("/dotations/assigned-items", response_model=list[models.DotationAssignedItem])
+async def list_dotation_assigned_items(
+    employee_id: int = Query(..., gt=0),
+    module: str = Query(default="clothing"),
+    user: models.User = Depends(get_current_user),
+) -> list[models.DotationAssignedItem]:
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="view")
+    _require_clothing_module(module)
+    return services.list_dotation_assigned_items(employee_id)

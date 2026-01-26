@@ -1420,6 +1420,21 @@ class DotationUpdate(BaseModel):
     is_degraded: Optional[bool] = None
 
 
+class DotationBeneficiary(BaseModel):
+    employee_id: int
+    display_name: str
+    assigned_count: int
+
+
+class DotationAssignedItem(BaseModel):
+    assignment_id: int
+    item_id: int
+    sku: str
+    label: str
+    variant: Optional[str] = None
+    qty: int
+
+
 class DotationScanAddPayload(BaseModel):
     employee_id: int = Field(..., gt=0)
     barcode: str = Field(..., min_length=1, max_length=64)
