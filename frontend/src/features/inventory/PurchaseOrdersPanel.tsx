@@ -1,5 +1,5 @@
 import { FormEvent, useMemo, useState } from "react";
-import { QueryKey, useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryKey, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
@@ -28,11 +28,19 @@ interface Collaborator {
   full_name: string;
 }
 
-interface Dotation {
-  id: number;
-  collaborator_id: number;
+interface DotationBeneficiary {
+  employee_id: number;
+  display_name: string;
+  assigned_count: number;
+}
+
+interface DotationAssignedItem {
+  assignment_id: number;
   item_id: number;
-  quantity: number;
+  sku: string;
+  label: string;
+  variant?: string | null;
+  qty: number;
 }
 
 interface ItemOption {
@@ -401,14 +409,10 @@ export function PurchaseOrdersPanel({
     return `${item.name}${sku}${size}`;
   };
 
-  const resolveDotationLabel = (dotation: Dotation) => {
-    const item = itemsById.get(dotation.item_id);
-    if (!item) {
-      return `#${dotation.item_id}`;
-    }
-    const size = item.size ? ` · ${item.size}` : "";
-    const sku = item.sku ? ` (${item.sku})` : "";
-    return `${item.name}${sku}${size}`;
+  const resolveAssignedItemLabel = (assignedItem: DotationAssignedItem) => {
+    const size = assignedItem.variant ? ` · ${assignedItem.variant}` : "";
+    const sku = assignedItem.sku ? ` (${assignedItem.sku})` : "";
+    return `${assignedItem.label}${sku}${size}`;
   };
 
   const formatConflictLabel = (match: BarcodeLookupItem) => {
@@ -477,6 +481,11 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const hasReplacementLine = useMemo(
+    () => draftLines.some((line) => line.lineType === "replacement"),
+    [draftLines]
+  );
+
   const { data: collaborators = [] } = useQuery({
     queryKey: ["clothing-collaborators"],
     queryFn: async () => {
@@ -486,14 +495,61 @@ export function PurchaseOrdersPanel({
     enabled: enableReplacementFlow
   });
 
-  const { data: dotations = [] } = useQuery({
-    queryKey: ["clothing-dotations"],
+  const { data: beneficiaries = [] } = useQuery({
+    queryKey: ["clothing-dotations-beneficiaries"],
     queryFn: async () => {
-      const response = await api.get<Dotation[]>("/dotations");
+      const response = await api.get<DotationBeneficiary[]>("/dotations/beneficiaries", {
+        params: { module: "clothing" }
+      });
       return response.data;
     },
-    enabled: enableReplacementFlow
+    enabled: enableReplacementFlow && hasReplacementLine
   });
+
+  const assignedItemEmployeeIds = useMemo(() => {
+    const ids = new Set<number>();
+    draftLines.forEach((line) => {
+      if (line.lineType === "replacement" && typeof line.beneficiaryId === "number") {
+        ids.add(line.beneficiaryId);
+      }
+    });
+    orders.forEach((order) => {
+      (order.pending_assignments ?? []).forEach((assignment) => {
+        if (assignment.return_employee_item_id && assignment.employee_id) {
+          ids.add(assignment.employee_id);
+        }
+      });
+    });
+    return Array.from(ids);
+  }, [draftLines, orders]);
+
+  const assignedItemQueries = useMemo(
+    () =>
+      assignedItemEmployeeIds.map((beneficiaryId) => ({
+        queryKey: ["clothing-assigned-items", beneficiaryId],
+        queryFn: async () => {
+          const response = await api.get<DotationAssignedItem[]>("/dotations/assigned-items", {
+            params: { module: "clothing", employee_id: beneficiaryId }
+          });
+          return response.data;
+        },
+        enabled: enableReplacementFlow
+      })),
+    [assignedItemEmployeeIds, enableReplacementFlow]
+  );
+
+  const assignedItemsQueries = useQueries({ queries: assignedItemQueries });
+
+  const assignedItemsByBeneficiary = useMemo(() => {
+    const map = new Map<number, DotationAssignedItem[]>();
+    assignedItemsQueries.forEach((query, index) => {
+      const beneficiaryId = assignedItemEmployeeIds[index];
+      if (beneficiaryId) {
+        map.set(beneficiaryId, query.data ?? []);
+      }
+    });
+    return map;
+  }, [assignedItemEmployeeIds, assignedItemsQueries]);
 
   const suppliersById = useMemo(() => {
     return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
@@ -1225,12 +1281,15 @@ export function PurchaseOrdersPanel({
                                         <p className="text-[11px] text-slate-400">
                                           Retour:{" "}
                                           {(() => {
-                                            const matched = dotations.find(
-                                              (dotation) =>
-                                                dotation.id === assignment.return_employee_item_id
+                                            const matched = (
+                                              assignedItemsByBeneficiary.get(assignment.employee_id) ??
+                                              []
+                                            ).find(
+                                              (item) =>
+                                                item.assignment_id === assignment.return_employee_item_id
                                             );
                                             return matched
-                                              ? resolveDotationLabel(matched)
+                                              ? resolveAssignedItemLabel(matched)
                                               : `#${assignment.return_employee_item_id}`;
                                           })()}
                                           {assignment.return_reason
@@ -1543,25 +1602,25 @@ export function PurchaseOrdersPanel({
           {draftLines.map((line, index) => {
             const selectedItem =
               typeof line.itemId === "number" ? itemsById.get(line.itemId) : undefined;
-            const collaboratorId =
+            const beneficiaryId =
               typeof line.beneficiaryId === "number" ? line.beneficiaryId : null;
-            const collaboratorDotations = collaboratorId
-              ? dotations.filter((dotation) => dotation.collaborator_id === collaboratorId)
+            const beneficiaryAssignments = beneficiaryId
+              ? assignedItemsByBeneficiary.get(beneficiaryId) ?? []
               : [];
-            const filteredDotations =
-              selectedItem && collaboratorDotations.length > 0
-                ? collaboratorDotations.filter((dotation) => {
-                    const dotationItem = itemsById.get(dotation.item_id);
+            const filteredAssignments =
+              selectedItem && beneficiaryAssignments.length > 0
+                ? beneficiaryAssignments.filter((assignment) => {
+                    const item = itemsById.get(assignment.item_id);
                     return (
-                      dotationItem &&
-                      dotationItem.category_id === selectedItem.category_id &&
-                      dotationItem.size === selectedItem.size
+                      item &&
+                      item.category_id === selectedItem.category_id &&
+                      item.size === selectedItem.size
                     );
                   })
                 : [];
             const returnOptions =
-              filteredDotations.length > 0 ? filteredDotations : collaboratorDotations;
-            const isFiltered = filteredDotations.length > 0;
+              filteredAssignments.length > 0 ? filteredAssignments : beneficiaryAssignments;
+            const isFiltered = filteredAssignments.length > 0;
             return (
               <div
                 key={index}
@@ -1674,13 +1733,26 @@ export function PurchaseOrdersPanel({
                               }
                               className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                             >
-                              <option value="">Sélectionnez un collaborateur</option>
-                              {collaborators.map((collaborator) => (
-                                <option key={collaborator.id} value={collaborator.id}>
-                                  {collaborator.full_name}
+                              <option value="">Sélectionnez un collaborateur (doté)</option>
+                              {beneficiaries.map((beneficiary) => (
+                                <option
+                                  key={beneficiary.employee_id}
+                                  value={beneficiary.employee_id}
+                                >
+                                  {beneficiary.display_name}
+                                  {beneficiary.assigned_count > 0
+                                    ? ` (${beneficiary.assigned_count} ${
+                                        beneficiary.assigned_count > 1 ? "articles" : "article"
+                                      })`
+                                    : ""}
                                 </option>
                               ))}
                             </select>
+                            {beneficiaries.length === 0 ? (
+                              <p className="text-xs text-slate-400">
+                                Aucun collaborateur doté sur ce site.
+                              </p>
+                            ) : null}
                           </div>
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-slate-300">
@@ -1701,20 +1773,23 @@ export function PurchaseOrdersPanel({
                                 })
                               }
                               className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                              disabled={!collaboratorId}
+                              disabled={!beneficiaryId}
                             >
                               <option value="">
-                                {collaboratorId
+                                {beneficiaryId
                                   ? "Sélectionnez une dotation"
                                   : "Choisissez d'abord un collaborateur"}
                               </option>
-                              {returnOptions.map((dotation) => (
-                                <option key={dotation.id} value={dotation.id}>
-                                  {resolveDotationLabel(dotation)}
+                              {returnOptions.map((assignment) => (
+                                <option
+                                  key={assignment.assignment_id}
+                                  value={assignment.assignment_id}
+                                >
+                                  {resolveAssignedItemLabel(assignment)}
                                 </option>
                               ))}
                             </select>
-                            {collaboratorId && isFiltered ? (
+                            {beneficiaryId && isFiltered ? (
                               <p className="text-xs text-slate-400">
                                 Suggestions basées sur la catégorie et la taille de l'article.
                               </p>
