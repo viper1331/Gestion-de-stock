@@ -4,72 +4,137 @@
 
 :root {
   color-scheme: light;
+  --bg: #ffffff;
+  --panel: #f8fafc;
+  --panel-2: #f1f5f9;
+  --panel-3: #e2e8f0;
+  --text: #0f172a;
+  --muted: #64748b;
+  --border: #e2e8f0;
+  --primary: #2563eb;
+  --primary-fg: #0f172a;
+  --info: #3b82f6;
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-fg: #1e3a8a;
+  --info-border: rgba(59, 130, 246, 0.35);
+  --info-glow: rgba(59, 130, 246, 0.25);
+  --success: #10b981;
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --success-fg: #065f46;
+  --success-border: rgba(16, 185, 129, 0.35);
+  --success-glow: rgba(16, 185, 129, 0.25);
+  --warning: #f59e0b;
+  --warning-bg: rgba(245, 158, 11, 0.14);
+  --warning-fg: #78350f;
+  --warning-border: rgba(245, 158, 11, 0.35);
+  --warning-glow: rgba(245, 158, 11, 0.3);
+  --danger: #ef4444;
+  --danger-bg: rgba(239, 68, 68, 0.12);
+  --danger-fg: #7f1d1d;
+  --danger-border: rgba(239, 68, 68, 0.35);
+  --danger-glow: rgba(239, 68, 68, 0.3);
+  --stat-card-bg: #ffffff;
+  --stat-card-border: #e2e8f0;
+  --stat-card-border-glow-start: rgba(15, 23, 42, 0.1);
+  --stat-card-border-glow-end: rgba(15, 23, 42, 0.02);
+  --stat-card-pulse-glow: rgba(15, 23, 42, 0.08);
 }
 
-.dark {
+:root.dark {
   color-scheme: dark;
+  --bg: #020617;
+  --panel: #0f172a;
+  --panel-2: #0b1220;
+  --panel-3: #1e293b;
+  --text: #f8fafc;
+  --muted: #94a3b8;
+  --border: #1e293b;
+  --primary: #3b82f6;
+  --primary-fg: #f8fafc;
+  --info: #60a5fa;
+  --info-bg: rgba(59, 130, 246, 0.12);
+  --info-fg: #dbeafe;
+  --info-border: rgba(59, 130, 246, 0.4);
+  --info-glow: rgba(59, 130, 246, 0.45);
+  --success: #34d399;
+  --success-bg: rgba(16, 185, 129, 0.12);
+  --success-fg: #d1fae5;
+  --success-border: rgba(16, 185, 129, 0.4);
+  --success-glow: rgba(16, 185, 129, 0.45);
+  --warning: #fbbf24;
+  --warning-bg: rgba(245, 158, 11, 0.14);
+  --warning-fg: #fef3c7;
+  --warning-border: rgba(245, 158, 11, 0.45);
+  --warning-glow: rgba(245, 158, 11, 0.55);
+  --danger: #f87171;
+  --danger-bg: rgba(239, 68, 68, 0.14);
+  --danger-fg: #fee2e2;
+  --danger-border: rgba(239, 68, 68, 0.45);
+  --danger-glow: rgba(239, 68, 68, 0.55);
+  --stat-card-bg: rgba(10, 18, 35, 0.55);
+  --stat-card-border: rgba(255, 255, 255, 0.08);
+  --stat-card-border-glow-start: rgba(255, 255, 255, 0.1);
+  --stat-card-border-glow-end: rgba(255, 255, 255, 0.02);
+  --stat-card-pulse-glow: rgba(255, 255, 255, 0.1);
 }
 
 body {
-  @apply bg-white text-slate-900;
+  background-color: var(--bg);
+  color: var(--text);
   font-family: "Inter", system-ui, sans-serif;
-}
-
-.dark body {
-  @apply bg-slate-950 text-slate-100;
 }
 
 /* Light theme overrides for components that default to dark styles */
 html:not(.dark) .bg-slate-950 {
-  background-color: #f1f5f9;
+  background-color: var(--panel-2);
 }
 
 html:not(.dark) .bg-slate-950\/60 {
-  background-color: #f1f5f999;
+  background-color: color-mix(in srgb, var(--panel-2) 60%, transparent);
 }
 
 html:not(.dark) .bg-slate-900 {
-  background-color: #ffffff;
+  background-color: var(--bg);
 }
 
 html:not(.dark) .bg-slate-900\/70 {
-  background-color: #ffffffb3;
+  background-color: color-mix(in srgb, var(--bg) 70%, transparent);
 }
 
 html:not(.dark) .bg-slate-900\/60 {
-  background-color: #ffffff99;
+  background-color: color-mix(in srgb, var(--bg) 60%, transparent);
 }
 
 html:not(.dark) .bg-slate-900\/40 {
-  background-color: #ffffff66;
+  background-color: color-mix(in srgb, var(--bg) 40%, transparent);
 }
 
 html:not(.dark) .bg-slate-800 {
-  background-color: #e2e8f0;
+  background-color: var(--panel-3);
 }
 
 html:not(.dark) .bg-slate-700 {
-  background-color: #cbd5f5;
+  background-color: #cbd5e1;
 }
 
 html:not(.dark) .hover\:bg-slate-900:hover {
-  background-color: #f1f5f9;
+  background-color: var(--panel-2);
 }
 
 html:not(.dark) .hover\:bg-slate-800:hover {
-  background-color: #e2e8f0;
+  background-color: var(--panel-3);
 }
 
 html:not(.dark) .hover\:bg-slate-700:hover {
-  background-color: #cbd5f5;
+  background-color: #cbd5e1;
 }
 
 html:not(.dark) .border-slate-800 {
-  border-color: #e2e8f0;
+  border-color: var(--panel-3);
 }
 
 html:not(.dark) .border-slate-700 {
-  border-color: #cbd5f5;
+  border-color: #cbd5e1;
 }
 
 html:not(.dark) .border-slate-500 {
@@ -77,11 +142,11 @@ html:not(.dark) .border-slate-500 {
 }
 
 html:not(.dark) .divide-slate-900 > :not([hidden]) ~ :not([hidden]) {
-  border-color: #e2e8f0;
+  border-color: var(--panel-3);
 }
 
 html:not(.dark) .divide-slate-800 > :not([hidden]) ~ :not([hidden]) {
-  border-color: #cbd5f5;
+  border-color: #cbd5e1;
 }
 
 html:not(.dark) .text-slate-50,
@@ -103,6 +168,63 @@ html:not(.dark) .text-slate-400 {
 
 html:not(.dark) .text-slate-500 {
   color: #64748b;
+}
+
+html:not(.dark) .bg-red-950\/60 {
+  background-color: color-mix(in srgb, var(--danger-bg) 75%, transparent);
+}
+
+html:not(.dark) .bg-amber-950\/40 {
+  background-color: color-mix(in srgb, var(--warning-bg) 70%, transparent);
+}
+
+html:not(.dark) .text-red-300,
+html:not(.dark) .text-rose-300 {
+  color: var(--danger-fg);
+}
+
+html:not(.dark) .text-amber-200,
+html:not(.dark) .text-amber-300,
+html:not(.dark) .text-orange-300 {
+  color: var(--warning-fg);
+}
+
+html:not(.dark) .text-emerald-300 {
+  color: var(--success-fg);
+}
+
+html:not(.dark) .text-indigo-300 {
+  color: #1e3a8a;
+}
+
+html:not(.dark) .text-blue-300 {
+  color: #1e40af;
+}
+
+html:not(.dark) .text-yellow-300 {
+  color: #92400e;
+}
+
+html:not(.dark) .hover\:text-red-200:hover,
+html:not(.dark) .hover\:text-rose-200:hover {
+  color: var(--danger-fg);
+}
+
+html:not(.dark) .hover\:text-amber-200:hover,
+html:not(.dark) .hover\:text-orange-200:hover {
+  color: var(--warning-fg);
+}
+
+html:not(.dark) .hover\:text-emerald-200:hover {
+  color: var(--success-fg);
+}
+
+html:not(.dark) .hover\:text-indigo-200:hover {
+  color: #1e3a8a;
+}
+
+html:not(.dark) .hover\:text-blue-200:hover {
+  color: #1e40af;
 }
 
 /* Sidebar layout hardening */
@@ -198,8 +320,8 @@ html:not(.dark) .text-slate-500 {
   position: relative;
   border-radius: 16px;
   overflow: hidden;
-  border: 1px solid rgba(255, 255, 255, 0.08);
-  background: rgba(10, 18, 35, 0.55);
+  border: 1px solid var(--stat-card-border);
+  background: var(--stat-card-bg);
   backdrop-filter: blur(10px);
 }
 
@@ -213,8 +335,8 @@ html:not(.dark) .text-slate-500 {
   padding: 1px;
   background: linear-gradient(
     135deg,
-    rgba(255, 255, 255, 0.1),
-    rgba(255, 255, 255, 0.02)
+    var(--stat-card-border-glow-start),
+    var(--stat-card-border-glow-end)
   );
   -webkit-mask:
     linear-gradient(#000 0 0) content-box,
@@ -234,35 +356,35 @@ html:not(.dark) .text-slate-500 {
 
 /* Variantes */
 .stat-card[data-variant="info"] {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.12), rgba(10, 18, 35, 0.55));
+  background: linear-gradient(135deg, var(--info-bg), var(--stat-card-bg));
 }
 
 .stat-card[data-variant="success"] {
-  background: linear-gradient(135deg, rgba(16, 185, 129, 0.12), rgba(10, 18, 35, 0.55));
+  background: linear-gradient(135deg, var(--success-bg), var(--stat-card-bg));
 }
 
 .stat-card[data-variant="warning"] {
-  background: linear-gradient(135deg, rgba(245, 158, 11, 0.14), rgba(10, 18, 35, 0.55));
+  background: linear-gradient(135deg, var(--warning-bg), var(--stat-card-bg));
 }
 
 .stat-card[data-variant="danger"] {
-  background: linear-gradient(135deg, rgba(239, 68, 68, 0.14), rgba(10, 18, 35, 0.55));
+  background: linear-gradient(135deg, var(--danger-bg), var(--stat-card-bg));
 }
 
 .stat-card[data-variant="info"] .stat-glow {
-  background: radial-gradient(circle at 15% 25%, rgba(59, 130, 246, 0.45), transparent 55%);
+  background: radial-gradient(circle at 15% 25%, var(--info-glow), transparent 55%);
 }
 
 .stat-card[data-variant="success"] .stat-glow {
-  background: radial-gradient(circle at 15% 25%, rgba(16, 185, 129, 0.45), transparent 55%);
+  background: radial-gradient(circle at 15% 25%, var(--success-glow), transparent 55%);
 }
 
 .stat-card[data-variant="warning"] .stat-glow {
-  background: radial-gradient(circle at 15% 25%, rgba(245, 158, 11, 0.55), transparent 55%);
+  background: radial-gradient(circle at 15% 25%, var(--warning-glow), transparent 55%);
 }
 
 .stat-card[data-variant="danger"] .stat-glow {
-  background: radial-gradient(circle at 15% 25%, rgba(239, 68, 68, 0.55), transparent 55%);
+  background: radial-gradient(circle at 15% 25%, var(--danger-glow), transparent 55%);
 }
 
 /* Pulse uniquement alertes */
@@ -279,7 +401,7 @@ html:not(.dark) .text-slate-500 {
   pointer-events: none;
   opacity: 0.8;
   animation: glowBorder 1.6s ease-in-out infinite;
-  background: radial-gradient(circle at 20% 20%, rgba(255, 255, 255, 0.1), transparent 60%);
+  background: radial-gradient(circle at 20% 20%, var(--stat-card-pulse-glow), transparent 60%);
 }
 
 .stat-card[data-pulse="true"][data-pulse-level="fast"] {
