@@ -263,6 +263,16 @@ def render_purchase_order_pdf(
         qty_values = [str(getattr(item, "quantity_ordered", 0)) for item in items]
         unit_values = [_format_value(getattr(item, "unit", None)) for item in items]
         received_values = [str(getattr(item, "quantity_received", 0)) for item in items]
+        beneficiary_values = [
+            _format_value(getattr(item, "beneficiary_name", None)) for item in items
+        ]
+        return_values = []
+        for item in items:
+            if getattr(item, "return_expected", False):
+                reason = _format_value(getattr(item, "return_reason", None))
+                return_values.append(f"Oui{f' - {reason}' if reason else ''}")
+            else:
+                return_values.append("Non")
 
         sku_min = 90 * scale
         sku_max = 160 * scale
@@ -272,6 +282,10 @@ def render_purchase_order_pdf(
         unit_max = 100 * scale
         received_min = 60 * scale
         received_max = 100 * scale
+        beneficiary_min = 110 * scale
+        beneficiary_max = 170 * scale
+        return_min = 110 * scale
+        return_max = 180 * scale
         designation_min = 220 * scale
 
         sku_width = _measure_column_width(
@@ -281,6 +295,24 @@ def render_purchase_order_pdf(
             font_size=font_size,
             min_width=sku_min,
             max_width=sku_max,
+            padding=padding,
+        )
+        beneficiary_width = _measure_column_width(
+            beneficiary_values,
+            label="Bénéficiaire",
+            font_name=theme.font_family,
+            font_size=font_size,
+            min_width=beneficiary_min,
+            max_width=beneficiary_max,
+            padding=padding,
+        )
+        return_width = _measure_column_width(
+            return_values,
+            label="Retour attendu",
+            font_name=theme.font_family,
+            font_size=font_size,
+            min_width=return_min,
+            max_width=return_max,
             padding=padding,
         )
         qty_width = _measure_column_width(
@@ -313,19 +345,27 @@ def render_purchase_order_pdf(
                 padding=padding,
             )
 
-        designation_width = table_width - (sku_width + qty_width + unit_width + received_width)
+        designation_width = table_width - (
+            sku_width + beneficiary_width + return_width + qty_width + unit_width + received_width
+        )
         if designation_width < designation_min:
             deficit = designation_min - designation_width
             sku_width, deficit = _reduce_width(sku_width, sku_min, deficit)
+            beneficiary_width, deficit = _reduce_width(beneficiary_width, beneficiary_min, deficit)
+            return_width, deficit = _reduce_width(return_width, return_min, deficit)
             unit_width, deficit = _reduce_width(unit_width, unit_min, deficit)
             if include_received:
                 received_width, deficit = _reduce_width(received_width, received_min, deficit)
             qty_width, _ = _reduce_width(qty_width, qty_min, deficit)
-            designation_width = table_width - (sku_width + qty_width + unit_width + received_width)
+            designation_width = table_width - (
+                sku_width + beneficiary_width + return_width + qty_width + unit_width + received_width
+            )
 
         columns = [
             {"key": "sku", "label": "SKU", "width": sku_width, "align": "left"},
             {"key": "designation", "label": "Désignation", "width": designation_width, "align": "left"},
+            {"key": "beneficiary", "label": "Bénéficiaire", "width": beneficiary_width, "align": "left"},
+            {"key": "return_info", "label": "Retour attendu", "width": return_width, "align": "left"},
             {"key": "quantity", "label": "Quantité", "width": qty_width, "align": "right"},
             {"key": "unit", "label": "Unité", "width": unit_width, "align": "center"},
         ]
@@ -411,9 +451,16 @@ def render_purchase_order_pdf(
         designation = _extract_item_name(item)
         quantity = str(getattr(item, "quantity_ordered", 0))
         received = str(getattr(item, "quantity_received", 0))
+        beneficiary = _format_value(getattr(item, "beneficiary_name", None))
+        return_info = "Non"
+        if getattr(item, "return_expected", False):
+            reason = _format_value(getattr(item, "return_reason", None))
+            return_info = f"Oui{f' - {reason}' if reason else ''}"
         row_values = {
             "sku": sku,
             "designation": designation,
+            "beneficiary": beneficiary,
+            "return_info": return_info,
             "quantity": quantity,
             "unit": unit,
             "received": received,

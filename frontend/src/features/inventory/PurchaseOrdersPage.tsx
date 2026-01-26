@@ -77,7 +77,13 @@ export function PurchaseOrdersPage() {
         render: () => (
           <EditableBlock id="purchase-orders-panel">
             {gateContent ? gateContent : (
-              <PurchaseOrdersPanel suppliers={suppliers} moduleKey="purchase_orders" />
+              <PurchaseOrdersPanel
+                suppliers={suppliers}
+                moduleKey="purchase_orders"
+                purchaseOrdersPath="/clothing/purchase-orders"
+                ordersQueryKey={["clothing-purchase-orders"]}
+                enableReplacementFlow
+              />
             )}
           </EditableBlock>
         )

@@ -124,6 +124,12 @@ app.include_router(dotations.router, prefix="/dotations", tags=["dotations"])
 app.include_router(pharmacy.router, prefix="/pharmacy", tags=["pharmacy"])
 app.include_router(stock.router, prefix="/stock", tags=["stock"])
 app.include_router(purchase_orders.router, prefix="/purchase-orders", tags=["purchase-orders"])
+app.include_router(
+    purchase_orders.router,
+    prefix="/clothing/purchase-orders",
+    tags=["clothing-purchase-orders"],
+    include_in_schema=False,
+)
 app.include_router(purchase_suggestions.router, tags=["purchase-suggestions"])
 app.include_router(remise_orders.router, prefix="/remise-inventory/orders", tags=["remise-purchase-orders"])
 app.include_router(pharmacy_orders.router, prefix="/pharmacy/orders", tags=["pharmacy-purchase-orders"])

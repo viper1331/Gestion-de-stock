@@ -1061,11 +1061,25 @@ class PurchaseOrderItem(BaseModel):
     item_name: str | None = None
     sku: str | None = None
     unit: str | None = None
+    beneficiary_employee_id: int | None = None
+    beneficiary_name: str | None = None
+    line_type: Literal["standard", "replacement"] = "standard"
+    return_expected: bool = False
+    return_reason: str | None = None
+    return_employee_item_id: int | None = None
+    return_qty: int = 0
+    return_status: Literal["none", "to_prepare", "shipped", "supplier_received", "cancelled"] = "none"
 
 
 class PurchaseOrderItemInput(BaseModel):
     item_id: int = Field(..., gt=0)
     quantity_ordered: int = Field(..., gt=0)
+    beneficiary_employee_id: int | None = Field(default=None, gt=0)
+    line_type: Literal["standard", "replacement"] = "standard"
+    return_expected: bool = False
+    return_reason: str | None = Field(default=None, max_length=256)
+    return_employee_item_id: int | None = Field(default=None, gt=0)
+    return_qty: int | None = Field(default=None, gt=0)
 
 
 class PurchaseOrderReceiveItem(BaseModel):
@@ -1081,6 +1095,72 @@ class PurchaseOrderReceiveLine(BaseModel):
 class PurchaseOrderReceivePayload(BaseModel):
     items: list[PurchaseOrderReceiveItem] = Field(default_factory=list)
     lines: list[PurchaseOrderReceiveLine] = Field(default_factory=list)
+
+
+class PurchaseOrderReceipt(BaseModel):
+    id: int
+    site_key: str
+    purchase_order_id: int
+    purchase_order_line_id: int
+    received_qty: int
+    conformity_status: Literal["conforme", "non_conforme"]
+    nonconformity_reason: str | None = None
+    nonconformity_action: Literal["replacement", "credit_note", "return_to_supplier"] | None = None
+    note: str | None = None
+    created_by: str | None = None
+    created_at: datetime
+
+
+class PurchaseOrderReceiveLinePayload(BaseModel):
+    purchase_order_line_id: int = Field(..., gt=0)
+    received_qty: int = Field(..., gt=0)
+    conformity_status: Literal["conforme", "non_conforme"]
+    nonconformity_reason: str | None = Field(default=None, max_length=256)
+    nonconformity_action: Literal["replacement", "credit_note", "return_to_supplier"] | None = None
+    note: str | None = Field(default=None, max_length=256)
+
+
+class PendingClothingAssignment(BaseModel):
+    id: int
+    site_key: str
+    purchase_order_id: int
+    purchase_order_line_id: int
+    receipt_id: int
+    employee_id: int
+    new_item_id: int
+    new_item_sku: str | None = None
+    new_item_size: str | None = None
+    qty: int
+    return_employee_item_id: int | None = None
+    return_reason: str | None = None
+    status: Literal["pending", "validated", "cancelled"]
+    created_at: datetime
+    validated_at: datetime | None = None
+    validated_by: str | None = None
+
+
+class ClothingSupplierReturn(BaseModel):
+    id: int
+    site_key: str
+    purchase_order_id: int
+    purchase_order_line_id: int | None = None
+    employee_id: int | None = None
+    employee_item_id: int | None = None
+    item_id: int | None = None
+    qty: int
+    reason: str | None = None
+    status: Literal["prepared", "shipped", "supplier_received"]
+    created_at: datetime
+
+
+class RegisterClothingSupplierReturnPayload(BaseModel):
+    purchase_order_line_id: int = Field(..., gt=0)
+    employee_id: int | None = Field(default=None, gt=0)
+    employee_item_id: int | None = Field(default=None, gt=0)
+    item_id: int | None = Field(default=None, gt=0)
+    qty: int = Field(..., gt=0)
+    reason: str | None = Field(default=None, max_length=256)
+    status: Literal["prepared", "shipped", "supplier_received"] = "prepared"
 
 
 class PurchaseOrderCreate(BaseModel):
@@ -1103,6 +1183,9 @@ class PurchaseOrderDetail(PurchaseOrder):
     supplier_has_email: bool = False
     supplier_missing_reason: str | None = None
     items: list[PurchaseOrderItem] = Field(default_factory=list)
+    receipts: list[PurchaseOrderReceipt] = Field(default_factory=list)
+    pending_assignments: list[PendingClothingAssignment] = Field(default_factory=list)
+    supplier_returns: list[ClothingSupplierReturn] = Field(default_factory=list)
 
 
 class PurchaseOrderEmailLogEntry(BaseModel):
