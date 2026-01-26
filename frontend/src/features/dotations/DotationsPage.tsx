@@ -1,6 +1,7 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import type { AxiosError } from "axios";
+import { toast } from "sonner";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -10,6 +11,7 @@ import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
+import { DraggableModal } from "../../components/DraggableModal";
 
 interface Collaborator {
   id: number;
@@ -55,6 +57,23 @@ interface DotationEditFormValues {
   is_degraded: boolean;
 }
 
+interface ScannedDotationLine {
+  item_id: number;
+  name: string;
+  sku: string;
+  quantity: number;
+}
+
+const buildDefaultFormValues = (): DotationFormValues => ({
+  collaborator_id: "",
+  item_id: "",
+  quantity: 1,
+  notes: "",
+  perceived_at: new Date().toISOString().slice(0, 10),
+  is_lost: false,
+  is_degraded: false
+});
+
 export function DotationsPage() {
   const { user } = useAuth();
   const queryClient = useQueryClient();
@@ -62,22 +81,27 @@ export function DotationsPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [filters, setFilters] = useState<{ collaborator: string; item: string }>({ collaborator: "all", item: "all" });
-  const buildDefaultFormValues = () => ({
-    collaborator_id: "",
-    item_id: "",
-    quantity: 1,
-    notes: "",
-    perceived_at: new Date().toISOString().slice(0, 10),
-    is_lost: false,
-    is_degraded: false
-  });
   const [formValues, setFormValues] = useState<DotationFormValues>(() => buildDefaultFormValues());
   const [editingDotationId, setEditingDotationId] = useState<number | null>(null);
   const [editFormValues, setEditFormValues] = useState<DotationEditFormValues | null>(null);
+  const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [scanValue, setScanValue] = useState("");
+  const [scannedLines, setScannedLines] = useState<ScannedDotationLine[]>([]);
 
   const canView = user?.role === "admin" || modulePermissions.canAccess("dotations");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("dotations", "edit");
   const moduleTitle = useModuleTitle("dotations");
+
+  useEffect(() => {
+    if (!isCreateModalOpen) {
+      return;
+    }
+    setFormValues(buildDefaultFormValues());
+    setScanValue("");
+    setScannedLines([]);
+    setMessage(null);
+    setError(null);
+  }, [isCreateModalOpen]);
 
   const { data: collaborators = [], isFetching: isFetchingCollaborators } = useQuery({
     queryKey: ["dotations", "collaborators"],
@@ -140,6 +164,7 @@ export function DotationsPage() {
     onSettled: () => setTimeout(() => setMessage(null), 4000)
   });
 
+
   const deleteDotation = useMutation({
     mutationFn: async ({ id, restock }: { id: number; restock: boolean }) => {
       await api.delete(`/dotations/dotations/${id}`, { params: { restock } });
@@ -200,6 +225,54 @@ export function DotationsPage() {
   const itemById = useMemo(() => {
     return new Map(items.map((item) => [item.id, item]));
   }, [items]);
+
+  const scanAddDotation = useMutation({
+    mutationFn: async (payload: { employee_id: number; barcode: string; quantity: number }) => {
+      const response = await api.post<Dotation>("/dotations/scan_add", payload);
+      return response.data;
+    },
+    onSuccess: async (dotation) => {
+      const item = itemById.get(dotation.item_id);
+      setScannedLines((prev) => {
+        const existingIndex = prev.findIndex((line) => line.item_id === dotation.item_id);
+        if (existingIndex === -1) {
+          return [
+            ...prev,
+            {
+              item_id: dotation.item_id,
+              name: item?.name ?? `Article #${dotation.item_id}`,
+              sku: item?.sku ?? "",
+              quantity: dotation.quantity
+            }
+          ];
+        }
+        const next = [...prev];
+        const existing = next[existingIndex];
+        next[existingIndex] = { ...existing, quantity: existing.quantity + dotation.quantity };
+        return next;
+      });
+      toast.success("Article ajouté à la dotation");
+      setScanValue("");
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["dotations", "list"], exact: false }),
+        queryClient.invalidateQueries({ queryKey: ["items"], exact: false }),
+        queryClient.invalidateQueries({ queryKey: ["reports"], exact: false })
+      ]);
+    },
+    onError: (err: AxiosError<{ detail?: string }>) => {
+      const status = err.response?.status;
+      const detail = err.response?.data?.detail;
+      if (status === 404) {
+        toast.error("Aucun article trouvé pour ce code.");
+      } else if (status === 403) {
+        toast.error("Autorisations insuffisantes pour ajouter une dotation.");
+      } else if (detail) {
+        toast.error(detail);
+      } else {
+        toast.error("Impossible d'ajouter l'article à la dotation.");
+      }
+    }
+  });
 
   const groupedDotations = useMemo(() => {
     const groups = new Map<
@@ -277,6 +350,24 @@ export function DotationsPage() {
     setFormValues(buildDefaultFormValues());
   };
 
+  const handleScanAdd = async () => {
+    const trimmed = scanValue.trim();
+    if (!trimmed || scanAddDotation.isPending) {
+      return;
+    }
+    if (!formValues.collaborator_id) {
+      toast.error("Sélectionnez d’abord un collaborateur avant de scanner un article.");
+      return;
+    }
+    setMessage(null);
+    setError(null);
+    await scanAddDotation.mutateAsync({
+      employee_id: Number(formValues.collaborator_id),
+      barcode: trimmed,
+      quantity: 1
+    });
+  };
+
   const handleStartEditing = (dotation: Dotation) => {
     setMessage(null);
     setError(null);
@@ -327,9 +418,20 @@ export function DotationsPage() {
 
   const content = (
     <section className="space-y-6">
-      <header className="space-y-1">
-        <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
-        <p className="text-sm text-slate-400">Suivez les dotations et restitutions de matériel.</p>
+      <header className="flex flex-wrap items-start justify-between gap-4">
+        <div className="space-y-1">
+          <h2 className="text-2xl font-semibold text-white">{moduleTitle}</h2>
+          <p className="text-sm text-slate-400">Suivez les dotations et restitutions de matériel.</p>
+        </div>
+        {canEdit ? (
+          <button
+            type="button"
+            onClick={() => setIsCreateModalOpen(true)}
+            className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
+          >
+            Nouvelle dotation
+          </button>
+        ) : null}
       </header>
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
@@ -376,14 +478,14 @@ export function DotationsPage() {
         </div>
       </div>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,2fr)_minmax(0,1fr)]">
-        <div className="space-y-5">
-          {isFetching ? <p className="text-xs text-slate-400">Actualisation des dotations...</p> : null}
-          {groupedDotations.length === 0 ? (
-            <p className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-6 text-sm text-slate-400">
-              Aucune dotation enregistrée pour le moment.
-            </p>
-          ) : null}
+      <div className="space-y-5">
+        {isFetching ? <p className="text-xs text-slate-400">Actualisation des dotations...</p> : null}
+        {groupedDotations.length === 0 ? (
+          <p className="rounded-lg border border-slate-800 bg-slate-950 px-4 py-6 text-sm text-slate-400">
+            Aucune dotation enregistrée pour le moment.
+          </p>
+        ) : null}
+        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
           {groupedDotations.map(({ collaboratorId, collaborator, dotations: collaboratorDotations }) => (
             <article key={collaboratorId} className="space-y-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
               <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
@@ -653,32 +755,92 @@ export function DotationsPage() {
             </article>
           ))}
         </div>
+      </div>
 
-        <aside className="rounded-lg border border-slate-800 bg-slate-900 p-4">
-          <h3 className="text-sm font-semibold text-white">Nouvelle dotation</h3>
-          {canEdit ? (
-            <form className="mt-3 space-y-3" onSubmit={handleSubmit}>
-              <div className="space-y-1">
-                <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-collaborator">
-                  Collaborateur
-                </label>
-                <select
-                  id="dotation-collaborator"
-                  value={formValues.collaborator_id}
-                  onChange={(event) => setFormValues((prev) => ({ ...prev, collaborator_id: event.target.value }))}
-                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                  disabled={isFetchingCollaborators}
-                  required
-                  title="Choisissez le collaborateur bénéficiaire"
+      <DraggableModal
+        open={isCreateModalOpen}
+        title="Nouvelle dotation"
+        onClose={() => setIsCreateModalOpen(false)}
+        maxWidthClassName="max-w-[1100px] w-[95vw] max-h-[85vh]"
+        bodyClassName="px-6 py-5"
+      >
+        {canEdit ? (
+          <div className="space-y-6">
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+              <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-collaborator">
+                Collaborateur
+              </label>
+              <select
+                id="dotation-collaborator"
+                value={formValues.collaborator_id}
+                onChange={(event) => setFormValues((prev) => ({ ...prev, collaborator_id: event.target.value }))}
+                className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                disabled={isFetchingCollaborators}
+                required
+                title="Choisissez le collaborateur bénéficiaire"
+              >
+                <option value="">Sélectionner...</option>
+                {collaborators.map((collaborator) => (
+                  <option key={collaborator.id} value={collaborator.id}>
+                    {collaborator.full_name}
+                  </option>
+                ))}
+              </select>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+              <h4 className="text-sm font-semibold text-white">Scanner un article</h4>
+              <div className="mt-3 flex flex-col gap-3 sm:flex-row sm:items-end">
+                <div className="flex-1 space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-scan">
+                    Code-barres / SKU
+                  </label>
+                  <AppTextInput
+                    id="dotation-scan"
+                    value={scanValue}
+                    onChange={(event) => setScanValue(event.target.value)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter") {
+                        event.preventDefault();
+                        void handleScanAdd();
+                      }
+                    }}
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    placeholder="Scanner ou saisir un code"
+                    title="Scanner ou saisir un code-barres"
+                  />
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void handleScanAdd()}
+                  disabled={scanAddDotation.isPending}
+                  className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
                 >
-                  <option value="">Sélectionner...</option>
-                  {collaborators.map((collaborator) => (
-                    <option key={collaborator.id} value={collaborator.id}>
-                      {collaborator.full_name}
-                    </option>
-                  ))}
-                </select>
+                  {scanAddDotation.isPending ? "Ajout..." : "Ajouter"}
+                </button>
               </div>
+              <p className="mt-2 text-xs text-slate-400">
+                Utilisez un lecteur code-barres ou validez avec Entrée.
+              </p>
+            </div>
+
+            {scannedLines.length > 0 ? (
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+                <h4 className="text-sm font-semibold text-white">Articles scannés</h4>
+                <ul className="mt-3 space-y-2 text-sm text-slate-200">
+                  {scannedLines.map((line) => (
+                    <li key={line.item_id} className="flex flex-wrap items-center justify-between gap-2 rounded border border-slate-800 bg-slate-900/60 px-3 py-2">
+                      <span className="font-semibold text-white">
+                        {line.name} {line.sku ? `(${line.sku})` : ""}
+                      </span>
+                      <span className="text-xs text-slate-300">Quantité : {line.quantity}</span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+
+            <form className="space-y-3 rounded-lg border border-slate-800 bg-slate-950 p-4" onSubmit={handleSubmit}>
+              <h4 className="text-sm font-semibold text-white">Saisie manuelle</h4>
               <div className="space-y-1">
                 <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-item">
                   Article
@@ -783,13 +945,13 @@ export function DotationsPage() {
                 {createDotation.isPending ? "Enregistrement..." : "Enregistrer"}
               </button>
             </form>
-          ) : (
-            <p className="mt-3 text-sm text-slate-400">
-              Vous ne disposez pas des droits d'écriture pour créer des dotations.
-            </p>
-          )}
-        </aside>
-      </div>
+          </div>
+        ) : (
+          <p className="text-sm text-slate-400">
+            Vous ne disposez pas des droits d'écriture pour créer des dotations.
+          </p>
+        )}
+      </DraggableModal>
     </section>
   );
 
