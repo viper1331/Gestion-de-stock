@@ -2103,8 +2103,7 @@ function ItemForm({
             <span className="space-y-1">
               <span>Suivre les alertes de stock</span>
               <span className="block text-[11px] font-normal text-slate-400">
-                Désactivez cette option pour exclure ce matériel des alertes de seuil bas dans le tableau
-                de bord.
+                Désactivez cette option pour exclure ce matériel des alertes de seuil bas…
               </span>
             </span>
           </label>

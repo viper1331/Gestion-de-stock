@@ -3426,9 +3426,9 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             )
         if "track_low_stock" not in columns:
             execute(
-                "ALTER TABLE items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 0"
+                "ALTER TABLE items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 1"
             )
-            execute("UPDATE items SET track_low_stock = 0 WHERE track_low_stock IS NULL")
+            execute("UPDATE items SET track_low_stock = 1 WHERE track_low_stock IS NULL")
 
         executescript(
             """
@@ -7924,11 +7924,17 @@ def _get_vehicle_view_config(
 def list_low_stock(threshold: int) -> list[models.LowStockReport]:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
+        item_columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(items)").fetchall()
+        }
+        where_clauses = ["quantity < low_stock_threshold", "low_stock_threshold >= ?"]
+        if "track_low_stock" in item_columns:
+            where_clauses.append("track_low_stock = 1")
         cur = conn.execute(
-            """
+            f"""
             SELECT *, (low_stock_threshold - quantity) AS shortage
             FROM items
-            WHERE quantity < low_stock_threshold AND low_stock_threshold >= ?
+            WHERE {" AND ".join(where_clauses)}
             ORDER BY shortage DESC
             """,
             (threshold,),
@@ -7944,6 +7950,9 @@ def list_low_stock(threshold: int) -> list[models.LowStockReport]:
                     size=row["size"],
                     quantity=row["quantity"],
                     low_stock_threshold=row["low_stock_threshold"],
+                    track_low_stock=bool(row["track_low_stock"])
+                    if "track_low_stock" in row.keys()
+                    else True,
                     supplier_id=row["supplier_id"],
                 ),
                 shortage=row["shortage"],

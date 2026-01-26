@@ -871,7 +871,7 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     size TEXT,
                     quantity INTEGER NOT NULL DEFAULT 0,
                     low_stock_threshold INTEGER NOT NULL DEFAULT 0,
-                    track_low_stock INTEGER NOT NULL DEFAULT 0,
+                    track_low_stock INTEGER NOT NULL DEFAULT 1,
                     supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL
                 );
                 CREATE TABLE IF NOT EXISTS movements (

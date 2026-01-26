@@ -55,6 +55,7 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   showPurchaseOrders: true,
   searchPlaceholder: "Rechercher par nom ou SKU",
   supportsItemImages: false,
+  supportsLowStockOptOut: true,
   supportsExpirationDate: false,
   barcodePrefix: "HAB",
   statsPath: "/items/stats",
