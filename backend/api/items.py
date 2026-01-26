@@ -67,6 +67,14 @@ async def list_items(
     return services.list_items(search)
 
 
+@router.get("/stats", response_model=models.InventoryStats)
+async def get_clothing_stats(
+    user: models.User = Depends(get_current_user),
+) -> models.InventoryStats:
+    _require_permission(user, action="view")
+    return services.get_inventory_stats("clothing")
+
+
 @router.post("/", response_model=models.Item, status_code=201)
 async def create_item(payload: models.ItemCreate, user: models.User = Depends(get_current_user)) -> models.Item:
     _require_permission(user, action="edit")

@@ -30,6 +30,14 @@ async def list_remise_items(
     return services.list_remise_items(search)
 
 
+@router.get("/stats", response_model=models.InventoryStats)
+async def get_remise_stats(
+    user: models.User = Depends(get_current_user),
+) -> models.InventoryStats:
+    _require_permission(user, action="view")
+    return services.get_inventory_stats("inventory_remise")
+
+
 @router.get("/export/pdf")
 async def export_remise_inventory_pdf(user: models.User = Depends(get_current_user)):
     _require_permission(user, action="view")

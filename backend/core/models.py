@@ -546,14 +546,6 @@ class VehiclePharmacyLotApplyResult(BaseModel):
 class VehicleAppliedLot(BaseModel):
     id: int
     vehicle_id: int
-    vehicle_type: VehicleType | None = None
-    view: str | None = None
-    source: str
-    pharmacy_lot_id: int | None = None
-    lot_name: str | None = None
-    position_x: float | None = Field(default=None, ge=0.0, le=1.0)
-    position_y: float | None = Field(default=None, ge=0.0, le=1.0)
-    created_at: datetime | None = None
 
 
 class VehicleAppliedLotUpdate(BaseModel):
@@ -581,6 +573,14 @@ class Movement(BaseModel):
 class MovementCreate(BaseModel):
     delta: int
     reason: Optional[str] = None
+
+
+class InventoryStats(BaseModel):
+    references: int
+    total_stock: int
+    low_stock: int
+    purchase_orders_open: int
+    stockouts: int
 
 
 class RemiseLotBase(BaseModel):
