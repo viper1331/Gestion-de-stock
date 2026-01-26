@@ -299,12 +299,13 @@ def init_databases() -> None:
                 );
                 CREATE TABLE IF NOT EXISTS user_page_layouts (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_key TEXT NOT NULL DEFAULT 'JLL',
                     username TEXT NOT NULL,
                     page_key TEXT NOT NULL,
                     layout_json TEXT NOT NULL,
                     hidden_blocks_json TEXT NOT NULL,
                     updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                    UNIQUE(username, page_key)
+                    UNIQUE(site_key, username, page_key)
                 );
                 CREATE TABLE IF NOT EXISTS ui_menu_prefs (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -332,6 +333,7 @@ def init_databases() -> None:
             _ensure_user_session_columns(conn)
             _ensure_two_factor_columns(conn)
             _ensure_two_factor_challenge_columns(conn)
+            _ensure_user_page_layouts_schema(conn)
             _ensure_user_table_prefs_schema(conn)
         _init_core_database()
         _sync_user_site_preferences()
@@ -364,12 +366,13 @@ def _init_core_database() -> None:
             );
             CREATE TABLE IF NOT EXISTS user_page_layouts (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_key TEXT NOT NULL DEFAULT 'JLL',
                 username TEXT NOT NULL,
                 page_key TEXT NOT NULL,
                 layout_json TEXT NOT NULL,
                 hidden_blocks_json TEXT NOT NULL,
                 updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
-                UNIQUE(username, page_key)
+                UNIQUE(site_key, username, page_key)
             );
             CREATE TABLE IF NOT EXISTS backup_settings (
                 site_key TEXT PRIMARY KEY,
@@ -456,6 +459,7 @@ def _init_core_database() -> None:
             );
             """
         )
+        _ensure_user_page_layouts_schema(conn)
         default_paths = get_default_site_db_paths()
         for site_key in SITE_KEYS:
             conn.execute(
@@ -494,27 +498,50 @@ def _migrate_user_layouts_to_core(core_conn: sqlite3.Connection) -> None:
         return
     try:
         with get_users_connection() as users_conn:
-            existing_rows = users_conn.execute(
-                """
-                SELECT username, page_key, layout_json, hidden_blocks_json, updated_at
-                FROM user_page_layouts
-                """
-            ).fetchall()
+            columns = {
+                row["name"]
+                for row in users_conn.execute(
+                    "PRAGMA table_info(user_page_layouts)"
+                ).fetchall()
+            }
+            has_site_key = "site_key" in columns
+            if has_site_key:
+                existing_rows = users_conn.execute(
+                    """
+                    SELECT site_key, username, page_key, layout_json, hidden_blocks_json, updated_at
+                    FROM user_page_layouts
+                    """
+                ).fetchall()
+            else:
+                existing_rows = users_conn.execute(
+                    """
+                    SELECT username, page_key, layout_json, hidden_blocks_json, updated_at
+                    FROM user_page_layouts
+                    """
+                ).fetchall()
     except sqlite3.OperationalError:
         return
     if not existing_rows:
         return
     core_conn.executemany(
         """
-        INSERT INTO user_page_layouts (username, page_key, layout_json, hidden_blocks_json, updated_at)
-        VALUES (?, ?, ?, ?, ?)
-        ON CONFLICT(username, page_key) DO UPDATE SET
+        INSERT INTO user_page_layouts (
+            site_key,
+            username,
+            page_key,
+            layout_json,
+            hidden_blocks_json,
+            updated_at
+        )
+        VALUES (?, ?, ?, ?, ?, ?)
+        ON CONFLICT(site_key, username, page_key) DO UPDATE SET
           layout_json = excluded.layout_json,
           hidden_blocks_json = excluded.hidden_blocks_json,
           updated_at = excluded.updated_at
         """,
         [
             (
+                row["site_key"] if has_site_key else DEFAULT_SITE_KEY,
                 row["username"],
                 row["page_key"],
                 row["layout_json"],
@@ -720,6 +747,50 @@ def _ensure_user_table_prefs_schema(conn: sqlite3.Connection) -> None:
         (DEFAULT_SITE_KEY,),
     )
     conn.execute("DROP TABLE user_table_prefs_old")
+
+
+def _ensure_user_page_layouts_schema(conn: sqlite3.Connection) -> None:
+    try:
+        columns = {
+            row["name"]
+            for row in conn.execute("PRAGMA table_info(user_page_layouts)").fetchall()
+        }
+    except sqlite3.OperationalError:
+        return
+    if not columns or "site_key" in columns:
+        return
+    logger.info("[DB] Migration user_page_layouts pour multi-sites")
+    conn.execute("ALTER TABLE user_page_layouts RENAME TO user_page_layouts_old")
+    conn.execute(
+        """
+        CREATE TABLE user_page_layouts (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            site_key TEXT NOT NULL,
+            username TEXT NOT NULL,
+            page_key TEXT NOT NULL,
+            layout_json TEXT NOT NULL,
+            hidden_blocks_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(site_key, username, page_key)
+        )
+        """
+    )
+    conn.execute(
+        """
+        INSERT INTO user_page_layouts (
+            site_key,
+            username,
+            page_key,
+            layout_json,
+            hidden_blocks_json,
+            updated_at
+        )
+        SELECT ?, username, page_key, layout_json, hidden_blocks_json, updated_at
+        FROM user_page_layouts_old
+        """,
+        (DEFAULT_SITE_KEY,),
+    )
+    conn.execute("DROP TABLE user_page_layouts_old")
 
 
 def _ensure_stock_db_path_alias() -> None:

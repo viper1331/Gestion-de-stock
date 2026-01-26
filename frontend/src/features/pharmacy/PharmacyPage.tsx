@@ -1060,19 +1060,6 @@ export function PharmacyPage() {
             <button
               type="button"
               onClick={() => {
-                setMovementItemId(null);
-                setIsMovementModalOpen(true);
-              }}
-              className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
-              title="Saisir un mouvement de stock"
-            >
-              Mouvement de stock
-            </button>
-          ) : null}
-          {canEdit ? (
-            <button
-              type="button"
-              onClick={() => {
                 setSelected(null);
                 setFormMode("create");
                 setIsItemModalOpen(true);
@@ -1168,6 +1155,26 @@ export function PharmacyPage() {
           pulseLevel="normal"
         />
       </div>
+    </section>
+  );
+
+  const movementBlock = (
+    <section className="min-w-0 space-y-3">
+      <div>
+        <h3 className="text-sm font-semibold text-white">Mouvements de stock</h3>
+        <p className="text-xs text-slate-400">Enregistrez des entrées, sorties ou corrections.</p>
+      </div>
+      <button
+        type="button"
+        onClick={() => {
+          setMovementItemId(null);
+          setIsMovementModalOpen(true);
+        }}
+        className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+        title="Saisir un mouvement de stock"
+      >
+        Nouveau mouvement
+      </button>
     </section>
   );
 
@@ -1921,6 +1928,23 @@ export function PharmacyPage() {
       },
       render: () => <EditableBlock id="pharmacy-stats">{statsBlock}</EditableBlock>
     },
+    ...(canEdit
+      ? [
+          {
+            id: "pharmacy-movements",
+            title: "Mouvements de stock",
+            permissions: ["pharmacy"],
+            variant: "plain",
+            defaultLayout: {
+              lg: { x: 8, y: 12, w: 4, h: 6 },
+              md: { x: 0, y: 36, w: 10, h: 6 },
+              sm: { x: 0, y: 36, w: 6, h: 6 },
+              xs: { x: 0, y: 36, w: 4, h: 6 }
+            },
+            render: () => <EditableBlock id="pharmacy-movements">{movementBlock}</EditableBlock>
+          }
+        ]
+      : []),
     {
       id: "pharmacy-items",
       title: "Articles pharmacie",
@@ -2009,6 +2033,12 @@ export function PharmacyPage() {
         pageKey="module:pharmacy:inventory"
         blocks={blocks}
         className="space-y-6"
+        renderHeader={({ editButton, actionButtons, isEditing }) => (
+          <div className="flex flex-wrap justify-end gap-2">
+            {editButton}
+            {isEditing ? actionButtons : null}
+          </div>
+        )}
       />
     </>
   );

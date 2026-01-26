@@ -65,6 +65,7 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
         "blocks": {
             "pharmacy-header": ("pharmacy", "view"),
             "pharmacy-search": ("pharmacy", "view"),
+            "pharmacy-movements": ("pharmacy", "edit"),
             "pharmacy-items": ("pharmacy", "view"),
             "pharmacy-lots": ("pharmacy", "view"),
             "pharmacy-low-stock": ("pharmacy", "view"),
@@ -242,6 +243,7 @@ async def get_user_layout(
 ) -> models.UserPageLayoutResponse:
     block_rules = _get_page_rules(page_key)
     permissions = _load_permissions(user)
+    site_key = db.get_current_site_key()
     allowed_blocks = {
         block_id
         for block_id, requirement in block_rules.items()
@@ -253,9 +255,9 @@ async def get_user_layout(
             """
             SELECT layout_json, hidden_blocks_json, updated_at
             FROM user_page_layouts
-            WHERE username = ? AND page_key = ?
+            WHERE site_key = ? AND username = ? AND page_key = ?
             """,
-            (user.username, page_key),
+            (site_key, user.username, page_key),
         ).fetchone()
 
     if row is None:
@@ -293,6 +295,7 @@ async def upsert_user_layout(
     user: models.User = Depends(get_current_user),
 ) -> models.UserPageLayoutResponse:
     block_rules = _get_page_rules(page_key)
+    site_key = db.get_current_site_key()
     layout_ids = {item.i for items in payload.layout.values() for item in items}
     hidden_ids = set(payload.hidden_blocks)
     _validate_block_ids(page_key, layout_ids | hidden_ids)
@@ -313,21 +316,27 @@ async def upsert_user_layout(
     with db.get_core_connection() as conn:
         conn.execute(
             """
-            INSERT INTO user_page_layouts (username, page_key, layout_json, hidden_blocks_json)
-            VALUES (?, ?, ?, ?)
-            ON CONFLICT(username, page_key) DO UPDATE SET
+            INSERT INTO user_page_layouts (
+                site_key,
+                username,
+                page_key,
+                layout_json,
+                hidden_blocks_json
+            )
+            VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT(site_key, username, page_key) DO UPDATE SET
               layout_json = excluded.layout_json,
               hidden_blocks_json = excluded.hidden_blocks_json,
               updated_at = CURRENT_TIMESTAMP
             """,
-            (user.username, page_key, layout_json, hidden_json),
+            (site_key, user.username, page_key, layout_json, hidden_json),
         )
         row = conn.execute(
             """
             SELECT updated_at FROM user_page_layouts
-            WHERE username = ? AND page_key = ?
+            WHERE site_key = ? AND username = ? AND page_key = ?
             """,
-            (user.username, page_key),
+            (site_key, user.username, page_key),
         ).fetchone()
 
     return models.UserPageLayoutResponse(
