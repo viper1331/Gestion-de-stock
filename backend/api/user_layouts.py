@@ -27,6 +27,7 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
         "blocks": {
             "inventory-main": ("clothing", "view"),
             "inventory-orders": ("clothing", "view"),
+            "inventory-stats": ("clothing", "view"),
         }
     },
     "module:clothing:purchase-orders": {
@@ -97,6 +98,7 @@ _PAGE_RULES: dict[str, dict[str, dict[str, tuple[str, str] | None]]] = {
             "remise-items": ("inventory_remise", "view"),
             "remise-orders": ("inventory_remise", "view"),
             "remise-lots": ("inventory_remise", "view"),
+            "remise-stats": ("inventory_remise", "view"),
         }
     },
     "module:settings": {

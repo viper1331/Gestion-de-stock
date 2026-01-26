@@ -1385,6 +1385,80 @@ def _resolve_report_module(module: str) -> _ReportModuleConfig | None:
     return _REPORT_MODULES.get(normalized)
 
 
+def get_inventory_stats(module_key: str) -> models.InventoryStats:
+    ensure_database_ready()
+    resolved = _resolve_report_module(module_key)
+    if not resolved or not resolved.items_table:
+        raise ValueError("Module introuvable")
+    with db.get_stock_connection() as conn:
+        if resolved.inventory_module == "inventory_remise":
+            _ensure_remise_item_columns(conn)
+        if not _table_exists(conn, resolved.items_table):
+            return models.InventoryStats(
+                references=0,
+                total_stock=0,
+                low_stock=0,
+                purchase_orders_open=0,
+                stockouts=0,
+            )
+        item_columns = {
+            row["name"]
+            for row in conn.execute(f"PRAGMA table_info({resolved.items_table})").fetchall()
+        }
+        references = int(
+            conn.execute(
+                f"SELECT COUNT(1) AS count FROM {resolved.items_table}"
+            ).fetchone()["count"]
+            or 0
+        )
+        total_stock = int(
+            conn.execute(
+                f"SELECT SUM(quantity) AS total FROM {resolved.items_table}"
+            ).fetchone()["total"]
+            or 0
+        )
+        stockouts = int(
+            conn.execute(
+                f"SELECT COUNT(1) AS count FROM {resolved.items_table} WHERE quantity = 0"
+            ).fetchone()["count"]
+            or 0
+        )
+        low_stock = 0
+        if "low_stock_threshold" in item_columns:
+            low_stock_where = ["low_stock_threshold > 0", "quantity <= low_stock_threshold"]
+            if "track_low_stock" in item_columns:
+                low_stock_where.append("track_low_stock = 1")
+            low_stock = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.items_table}
+                    WHERE {" AND ".join(low_stock_where)}
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+        purchase_orders_open = 0
+        if resolved.orders_table and _table_exists(conn, resolved.orders_table):
+            purchase_orders_open = int(
+                conn.execute(
+                    f"""
+                    SELECT COUNT(1) AS count
+                    FROM {resolved.orders_table}
+                    WHERE status IN ('PENDING', 'ORDERED', 'PARTIALLY_RECEIVED')
+                    """
+                ).fetchone()["count"]
+                or 0
+            )
+    return models.InventoryStats(
+        references=references,
+        total_stock=total_stock,
+        low_stock=low_stock,
+        purchase_orders_open=purchase_orders_open,
+        stockouts=stockouts,
+    )
+
+
 def _auto_report_bucket(start: date, end: date) -> str:
     delta_days = max(0, (end - start).days)
     if delta_days <= 31:

@@ -12,6 +12,7 @@ export interface InventoryModuleConfig {
   basePath: string;
   categoriesPath: string;
   supplierModule?: string | null;
+  permissionsModuleKey?: string;
   queryKeyPrefix: string;
   storageKeyPrefix: string;
   tableKey?: string;
@@ -35,6 +36,7 @@ export interface InventoryModuleConfig {
   exportPdfPath?: string;
   exportPdfFilenamePrefix?: string;
   customFieldScope?: string;
+  statsPath?: string;
 }
 
 export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
@@ -44,6 +46,7 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   basePath: "/items",
   categoriesPath: "/categories",
   supplierModule: "suppliers",
+  permissionsModuleKey: "clothing",
   queryKeyPrefix: "inventory",
   storageKeyPrefix: "inventory",
   tableKey: "clothing.items",
@@ -52,5 +55,6 @@ export const DEFAULT_INVENTORY_CONFIG: InventoryModuleConfig = {
   searchPlaceholder: "Rechercher par nom ou SKU",
   supportsItemImages: false,
   supportsExpirationDate: false,
-  barcodePrefix: "HAB"
+  barcodePrefix: "HAB",
+  statsPath: "/items/stats"
 };

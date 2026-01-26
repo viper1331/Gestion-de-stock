@@ -25,6 +25,7 @@ import { resolveMediaUrl } from "../../lib/media";
 import { ensureUniqueSku, normalizeSkuInput, type ExistingSkuEntry } from "../../lib/sku";
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
 import { useAuth } from "../auth/useAuth";
+import { useModulePermissions } from "../permissions/useModulePermissions";
 import {
   DEFAULT_INVENTORY_CONFIG,
   type FrenchGender,
@@ -70,6 +71,14 @@ interface Movement {
   delta: number;
   reason: string | null;
   created_at: string;
+}
+
+interface InventoryStats {
+  references: number;
+  total_stock: number;
+  low_stock: number;
+  purchase_orders_open: number;
+  stockouts: number;
 }
 
 interface ItemFormValues {
@@ -129,6 +138,9 @@ type InventoryModuleDashboardSections = {
   filters: ReactNode;
   table: ReactNode;
   orders?: ReactNode;
+  stats?: ReactNode;
+  tabs?: ReactNode;
+  activeTab?: "items" | "stats";
 };
 
 interface InventoryModuleDashboardProps {
@@ -150,12 +162,45 @@ type InventoryColumnKey =
 
 type ExpirationStatus = "expired" | "expiring-soon" | null;
 
+type PulseLevel = "normal" | "fast";
+
+function StatCard(props: {
+  title: string;
+  value: number | string;
+  subtitle: string;
+  icon: ReactNode;
+  variant: "info" | "success" | "warning" | "danger";
+  pulse?: boolean;
+  pulseLevel?: PulseLevel;
+}) {
+  return (
+    <article
+      className="stat-card p-4"
+      data-variant={props.variant}
+      data-pulse={props.pulse ? "true" : "false"}
+      data-pulse-level={props.pulseLevel ?? "normal"}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-xs uppercase tracking-wide text-slate-400">{props.title}</p>
+          <p className="mt-1 text-2xl font-semibold text-white">{props.value}</p>
+        </div>
+        <div className="stat-glow">{props.icon}</div>
+      </div>
+      <p className="mt-2 text-xs text-slate-400">{props.subtitle}</p>
+    </article>
+  );
+}
+
 export function InventoryModuleDashboard({
   config = DEFAULT_INVENTORY_CONFIG,
   renderLayout
 }: InventoryModuleDashboardProps) {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  const modulePermissions = useModulePermissions({
+    enabled: Boolean(user && config.permissionsModuleKey)
+  });
   const queryClient = useQueryClient();
   const [searchValue, setSearchValue] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -165,6 +210,20 @@ export function InventoryModuleDashboard({
   const [isItemModalOpen, setIsItemModalOpen] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<"items" | "stats">("items");
+
+  const canViewStats =
+    Boolean(config.statsPath) &&
+    (isAdmin ||
+      (config.permissionsModuleKey
+        ? modulePermissions.canAccess(config.permissionsModuleKey, "view")
+        : false));
+
+  useEffect(() => {
+    if (!canViewStats && activeTab === "stats") {
+      setActiveTab("items");
+    }
+  }, [activeTab, canViewStats]);
 
   const supportsItemImages = config.supportsItemImages === true;
   const supportsLowStockOptOut = config.supportsLowStockOptOut === true;
@@ -207,6 +266,18 @@ export function InventoryModuleDashboard({
       });
       return response.data;
     }
+  });
+
+  const statsQuery = useQuery({
+    queryKey: ["inventory-stats", config.queryKeyPrefix],
+    queryFn: async () => {
+      if (!config.statsPath) {
+        throw new Error("Aucune statistique configurée pour ce module.");
+      }
+      const response = await api.get<InventoryStats>(config.statsPath);
+      return response.data;
+    },
+    enabled: Boolean(canViewStats && activeTab === "stats" && config.statsPath)
   });
 
   const { data: categories = [] } = useQuery({
@@ -261,6 +332,7 @@ export function InventoryModuleDashboard({
     },
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["items"] });
+      await queryClient.invalidateQueries({ queryKey: ["inventory-stats", config.queryKeyPrefix] });
       setMessage(`${capitalizeFirst(itemNoun.definite)} créé avec succès.`);
     },
     onError: () => setError(`Impossible de créer ${itemNoun.definite}.`),
@@ -274,6 +346,7 @@ export function InventoryModuleDashboard({
     },
     onSuccess: async (_, variables) => {
       await queryClient.invalidateQueries({ queryKey: ["items"] });
+      await queryClient.invalidateQueries({ queryKey: ["inventory-stats", config.queryKeyPrefix] });
       await queryClient.invalidateQueries({
         queryKey: ["movements", config.queryKeyPrefix, variables.itemId]
       });
@@ -291,6 +364,7 @@ export function InventoryModuleDashboard({
       setMessage(`${capitalizeFirst(itemNoun.definite)} supprimé.`);
       closeSidebar();
       await queryClient.invalidateQueries({ queryKey: ["items"] });
+      await queryClient.invalidateQueries({ queryKey: ["inventory-stats", config.queryKeyPrefix] });
     },
     onError: () => setError(`Impossible de supprimer ${itemNoun.definite}.`),
     onSettled: () => queryClient.invalidateQueries({ queryKey: ["reports"] })
@@ -303,6 +377,7 @@ export function InventoryModuleDashboard({
     onSuccess: async (_, variables) => {
       setMessage("Mouvement enregistré.");
       await queryClient.invalidateQueries({ queryKey: ["items"] });
+      await queryClient.invalidateQueries({ queryKey: ["inventory-stats", config.queryKeyPrefix] });
       await queryClient.invalidateQueries({
         queryKey: ["movements", config.queryKeyPrefix, variables.itemId]
       });
@@ -802,12 +877,39 @@ export function InventoryModuleDashboard({
     }
   };
 
+  const tabButtonClass = (isActive: boolean) =>
+    `rounded-full border px-4 py-1 text-xs font-semibold transition ${
+      isActive
+        ? "border-indigo-400/70 bg-indigo-500/20 text-indigo-100"
+        : "border-slate-700 bg-slate-900 text-slate-300 hover:border-slate-500 hover:text-white"
+    }`;
+
+  const tabsContent = canViewStats ? (
+    <div className="flex flex-wrap gap-2">
+      <button
+        type="button"
+        onClick={() => setActiveTab("items")}
+        className={tabButtonClass(activeTab === "items")}
+      >
+        Articles
+      </button>
+      <button
+        type="button"
+        onClick={() => setActiveTab("stats")}
+        className={tabButtonClass(activeTab === "stats")}
+      >
+        Statistiques
+      </button>
+    </div>
+  ) : null;
+
   const headerContent = (
     <div className="rounded-lg border border-slate-800 bg-slate-900 p-6 shadow">
       <div className="space-y-1">
         <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
         <p className="text-sm text-slate-400">{config.description}</p>
       </div>
+      {tabsContent ? <div className="mt-4">{tabsContent}</div> : null}
       {message || error ? (
         <div className="mt-4 space-y-3">
           {message ? <Alert tone="success" message={message} /> : null}
@@ -885,11 +987,11 @@ export function InventoryModuleDashboard({
     </div>
   );
 
-  const filtersContent = (
+  const filtersContent = activeTab === "items" ? (
     <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 shadow">
       {renderToolbar()}
     </div>
-  );
+  ) : null;
 
   const tableContent = (
     <div className="flex min-h-0 flex-col gap-6 lg:flex-row lg:items-start">
@@ -1229,6 +1331,79 @@ export function InventoryModuleDashboard({
     </div>
   );
 
+  const statsData: InventoryStats = statsQuery.data ?? {
+    references: 0,
+    total_stock: 0,
+    low_stock: 0,
+    purchase_orders_open: 0,
+    stockouts: 0
+  };
+  const lowStockPulseLevel: PulseLevel = statsData.low_stock >= 10 ? "fast" : "normal";
+
+  const statsContent = canViewStats ? (
+    <section className="min-w-0 space-y-3">
+      <div className="grid gap-3 sm:grid-cols-2">
+        <StatCard
+          title="Références"
+          value={statsData.references}
+          subtitle="Articles enregistrés."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">📦</span>
+          }
+          variant="info"
+        />
+        <StatCard
+          title="Stock total"
+          value={statsData.total_stock}
+          subtitle="Quantité totale disponible."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">🧮</span>
+          }
+          variant="success"
+        />
+        <StatCard
+          title="Alertes stock"
+          value={statsData.low_stock}
+          subtitle="Articles sous seuil."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">⚠️</span>
+          }
+          variant="warning"
+          pulse={statsData.low_stock > 0}
+          pulseLevel={lowStockPulseLevel}
+        />
+        <StatCard
+          title="Rupture de stock"
+          value={statsData.stockouts}
+          subtitle="Articles à 0 en stock."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">🛑</span>
+          }
+          variant="danger"
+          pulse={statsData.stockouts > 0}
+          pulseLevel="normal"
+        />
+        <StatCard
+          title="BC en cours"
+          value={statsData.purchase_orders_open}
+          subtitle="Bons de commande non reçus."
+          icon={
+            <span className="inline-flex h-8 w-8 items-center justify-center rounded-lg bg-white/5">🧾</span>
+          }
+          variant="info"
+          pulse={statsData.purchase_orders_open > 0}
+          pulseLevel="normal"
+        />
+      </div>
+      {statsQuery.isFetching ? (
+        <p className="text-sm text-slate-400">Actualisation des statistiques...</p>
+      ) : null}
+      {statsQuery.isError ? (
+        <p className="text-sm text-red-400">Impossible de charger les statistiques.</p>
+      ) : null}
+    </section>
+  ) : null;
+
   const itemFormId = "inventory-item-form";
   const itemModal = (
     <DraggableModal
@@ -1316,15 +1491,40 @@ export function InventoryModuleDashboard({
           {itemModal}
         </>
       ),
-      orders: ordersContent ?? undefined
+      orders: ordersContent ?? undefined,
+      stats: statsContent ?? undefined,
+      tabs: tabsContent ?? undefined,
+      activeTab
     });
   }
 
-  const blocks: EditablePageBlock[] = [
-    {
+  const permissionsModuleKey = config.permissionsModuleKey ?? "clothing";
+  const blocks: EditablePageBlock[] = [];
+
+  if (activeTab === "stats" && statsContent) {
+    blocks.push({
+      id: "inventory-stats",
+      title: "Statistiques",
+      permissions: [permissionsModuleKey],
+      required: true,
+      variant: "plain",
+      defaultLayout: {
+        lg: { x: 0, y: 0, w: 12, h: 10 },
+        md: { x: 0, y: 0, w: 10, h: 10 },
+        sm: { x: 0, y: 0, w: 6, h: 10 },
+        xs: { x: 0, y: 0, w: 4, h: 10 }
+      },
+      render: () => (
+        <EditableBlock id="inventory-stats">
+          {statsContent}
+        </EditableBlock>
+      )
+    });
+  } else {
+    blocks.push({
       id: "inventory-main",
       title: "Inventaire",
-      permissions: ["clothing"],
+      permissions: [permissionsModuleKey],
       required: true,
       variant: "plain",
       defaultLayout: {
@@ -1338,27 +1538,27 @@ export function InventoryModuleDashboard({
           {tableContent}
         </EditableBlock>
       )
-    }
-  ];
-
-  if (config.showPurchaseOrders && ordersContent) {
-    blocks.push({
-      id: "inventory-orders",
-      title: config.purchaseOrdersTitle ?? "Bons de commande",
-      permissions: ["clothing"],
-      variant: "plain",
-      defaultLayout: {
-        lg: { x: 0, y: 18, w: 12, h: 12 },
-        md: { x: 0, y: 18, w: 10, h: 12 },
-        sm: { x: 0, y: 18, w: 6, h: 12 },
-        xs: { x: 0, y: 18, w: 4, h: 12 }
-      },
-      render: () => (
-        <EditableBlock id="inventory-orders">
-          {ordersContent}
-        </EditableBlock>
-      )
     });
+
+    if (config.showPurchaseOrders && ordersContent) {
+      blocks.push({
+        id: "inventory-orders",
+        title: config.purchaseOrdersTitle ?? "Bons de commande",
+        permissions: [permissionsModuleKey],
+        variant: "plain",
+        defaultLayout: {
+          lg: { x: 0, y: 18, w: 12, h: 12 },
+          md: { x: 0, y: 18, w: 10, h: 12 },
+          sm: { x: 0, y: 18, w: 6, h: 12 },
+          xs: { x: 0, y: 18, w: 4, h: 12 }
+        },
+        render: () => (
+          <EditableBlock id="inventory-orders">
+            {ordersContent}
+          </EditableBlock>
+        )
+      });
+    }
   }
 
   return (
@@ -1374,7 +1574,8 @@ export function InventoryModuleDashboard({
                 <h2 className="text-2xl font-semibold text-white">{config.title}</h2>
                 <p className="text-sm text-slate-400">{config.description}</p>
               </div>
-              {renderToolbar({ editButton, actionButtons, isEditing })}
+              {tabsContent ? <div>{tabsContent}</div> : null}
+              {activeTab === "items" ? renderToolbar({ editButton, actionButtons, isEditing }) : null}
             </header>
 
             {message ? <Alert tone="success" message={message} /> : null}

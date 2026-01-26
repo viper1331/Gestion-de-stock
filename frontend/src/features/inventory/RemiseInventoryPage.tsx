@@ -13,6 +13,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   basePath: "/remise-inventory",
   categoriesPath: "/remise-inventory/categories",
   supplierModule: "inventory_remise",
+  permissionsModuleKey: "inventory_remise",
   queryKeyPrefix: "remise-inventory",
   storageKeyPrefix: "remise-inventory",
   tableKey: "remise.items",
@@ -35,6 +36,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   exportPdfPath: "/remise-inventory/export/pdf",
   exportPdfFilenamePrefix: "inventaire_remises",
   customFieldScope: "remise_items",
+  statsPath: "/remise-inventory/stats",
   itemNoun: {
     singular: "matériel",
     plural: "matériels",
@@ -52,7 +54,7 @@ export function RemiseInventoryPage() {
   return (
     <InventoryModuleDashboard
       config={config}
-      renderLayout={({ header, filters, table, orders }) => {
+      renderLayout={({ header, filters, table, orders, stats, activeTab }) => {
         const blocks: EditablePageBlock[] = [
           {
             id: "remise-header",
@@ -71,25 +73,51 @@ export function RemiseInventoryPage() {
                 {header}
               </EditableBlock>
             )
-          },
-          {
-            id: "remise-filters",
-            title: "Filtres et actions",
-            permissions: ["inventory_remise"],
-            variant: "plain",
-            defaultLayout: {
-              lg: { x: 0, y: 6, w: 12, h: 6 },
-              md: { x: 0, y: 6, w: 10, h: 6 },
-              sm: { x: 0, y: 6, w: 6, h: 6 },
-              xs: { x: 0, y: 6, w: 4, h: 6 }
-            },
-            render: () => (
-              <EditableBlock id="remise-filters">
-                {filters}
-              </EditableBlock>
-            )
-          },
-          {
+          }
+        ];
+
+        if (activeTab === "stats") {
+          if (stats) {
+            blocks.push({
+              id: "remise-stats",
+              title: "Statistiques",
+              permissions: ["inventory_remise"],
+              variant: "plain",
+              defaultLayout: {
+                lg: { x: 0, y: 6, w: 12, h: 10 },
+                md: { x: 0, y: 6, w: 10, h: 10 },
+                sm: { x: 0, y: 6, w: 6, h: 10 },
+                xs: { x: 0, y: 6, w: 4, h: 10 }
+              },
+              render: () => (
+                <EditableBlock id="remise-stats">
+                  {stats}
+                </EditableBlock>
+              )
+            });
+          }
+        } else {
+          if (filters) {
+            blocks.push({
+              id: "remise-filters",
+              title: "Filtres et actions",
+              permissions: ["inventory_remise"],
+              variant: "plain",
+              defaultLayout: {
+                lg: { x: 0, y: 6, w: 12, h: 6 },
+                md: { x: 0, y: 6, w: 10, h: 6 },
+                sm: { x: 0, y: 6, w: 6, h: 6 },
+                xs: { x: 0, y: 6, w: 4, h: 6 }
+              },
+              render: () => (
+                <EditableBlock id="remise-filters">
+                  {filters}
+                </EditableBlock>
+              )
+            });
+          }
+
+          blocks.push({
             id: "remise-items",
             title: "Matériels en remise",
             permissions: ["inventory_remise"],
@@ -105,48 +133,48 @@ export function RemiseInventoryPage() {
                 {table}
               </EditableBlock>
             )
-          }
-        ];
+          });
 
-        if (orders) {
+          if (orders) {
+            blocks.push({
+              id: "remise-orders",
+              title: "Bons de commande remises",
+              permissions: ["inventory_remise"],
+              variant: "plain",
+              minH: 12,
+              defaultLayout: {
+                lg: { x: 0, y: 32, w: 12, h: 12 },
+                md: { x: 0, y: 32, w: 10, h: 12 },
+                sm: { x: 0, y: 32, w: 6, h: 12 },
+                xs: { x: 0, y: 32, w: 4, h: 12 }
+              },
+              render: () => (
+                <EditableBlock id="remise-orders">
+                  {orders}
+                </EditableBlock>
+              )
+            });
+          }
+
           blocks.push({
-            id: "remise-orders",
-            title: "Bons de commande remises",
+            id: "remise-lots",
+            title: "Lots",
             permissions: ["inventory_remise"],
             variant: "plain",
-            minH: 12,
+            minH: 10,
             defaultLayout: {
-              lg: { x: 0, y: 32, w: 12, h: 12 },
-              md: { x: 0, y: 32, w: 10, h: 12 },
-              sm: { x: 0, y: 32, w: 6, h: 12 },
-              xs: { x: 0, y: 32, w: 4, h: 12 }
+              lg: { x: 0, y: 44, w: 12, h: 14 },
+              md: { x: 0, y: 44, w: 10, h: 14 },
+              sm: { x: 0, y: 44, w: 6, h: 14 },
+              xs: { x: 0, y: 44, w: 4, h: 14 }
             },
             render: () => (
-              <EditableBlock id="remise-orders">
-                {orders}
+              <EditableBlock id="remise-lots">
+                <RemiseLotsPanel />
               </EditableBlock>
             )
           });
         }
-
-        blocks.push({
-          id: "remise-lots",
-          title: "Lots",
-          permissions: ["inventory_remise"],
-          variant: "plain",
-          minH: 10,
-          defaultLayout: {
-            lg: { x: 0, y: 44, w: 12, h: 14 },
-            md: { x: 0, y: 44, w: 10, h: 14 },
-            sm: { x: 0, y: 44, w: 6, h: 14 },
-            xs: { x: 0, y: 44, w: 4, h: 14 }
-          },
-          render: () => (
-            <EditableBlock id="remise-lots">
-              <RemiseLotsPanel />
-            </EditableBlock>
-          )
-        });
 
         return (
           <EditablePageLayout
