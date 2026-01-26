@@ -23,11 +23,24 @@ interface Supplier {
   address: string | null;
 }
 
+interface Collaborator {
+  id: number;
+  full_name: string;
+}
+
+interface Dotation {
+  id: number;
+  collaborator_id: number;
+  item_id: number;
+  quantity: number;
+}
+
 interface ItemOption {
   id: number;
   name: string;
   sku?: string | null;
   size?: string | null;
+  category_id?: number | null;
   quantity?: number | null;
   supplier_id?: number | null;
   extra?: Record<string, unknown>;
@@ -43,6 +56,56 @@ interface PurchaseOrderItem {
   item_name: string | null;
   quantity_ordered: number;
   quantity_received: number;
+  beneficiary_employee_id?: number | null;
+  beneficiary_name?: string | null;
+  line_type?: "standard" | "replacement";
+  return_expected?: boolean;
+  return_reason?: string | null;
+  return_employee_item_id?: number | null;
+  return_qty?: number;
+  return_status?: "none" | "to_prepare" | "shipped" | "supplier_received" | "cancelled";
+}
+
+interface PurchaseOrderReceipt {
+  id: number;
+  purchase_order_id: number;
+  purchase_order_line_id: number;
+  received_qty: number;
+  conformity_status: "conforme" | "non_conforme";
+  nonconformity_reason?: string | null;
+  nonconformity_action?: "replacement" | "credit_note" | "return_to_supplier" | null;
+  note?: string | null;
+  created_by?: string | null;
+  created_at: string;
+}
+
+interface PendingClothingAssignment {
+  id: number;
+  purchase_order_id: number;
+  purchase_order_line_id: number;
+  receipt_id: number;
+  employee_id: number;
+  new_item_id: number;
+  qty: number;
+  return_employee_item_id?: number | null;
+  return_reason?: string | null;
+  status: "pending" | "validated" | "cancelled";
+  created_at: string;
+  validated_at?: string | null;
+  validated_by?: string | null;
+}
+
+interface ClothingSupplierReturn {
+  id: number;
+  purchase_order_id: number;
+  purchase_order_line_id?: number | null;
+  employee_id?: number | null;
+  employee_item_id?: number | null;
+  item_id?: number | null;
+  qty: number;
+  reason?: string | null;
+  status: "prepared" | "shipped" | "supplier_received";
+  created_at: string;
 }
 
 interface PurchaseOrderDetail {
@@ -60,18 +123,42 @@ interface PurchaseOrderDetail {
   last_sent_to: string | null;
   last_sent_by: string | null;
   items: PurchaseOrderItem[];
+  receipts?: PurchaseOrderReceipt[];
+  pending_assignments?: PendingClothingAssignment[];
+  supplier_returns?: ClothingSupplierReturn[];
 }
 
 interface CreateOrderPayload {
   supplier_id: number | null;
   status: string;
   note: string | null;
-  items: Array<{ quantity_ordered: number } & Partial<Record<ItemIdKey, number>>>;
+  items: Array<
+    { quantity_ordered: number } & Partial<Record<ItemIdKey, number>> & {
+        beneficiary_employee_id?: number | null;
+        line_type?: "standard" | "replacement";
+        return_expected?: boolean;
+        return_reason?: string | null;
+        return_employee_item_id?: number | null;
+        return_qty?: number | null;
+      }
+  >;
 }
 
 interface ReceiveOrderPayload {
   orderId: number;
   lines: Array<{ line_id: number; qty: number }>;
+}
+
+interface ReceiveLinePayload {
+  orderId: number;
+  lines: Array<{
+    purchase_order_line_id: number;
+    received_qty: number;
+    conformity_status: "conforme" | "non_conforme";
+    nonconformity_reason?: string | null;
+    nonconformity_action?: "replacement" | "credit_note" | "return_to_supplier" | null;
+    note?: string | null;
+  }>;
 }
 
 interface UpdateOrderPayload {
@@ -110,9 +197,24 @@ const ORDER_STATUSES: Array<{ value: string; label: string }> = [
   { value: "CANCELLED", label: "Annulé" }
 ];
 
+const RETURN_REASONS = [
+  "Vétusté",
+  "Endommagé",
+  "Erreur taille",
+  "Non conforme",
+  "Autre"
+];
+
 interface DraftLine {
   itemId: number | "";
   quantity: number;
+  lineType?: "standard" | "replacement";
+  beneficiaryId?: number | "";
+  returnExpected?: boolean;
+  returnReason?: string;
+  returnReasonDetail?: string;
+  returnEmployeeItemId?: number | "";
+  returnQty?: number;
 }
 
 interface PurchaseOrdersPanelProps {
@@ -126,6 +228,7 @@ interface PurchaseOrdersPanelProps {
   description?: string;
   downloadPrefix?: string;
   itemIdField?: ItemIdKey;
+  enableReplacementFlow?: boolean;
 }
 
 export function PurchaseOrdersPanel({
@@ -138,7 +241,8 @@ export function PurchaseOrdersPanel({
   title = "Bons de commande",
   description = "Suivez les commandes fournisseurs et marquez les réceptions pour mettre à jour les stocks.",
   downloadPrefix = "bon_commande",
-  itemIdField = "item_id"
+  itemIdField = "item_id",
+  enableReplacementFlow = false
 }: PurchaseOrdersPanelProps) {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
@@ -150,7 +254,9 @@ export function PurchaseOrdersPanel({
   const [draftSupplier, setDraftSupplier] = useState<number | "">("");
   const [draftStatus, setDraftStatus] = useState<string>("ORDERED");
   const [draftNote, setDraftNote] = useState("");
-  const [draftLines, setDraftLines] = useState<DraftLine[]>([{ itemId: "", quantity: 1 }]);
+  const [draftLines, setDraftLines] = useState<DraftLine[]>([
+    { itemId: "", quantity: 1, lineType: "standard", returnExpected: false }
+  ]);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
@@ -166,6 +272,19 @@ export function PurchaseOrdersPanel({
   const [receiveModalOrder, setReceiveModalOrder] = useState<PurchaseOrderDetail | null>(null);
   const [receiveQuantities, setReceiveQuantities] = useState<Record<number, number>>({});
   const [receiveFormError, setReceiveFormError] = useState<string | null>(null);
+  const [receiveDetails, setReceiveDetails] = useState<
+    Record<
+      number,
+      {
+        qty: number;
+        conformity_status: "conforme" | "non_conforme";
+        nonconformity_reason: string;
+        nonconformity_action: "replacement" | "credit_note" | "return_to_supplier" | "";
+        note: string;
+      }
+    >
+  >({});
+  const [pendingValidationError, setPendingValidationError] = useState<string | null>(null);
   const selectedDraftSupplier = useMemo(
     () => suppliers.find((supplier) => supplier.id === draftSupplier),
     [draftSupplier, suppliers]
@@ -175,9 +294,6 @@ export function PurchaseOrdersPanel({
     [editSupplier, suppliers]
   );
   const createFormId = `purchase-order-create-${itemIdField}`;
-  const suppliersById = useMemo(() => {
-    return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
-  }, [suppliers]);
   const canRefresh =
     user?.role === "admin" || modulePermissions.canAccess(moduleKey, "edit");
 
@@ -237,7 +353,10 @@ export function PurchaseOrdersPanel({
         };
         return next;
       }
-      return [...prev, { itemId: match.id, quantity: 1 }];
+      return [
+        ...prev,
+        { itemId: match.id, quantity: 1, lineType: "standard", returnExpected: false }
+      ];
     });
   };
 
@@ -260,6 +379,36 @@ export function PurchaseOrdersPanel({
   const formatItemLabel = (item: ItemOption) => {
     const supplierName = item.supplier_id ? suppliersById.get(item.supplier_id) : undefined;
     return formatPurchaseOrderItemLabel(item as PurchaseOrderItemLabelData, supplierName);
+  };
+
+  const resolveCollaboratorName = (collaboratorId: number | null | undefined) => {
+    if (!collaboratorId) {
+      return "-";
+    }
+    return collaboratorsById.get(collaboratorId) ?? `#${collaboratorId}`;
+  };
+
+  const resolveItemLabel = (itemId: number | null | undefined) => {
+    if (!itemId) {
+      return "-";
+    }
+    const item = itemsById.get(itemId);
+    if (!item) {
+      return `#${itemId}`;
+    }
+    const size = item.size ? ` · ${item.size}` : "";
+    const sku = item.sku ? ` (${item.sku})` : "";
+    return `${item.name}${sku}${size}`;
+  };
+
+  const resolveDotationLabel = (dotation: Dotation) => {
+    const item = itemsById.get(dotation.item_id);
+    if (!item) {
+      return `#${dotation.item_id}`;
+    }
+    const size = item.size ? ` · ${item.size}` : "";
+    const sku = item.sku ? ` (${item.sku})` : "";
+    return `${item.name}${sku}${size}`;
   };
 
   const formatConflictLabel = (match: BarcodeLookupItem) => {
@@ -312,7 +461,10 @@ export function PurchaseOrdersPanel({
             ...item,
             item_id: normalizedId
           } satisfies PurchaseOrderItem;
-        })
+        }),
+        receipts: order.receipts ?? [],
+        pending_assignments: order.pending_assignments ?? [],
+        supplier_returns: order.supplier_returns ?? []
       }));
     }
   });
@@ -325,6 +477,34 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const { data: collaborators = [] } = useQuery({
+    queryKey: ["clothing-collaborators"],
+    queryFn: async () => {
+      const response = await api.get<Collaborator[]>("/collaborators");
+      return response.data;
+    },
+    enabled: enableReplacementFlow
+  });
+
+  const { data: dotations = [] } = useQuery({
+    queryKey: ["clothing-dotations"],
+    queryFn: async () => {
+      const response = await api.get<Dotation[]>("/dotations");
+      return response.data;
+    },
+    enabled: enableReplacementFlow
+  });
+
+  const suppliersById = useMemo(() => {
+    return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
+  }, [suppliers]);
+  const itemsById = useMemo(() => {
+    return new Map(items.map((item) => [item.id, item]));
+  }, [items]);
+  const collaboratorsById = useMemo(() => {
+    return new Map(collaborators.map((collaborator) => [collaborator.id, collaborator.full_name]));
+  }, [collaborators]);
+
   const createOrder = useMutation({
     mutationFn: async (payload: CreateOrderPayload) => {
       await api.post(`${purchaseOrdersPath}/`, payload);
@@ -332,7 +512,7 @@ export function PurchaseOrdersPanel({
     onSuccess: async () => {
       setMessage("Bon de commande créé.");
       setIsCreateModalOpen(false);
-      setDraftLines([{ itemId: "", quantity: 1 }]);
+      setDraftLines([{ itemId: "", quantity: 1, lineType: "standard", returnExpected: false }]);
       setDraftSupplier("");
       setDraftStatus("ORDERED");
       setDraftNote("");
@@ -377,6 +557,54 @@ export function PurchaseOrdersPanel({
     onError: () => setError("Impossible d'enregistrer la réception."),
     onSettled: () => {
       window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const receiveOrderLines = useMutation({
+    mutationFn: async ({ orderId, lines }: ReceiveLinePayload) => {
+      await Promise.all(
+        lines.map((line) =>
+          api.post(`${purchaseOrdersPath}/${orderId}/receive-line`, line)
+        )
+      );
+    },
+    onSuccess: async () => {
+      setMessage("Réception enregistrée.");
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
+    },
+    onError: () => setError("Impossible d'enregistrer la réception."),
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const validatePendingAssignment = useMutation<
+    PendingClothingAssignment,
+    AxiosError<ApiErrorResponse>,
+    { orderId: number; pendingId: number }
+  >({
+    mutationFn: async ({ orderId, pendingId }) => {
+      const response = await api.post<PendingClothingAssignment>(
+        `${purchaseOrdersPath}/${orderId}/pending-assignments/${pendingId}/validate`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Attribution validée.");
+      setPendingValidationError(null);
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setPendingValidationError(detail ?? "Impossible de valider l'attribution.");
+    },
+    onSettled: () => {
+      window.setTimeout(() => {
+        setMessage(null);
+        setPendingValidationError(null);
+      }, 4000);
     }
   });
 
@@ -445,7 +673,7 @@ export function PurchaseOrdersPanel({
   >({
     mutationFn: async () => {
       const response = await api.post<PurchaseOrderAutoRefreshResponse>(
-        "/purchase-orders/auto/refresh",
+        `${purchaseOrdersPath}/auto/refresh`,
         null,
         { params: { module: moduleKey } }
       );
@@ -484,7 +712,10 @@ export function PurchaseOrdersPanel({
   };
 
   const handleAddLine = () => {
-    setDraftLines((prev) => [...prev, { itemId: "", quantity: 1 }]);
+    setDraftLines((prev) => [
+      ...prev,
+      { itemId: "", quantity: 1, lineType: "standard", returnExpected: false }
+    ]);
   };
 
   const handleRemoveLine = (index: number) => {
@@ -507,14 +738,51 @@ export function PurchaseOrdersPanel({
       .filter((line) => line.itemId !== "" && line.quantity > 0)
       .map((line) => {
         const itemId = Number(line.itemId);
+        const lineType = line.lineType ?? "standard";
+        const beneficiaryId =
+          line.beneficiaryId === "" || line.beneficiaryId === undefined
+            ? null
+            : Number(line.beneficiaryId);
+        const returnReason =
+          line.returnReason === "Autre"
+            ? line.returnReasonDetail?.trim() || null
+            : line.returnReason?.trim() || null;
+        const returnEmployeeItemId =
+          line.returnEmployeeItemId === "" || line.returnEmployeeItemId === undefined
+            ? null
+            : Number(line.returnEmployeeItemId);
         return {
           [itemIdField]: itemId,
-          quantity_ordered: line.quantity
+          quantity_ordered: line.quantity,
+          beneficiary_employee_id: beneficiaryId,
+          line_type: lineType,
+          return_expected: lineType === "replacement",
+          return_reason: returnReason,
+          return_employee_item_id: returnEmployeeItemId,
+          return_qty: lineType === "replacement" ? line.returnQty ?? line.quantity : null
         } satisfies { quantity_ordered: number } & Partial<Record<ItemIdKey, number>>;
       });
     if (normalizedLines.length === 0) {
       setError("Ajoutez au moins une ligne de commande valide.");
       return;
+    }
+    if (enableReplacementFlow) {
+      const invalidReplacement = normalizedLines.find((line) => {
+        if (line.line_type !== "replacement") {
+          return false;
+        }
+        return (
+          !line.beneficiary_employee_id ||
+          !line.return_reason ||
+          !line.return_employee_item_id ||
+          !line.return_qty ||
+          line.return_qty <= 0
+        );
+      });
+      if (invalidReplacement) {
+        setError("Complétez le bénéficiaire et le retour attendu pour les remplacements.");
+        return;
+      }
     }
     const payload: CreateOrderPayload = {
       supplier_id: draftSupplier === "" ? null : Number(draftSupplier),
@@ -528,54 +796,136 @@ export function PurchaseOrdersPanel({
   const handleOpenReceiveModal = (order: PurchaseOrderDetail) => {
     setReceiveFormError(null);
     setReceiveModalOrder(order);
-    setReceiveQuantities(
-      order.items.reduce<Record<number, number>>((acc, line) => {
-        acc[line.id] = 0;
-        return acc;
-      }, {})
-    );
+    if (enableReplacementFlow) {
+      setReceiveDetails(
+        order.items.reduce<
+          Record<
+            number,
+            {
+              qty: number;
+              conformity_status: "conforme" | "non_conforme";
+              nonconformity_reason: string;
+              nonconformity_action: "replacement" | "credit_note" | "return_to_supplier" | "";
+              note: string;
+            }
+          >
+        >((acc, line) => {
+          acc[line.id] = {
+            qty: 0,
+            conformity_status: "conforme",
+            nonconformity_reason: "",
+            nonconformity_action: "",
+            note: ""
+          };
+          return acc;
+        }, {})
+      );
+    } else {
+      setReceiveQuantities(
+        order.items.reduce<Record<number, number>>((acc, line) => {
+          acc[line.id] = 0;
+          return acc;
+        }, {})
+      );
+    }
   };
 
   const handleCloseReceiveModal = () => {
     setReceiveFormError(null);
     setReceiveModalOrder(null);
     setReceiveQuantities({});
+    setReceiveDetails({});
   };
 
   const handleSubmitPartialReceive = async () => {
     if (!receiveModalOrder) {
       return;
     }
-    const payloadLines = receiveModalOrder.items
-      .map((line) => {
-        const remaining = line.quantity_ordered - line.quantity_received;
-        const qty = receiveQuantities[line.id] ?? 0;
-        return {
-          line_id: line.id,
-          qty,
-          remaining
-        };
-      })
-      .filter((line) => line.qty > 0);
+    if (enableReplacementFlow) {
+      const payloadLines = receiveModalOrder.items
+        .map((line) => {
+          const remaining = line.quantity_ordered - line.quantity_received;
+          const details = receiveDetails[line.id];
+          const qty = details?.qty ?? 0;
+          return {
+            line,
+            remaining,
+            details,
+            qty
+          };
+        })
+        .filter((entry) => entry.qty > 0 && entry.details);
 
-    const invalidLine = payloadLines.find((line) => line.qty > line.remaining);
-    if (invalidLine) {
-      setReceiveFormError("La quantité ne peut pas dépasser le restant à recevoir.");
-      return;
-    }
-    if (payloadLines.length === 0) {
-      setReceiveFormError("Renseignez au moins une quantité à réceptionner.");
-      return;
-    }
-    setReceiveFormError(null);
-    try {
-      await receiveOrder.mutateAsync({
-        orderId: receiveModalOrder.id,
-        lines: payloadLines.map(({ line_id, qty }) => ({ line_id, qty }))
-      });
-      handleCloseReceiveModal();
-    } catch {
-      // Les erreurs API sont gérées par la mutation
+      const invalidLine = payloadLines.find((entry) => entry.qty > entry.remaining);
+      if (invalidLine) {
+        setReceiveFormError("La quantité ne peut pas dépasser le restant à recevoir.");
+        return;
+      }
+      const missingNonConformity = payloadLines.find(
+        (entry) =>
+          entry.details?.conformity_status === "non_conforme" &&
+          (!entry.details.nonconformity_reason.trim() ||
+            !entry.details.nonconformity_action)
+      );
+      if (missingNonConformity) {
+        setReceiveFormError("Renseignez un motif et une action pour les non-conformités.");
+        return;
+      }
+      if (payloadLines.length === 0) {
+        setReceiveFormError("Renseignez au moins une quantité à réceptionner.");
+        return;
+      }
+      setReceiveFormError(null);
+      try {
+        await receiveOrderLines.mutateAsync({
+          orderId: receiveModalOrder.id,
+          lines: payloadLines.map((entry) => ({
+            purchase_order_line_id: entry.line.id,
+            received_qty: entry.qty,
+            conformity_status: entry.details!.conformity_status,
+            nonconformity_reason: entry.details!.nonconformity_reason.trim()
+              ? entry.details!.nonconformity_reason.trim()
+              : null,
+            nonconformity_action: entry.details!.nonconformity_action || null,
+            note: entry.details!.note.trim() ? entry.details!.note.trim() : null
+          }))
+        });
+        handleCloseReceiveModal();
+      } catch {
+        // Les erreurs API sont gérées par la mutation
+      }
+    } else {
+      const payloadLines = receiveModalOrder.items
+        .map((line) => {
+          const remaining = line.quantity_ordered - line.quantity_received;
+          const qty = receiveQuantities[line.id] ?? 0;
+          return {
+            line_id: line.id,
+            qty,
+            remaining
+          };
+        })
+        .filter((line) => line.qty > 0);
+
+      const invalidLine = payloadLines.find((line) => line.qty > line.remaining);
+      if (invalidLine) {
+        setReceiveFormError("La quantité ne peut pas dépasser le restant à recevoir.");
+        return;
+      }
+      if (payloadLines.length === 0) {
+        setReceiveFormError("Renseignez au moins une quantité à réceptionner.");
+        return;
+      }
+      setReceiveFormError(null);
+      try {
+        await receiveOrder.mutateAsync({
+          orderId: receiveModalOrder.id,
+          lines: payloadLines.map(({ line_id, qty }) => ({ line_id, qty }))
+        });
+        handleCloseReceiveModal();
+      } catch {
+        // Les erreurs API sont gérées par la mutation
+      }
     }
   };
 
@@ -583,13 +933,36 @@ export function PurchaseOrdersPanel({
     if (!receiveModalOrder) {
       return;
     }
-    setReceiveQuantities(
-      receiveModalOrder.items.reduce<Record<number, number>>((acc, line) => {
-        const remaining = line.quantity_ordered - line.quantity_received;
-        acc[line.id] = Math.max(0, remaining);
-        return acc;
-      }, {})
-    );
+    if (enableReplacementFlow) {
+      setReceiveDetails((prev) => {
+        const next = { ...prev };
+        receiveModalOrder.items.forEach((line) => {
+          const remaining = line.quantity_ordered - line.quantity_received;
+          if (!next[line.id]) {
+            next[line.id] = {
+              qty: 0,
+              conformity_status: "conforme",
+              nonconformity_reason: "",
+              nonconformity_action: "",
+              note: ""
+            };
+          }
+          next[line.id] = {
+            ...next[line.id],
+            qty: Math.max(0, remaining)
+          };
+        });
+        return next;
+      });
+    } else {
+      setReceiveQuantities(
+        receiveModalOrder.items.reduce<Record<number, number>>((acc, line) => {
+          const remaining = line.quantity_ordered - line.quantity_received;
+          acc[line.id] = Math.max(0, remaining);
+          return acc;
+        }, {})
+      );
+    }
   };
 
   const handleEditOrder = (order: PurchaseOrderDetail) => {
@@ -708,6 +1081,9 @@ export function PurchaseOrdersPanel({
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {refreshSummary ? <p className="text-xs text-slate-400">{refreshSummary}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {pendingValidationError ? (
+        <p className="text-sm text-red-400">{pendingValidationError}</p>
+      ) : null}
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-4">
@@ -779,16 +1155,107 @@ export function PurchaseOrdersPanel({
                         <ul className="space-y-1 text-xs">
                           {order.items.map((line) => {
                             const itemId = resolveItemId(line);
+                            const lineReceipts = (order.receipts ?? []).filter(
+                              (receipt) => receipt.purchase_order_line_id === line.id
+                            );
+                            const hasNonConforming = lineReceipts.some(
+                              (receipt) => receipt.conformity_status === "non_conforme"
+                            );
+                            const hasConforming = lineReceipts.some(
+                              (receipt) => receipt.conformity_status === "conforme"
+                            );
                             return (
                               <li key={line.id}>
-                                <span className="font-semibold">{line.item_name ?? `#${itemId}`}</span>
-                                {": "}
-                                <span>
-                                  {line.quantity_received}/{line.quantity_ordered}
-                                </span>
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className="font-semibold">
+                                    {line.item_name ?? `#${itemId}`}
+                                  </span>
+                                  <span>
+                                    {line.quantity_received}/{line.quantity_ordered}
+                                  </span>
+                                  {hasConforming ? (
+                                    <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-200">
+                                      Conforme
+                                    </span>
+                                  ) : null}
+                                  {hasNonConforming ? (
+                                    <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] text-rose-200">
+                                      NC
+                                    </span>
+                                  ) : null}
+                                </div>
+                                {line.beneficiary_employee_id ? (
+                                  <p className="text-[11px] text-slate-400">
+                                    Bénéficiaire:{" "}
+                                    {line.beneficiary_name ??
+                                      resolveCollaboratorName(line.beneficiary_employee_id)}
+                                  </p>
+                                ) : null}
+                                {line.line_type === "replacement" ? (
+                                  <p className="text-[11px] text-slate-400">
+                                    Retour attendu:{" "}
+                                    {line.return_expected ? "Oui" : "Non"}
+                                    {line.return_reason ? ` · ${line.return_reason}` : ""}
+                                    {line.return_status ? ` · ${line.return_status}` : ""}
+                                  </p>
+                                ) : null}
                               </li>
                             );
                           })}
+                          {(order.pending_assignments ?? []).some(
+                            (assignment) => assignment.status === "pending"
+                          ) ? (
+                            <li className="space-y-2 pt-2">
+                              <p className="text-[11px] uppercase text-slate-500">
+                                Attributions en attente
+                              </p>
+                              {(order.pending_assignments ?? [])
+                                .filter((assignment) => assignment.status === "pending")
+                                .map((assignment) => (
+                                  <div
+                                    key={assignment.id}
+                                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-1"
+                                  >
+                                    <div>
+                                      <p className="text-xs text-slate-200">
+                                        {resolveCollaboratorName(assignment.employee_id)} ·{" "}
+                                        {resolveItemLabel(assignment.new_item_id)}
+                                      </p>
+                                      {assignment.return_employee_item_id ? (
+                                        <p className="text-[11px] text-slate-400">
+                                          Retour:{" "}
+                                          {(() => {
+                                            const matched = dotations.find(
+                                              (dotation) =>
+                                                dotation.id === assignment.return_employee_item_id
+                                            );
+                                            return matched
+                                              ? resolveDotationLabel(matched)
+                                              : `#${assignment.return_employee_item_id}`;
+                                          })()}
+                                          {assignment.return_reason
+                                            ? ` · ${assignment.return_reason}`
+                                            : ""}
+                                        </p>
+                                      ) : null}
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() =>
+                                        validatePendingAssignment.mutate({
+                                          orderId: order.id,
+                                          pendingId: assignment.id
+                                        })
+                                      }
+                                      disabled={validatePendingAssignment.isPending}
+                                      className="rounded bg-indigo-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                    >
+                                      Valider attribution + retour
+                                    </button>
+                                  </div>
+                                ))}
+                            </li>
+                          ) : null}
                           {order.note ? (
                             <li className="text-slate-400">Note: {order.note}</li>
                           ) : null}
@@ -805,9 +1272,23 @@ export function PurchaseOrdersPanel({
                         <div className="flex flex-col gap-2">
                           <button
                             type="button"
-                            onClick={() =>
-                              receiveOrder.mutate({ orderId: order.id, lines: outstanding })
-                            }
+                            onClick={() => {
+                              if (enableReplacementFlow) {
+                                receiveOrderLines.mutate({
+                                  orderId: order.id,
+                                  lines: outstanding.map((line) => ({
+                                    purchase_order_line_id: line.line_id,
+                                    received_qty: line.qty,
+                                    conformity_status: "conforme",
+                                    nonconformity_reason: null,
+                                    nonconformity_action: null,
+                                    note: null
+                                  }))
+                                });
+                              } else {
+                                receiveOrder.mutate({ orderId: order.id, lines: outstanding });
+                              }
+                            }}
                             disabled={!canReceive}
                             className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
                             title={
@@ -1059,57 +1540,263 @@ export function PurchaseOrdersPanel({
               </button>
             </div>
           </div>
-          {draftLines.map((line, index) => (
-            <div key={index} className="flex min-w-0 gap-2">
-              <select
-                value={line.itemId}
-                onChange={(event) =>
-                  setDraftLines((prev) => {
-                    const next = [...prev];
-                    next[index] = {
-                      ...next[index],
-                      itemId: event.target.value ? Number(event.target.value) : ""
-                    };
-                    return next;
+          {draftLines.map((line, index) => {
+            const selectedItem =
+              typeof line.itemId === "number" ? itemsById.get(line.itemId) : undefined;
+            const collaboratorId =
+              typeof line.beneficiaryId === "number" ? line.beneficiaryId : null;
+            const collaboratorDotations = collaboratorId
+              ? dotations.filter((dotation) => dotation.collaborator_id === collaboratorId)
+              : [];
+            const filteredDotations =
+              selectedItem && collaboratorDotations.length > 0
+                ? collaboratorDotations.filter((dotation) => {
+                    const dotationItem = itemsById.get(dotation.item_id);
+                    return (
+                      dotationItem &&
+                      dotationItem.category_id === selectedItem.category_id &&
+                      dotationItem.size === selectedItem.size
+                    );
                   })
-                }
-                className="w-full min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                : [];
+            const returnOptions =
+              filteredDotations.length > 0 ? filteredDotations : collaboratorDotations;
+            const isFiltered = filteredDotations.length > 0;
+            return (
+              <div
+                key={index}
+                className="space-y-3 rounded-md border border-slate-800 bg-slate-950/60 p-3"
               >
-                <option value="">Sélectionnez un article</option>
-                {items.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {formatItemLabel(item)}
-                  </option>
-                ))}
-              </select>
-              <AppTextInput
-                type="number"
-                min={1}
-                value={line.quantity}
-                onChange={(event) =>
-                  setDraftLines((prev) => {
-                    const next = [...prev];
-                    next[index] = {
-                      ...next[index],
-                      quantity: Number(event.target.value)
-                    };
-                    return next;
-                  })
-                }
-                className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-              />
-              {draftLines.length > 1 ? (
-                <button
-                  type="button"
-                  onClick={() => handleRemoveLine(index)}
-                  className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
-                  title="Supprimer la ligne"
-                >
-                  Retirer
-                </button>
-              ) : null}
-            </div>
-          ))}
+                <div className="flex min-w-0 flex-wrap gap-2">
+                  <select
+                    value={line.itemId}
+                    onChange={(event) =>
+                      setDraftLines((prev) => {
+                        const next = [...prev];
+                        next[index] = {
+                          ...next[index],
+                          itemId: event.target.value ? Number(event.target.value) : ""
+                        };
+                        return next;
+                      })
+                    }
+                    className="w-full min-w-0 flex-1 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="">Sélectionnez un article</option>
+                    {items.map((item) => (
+                      <option key={item.id} value={item.id}>
+                        {formatItemLabel(item)}
+                      </option>
+                    ))}
+                  </select>
+                  <AppTextInput
+                    type="number"
+                    min={1}
+                    value={line.quantity}
+                    onChange={(event) =>
+                      setDraftLines((prev) => {
+                        const next = [...prev];
+                        const qty = Number(event.target.value);
+                        next[index] = {
+                          ...next[index],
+                          quantity: qty,
+                          returnQty:
+                            next[index].lineType === "replacement" ? qty : next[index].returnQty
+                        };
+                        return next;
+                      })
+                    }
+                    className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  />
+                  {draftLines.length > 1 ? (
+                    <button
+                      type="button"
+                      onClick={() => handleRemoveLine(index)}
+                      className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
+                      title="Supprimer la ligne"
+                    >
+                      Retirer
+                    </button>
+                  ) : null}
+                </div>
+
+                {enableReplacementFlow ? (
+                  <div className="space-y-3 text-sm text-slate-200">
+                    <label className="flex items-center gap-2 text-xs font-semibold text-slate-300">
+                      <input
+                        type="checkbox"
+                        checked={line.lineType === "replacement"}
+                        onChange={(event) =>
+                          setDraftLines((prev) => {
+                            const next = [...prev];
+                            const isReplacement = event.target.checked;
+                            next[index] = {
+                              ...next[index],
+                              lineType: isReplacement ? "replacement" : "standard",
+                              returnExpected: isReplacement,
+                              beneficiaryId: isReplacement ? next[index].beneficiaryId ?? "" : "",
+                              returnReason: isReplacement
+                                ? next[index].returnReason ?? RETURN_REASONS[0]
+                                : "",
+                              returnEmployeeItemId: isReplacement
+                                ? next[index].returnEmployeeItemId ?? ""
+                                : "",
+                              returnQty: isReplacement ? next[index].returnQty ?? line.quantity : 0
+                            };
+                            return next;
+                          })
+                        }
+                      />
+                      Remplacement / Retour fournisseur
+                    </label>
+
+                    {line.lineType === "replacement" ? (
+                      <>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-300">
+                              Bénéficiaire
+                            </label>
+                            <select
+                              value={line.beneficiaryId ?? ""}
+                              onChange={(event) =>
+                                setDraftLines((prev) => {
+                                  const next = [...prev];
+                                  next[index] = {
+                                    ...next[index],
+                                    beneficiaryId: event.target.value
+                                      ? Number(event.target.value)
+                                      : "",
+                                    returnEmployeeItemId: ""
+                                  };
+                                  return next;
+                                })
+                              }
+                              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                            >
+                              <option value="">Sélectionnez un collaborateur</option>
+                              {collaborators.map((collaborator) => (
+                                <option key={collaborator.id} value={collaborator.id}>
+                                  {collaborator.full_name}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-300">
+                              Article attribué à retourner
+                            </label>
+                            <select
+                              value={line.returnEmployeeItemId ?? ""}
+                              onChange={(event) =>
+                                setDraftLines((prev) => {
+                                  const next = [...prev];
+                                  next[index] = {
+                                    ...next[index],
+                                    returnEmployeeItemId: event.target.value
+                                      ? Number(event.target.value)
+                                      : ""
+                                  };
+                                  return next;
+                                })
+                              }
+                              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                              disabled={!collaboratorId}
+                            >
+                              <option value="">
+                                {collaboratorId
+                                  ? "Sélectionnez une dotation"
+                                  : "Choisissez d'abord un collaborateur"}
+                              </option>
+                              {returnOptions.map((dotation) => (
+                                <option key={dotation.id} value={dotation.id}>
+                                  {resolveDotationLabel(dotation)}
+                                </option>
+                              ))}
+                            </select>
+                            {collaboratorId && isFiltered ? (
+                              <p className="text-xs text-slate-400">
+                                Suggestions basées sur la catégorie et la taille de l'article.
+                              </p>
+                            ) : null}
+                          </div>
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-300">
+                              Motif du retour
+                            </label>
+                            <select
+                              value={line.returnReason ?? RETURN_REASONS[0]}
+                              onChange={(event) =>
+                                setDraftLines((prev) => {
+                                  const next = [...prev];
+                                  next[index] = {
+                                    ...next[index],
+                                    returnReason: event.target.value,
+                                    returnReasonDetail:
+                                      event.target.value === "Autre"
+                                        ? next[index].returnReasonDetail ?? ""
+                                        : ""
+                                  };
+                                  return next;
+                                })
+                              }
+                              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                            >
+                              {RETURN_REASONS.map((reason) => (
+                                <option key={reason} value={reason}>
+                                  {reason}
+                                </option>
+                              ))}
+                            </select>
+                            {line.returnReason === "Autre" ? (
+                              <AppTextInput
+                                value={line.returnReasonDetail ?? ""}
+                                onChange={(event) =>
+                                  setDraftLines((prev) => {
+                                    const next = [...prev];
+                                    next[index] = {
+                                      ...next[index],
+                                      returnReasonDetail: event.target.value
+                                    };
+                                    return next;
+                                  })
+                                }
+                                placeholder="Précisez le motif"
+                                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                              />
+                            ) : null}
+                          </div>
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-300">
+                              Quantité retour
+                            </label>
+                            <AppTextInput
+                              type="number"
+                              min={1}
+                              value={line.returnQty ?? line.quantity}
+                              onChange={(event) =>
+                                setDraftLines((prev) => {
+                                  const next = [...prev];
+                                  next[index] = {
+                                    ...next[index],
+                                    returnQty: Number(event.target.value)
+                                  };
+                                  return next;
+                                })
+                              }
+                              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                            />
+                          </div>
+                        </div>
+                      </>
+                    ) : null}
+                  </div>
+                ) : null}
+              </div>
+            );
+          })}
           <button
             type="button"
             onClick={handleAddLine}
@@ -1149,7 +1836,7 @@ export function PurchaseOrdersPanel({
                 type="button"
                 onClick={handleSubmitPartialReceive}
                 className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500"
-                disabled={receiveOrder.isPending}
+                disabled={enableReplacementFlow ? receiveOrderLines.isPending : receiveOrder.isPending}
               >
                 Valider réception
               </button>
@@ -1166,40 +1853,179 @@ export function PurchaseOrdersPanel({
               <p className="text-xs text-red-400">{receiveFormError}</p>
             ) : null}
             <div className="space-y-3">
-              {receiveModalOrder.items.map((line) => {
-                const remaining = line.quantity_ordered - line.quantity_received;
-                const itemId = resolveItemId(line);
-                return (
-                  <div
-                    key={line.id}
-                    className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2"
-                  >
-                    <div>
-                      <p className="font-semibold">
-                        {line.item_name ?? (itemId ? `#${itemId}` : "Article")}
-                      </p>
-                      <p className="text-xs text-slate-400">
-                        Reçu: {line.quantity_received}/{line.quantity_ordered} · Restant:{" "}
-                        {Math.max(0, remaining)}
-                      </p>
-                    </div>
-                    <AppTextInput
-                      type="number"
-                      min={0}
-                      max={Math.max(0, remaining)}
-                      value={receiveQuantities[line.id] ?? 0}
-                      onChange={(event) =>
-                        setReceiveQuantities((prev) => ({
-                          ...prev,
-                          [line.id]: Number(event.target.value)
-                        }))
-                      }
-                      disabled={remaining <= 0}
-                      className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
-                    />
-                  </div>
-                );
-              })}
+              {enableReplacementFlow
+                ? receiveModalOrder.items.map((line) => {
+                    const remaining = line.quantity_ordered - line.quantity_received;
+                    const itemId = resolveItemId(line);
+                    const details = receiveDetails[line.id] ?? {
+                      qty: 0,
+                      conformity_status: "conforme",
+                      nonconformity_reason: "",
+                      nonconformity_action: "",
+                      note: ""
+                    };
+                    return (
+                      <div
+                        key={line.id}
+                        className="space-y-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2"
+                      >
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          <div>
+                            <p className="font-semibold">
+                              {line.item_name ?? (itemId ? `#${itemId}` : "Article")}
+                            </p>
+                            <p className="text-xs text-slate-400">
+                              Reçu: {line.quantity_received}/{line.quantity_ordered} · Restant:{" "}
+                              {Math.max(0, remaining)}
+                            </p>
+                          </div>
+                          <AppTextInput
+                            type="number"
+                            min={0}
+                            max={Math.max(0, remaining)}
+                            value={details.qty}
+                            onChange={(event) =>
+                              setReceiveDetails((prev) => ({
+                                ...prev,
+                                [line.id]: {
+                                  ...details,
+                                  qty: Number(event.target.value)
+                                }
+                              }))
+                            }
+                            disabled={remaining <= 0}
+                            className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                          />
+                        </div>
+                        <div className="grid gap-2 md:grid-cols-2">
+                          <div className="space-y-1">
+                            <label className="text-xs font-semibold text-slate-300">
+                              Conformité
+                            </label>
+                            <select
+                              value={details.conformity_status}
+                              onChange={(event) =>
+                                setReceiveDetails((prev) => ({
+                                  ...prev,
+                                  [line.id]: {
+                                    ...details,
+                                    conformity_status:
+                                      event.target.value === "non_conforme"
+                                        ? "non_conforme"
+                                        : "conforme"
+                                  }
+                                }))
+                              }
+                              className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none"
+                            >
+                              <option value="conforme">Conforme</option>
+                              <option value="non_conforme">Non conforme</option>
+                            </select>
+                          </div>
+                          {details.conformity_status === "non_conforme" ? (
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold text-slate-300">
+                                Action
+                              </label>
+                              <select
+                                value={details.nonconformity_action}
+                                onChange={(event) =>
+                                  setReceiveDetails((prev) => ({
+                                    ...prev,
+                                    [line.id]: {
+                                      ...details,
+                                      nonconformity_action:
+                                        event.target.value as typeof details.nonconformity_action
+                                    }
+                                  }))
+                                }
+                                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none"
+                              >
+                                <option value="">Sélectionnez une action</option>
+                                <option value="replacement">Remplacement</option>
+                                <option value="credit_note">Avoir</option>
+                                <option value="return_to_supplier">Retour fournisseur</option>
+                              </select>
+                            </div>
+                          ) : null}
+                        </div>
+                        {details.conformity_status === "non_conforme" ? (
+                          <div className="grid gap-2 md:grid-cols-2">
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold text-slate-300">
+                                Motif non conforme
+                              </label>
+                              <AppTextInput
+                                value={details.nonconformity_reason}
+                                onChange={(event) =>
+                                  setReceiveDetails((prev) => ({
+                                    ...prev,
+                                    [line.id]: {
+                                      ...details,
+                                      nonconformity_reason: event.target.value
+                                    }
+                                  }))
+                                }
+                                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none"
+                              />
+                            </div>
+                            <div className="space-y-1">
+                              <label className="text-xs font-semibold text-slate-300">
+                                Note
+                              </label>
+                              <AppTextInput
+                                value={details.note}
+                                onChange={(event) =>
+                                  setReceiveDetails((prev) => ({
+                                    ...prev,
+                                    [line.id]: {
+                                      ...details,
+                                      note: event.target.value
+                                    }
+                                  }))
+                                }
+                                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none"
+                              />
+                            </div>
+                          </div>
+                        ) : null}
+                      </div>
+                    );
+                  })
+                : receiveModalOrder.items.map((line) => {
+                    const remaining = line.quantity_ordered - line.quantity_received;
+                    const itemId = resolveItemId(line);
+                    return (
+                      <div
+                        key={line.id}
+                        className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-slate-800 bg-slate-950 px-3 py-2"
+                      >
+                        <div>
+                          <p className="font-semibold">
+                            {line.item_name ?? (itemId ? `#${itemId}` : "Article")}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            Reçu: {line.quantity_received}/{line.quantity_ordered} · Restant:{" "}
+                            {Math.max(0, remaining)}
+                          </p>
+                        </div>
+                        <AppTextInput
+                          type="number"
+                          min={0}
+                          max={Math.max(0, remaining)}
+                          value={receiveQuantities[line.id] ?? 0}
+                          onChange={(event) =>
+                            setReceiveQuantities((prev) => ({
+                              ...prev,
+                              [line.id]: Number(event.target.value)
+                            }))
+                          }
+                          disabled={remaining <= 0}
+                          className="w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none disabled:cursor-not-allowed disabled:opacity-60"
+                        />
+                      </div>
+                    );
+                  })}
             </div>
           </div>
         ) : null}

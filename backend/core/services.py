@@ -3609,6 +3609,28 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_order_items ADD COLUMN sku TEXT")
         if "unit" not in poi_columns:
             execute("ALTER TABLE purchase_order_items ADD COLUMN unit TEXT")
+        if "beneficiary_employee_id" not in poi_columns:
+            execute("ALTER TABLE purchase_order_items ADD COLUMN beneficiary_employee_id INTEGER")
+        if "line_type" not in poi_columns:
+            execute(
+                "ALTER TABLE purchase_order_items ADD COLUMN line_type TEXT NOT NULL DEFAULT 'standard'"
+            )
+        if "return_expected" not in poi_columns:
+            execute(
+                "ALTER TABLE purchase_order_items ADD COLUMN return_expected INTEGER NOT NULL DEFAULT 0"
+            )
+        if "return_reason" not in poi_columns:
+            execute("ALTER TABLE purchase_order_items ADD COLUMN return_reason TEXT")
+        if "return_employee_item_id" not in poi_columns:
+            execute("ALTER TABLE purchase_order_items ADD COLUMN return_employee_item_id INTEGER")
+        if "return_qty" not in poi_columns:
+            execute(
+                "ALTER TABLE purchase_order_items ADD COLUMN return_qty INTEGER NOT NULL DEFAULT 0"
+            )
+        if "return_status" not in poi_columns:
+            execute(
+                "ALTER TABLE purchase_order_items ADD COLUMN return_status TEXT NOT NULL DEFAULT 'none'"
+            )
 
         dotation_info = execute("PRAGMA table_info(dotations)").fetchall()
         dotation_columns = {row["name"] for row in dotation_info}
@@ -3704,6 +3726,62 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         )
         execute(
             "CREATE INDEX IF NOT EXISTS idx_pharmacy_purchase_order_items_item ON pharmacy_purchase_order_items(pharmacy_item_id)"
+        )
+
+        executescript(
+            """
+            CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_key TEXT NOT NULL,
+                purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                purchase_order_line_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+                received_qty INTEGER NOT NULL,
+                conformity_status TEXT NOT NULL,
+                nonconformity_reason TEXT,
+                nonconformity_action TEXT,
+                note TEXT,
+                created_by TEXT,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_order
+            ON purchase_order_receipts(purchase_order_id);
+            CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_line
+            ON purchase_order_receipts(purchase_order_line_id);
+            CREATE TABLE IF NOT EXISTS pending_clothing_assignments (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_key TEXT NOT NULL,
+                purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                purchase_order_line_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+                receipt_id INTEGER NOT NULL REFERENCES purchase_order_receipts(id) ON DELETE CASCADE,
+                employee_id INTEGER NOT NULL REFERENCES collaborators(id) ON DELETE CASCADE,
+                new_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                new_item_sku TEXT,
+                new_item_size TEXT,
+                qty INTEGER NOT NULL,
+                return_employee_item_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
+                return_reason TEXT,
+                status TEXT NOT NULL DEFAULT 'pending',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                validated_at TIMESTAMP,
+                validated_by TEXT,
+                UNIQUE(site_key, receipt_id, purchase_order_line_id)
+            );
+            CREATE TABLE IF NOT EXISTS clothing_supplier_returns (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                site_key TEXT NOT NULL,
+                purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                purchase_order_line_id INTEGER REFERENCES purchase_order_items(id) ON DELETE SET NULL,
+                employee_id INTEGER REFERENCES collaborators(id) ON DELETE SET NULL,
+                employee_item_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
+                item_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
+                qty INTEGER NOT NULL,
+                reason TEXT,
+                status TEXT NOT NULL DEFAULT 'prepared',
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_clothing_supplier_returns_order
+            ON clothing_supplier_returns(purchase_order_id);
+            """
         )
 
         executescript(
@@ -9144,6 +9222,10 @@ class SupplierResolutionError(ValueError):
         self.message = message
 
 
+class PendingAssignmentConflictError(ValueError):
+    pass
+
+
 def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
     ensure_database_ready()
     normalized_site_key = sites.normalize_site_key(str(site_key)) if site_key is not None else None
@@ -9271,12 +9353,44 @@ def _build_purchase_order_detail(
 ) -> models.PurchaseOrderDetail:
     has_line_sku = _table_has_column(conn, "purchase_order_items", "sku")
     has_line_unit = _table_has_column(conn, "purchase_order_items", "unit")
+    has_beneficiary = _table_has_column(conn, "purchase_order_items", "beneficiary_employee_id")
+    has_line_type = _table_has_column(conn, "purchase_order_items", "line_type")
+    has_return_expected = _table_has_column(conn, "purchase_order_items", "return_expected")
+    has_return_reason = _table_has_column(conn, "purchase_order_items", "return_reason")
+    has_return_employee_item_id = _table_has_column(
+        conn, "purchase_order_items", "return_employee_item_id"
+    )
+    has_return_qty = _table_has_column(conn, "purchase_order_items", "return_qty")
+    has_return_status = _table_has_column(conn, "purchase_order_items", "return_status")
     sku_expr = "i.sku AS sku"
     unit_expr = "COALESCE(NULLIF(TRIM(i.size), ''), 'Unité') AS unit"
     if has_line_sku:
         sku_expr = "COALESCE(NULLIF(TRIM(poi.sku), ''), i.sku) AS sku"
     if has_line_unit:
         unit_expr = "COALESCE(NULLIF(TRIM(poi.unit), ''), NULLIF(TRIM(i.size), ''), 'Unité') AS unit"
+    beneficiary_expr = "NULL AS beneficiary_employee_id"
+    beneficiary_name_expr = "NULL AS beneficiary_name"
+    if has_beneficiary:
+        beneficiary_expr = "poi.beneficiary_employee_id AS beneficiary_employee_id"
+        beneficiary_name_expr = "c.full_name AS beneficiary_name"
+    line_type_expr = "'standard' AS line_type"
+    if has_line_type:
+        line_type_expr = "poi.line_type AS line_type"
+    return_expected_expr = "0 AS return_expected"
+    if has_return_expected:
+        return_expected_expr = "poi.return_expected AS return_expected"
+    return_reason_expr = "NULL AS return_reason"
+    if has_return_reason:
+        return_reason_expr = "poi.return_reason AS return_reason"
+    return_employee_expr = "NULL AS return_employee_item_id"
+    if has_return_employee_item_id:
+        return_employee_expr = "poi.return_employee_item_id AS return_employee_item_id"
+    return_qty_expr = "0 AS return_qty"
+    if has_return_qty:
+        return_qty_expr = "poi.return_qty AS return_qty"
+    return_status_expr = "'none' AS return_status"
+    if has_return_status:
+        return_status_expr = "poi.return_status AS return_status"
     items_cur = conn.execute(
         f"""
         SELECT poi.id,
@@ -9286,9 +9400,18 @@ def _build_purchase_order_detail(
                poi.quantity_received,
                i.name AS item_name,
                {sku_expr},
-               {unit_expr}
+               {unit_expr},
+               {beneficiary_expr},
+               {beneficiary_name_expr},
+               {line_type_expr},
+               {return_expected_expr},
+               {return_reason_expr},
+               {return_employee_expr},
+               {return_qty_expr},
+               {return_status_expr}
         FROM purchase_order_items AS poi
         JOIN items AS i ON i.id = poi.item_id
+        LEFT JOIN collaborators AS c ON c.id = poi.beneficiary_employee_id
         WHERE poi.purchase_order_id = ?
         ORDER BY i.name COLLATE NOCASE
         """,
@@ -9304,6 +9427,14 @@ def _build_purchase_order_detail(
             item_name=item_row["item_name"],
             sku=_row_get(item_row, "sku"),
             unit=_row_get(item_row, "unit"),
+            beneficiary_employee_id=_row_get(item_row, "beneficiary_employee_id"),
+            beneficiary_name=_row_get(item_row, "beneficiary_name"),
+            line_type=_row_get(item_row, "line_type", "standard"),
+            return_expected=bool(_row_get(item_row, "return_expected", 0)),
+            return_reason=_row_get(item_row, "return_reason"),
+            return_employee_item_id=_row_get(item_row, "return_employee_item_id"),
+            return_qty=_row_get(item_row, "return_qty", 0),
+            return_status=_row_get(item_row, "return_status", "none"),
         )
         for item_row in items_cur.fetchall()
     ]
@@ -9322,6 +9453,93 @@ def _build_purchase_order_detail(
             supplier_has_email = True
         except SupplierResolutionError as exc:
             supplier_missing_reason = exc.code
+    resolved_site_key = site_key or db.get_current_site_key()
+    receipts: list[models.PurchaseOrderReceipt] = []
+    if _table_exists(conn, "purchase_order_receipts"):
+        receipt_rows = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ? AND site_key = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (order_row["id"], resolved_site_key),
+        ).fetchall()
+        receipts = [
+            models.PurchaseOrderReceipt(
+                id=row["id"],
+                site_key=row["site_key"],
+                purchase_order_id=row["purchase_order_id"],
+                purchase_order_line_id=row["purchase_order_line_id"],
+                received_qty=row["received_qty"],
+                conformity_status=row["conformity_status"],
+                nonconformity_reason=_row_get(row, "nonconformity_reason"),
+                nonconformity_action=_row_get(row, "nonconformity_action"),
+                note=_row_get(row, "note"),
+                created_by=_row_get(row, "created_by"),
+                created_at=row["created_at"],
+            )
+            for row in receipt_rows
+        ]
+    pending_assignments: list[models.PendingClothingAssignment] = []
+    if _table_exists(conn, "pending_clothing_assignments"):
+        pending_rows = conn.execute(
+            """
+            SELECT *
+            FROM pending_clothing_assignments
+            WHERE purchase_order_id = ? AND site_key = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (order_row["id"], resolved_site_key),
+        ).fetchall()
+        pending_assignments = [
+            models.PendingClothingAssignment(
+                id=row["id"],
+                site_key=row["site_key"],
+                purchase_order_id=row["purchase_order_id"],
+                purchase_order_line_id=row["purchase_order_line_id"],
+                receipt_id=row["receipt_id"],
+                employee_id=row["employee_id"],
+                new_item_id=row["new_item_id"],
+                new_item_sku=_row_get(row, "new_item_sku"),
+                new_item_size=_row_get(row, "new_item_size"),
+                qty=row["qty"],
+                return_employee_item_id=_row_get(row, "return_employee_item_id"),
+                return_reason=_row_get(row, "return_reason"),
+                status=row["status"],
+                created_at=row["created_at"],
+                validated_at=_row_get(row, "validated_at"),
+                validated_by=_row_get(row, "validated_by"),
+            )
+            for row in pending_rows
+        ]
+    supplier_returns: list[models.ClothingSupplierReturn] = []
+    if _table_exists(conn, "clothing_supplier_returns"):
+        return_rows = conn.execute(
+            """
+            SELECT *
+            FROM clothing_supplier_returns
+            WHERE purchase_order_id = ? AND site_key = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (order_row["id"], resolved_site_key),
+        ).fetchall()
+        supplier_returns = [
+            models.ClothingSupplierReturn(
+                id=row["id"],
+                site_key=row["site_key"],
+                purchase_order_id=row["purchase_order_id"],
+                purchase_order_line_id=_row_get(row, "purchase_order_line_id"),
+                employee_id=_row_get(row, "employee_id"),
+                employee_item_id=_row_get(row, "employee_item_id"),
+                item_id=_row_get(row, "item_id"),
+                qty=row["qty"],
+                reason=_row_get(row, "reason"),
+                status=row["status"],
+                created_at=row["created_at"],
+            )
+            for row in return_rows
+        ]
     return models.PurchaseOrderDetail(
         id=order_row["id"],
         supplier_id=supplier_id,
@@ -9338,6 +9556,9 @@ def _build_purchase_order_detail(
         last_sent_to=order_row["last_sent_to"],
         last_sent_by=order_row["last_sent_by"],
         items=items,
+        receipts=receipts,
+        pending_assignments=pending_assignments,
+        supplier_returns=supplier_returns,
     )
 
 
@@ -9379,10 +9600,7 @@ def get_purchase_order(order_id: int) -> models.PurchaseOrderDetail:
 def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.PurchaseOrderDetail:
     ensure_database_ready()
     status = _normalize_purchase_order_status(payload.status)
-    aggregated = _aggregate_positive_quantities(
-        (line.item_id, line.quantity_ordered) for line in payload.items
-    )
-    if not aggregated:
+    if not payload.items:
         raise ValueError("Au moins un article est requis pour créer un bon de commande")
     with db.get_stock_connection() as conn:
         if payload.supplier_id is not None:
@@ -9402,12 +9620,74 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
             order_id = cur.lastrowid
             has_line_sku = _table_has_column(conn, "purchase_order_items", "sku")
             has_line_unit = _table_has_column(conn, "purchase_order_items", "unit")
-            for item_id, quantity in aggregated.items():
+            has_beneficiary = _table_has_column(
+                conn, "purchase_order_items", "beneficiary_employee_id"
+            )
+            has_line_type = _table_has_column(conn, "purchase_order_items", "line_type")
+            has_return_expected = _table_has_column(conn, "purchase_order_items", "return_expected")
+            has_return_reason = _table_has_column(conn, "purchase_order_items", "return_reason")
+            has_return_employee_item_id = _table_has_column(
+                conn, "purchase_order_items", "return_employee_item_id"
+            )
+            has_return_qty = _table_has_column(conn, "purchase_order_items", "return_qty")
+            has_return_status = _table_has_column(conn, "purchase_order_items", "return_status")
+            for line in payload.items:
+                item_id = line.item_id
+                quantity = line.quantity_ordered
+                if quantity <= 0:
+                    continue
                 item_row = conn.execute(
                     "SELECT sku, size FROM items WHERE id = ?", (item_id,)
                 ).fetchone()
                 if item_row is None:
                     raise ValueError("Article introuvable")
+                line_type = (line.line_type or "standard").strip().lower()
+                if line_type not in {"standard", "replacement"}:
+                    raise ValueError("Type de ligne invalide")
+                beneficiary_id = line.beneficiary_employee_id
+                if beneficiary_id:
+                    collaborator_row = conn.execute(
+                        "SELECT 1 FROM collaborators WHERE id = ?",
+                        (beneficiary_id,),
+                    ).fetchone()
+                    if collaborator_row is None:
+                        raise ValueError("Collaborateur introuvable")
+                return_expected = bool(line.return_expected)
+                return_reason = (line.return_reason or "").strip() if line.return_reason else None
+                return_employee_item_id = line.return_employee_item_id
+                return_qty = line.return_qty if line.return_qty is not None else 0
+                return_status = "none"
+                if line_type == "replacement":
+                    if not beneficiary_id:
+                        raise ValueError("Le bénéficiaire est requis pour un remplacement")
+                    return_expected = True
+                    if not return_reason:
+                        raise ValueError("Le motif de retour est requis pour un remplacement")
+                    if return_qty <= 0:
+                        return_qty = quantity
+                    if return_qty <= 0:
+                        raise ValueError("La quantité de retour doit être positive")
+                    if not return_employee_item_id:
+                        raise ValueError("L'article à retourner est requis pour un remplacement")
+                    dotation_row = conn.execute(
+                        """
+                        SELECT collaborator_id
+                        FROM dotations
+                        WHERE id = ?
+                        """,
+                        (return_employee_item_id,),
+                    ).fetchone()
+                    if dotation_row is None:
+                        raise ValueError("Article attribué introuvable pour le retour")
+                    if dotation_row["collaborator_id"] != beneficiary_id:
+                        raise ValueError("L'article retourné n'appartient pas au bénéficiaire")
+                    return_status = "to_prepare"
+                elif return_expected:
+                    if not return_reason:
+                        raise ValueError("Le motif de retour est requis")
+                    if return_qty <= 0:
+                        raise ValueError("La quantité de retour doit être positive")
+                    return_status = "to_prepare"
                 columns = [
                     "purchase_order_id",
                     "item_id",
@@ -9421,6 +9701,27 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                 if has_line_unit:
                     columns.append("unit")
                     values.append(item_row["size"] if item_row["size"] else None)
+                if has_beneficiary:
+                    columns.append("beneficiary_employee_id")
+                    values.append(beneficiary_id)
+                if has_line_type:
+                    columns.append("line_type")
+                    values.append(line_type)
+                if has_return_expected:
+                    columns.append("return_expected")
+                    values.append(int(return_expected))
+                if has_return_reason:
+                    columns.append("return_reason")
+                    values.append(return_reason)
+                if has_return_employee_item_id:
+                    columns.append("return_employee_item_id")
+                    values.append(return_employee_item_id)
+                if has_return_qty:
+                    columns.append("return_qty")
+                    values.append(return_qty)
+                if has_return_status:
+                    columns.append("return_status")
+                    values.append(return_status)
                 conn.execute(
                     f"INSERT INTO purchase_order_items ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
                     values,
@@ -10930,6 +11231,391 @@ def receive_purchase_order(
             conn.rollback()
             raise
     return get_purchase_order(order_id)
+
+
+def receive_purchase_order_line(
+    order_id: int,
+    payload: models.PurchaseOrderReceiveLinePayload,
+    *,
+    created_by: str | None,
+) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    normalized_site_key = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        order_row = conn.execute(
+            "SELECT status FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if order_row is None:
+            raise ValueError("Bon de commande introuvable")
+        if order_row["status"] == "CANCELLED":
+            raise ValueError("Bon de commande annulé")
+        line = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_items
+            WHERE purchase_order_id = ? AND id = ?
+            """,
+            (order_id, payload.purchase_order_line_id),
+        ).fetchone()
+        if line is None:
+            raise ValueError("Ligne de commande introuvable")
+        if payload.received_qty <= 0:
+            raise ValueError("Quantité reçue invalide")
+        remaining = line["quantity_ordered"] - line["quantity_received"]
+        if payload.received_qty > remaining:
+            raise ValueError("Quantité reçue supérieure au restant")
+        if payload.conformity_status == "non_conforme":
+            if not payload.nonconformity_reason:
+                raise ValueError("Motif de non-conformité requis")
+            if not payload.nonconformity_action:
+                raise ValueError("Action de non-conformité requise")
+        try:
+            if payload.conformity_status == "conforme":
+                new_received = line["quantity_received"] + payload.received_qty
+                conn.execute(
+                    "UPDATE purchase_order_items SET quantity_received = ? WHERE id = ?",
+                    (new_received, line["id"]),
+                )
+                conn.execute(
+                    "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                    (payload.received_qty, line["item_id"]),
+                )
+                conn.execute(
+                    "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                    (
+                        line["item_id"],
+                        payload.received_qty,
+                        f"Réception bon de commande #{order_id}",
+                    ),
+                )
+            receipt_cur = conn.execute(
+                """
+                INSERT INTO purchase_order_receipts (
+                    site_key,
+                    purchase_order_id,
+                    purchase_order_line_id,
+                    received_qty,
+                    conformity_status,
+                    nonconformity_reason,
+                    nonconformity_action,
+                    note,
+                    created_by
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_site_key,
+                    order_id,
+                    payload.purchase_order_line_id,
+                    payload.received_qty,
+                    payload.conformity_status,
+                    payload.nonconformity_reason,
+                    payload.nonconformity_action,
+                    payload.note,
+                    created_by,
+                ),
+            )
+            receipt_id = receipt_cur.lastrowid
+            line_type = _row_get(line, "line_type", "standard")
+            beneficiary_id = _row_get(line, "beneficiary_employee_id")
+            if payload.conformity_status == "conforme" and line_type == "replacement":
+                item_row = conn.execute(
+                    "SELECT sku, size FROM items WHERE id = ?",
+                    (line["item_id"],),
+                ).fetchone()
+                conn.execute(
+                    """
+                    INSERT OR IGNORE INTO pending_clothing_assignments (
+                        site_key,
+                        purchase_order_id,
+                        purchase_order_line_id,
+                        receipt_id,
+                        employee_id,
+                        new_item_id,
+                        new_item_sku,
+                        new_item_size,
+                        qty,
+                        return_employee_item_id,
+                        return_reason,
+                        status
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                    """,
+                    (
+                        normalized_site_key,
+                        order_id,
+                        line["id"],
+                        receipt_id,
+                        beneficiary_id,
+                        line["item_id"],
+                        _row_get(item_row, "sku"),
+                        _row_get(item_row, "size"),
+                        payload.received_qty,
+                        _row_get(line, "return_employee_item_id"),
+                        _row_get(line, "return_reason"),
+                    ),
+                )
+                if _table_has_column(conn, "purchase_order_items", "return_status") and _row_get(
+                    line, "return_expected", 0
+                ):
+                    conn.execute(
+                        "UPDATE purchase_order_items SET return_status = ? WHERE id = ?",
+                        ("to_prepare", line["id"]),
+                    )
+            if payload.conformity_status == "conforme":
+                totals = conn.execute(
+                    """
+                    SELECT quantity_ordered, quantity_received
+                    FROM purchase_order_items
+                    WHERE purchase_order_id = ?
+                    """,
+                    (order_id,),
+                ).fetchall()
+                if all(row["quantity_received"] >= row["quantity_ordered"] for row in totals):
+                    new_status = "RECEIVED"
+                elif any(row["quantity_received"] > 0 for row in totals):
+                    new_status = "PARTIALLY_RECEIVED"
+                else:
+                    new_status = order_row["status"]
+                if new_status != order_row["status"]:
+                    conn.execute(
+                        "UPDATE purchase_orders SET status = ? WHERE id = ?",
+                        (new_status, order_id),
+                    )
+            _persist_after_commit(conn, "default")
+        except Exception:
+            conn.rollback()
+            raise
+    return get_purchase_order(order_id)
+
+
+def validate_pending_assignment(
+    order_id: int,
+    pending_id: int,
+    *,
+    validated_by: str | None,
+) -> models.PendingClothingAssignment:
+    ensure_database_ready()
+    normalized_site_key = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        conn.execute("BEGIN IMMEDIATE")
+        pending_row = conn.execute(
+            """
+            SELECT *
+            FROM pending_clothing_assignments
+            WHERE id = ? AND purchase_order_id = ? AND site_key = ?
+            """,
+            (pending_id, order_id, normalized_site_key),
+        ).fetchone()
+        if pending_row is None:
+            raise ValueError("Attribution en attente introuvable")
+        if pending_row["status"] != "pending":
+            raise ValueError("Attribution déjà traitée")
+        line_row = conn.execute(
+            "SELECT * FROM purchase_order_items WHERE id = ?",
+            (pending_row["purchase_order_line_id"],),
+        ).fetchone()
+        if line_row is None:
+            raise ValueError("Ligne de commande introuvable")
+        return_employee_item_id = _row_get(pending_row, "return_employee_item_id")
+        if not return_employee_item_id:
+            raise ValueError("Article à retourner manquant")
+        dotation_row = conn.execute(
+            "SELECT * FROM dotations WHERE id = ?",
+            (return_employee_item_id,),
+        ).fetchone()
+        if dotation_row is None:
+            raise PendingAssignmentConflictError("Article attribué introuvable")
+        if dotation_row["collaborator_id"] != pending_row["employee_id"]:
+            raise PendingAssignmentConflictError(
+                "L'article retourné n'appartient pas au collaborateur"
+            )
+        return_qty = _row_get(line_row, "return_qty", pending_row["qty"])
+        if return_qty <= 0:
+            return_qty = pending_row["qty"]
+        if dotation_row["quantity"] < return_qty:
+            raise ValueError("Quantité de retour supérieure à la dotation")
+        item_row = conn.execute(
+            "SELECT quantity FROM items WHERE id = ?",
+            (pending_row["new_item_id"],),
+        ).fetchone()
+        if item_row is None:
+            raise ValueError("Article introuvable")
+        if item_row["quantity"] < pending_row["qty"]:
+            raise ValueError("Stock insuffisant pour la dotation")
+        conn.execute(
+            """
+            INSERT INTO dotations (
+                collaborator_id,
+                item_id,
+                quantity,
+                notes,
+                perceived_at,
+                is_lost,
+                is_degraded
+            ) VALUES (?, ?, ?, ?, DATE('now'), 0, 0)
+            """,
+            (
+                pending_row["employee_id"],
+                pending_row["new_item_id"],
+                pending_row["qty"],
+                f"Remplacement BC #{order_id}",
+            ),
+        )
+        conn.execute(
+            "UPDATE items SET quantity = quantity - ? WHERE id = ?",
+            (pending_row["qty"], pending_row["new_item_id"]),
+        )
+        conn.execute(
+            "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+            (pending_row["new_item_id"], -pending_row["qty"], "DOTATION_ASSIGNMENT"),
+        )
+        conn.execute("DELETE FROM dotations WHERE id = ?", (return_employee_item_id,))
+        conn.execute(
+            "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+            (return_qty, dotation_row["item_id"]),
+        )
+        conn.execute(
+            "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+            (dotation_row["item_id"], return_qty, "RETURN_FROM_EMPLOYEE"),
+        )
+        conn.execute(
+            "UPDATE items SET quantity = quantity - ? WHERE id = ?",
+            (return_qty, dotation_row["item_id"]),
+        )
+        conn.execute(
+            "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+            (dotation_row["item_id"], -return_qty, "RETURN_TO_SUPPLIER"),
+        )
+        conn.execute(
+            """
+            INSERT INTO clothing_supplier_returns (
+                site_key,
+                purchase_order_id,
+                purchase_order_line_id,
+                employee_id,
+                employee_item_id,
+                item_id,
+                qty,
+                reason,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_site_key,
+                order_id,
+                pending_row["purchase_order_line_id"],
+                pending_row["employee_id"],
+                return_employee_item_id,
+                dotation_row["item_id"],
+                return_qty,
+                _row_get(line_row, "return_reason"),
+                "shipped",
+            ),
+        )
+        if _table_has_column(conn, "purchase_order_items", "return_status"):
+            conn.execute(
+                "UPDATE purchase_order_items SET return_status = ? WHERE id = ?",
+                ("shipped", pending_row["purchase_order_line_id"]),
+            )
+        conn.execute(
+            """
+            UPDATE pending_clothing_assignments
+            SET status = 'validated',
+                validated_at = CURRENT_TIMESTAMP,
+                validated_by = ?
+            WHERE id = ?
+            """,
+            (validated_by, pending_id),
+        )
+        _persist_after_commit(conn, "default")
+        updated = conn.execute(
+            "SELECT * FROM pending_clothing_assignments WHERE id = ?",
+            (pending_id,),
+        ).fetchone()
+        if updated is None:
+            raise ValueError("Attribution en attente introuvable")
+        return models.PendingClothingAssignment(
+            id=updated["id"],
+            site_key=updated["site_key"],
+            purchase_order_id=updated["purchase_order_id"],
+            purchase_order_line_id=updated["purchase_order_line_id"],
+            receipt_id=updated["receipt_id"],
+            employee_id=updated["employee_id"],
+            new_item_id=updated["new_item_id"],
+            new_item_sku=_row_get(updated, "new_item_sku"),
+            new_item_size=_row_get(updated, "new_item_size"),
+            qty=updated["qty"],
+            return_employee_item_id=_row_get(updated, "return_employee_item_id"),
+            return_reason=_row_get(updated, "return_reason"),
+            status=updated["status"],
+            created_at=updated["created_at"],
+            validated_at=_row_get(updated, "validated_at"),
+            validated_by=_row_get(updated, "validated_by"),
+        )
+
+
+def register_clothing_supplier_return(
+    order_id: int,
+    payload: models.RegisterClothingSupplierReturnPayload,
+) -> models.ClothingSupplierReturn:
+    ensure_database_ready()
+    normalized_site_key = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO clothing_supplier_returns (
+                site_key,
+                purchase_order_id,
+                purchase_order_line_id,
+                employee_id,
+                employee_item_id,
+                item_id,
+                qty,
+                reason,
+                status
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                normalized_site_key,
+                order_id,
+                payload.purchase_order_line_id,
+                payload.employee_id,
+                payload.employee_item_id,
+                payload.item_id,
+                payload.qty,
+                payload.reason,
+                payload.status,
+            ),
+        )
+        if payload.item_id and payload.status in {"shipped", "supplier_received"}:
+            conn.execute(
+                "UPDATE items SET quantity = quantity - ? WHERE id = ?",
+                (payload.qty, payload.item_id),
+            )
+            conn.execute(
+                "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                (payload.item_id, -payload.qty, "RETURN_TO_SUPPLIER"),
+            )
+        _persist_after_commit(conn, "default")
+        row = conn.execute(
+            "SELECT * FROM clothing_supplier_returns WHERE id = ?",
+            (cur.lastrowid,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Retour fournisseur introuvable")
+        return models.ClothingSupplierReturn(
+            id=row["id"],
+            site_key=row["site_key"],
+            purchase_order_id=row["purchase_order_id"],
+            purchase_order_line_id=_row_get(row, "purchase_order_line_id"),
+            employee_id=_row_get(row, "employee_id"),
+            employee_item_id=_row_get(row, "employee_item_id"),
+            item_id=_row_get(row, "item_id"),
+            qty=row["qty"],
+            reason=_row_get(row, "reason"),
+            status=row["status"],
+            created_at=row["created_at"],
+        )
 
 
 def _build_remise_purchase_order_detail(

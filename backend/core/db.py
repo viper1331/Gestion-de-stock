@@ -913,8 +913,66 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     quantity_ordered INTEGER NOT NULL,
                     quantity_received INTEGER NOT NULL DEFAULT 0,
                     sku TEXT,
-                    unit TEXT
+                    unit TEXT,
+                    beneficiary_employee_id INTEGER,
+                    line_type TEXT NOT NULL DEFAULT 'standard',
+                    return_expected INTEGER NOT NULL DEFAULT 0,
+                    return_reason TEXT,
+                    return_employee_item_id INTEGER,
+                    return_qty INTEGER NOT NULL DEFAULT 0,
+                    return_status TEXT NOT NULL DEFAULT 'none'
                 );
+                CREATE TABLE IF NOT EXISTS purchase_order_receipts (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_key TEXT NOT NULL,
+                    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                    purchase_order_line_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+                    received_qty INTEGER NOT NULL,
+                    conformity_status TEXT NOT NULL,
+                    nonconformity_reason TEXT,
+                    nonconformity_action TEXT,
+                    note TEXT,
+                    created_by TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_order
+                ON purchase_order_receipts(purchase_order_id);
+                CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_line
+                ON purchase_order_receipts(purchase_order_line_id);
+                CREATE TABLE IF NOT EXISTS pending_clothing_assignments (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_key TEXT NOT NULL,
+                    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                    purchase_order_line_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+                    receipt_id INTEGER NOT NULL REFERENCES purchase_order_receipts(id) ON DELETE CASCADE,
+                    employee_id INTEGER NOT NULL REFERENCES collaborators(id) ON DELETE CASCADE,
+                    new_item_id INTEGER NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+                    new_item_sku TEXT,
+                    new_item_size TEXT,
+                    qty INTEGER NOT NULL,
+                    return_employee_item_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
+                    return_reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    validated_at TIMESTAMP,
+                    validated_by TEXT,
+                    UNIQUE(site_key, receipt_id, purchase_order_line_id)
+                );
+                CREATE TABLE IF NOT EXISTS clothing_supplier_returns (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_key TEXT NOT NULL,
+                    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                    purchase_order_line_id INTEGER REFERENCES purchase_order_items(id) ON DELETE SET NULL,
+                    employee_id INTEGER REFERENCES collaborators(id) ON DELETE SET NULL,
+                    employee_item_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
+                    item_id INTEGER REFERENCES items(id) ON DELETE SET NULL,
+                    qty INTEGER NOT NULL,
+                    reason TEXT,
+                    status TEXT NOT NULL DEFAULT 'prepared',
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_clothing_supplier_returns_order
+                ON clothing_supplier_returns(purchase_order_id);
                 CREATE TABLE IF NOT EXISTS purchase_suggestions (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     site_key TEXT NOT NULL,

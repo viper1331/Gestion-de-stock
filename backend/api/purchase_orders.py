@@ -180,6 +180,73 @@ async def receive_order(
         raise HTTPException(status_code=status, detail=message) from exc
 
 
+@router.post("/{order_id}/receive-line", response_model=models.PurchaseOrderDetail)
+async def receive_order_line(
+    order_id: int,
+    payload: models.PurchaseOrderReceiveLinePayload,
+    user: models.User = Depends(get_current_user),
+) -> models.PurchaseOrderDetail:
+    _require_permission(user, action="edit")
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    try:
+        return services.receive_purchase_order_line(
+            order_id,
+            payload,
+            created_by=user.email or user.username,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post(
+    "/{order_id}/pending-assignments/{pending_id}/validate",
+    response_model=models.PendingClothingAssignment,
+)
+async def validate_pending_assignment(
+    order_id: int,
+    pending_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.PendingClothingAssignment:
+    _require_permission(user, action="edit")
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    try:
+        return services.validate_pending_assignment(
+            order_id,
+            pending_id,
+            validated_by=user.email or user.username,
+        )
+    except services.PendingAssignmentConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post(
+    "/{order_id}/register-return",
+    response_model=models.ClothingSupplierReturn,
+)
+async def register_supplier_return(
+    order_id: int,
+    payload: models.RegisterClothingSupplierReturnPayload,
+    user: models.User = Depends(get_current_user),
+) -> models.ClothingSupplierReturn:
+    _require_permission(user, action="edit")
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    try:
+        return services.register_clothing_supplier_return(order_id, payload)
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
 @router.delete("/{order_id}", status_code=204)
 async def delete_order(
     order_id: int,
