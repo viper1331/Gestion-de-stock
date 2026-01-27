@@ -1052,6 +1052,9 @@ class Supplier(SupplierBase):
 class PurchaseOrder(BaseModel):
     id: int
     supplier_id: int | None = None
+    parent_id: int | None = None
+    replacement_for_line_id: int | None = None
+    kind: Literal["standard", "replacement_request"] = "standard"
     status: str
     created_at: datetime
     note: str | None = None
@@ -1071,6 +1074,8 @@ class PurchaseOrderItem(BaseModel):
     sku: str | None = None
     size: str | None = None
     unit: str | None = None
+    nonconformity_reason: str | None = None
+    is_nonconforme: bool = False
     beneficiary_employee_id: int | None = None
     beneficiary_name: str | None = None
     line_type: Literal["standard", "replacement"] = "standard"
@@ -1239,6 +1244,12 @@ class PurchaseOrderReplacementResponse(BaseModel):
     ok: bool
     nonconformity_id: int
     status: Literal["open", "replacement_requested", "closed"]
+
+
+class PurchaseOrderReplacementOrderResponse(BaseModel):
+    replacement_order_id: int
+    replacement_order_status: str
+    can_send_to_supplier: bool
 
 
 class PurchaseOrderEmailLogEntry(BaseModel):
