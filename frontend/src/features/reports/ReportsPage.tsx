@@ -1,5 +1,5 @@
 import { useEffect, useId, useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Bar,
   BarChart,
@@ -14,6 +14,8 @@ import {
   XAxis,
   YAxis
 } from "recharts";
+import { isAxiosError } from "axios";
+import { toast } from "sonner";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -23,6 +25,7 @@ import { fetchConfigEntries } from "../../lib/config";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
+import { DraggableModal } from "../../components/DraggableModal";
 
 interface ReportRange {
   start: string;
@@ -91,6 +94,12 @@ interface ReportOverview {
     in: ReportTopItem[];
   };
   data_quality: ReportDataQuality;
+}
+
+interface ReportPurgeResponse {
+  ok: boolean;
+  module_key: string;
+  deleted: Record<string, number>;
 }
 
 interface ModuleDefinition {
@@ -201,6 +210,9 @@ export function ReportsPage() {
   const [includeDotation, setIncludeDotation] = useState(true);
   const [includeAdjustment, setIncludeAdjustment] = useState(true);
   const [refreshInterval, setRefreshInterval] = useState(10);
+  const [isPurgeModalOpen, setIsPurgeModalOpen] = useState(false);
+  const [purgeConfirmation, setPurgeConfirmation] = useState("");
+  const queryClient = useQueryClient();
 
   const { data: availableModules = [], isFetching: isFetchingModules } = useQuery({
     queryKey: ["available-modules"],
@@ -307,6 +319,43 @@ export function ReportsPage() {
       return response.data;
     },
     enabled: Boolean(canViewPage && selectedModule) && canViewSelectedModule
+  });
+
+  const selectedModuleLabel = useMemo(() => {
+    const match = reportModules.find((module) => module.key === selectedModule);
+    return match?.label ?? selectedModule;
+  }, [reportModules, selectedModule]);
+
+  const closePurgeModal = () => {
+    setIsPurgeModalOpen(false);
+    setPurgeConfirmation("");
+  };
+
+  const purgeStats = useMutation({
+    mutationFn: async () => {
+      const response = await api.post<ReportPurgeResponse>("/admin/reports/purge", {
+        module_key: selectedModule
+      });
+      return response.data;
+    },
+    onSuccess: async () => {
+      toast.success(`Stats du module ${selectedModuleLabel} purgées.`);
+      closePurgeModal();
+      await queryClient.invalidateQueries({ queryKey: ["reports"] });
+      if (refetch) {
+        await refetch();
+      }
+    },
+    onError: (purgeError) => {
+      let message = "Erreur lors de la purge des statistiques.";
+      if (isAxiosError(purgeError)) {
+        const detail = purgeError.response?.data?.detail;
+        if (typeof detail === "string" && detail.trim().length > 0) {
+          message = detail;
+        }
+      }
+      toast.error(message);
+    }
   });
 
   const orderStatusData = useMemo(() => {
@@ -432,6 +481,22 @@ export function ReportsPage() {
             className="mt-1 w-28 rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
           />
         </label>
+        {user?.role === "admin" ? (
+          <div className="flex flex-col gap-1 text-sm text-slate-300">
+            <span className="text-xs uppercase tracking-wide text-slate-400">Administration</span>
+            <button
+              type="button"
+              onClick={() => {
+                setPurgeConfirmation("");
+                setIsPurgeModalOpen(true);
+              }}
+              className="rounded-md border border-red-500/60 bg-red-500/10 px-4 py-2 text-sm font-semibold text-red-100 shadow-sm transition hover:bg-red-500/20"
+              disabled={!canViewSelectedModule}
+            >
+              Purger les stats
+            </button>
+          </div>
+        ) : null}
         <div className="flex items-center gap-4">
           <label className="flex items-center gap-2 text-sm text-slate-300">
             <input
@@ -688,6 +753,53 @@ export function ReportsPage() {
     </section>
   );
 
+  const canConfirmPurge = purgeConfirmation.trim().toUpperCase() === "PURGER";
+  const purgeModal = (
+    <DraggableModal
+      open={isPurgeModalOpen}
+      title="Purger les statistiques"
+      onClose={closePurgeModal}
+      maxWidthClassName="max-w-[min(92vw,520px)]"
+      bodyClassName="px-6 py-5"
+      footer={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={closePurgeModal}
+            className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => purgeStats.mutate()}
+            className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!canConfirmPurge || purgeStats.isPending}
+          >
+            {purgeStats.isPending ? "Purge en cours..." : "Purger maintenant"}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-4 text-sm text-slate-200">
+        <p>
+          Vous êtes sur le point de supprimer toutes les statistiques du module{" "}
+          <span className="font-semibold text-white">{selectedModuleLabel || "—"}</span>. Cette
+          action est irréversible.
+        </p>
+        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Confirmation
+          <AppTextInput
+            value={purgeConfirmation}
+            onChange={(event) => setPurgeConfirmation(event.target.value)}
+            placeholder="Tapez PURGER"
+            className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-red-400 focus:outline-none"
+          />
+        </label>
+      </div>
+    </DraggableModal>
+  );
+
   const blocks: EditablePageBlock[] = [
     {
       id: "reports-main",
@@ -703,6 +815,7 @@ export function ReportsPage() {
       render: () => (
         <EditableBlock id="reports-main">
           {content}
+          {purgeModal}
         </EditableBlock>
       )
     }

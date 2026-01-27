@@ -87,6 +87,16 @@ class PurchaseSuggestionSettingsPayload(BaseModel):
     expiry_soon_days: int
 
 
+class ReportPurgeRequest(BaseModel):
+    module_key: str
+
+
+class ReportPurgeResponse(BaseModel):
+    ok: bool
+    module_key: str
+    deleted: dict[str, int]
+
+
 def require_admin(user: models.User = Depends(get_current_user)) -> models.User:
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
@@ -247,6 +257,15 @@ def get_logs_status(user: models.User = Depends(require_admin)):
 def purge_logs(user: models.User = Depends(require_admin)):
     purge_rotated_logs(LOG_DIR, LOG_BACKUP_COUNT)
     return get_logs_status(user)
+
+
+@router.post("/reports/purge", response_model=ReportPurgeResponse)
+def purge_reports(payload: ReportPurgeRequest, user: models.User = Depends(require_admin)):
+    try:
+        module_key, deleted = services.purge_reports_stats(payload.module_key)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return ReportPurgeResponse(ok=True, module_key=module_key, deleted=deleted)
 
 
 @router.get("/security/settings", response_model=models.SecuritySettings)

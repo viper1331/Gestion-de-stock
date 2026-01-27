@@ -1391,6 +1391,17 @@ _REPORT_MODULES: dict[str, _ReportModuleConfig] = {
     ),
 }
 
+_REPORT_ORDER_DEPENDENCIES: dict[str, list[str]] = {
+    "purchase_orders": [
+        "purchase_order_items",
+        "purchase_order_receipts",
+        "purchase_order_nonconformities",
+        "pending_clothing_assignments",
+    ],
+    "pharmacy_purchase_orders": ["pharmacy_purchase_order_items"],
+    "remise_purchase_orders": ["remise_purchase_order_items"],
+}
+
 
 def _resolve_report_module(module: str) -> _ReportModuleConfig | None:
     normalized = (module or "").strip().lower()
@@ -13306,6 +13317,41 @@ def get_reports_overview(
             abnormal_movements=abnormal_movements,
         ),
     )
+
+
+def purge_reports_stats(module_key: str) -> tuple[str, dict[str, int]]:
+    ensure_database_ready()
+    normalized_module = (module_key or "").strip().lower()
+    resolved = _resolve_report_module(normalized_module)
+    if not resolved:
+        raise ValueError("Module introuvable")
+
+    tables_to_purge: list[str] = []
+    if resolved.movements_table:
+        tables_to_purge.append(resolved.movements_table)
+    if resolved.orders_table:
+        tables_to_purge.extend(_REPORT_ORDER_DEPENDENCIES.get(resolved.orders_table, []))
+        tables_to_purge.append(resolved.orders_table)
+
+    deleted: dict[str, int] = {}
+    seen: set[str] = set()
+    with db.get_stock_connection() as conn:
+        try:
+            conn.execute("BEGIN")
+            for table in tables_to_purge:
+                if table in seen:
+                    continue
+                seen.add(table)
+                if not _table_exists(conn, table):
+                    deleted[table] = 0
+                    continue
+                cur = conn.execute(f"DELETE FROM {table}")
+                deleted[table] = int(cur.rowcount or 0)
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+    return resolved.module_key, deleted
 
 
 def get_collaborator(collaborator_id: int) -> models.Collaborator:
