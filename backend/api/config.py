@@ -8,6 +8,7 @@ from fastapi import APIRouter, Depends, HTTPException
 
 from backend.api.auth import get_current_user
 from backend.core import db, models
+from backend.services import system_settings
 
 router = APIRouter()
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "config.ini"
@@ -95,3 +96,14 @@ async def write_personal_homepage_config(
                 "DELETE FROM user_homepage_config WHERE user_id = ? AND key = ?",
                 (user.id, entry.key),
             )
+
+
+@router.get("/qol-settings", response_model=models.QolSettings)
+async def read_qol_settings(_: models.User = Depends(get_current_user)) -> models.QolSettings:
+    settings = system_settings.get_qol_settings()
+    return models.QolSettings(
+        timezone=settings.timezone,
+        date_format=settings.date_format,
+        auto_archive_days=settings.auto_archive_days,
+        note_preview_length=settings.note_preview_length,
+    )

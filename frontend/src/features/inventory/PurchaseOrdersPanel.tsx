@@ -15,6 +15,10 @@ import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 import { DraggableModal } from "components/DraggableModal";
 import { PurchaseOrderCreateModal } from "components/PurchaseOrderCreateModal";
+import { Timeline, type TimelineEvent } from "components/Timeline";
+import { StatusBadge } from "components/StatusBadge";
+import { TruncatedText } from "components/TruncatedText";
+import { fetchQolSettings, DEFAULT_QOL_SETTINGS } from "../../lib/qolSettings";
 
 interface Supplier {
   id: number;
@@ -289,6 +293,42 @@ const NONCONFORMITY_REASONS = [
   "Autre"
 ];
 
+type PrimaryOrderStatus =
+  | "CONFORME"
+  | "NON_CONFORME"
+  | "REMPLACEMENT_DEMANDE"
+  | "REMPLACEMENT_EN_COURS"
+  | "ARCHIVE";
+
+const STATUS_BADGE_LABELS: Record<PrimaryOrderStatus, { label: string; tone: "success" | "danger" | "warning" | "info" | "neutral"; tooltip: string }> = {
+  CONFORME: {
+    label: "Conforme",
+    tone: "success",
+    tooltip: "Bon de commande réceptionné sans non-conformité."
+  },
+  NON_CONFORME: {
+    label: "Non conforme",
+    tone: "danger",
+    tooltip: "Réception non conforme en attente de traitement."
+  },
+  REMPLACEMENT_DEMANDE: {
+    label: "Remplacement demandé",
+    tone: "warning",
+    tooltip: "Une demande de remplacement a été créée."
+  },
+  REMPLACEMENT_EN_COURS: {
+    label: "Remplacement en cours",
+    tone: "info",
+    tooltip: "Demande de remplacement envoyée au fournisseur."
+  },
+  ARCHIVE: {
+    label: "Archivé",
+    tone: "neutral",
+    tooltip: "Bon de commande archivé en lecture seule."
+  }
+};
+
+
 interface DraftLine {
   itemId: number | "";
   quantity: number;
@@ -300,6 +340,79 @@ interface DraftLine {
   targetDotationId?: number | "";
   returnQty?: number;
 }
+
+const buildPurchaseOrderTimeline = (order: PurchaseOrderDetail): TimelineEvent[] => {
+  const events: TimelineEvent[] = [];
+  const itemsById = new Map(order.items.map((line) => [line.id, line]));
+
+  events.push({
+    id: `creation-${order.id}`,
+    type: "CREATION",
+    date: order.created_at,
+    user: null,
+    message: order.auto_created ? "Création automatique du bon de commande." : "Bon de commande créé."
+  });
+
+  if (order.last_sent_at) {
+    events.push({
+      id: `send-${order.id}-${order.last_sent_at}`,
+      type: "ENVOI_FOURNISSEUR",
+      date: order.last_sent_at,
+      user: order.last_sent_by,
+      message: order.last_sent_to
+        ? `Bon de commande envoyé à ${order.last_sent_to}.`
+        : "Bon de commande envoyé au fournisseur."
+    });
+  }
+
+  (order.receipts ?? []).forEach((receipt) => {
+    const item = itemsById.get(receipt.purchase_order_line_id);
+    const itemLabel = item?.item_name ?? `Ligne #${receipt.purchase_order_line_id}`;
+    const reason = receipt.nonconformity_reason ? ` · Motif: ${receipt.nonconformity_reason}` : "";
+    events.push({
+      id: `receipt-${receipt.id}`,
+      type: receipt.conformity_status === "conforme" ? "RECEPTION_CONFORME" : "NON_CONFORME",
+      date: receipt.created_at,
+      user: receipt.created_by,
+      message: `${itemLabel} · ${receipt.received_qty} reçu${receipt.received_qty > 1 ? "s" : ""}${reason}.`
+    });
+  });
+
+  (order.nonconformities ?? []).forEach((nonconformity) => {
+    if (!nonconformity.requested_replacement) {
+      return;
+    }
+    events.push({
+      id: `replacement-${nonconformity.id}`,
+      type: "REMPLACEMENT_DEMANDE",
+      date: nonconformity.created_at,
+      user: nonconformity.created_by,
+      message: `Demande de remplacement · ${nonconformity.reason}.`
+    });
+  });
+
+  if (order.kind === "replacement_request" && order.status === "RECEIVED") {
+    events.push({
+      id: `replacement-received-${order.id}`,
+      type: "RECEPTION_REMPLACEMENT",
+      date: order.archived_at ?? order.created_at,
+      user: null,
+      message: "Réception du remplacement confirmée."
+    });
+  }
+
+  if (order.archived_at) {
+    events.push({
+      id: `archive-${order.id}`,
+      type: "ARCHIVAGE",
+      date: order.archived_at,
+      user: null,
+      message: "Bon de commande archivé."
+    });
+  }
+
+  return events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+};
 
 interface PurchaseOrdersPanelProps {
   suppliers: Supplier[];
@@ -330,6 +443,12 @@ export function PurchaseOrdersPanel({
 }: PurchaseOrdersPanelProps) {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
+  const { data: qolSettings } = useQuery({
+    queryKey: ["qol-settings"],
+    queryFn: fetchQolSettings,
+    enabled: Boolean(user)
+  });
+  const notePreviewLength = qolSettings?.note_preview_length ?? DEFAULT_QOL_SETTINGS.note_preview_length;
   const canSendEmail = useMemo(
     () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess("clothing", "edit"))),
     [modulePermissions, user]
@@ -1505,6 +1624,7 @@ export function PurchaseOrdersPanel({
                 {visibleOrders.map((order) => {
                   const isArchived = Boolean(order.is_archived);
                   const isReadOnly = isArchived;
+                  const timelineEvents = buildPurchaseOrderTimeline(order);
                   const outstanding = order.items
                     .map((line) => {
                       const remaining = line.quantity_ordered - line.quantity_received;
@@ -1555,6 +1675,10 @@ export function PurchaseOrdersPanel({
                   const replacementOrdersForLines =
                     replacementOrdersByParent.get(order.id) ?? new Map<number, PurchaseOrderDetail>();
                   const replacementOrders = Array.from(replacementOrdersForLines.values());
+                  const replacementRequested =
+                    hasNonConformingLatestReceipt &&
+                    ((order.nonconformities ?? []).some((nonconformity) => nonconformity.requested_replacement) ||
+                      replacementOrders.length > 0);
                   const sentReplacementOrders = replacementOrders
                     .filter((replacement) => Boolean(replacement.last_sent_at))
                     .sort((a, b) => {
@@ -1574,6 +1698,47 @@ export function PurchaseOrdersPanel({
                     enableReplacementFlow &&
                     hasNonConformingLatestReceipt &&
                     sentReplacementOrders.length > 0;
+                  const canArchive =
+                    canManageOrders &&
+                    order.status === "RECEIVED" &&
+                    outstanding.length === 0 &&
+                    !hasNonConformingLatestReceipt &&
+                    pendingAssignments.length === 0;
+                  let primaryStatus: PrimaryOrderStatus = "CONFORME";
+                  if (isArchived) {
+                    primaryStatus = "ARCHIVE";
+                  } else if (hasNonConformingLatestReceipt) {
+                    if (replacementOrders.length > 0) {
+                      primaryStatus =
+                        sentReplacementOrders.length > 0 ? "REMPLACEMENT_EN_COURS" : "REMPLACEMENT_DEMANDE";
+                    } else if (replacementRequested) {
+                      primaryStatus = "REMPLACEMENT_DEMANDE";
+                    } else {
+                      primaryStatus = "NON_CONFORME";
+                    }
+                  } else if (order.status === "RECEIVED") {
+                    primaryStatus = "CONFORME";
+                  }
+                  const primaryBadge = STATUS_BADGE_LABELS[primaryStatus];
+                  let primaryActionKey: string | null = null;
+                  if (isArchived && canManageOrders) {
+                    primaryActionKey = "unarchive";
+                  } else if (canFinalizeNonconformity) {
+                    primaryActionKey = "receive_all";
+                  } else if (hasNonConformingLatestReceipt && !replacementRequested && !isReadOnly) {
+                    primaryActionKey = "request_replacement";
+                  } else if (hasNonConformingLatestReceipt && replacementToSend) {
+                    primaryActionKey = "send_replacement";
+                  } else if (canReceive) {
+                    primaryActionKey = "receive_all";
+                  } else if (canSendEmail && order.status !== "RECEIVED") {
+                    primaryActionKey = "send_supplier";
+                  } else if (canArchive) {
+                    primaryActionKey = "archive";
+                  }
+                  const resolveActionClass = (key: string, primary: string, secondary: string) =>
+                    key === primaryActionKey ? `${primary} ring-1 ring-white/20` : secondary;
+                  const receiveAllLabel = canFinalizeNonconformity ? "Valider conforme" : "Réceptionner tout";
                   return (
                     <tr key={order.id}>
                       <td className="px-4 py-3 text-slate-300">
@@ -1593,34 +1758,36 @@ export function PurchaseOrdersPanel({
                         </div>
                       </td>
                       <td className="px-4 py-3 text-slate-200">
-                        {isArchived ? (
-                          <div className="flex flex-col gap-2 text-xs">
+                        <div className="flex flex-col gap-2 text-xs">
+                          <StatusBadge
+                            label={primaryBadge.label}
+                            tone={primaryBadge.tone}
+                            tooltip={primaryBadge.tooltip}
+                          />
+                          {isArchived ? (
                             <span>{resolveOrderStatusLabel(order.status)}</span>
-                            <span className="w-fit rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-200">
-                              Archivé
-                            </span>
-                          </div>
-                        ) : (
-                          <select
-                            value={order.status}
-                            onChange={(event) => {
-                              setError(null);
-                              updateOrder.mutate({
-                                orderId: order.id,
-                                status: event.target.value,
-                                successMessage: "Statut mis à jour."
-                              });
-                            }}
-                            className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-                            disabled={!canManageOrders}
-                          >
-                            {ORDER_STATUSES.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        )}
+                          ) : (
+                            <select
+                              value={order.status}
+                              onChange={(event) => {
+                                setError(null);
+                                updateOrder.mutate({
+                                  orderId: order.id,
+                                  status: event.target.value,
+                                  successMessage: "Statut mis à jour."
+                                });
+                              }}
+                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                              disabled={!canManageOrders}
+                            >
+                              {ORDER_STATUSES.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-slate-200">
                         <ul className="space-y-1 text-xs">
@@ -1795,7 +1962,11 @@ export function PurchaseOrdersPanel({
                                           })
                                         }
                                         disabled={requestReplacement.isPending}
-                                        className="rounded bg-rose-500 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className={resolveActionClass(
+                                          "request_replacement",
+                                          "rounded bg-rose-500 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60",
+                                          "rounded border border-rose-400/60 px-3 py-1 text-[11px] font-semibold text-rose-200 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                        )}
                                       >
                                         Créer demande de remplacement
                                       </button>
@@ -1878,8 +2049,19 @@ export function PurchaseOrdersPanel({
                               })}
                             </li>
                           ) : null}
+                          <li className="pt-2">
+                            <Timeline events={timelineEvents} title="Historique" />
+                          </li>
+                          {isReadOnly ? (
+                            <li className="text-[11px] text-amber-200">
+                              Bon de commande archivé : lecture seule activée.
+                            </li>
+                          ) : null}
                           {order.note ? (
-                            <li className="text-slate-400">Note: {order.note}</li>
+                            <li className="text-slate-400">
+                              Note:{" "}
+                              <TruncatedText text={order.note} maxLength={notePreviewLength} />
+                            </li>
                           ) : null}
                           {order.last_sent_at ? (
                             <li className="text-slate-400">
@@ -1896,7 +2078,11 @@ export function PurchaseOrdersPanel({
                             type="button"
                             onClick={() => handleDownload(order.id)}
                             disabled={downloadingId === order.id}
-                            className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            className={resolveActionClass(
+                              "download",
+                              "rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60",
+                              "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            )}
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
@@ -1906,7 +2092,11 @@ export function PurchaseOrdersPanel({
                                 type="button"
                                 onClick={() => handleUnarchiveOrder(order)}
                                 disabled={unarchiveOrder.isPending}
-                                className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={resolveActionClass(
+                                  "unarchive",
+                                  "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60",
+                                  "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                )}
                               >
                                 Désarchiver
                               </button>
@@ -1944,28 +2134,40 @@ export function PurchaseOrdersPanel({
                                   }
                                 }}
                                 disabled={!canReceive}
-                                className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={resolveActionClass(
+                                  "receive_all",
+                                  "rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60",
+                                  "rounded border border-emerald-500/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                )}
                                 title={
                                   canReceive
                                     ? "Enregistrer la réception des quantités restantes"
                                     : "Toutes les quantités ont été réceptionnées"
                                 }
                               >
-                                Réceptionner tout
+                                {receiveAllLabel}
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleOpenReceiveModal(order)}
                                 disabled={!canReceive}
-                                className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={resolveActionClass(
+                                  "receive_partial",
+                                  "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60",
+                                  "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                )}
                               >
                                 Réception partielle
                               </button>
                               <button
                                 type="button"
                                 onClick={() => handleEditOrder(order)}
-                                disabled={!canManageOrders}
-                                className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                disabled={!canManageOrders || isReadOnly}
+                                className={resolveActionClass(
+                                  "edit",
+                                  "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60",
+                                  "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                )}
                               >
                                 Modifier
                               </button>
@@ -1986,7 +2188,11 @@ export function PurchaseOrdersPanel({
                                           })
                                         }
                                         disabled={sendReplacementToSupplier.isPending}
-                                        className="rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className={resolveActionClass(
+                                          "send_replacement",
+                                          "rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60",
+                                          "rounded border border-emerald-400/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                        )}
                                         title="Envoyer la demande de remplacement au fournisseur"
                                       >
                                         {sendReplacementToSupplier.isPending
@@ -2004,7 +2210,11 @@ export function PurchaseOrdersPanel({
                                         type="button"
                                         onClick={() => handleOpenSendModal(order)}
                                         disabled={!supplierState.canSend}
-                                        className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                        className={resolveActionClass(
+                                          "send_supplier",
+                                          "rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60",
+                                          "rounded border border-indigo-400/60 px-3 py-1 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                        )}
                                         title={supplierState.tooltip}
                                       >
                                         Envoyer au fournisseur
@@ -2012,11 +2222,15 @@ export function PurchaseOrdersPanel({
                                     );
                                   })()
                                 : null}
-                              {canManageOrders && order.status === "RECEIVED" ? (
+                              {canArchive ? (
                                 <button
                                   type="button"
                                   onClick={() => handleOpenArchiveModal(order)}
-                                  className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+                                  className={resolveActionClass(
+                                    "archive",
+                                    "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400",
+                                    "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+                                  )}
                                 >
                                   Archiver
                                 </button>
@@ -2026,7 +2240,11 @@ export function PurchaseOrdersPanel({
                                   type="button"
                                   onClick={() => handleDeleteOrder(order)}
                                   disabled={deletingId === order.id}
-                                  className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  className={resolveActionClass(
+                                    "delete",
+                                    "rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60",
+                                    "rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  )}
                                 >
                                   {deletingId === order.id ? "Suppression..." : "Supprimer"}
                                 </button>

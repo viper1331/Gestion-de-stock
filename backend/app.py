@@ -32,6 +32,7 @@ from backend.api import (
     vehicle_inventory,
     remise_inventory,
     about,
+    search,
     system_config as system_config_api,
     pdf_config as pdf_config_api,
     pdf_studio as pdf_studio_api,
@@ -118,6 +119,7 @@ app.include_router(reports.router, prefix="/reports", tags=["reports"])
 app.include_router(barcode.router, prefix="/barcode", tags=["barcode"])
 app.include_router(barcode.router, prefix="/barcodes", tags=["barcode"], include_in_schema=False)
 app.include_router(config.router, prefix="/config", tags=["config"])
+app.include_router(search.router, tags=["search"])
 app.include_router(backup.router, prefix="/backup", tags=["backup"])
 app.include_router(suppliers.router, prefix="/suppliers", tags=["suppliers"])
 app.include_router(dotations.router, prefix="/dotations", tags=["dotations"])

@@ -190,3 +190,12 @@ async def list_dotation_assignee_items(
     _require_clothing_module(module)
     items = services.list_dotation_assignee_items(employee_id)
     return models.DotationAssigneeItemsResponse(items=items)
+
+
+@router.get("/dotations/{dotation_id}/events", response_model=list[models.DotationEvent])
+async def list_dotation_events(
+    dotation_id: int,
+    user: models.User = Depends(get_current_user),
+) -> list[models.DotationEvent]:
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="view")
+    return services.list_dotation_events(dotation_id)

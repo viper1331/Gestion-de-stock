@@ -25,6 +25,7 @@ import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
 import { getMenuOrder, setMenuOrder, type MenuOrderPayload } from "../api/uiMenu";
+import { api } from "../lib/api";
 import { fetchConfigEntries } from "../lib/config";
 import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
@@ -58,6 +59,14 @@ type MenuGroupDefinition = Omit<MenuGroup, "items"> & {
   items: MenuItemDefinition[];
 };
 
+type GlobalSearchResult = {
+  result_type: string;
+  entity_id: number;
+  label: string;
+  description?: string | null;
+  path: string;
+};
+
 export function AppLayout() {
   const { user, logout, initialize, isReady, isCheckingSession } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
@@ -78,7 +87,10 @@ export function AppLayout() {
     typeof window === "undefined" ? true : window.matchMedia("(min-width: 768px)").matches
   );
   const [isReorderMode, setIsReorderMode] = useState(false);
+  const [searchQuery, setSearchQuery] = useState("");
+  const [isSearchOpen, setIsSearchOpen] = useState(false);
   const drawerRef = useRef<HTMLDivElement | null>(null);
+  const searchContainerRef = useRef<HTMLDivElement | null>(null);
 
   const { data: configEntries = [] } = useQuery({
     queryKey: ["config", "global"],
@@ -89,6 +101,16 @@ export function AppLayout() {
     queryKey: ["site-context", user?.username],
     queryFn: fetchSiteContext,
     enabled: user?.role === "admin"
+  });
+  const { data: searchResults = [], isFetching: isSearching } = useQuery({
+    queryKey: ["global-search", searchQuery],
+    queryFn: async () => {
+      const response = await api.get<GlobalSearchResult[]>("/search", {
+        params: { q: searchQuery.trim() }
+      });
+      return response.data;
+    },
+    enabled: Boolean(user && searchQuery.trim().length >= 2)
   });
 
   const moduleTitles = useMemo(() => buildModuleTitleMap(configEntries), [configEntries]);
@@ -201,6 +223,24 @@ export function AppLayout() {
       document.removeEventListener("keydown", handleKeyDown);
     };
   }, [mobileDrawerOpen]);
+
+  useEffect(() => {
+    if (!isSearchOpen) {
+      return undefined;
+    }
+    const handleClickOutside = (event: globalThis.MouseEvent) => {
+      if (!searchContainerRef.current) {
+        return;
+      }
+      if (!searchContainerRef.current.contains(event.target as Node)) {
+        setIsSearchOpen(false);
+      }
+    };
+    document.addEventListener("mousedown", handleClickOutside);
+    return () => {
+      document.removeEventListener("mousedown", handleClickOutside);
+    };
+  }, [isSearchOpen]);
 
   const navigationGroups = useMemo(
     () => {
@@ -1211,7 +1251,53 @@ export function AppLayout() {
           </div>
       ) : null}
       <main className="flex min-h-0 min-w-0 flex-1 flex-col overflow-auto bg-slate-950 p-6">
-        <div className="flex items-center justify-end pb-4">
+        <div className="flex flex-wrap items-center justify-between gap-3 pb-4">
+          <div ref={searchContainerRef} className="relative w-full max-w-xl">
+            <label className="sr-only" htmlFor="global-search">
+              Recherche globale
+            </label>
+            <input
+              id="global-search"
+              value={searchQuery}
+              onChange={(event) => setSearchQuery(event.target.value)}
+              onFocus={() => setIsSearchOpen(true)}
+              placeholder="Recherche rapide (BC, fournisseur, collaborateur, SKU, notes...)"
+              className="w-full rounded-full border border-slate-800 bg-slate-900 px-4 py-2 text-sm text-slate-100 placeholder:text-slate-500 focus:border-indigo-500 focus:outline-none"
+            />
+            {isSearchOpen && searchQuery.trim().length >= 2 ? (
+              <div className="absolute left-0 right-0 z-30 mt-2 max-h-72 overflow-y-auto rounded-xl border border-slate-800 bg-slate-950 p-2 shadow-lg">
+                {isSearching ? (
+                  <p className="px-2 py-2 text-xs text-slate-400">Recherche...</p>
+                ) : searchResults.length === 0 ? (
+                  <p className="px-2 py-2 text-xs text-slate-400">Aucun résultat.</p>
+                ) : (
+                  <ul className="space-y-1 text-sm text-slate-100">
+                    {searchResults.map((result) => (
+                      <li key={`${result.result_type}-${result.entity_id}`}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setIsSearchOpen(false);
+                            setSearchQuery("");
+                            navigate(result.path);
+                          }}
+                          className="flex w-full flex-col rounded-lg px-3 py-2 text-left hover:bg-slate-900"
+                        >
+                          <span className="text-xs uppercase tracking-wide text-slate-400">
+                            {result.result_type}
+                          </span>
+                          <span className="font-semibold text-slate-100">{result.label}</span>
+                          {result.description ? (
+                            <span className="text-xs text-slate-400">{result.description}</span>
+                          ) : null}
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
+            ) : null}
+          </div>
           <span className="rounded-full border border-slate-800 bg-slate-900 px-3 py-1 text-xs font-semibold text-slate-200">
             Site: {activeSiteLabel}
           </span>
