@@ -1408,6 +1408,7 @@ class Dotation(DotationBase):
     id: int
     allocated_at: datetime
     is_obsolete: bool = False
+    size_variant: Optional[str] = None
 
 
 class DotationUpdate(BaseModel):
