@@ -72,6 +72,8 @@ interface PurchaseOrderItem {
   item_name: string | null;
   quantity_ordered: number;
   quantity_received: number;
+  received_conforme_qty?: number;
+  received_non_conforme_qty?: number;
   beneficiary_employee_id?: number | null;
   beneficiary_name?: string | null;
   line_type?: "standard" | "replacement";
@@ -86,10 +88,10 @@ interface PurchaseOrderReceipt {
   id: number;
   purchase_order_id: number;
   purchase_order_line_id: number;
+  module?: string | null;
   received_qty: number;
   conformity_status: "conforme" | "non_conforme";
   nonconformity_reason?: string | null;
-  nonconformity_action?: "replacement" | "credit_note" | "return_to_supplier" | null;
   note?: string | null;
   created_by?: string | null;
   created_at: string;
@@ -109,6 +111,7 @@ interface PendingClothingAssignment {
   created_at: string;
   validated_at?: string | null;
   validated_by?: string | null;
+  source_receipt?: PurchaseOrderReceipt | null;
 }
 
 interface ClothingSupplierReturn {
@@ -172,7 +175,6 @@ interface ReceiveLinePayload {
     received_qty: number;
     conformity_status: "conforme" | "non_conforme";
     nonconformity_reason?: string | null;
-    nonconformity_action?: "replacement" | "credit_note" | "return_to_supplier" | null;
     note?: string | null;
   }>;
 }
@@ -218,6 +220,14 @@ const RETURN_REASONS = [
   "Endommagé",
   "Erreur taille",
   "Non conforme",
+  "Autre"
+];
+
+const NONCONFORMITY_REASONS = [
+  "Endommagé",
+  "Erreur taille",
+  "Erreur référence",
+  "Manquant",
   "Autre"
 ];
 
@@ -296,7 +306,6 @@ export function PurchaseOrdersPanel({
         qty: number;
         conformity_status: "conforme" | "non_conforme";
         nonconformity_reason: string;
-        nonconformity_action: "replacement" | "credit_note" | "return_to_supplier" | "";
         note: string;
       }
     >
@@ -898,7 +907,6 @@ export function PurchaseOrdersPanel({
               qty: number;
               conformity_status: "conforme" | "non_conforme";
               nonconformity_reason: string;
-              nonconformity_action: "replacement" | "credit_note" | "return_to_supplier" | "";
               note: string;
             }
           >
@@ -907,7 +915,6 @@ export function PurchaseOrdersPanel({
             qty: 0,
             conformity_status: "conforme",
             nonconformity_reason: "",
-            nonconformity_action: "",
             note: ""
           };
           return acc;
@@ -957,11 +964,10 @@ export function PurchaseOrdersPanel({
       const missingNonConformity = payloadLines.find(
         (entry) =>
           entry.details?.conformity_status === "non_conforme" &&
-          (!entry.details.nonconformity_reason.trim() ||
-            !entry.details.nonconformity_action)
+          !entry.details.nonconformity_reason.trim()
       );
       if (missingNonConformity) {
-        setReceiveFormError("Renseignez un motif et une action pour les non-conformités.");
+        setReceiveFormError("Renseignez un motif pour les non-conformités.");
         return;
       }
       if (payloadLines.length === 0) {
@@ -979,7 +985,6 @@ export function PurchaseOrdersPanel({
             nonconformity_reason: entry.details!.nonconformity_reason.trim()
               ? entry.details!.nonconformity_reason.trim()
               : null,
-            nonconformity_action: entry.details!.nonconformity_action || null,
             note: entry.details!.note.trim() ? entry.details!.note.trim() : null
           }))
         });
@@ -1036,7 +1041,6 @@ export function PurchaseOrdersPanel({
               qty: 0,
               conformity_status: "conforme",
               nonconformity_reason: "",
-              nonconformity_action: "",
               note: ""
             };
           }
@@ -1206,6 +1210,22 @@ export function PurchaseOrdersPanel({
                     })
                     .filter((line): line is { line_id: number; qty: number } => line !== null);
                   const canReceive = outstanding.length > 0;
+                  const receiptsByLine = new Map<number, PurchaseOrderReceipt[]>();
+                  (order.receipts ?? []).forEach((receipt) => {
+                    const existing = receiptsByLine.get(receipt.purchase_order_line_id) ?? [];
+                    existing.push(receipt);
+                    receiptsByLine.set(receipt.purchase_order_line_id, existing);
+                  });
+                  const hasNonConformingLatestReceipt = order.items.some((line) => {
+                    const lineReceipts = receiptsByLine.get(line.id);
+                    return lineReceipts && lineReceipts[0]?.conformity_status === "non_conforme";
+                  });
+                  const pendingAssignments = (order.pending_assignments ?? []).filter(
+                    (assignment) => assignment.status === "pending"
+                  );
+                  const conformingPendingAssignments = pendingAssignments.filter(
+                    (assignment) => assignment.source_receipt?.conformity_status === "conforme"
+                  );
                   return (
                     <tr key={order.id}>
                       <td className="px-4 py-3 text-slate-300">
@@ -1248,15 +1268,11 @@ export function PurchaseOrdersPanel({
                         <ul className="space-y-1 text-xs">
                           {order.items.map((line) => {
                             const itemId = resolveItemId(line);
-                            const lineReceipts = (order.receipts ?? []).filter(
-                              (receipt) => receipt.purchase_order_line_id === line.id
-                            );
-                            const hasNonConforming = lineReceipts.some(
-                              (receipt) => receipt.conformity_status === "non_conforme"
-                            );
-                            const hasConforming = lineReceipts.some(
-                              (receipt) => receipt.conformity_status === "conforme"
-                            );
+                            const lineReceipts = receiptsByLine.get(line.id) ?? [];
+                            const latestReceipt = lineReceipts[0];
+                            const receivedConformeQty =
+                              line.received_conforme_qty ?? line.quantity_received;
+                            const receivedNonConformeQty = line.received_non_conforme_qty ?? 0;
                             return (
                               <li key={line.id}>
                                 <div className="flex flex-wrap items-center gap-2">
@@ -1264,19 +1280,28 @@ export function PurchaseOrdersPanel({
                                     {line.item_name ?? `#${itemId}`}
                                   </span>
                                   <span>
-                                    {line.quantity_received}/{line.quantity_ordered}
+                                    Conforme: {receivedConformeQty}/{line.quantity_ordered} — Non
+                                    conforme: {receivedNonConformeQty}
                                   </span>
-                                  {hasConforming ? (
+                                  {latestReceipt?.conformity_status === "conforme" ? (
                                     <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-200">
                                       Conforme
                                     </span>
                                   ) : null}
-                                  {hasNonConforming ? (
+                                  {latestReceipt?.conformity_status === "non_conforme" ? (
                                     <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] text-rose-200">
-                                      NC
+                                      Non conforme
                                     </span>
                                   ) : null}
                                 </div>
+                                {latestReceipt?.conformity_status === "non_conforme" ? (
+                                  <p className="text-[11px] text-rose-300">
+                                    {latestReceipt.nonconformity_reason
+                                      ? `Motif: ${latestReceipt.nonconformity_reason}`
+                                      : "Motif non renseigné"}
+                                    {latestReceipt.note ? ` · Note: ${latestReceipt.note}` : ""}
+                                  </p>
+                                ) : null}
                                 {line.beneficiary_employee_id ? (
                                   <p className="text-[11px] text-slate-400">
                                     Bénéficiaire:{" "}
@@ -1295,16 +1320,19 @@ export function PurchaseOrdersPanel({
                               </li>
                             );
                           })}
-                          {(order.pending_assignments ?? []).some(
-                            (assignment) => assignment.status === "pending"
-                          ) ? (
+                          {hasNonConformingLatestReceipt ? (
+                            <li className="pt-2 text-[11px] text-rose-300">
+                              Réception non conforme : aucune attribution possible.
+                            </li>
+                          ) : conformingPendingAssignments.length > 0 ? (
                             <li className="space-y-2 pt-2">
                               <p className="text-[11px] uppercase text-slate-500">
                                 Attributions en attente
                               </p>
-                              {(order.pending_assignments ?? [])
-                                .filter((assignment) => assignment.status === "pending")
-                                .map((assignment) => (
+                              {conformingPendingAssignments.map((assignment) => {
+                                const isBlocked =
+                                  assignment.source_receipt?.conformity_status !== "conforme";
+                                return (
                                   <div
                                     key={assignment.id}
                                     className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-1"
@@ -1343,13 +1371,19 @@ export function PurchaseOrdersPanel({
                                           pendingId: assignment.id
                                         })
                                       }
-                                      disabled={validatePendingAssignment.isPending}
+                                      disabled={validatePendingAssignment.isPending || isBlocked}
+                                      title={
+                                        isBlocked
+                                          ? "Réception non conforme : attribution bloquée"
+                                          : undefined
+                                      }
                                       className="rounded bg-indigo-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
                                     >
                                       Valider attribution + retour
                                     </button>
                                   </div>
-                                ))}
+                                );
+                              })}
                             </li>
                           ) : null}
                           {order.note ? (
@@ -1377,7 +1411,6 @@ export function PurchaseOrdersPanel({
                                     received_qty: line.qty,
                                     conformity_status: "conforme",
                                     nonconformity_reason: null,
-                                    nonconformity_action: null,
                                     note: null
                                   }))
                                 });
@@ -1977,7 +2010,6 @@ export function PurchaseOrdersPanel({
                       qty: 0,
                       conformity_status: "conforme",
                       nonconformity_reason: "",
-                      nonconformity_action: "",
                       note: ""
                     };
                     return (
@@ -2038,32 +2070,6 @@ export function PurchaseOrdersPanel({
                               <option value="non_conforme">Non conforme</option>
                             </select>
                           </div>
-                          {details.conformity_status === "non_conforme" ? (
-                            <div className="space-y-1">
-                              <label className="text-xs font-semibold text-slate-300">
-                                Action
-                              </label>
-                              <select
-                                value={details.nonconformity_action}
-                                onChange={(event) =>
-                                  setReceiveDetails((prev) => ({
-                                    ...prev,
-                                    [line.id]: {
-                                      ...details,
-                                      nonconformity_action:
-                                        event.target.value as typeof details.nonconformity_action
-                                    }
-                                  }))
-                                }
-                                className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none"
-                              >
-                                <option value="">Sélectionnez une action</option>
-                                <option value="replacement">Remplacement</option>
-                                <option value="credit_note">Avoir</option>
-                                <option value="return_to_supplier">Retour fournisseur</option>
-                              </select>
-                            </div>
-                          ) : null}
                         </div>
                         {details.conformity_status === "non_conforme" ? (
                           <div className="grid gap-2 md:grid-cols-2">
@@ -2071,7 +2077,7 @@ export function PurchaseOrdersPanel({
                               <label className="text-xs font-semibold text-slate-300">
                                 Motif non conforme
                               </label>
-                              <AppTextInput
+                              <select
                                 value={details.nonconformity_reason}
                                 onChange={(event) =>
                                   setReceiveDetails((prev) => ({
@@ -2083,7 +2089,14 @@ export function PurchaseOrdersPanel({
                                   }))
                                 }
                                 className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none"
-                              />
+                              >
+                                <option value="">Sélectionnez un motif</option>
+                                {NONCONFORMITY_REASONS.map((reason) => (
+                                  <option key={reason} value={reason}>
+                                    {reason}
+                                  </option>
+                                ))}
+                              </select>
                             </div>
                             <div className="space-y-1">
                               <label className="text-xs font-semibold text-slate-300">

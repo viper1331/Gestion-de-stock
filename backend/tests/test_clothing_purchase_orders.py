@@ -231,7 +231,6 @@ def test_receive_non_conforme_creates_receipt_no_stock_in() -> None:
             received_qty=1,
             conformity_status="non_conforme",
             nonconformity_reason="Endommagé",
-            nonconformity_action="replacement",
         ),
         created_by="tester",
     )
@@ -247,6 +246,120 @@ def test_receive_non_conforme_creates_receipt_no_stock_in() -> None:
         ).fetchone()
         assert receipt_row is not None
         assert receipt_row["conformity_status"] == "non_conforme"
+
+
+def test_non_conforme_blocks_pending_assignment_validation() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        new_item_id = _create_item(conn, name="Pantalon", sku="HAB-013")
+        old_item_id = _create_item(conn, name="Pantalon ancien", sku="HAB-014")
+        collaborator_id = _create_collaborator(conn, full_name="Claire Durand")
+        conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
+        dotation_id = _create_dotation(
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1
+        )
+        conn.commit()
+    order = services.create_purchase_order(
+        models.PurchaseOrderCreate(
+            supplier_id=None,
+            status="ORDERED",
+            note=None,
+            items=[
+                models.PurchaseOrderItemInput(
+                    item_id=new_item_id,
+                    quantity_ordered=2,
+                    line_type="replacement",
+                    beneficiary_employee_id=collaborator_id,
+                    return_expected=True,
+                    return_reason="Vétusté",
+                    return_employee_item_id=dotation_id,
+                    return_qty=1,
+                )
+            ],
+        )
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="non_conforme",
+            nonconformity_reason="Erreur taille",
+        ),
+        created_by="tester",
+    )
+    order = services.get_purchase_order(order.id)
+    assert order.pending_assignments
+    with db.get_stock_connection() as conn:
+        item_row = conn.execute("SELECT quantity FROM items WHERE id = ?", (new_item_id,)).fetchone()
+        assert item_row is not None
+        assert item_row["quantity"] == 1
+    with pytest.raises(
+        services.PendingAssignmentConflictError,
+        match="Réception non conforme : attribution impossible",
+    ):
+        services.validate_pending_assignment(
+            order.id, order.pending_assignments[0].id, validated_by="tester"
+        )
+
+
+def test_receipt_summaries_include_conforme_and_non_conforme() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Chemise", sku="HAB-015")
+        order_cur = conn.execute(
+            """
+            INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+            VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
+            """,
+            (None, "ORDERED", None),
+        )
+        conn.execute(
+            """
+            INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered, quantity_received)
+            VALUES (?, ?, ?, 0)
+            """,
+            (order_cur.lastrowid, item_id, 3),
+        )
+        conn.commit()
+        order_id = int(order_cur.lastrowid)
+        line_id = conn.execute(
+            "SELECT id FROM purchase_order_items WHERE purchase_order_id = ?",
+            (order_id,),
+        ).fetchone()["id"]
+    services.receive_purchase_order_line(
+        order_id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=line_id,
+            received_qty=2,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
+    services.receive_purchase_order_line(
+        order_id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=line_id,
+            received_qty=1,
+            conformity_status="non_conforme",
+            nonconformity_reason="Manquant",
+        ),
+        created_by="tester",
+    )
+    order = services.get_purchase_order(order_id)
+    assert order.items
+    line = order.items[0]
+    assert line.received_conforme_qty == 2
+    assert line.received_non_conforme_qty == 1
 
 
 def test_validate_pending_assigns_new_unassigns_old_and_creates_return_movements_in_order() -> None:

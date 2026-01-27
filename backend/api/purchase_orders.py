@@ -180,12 +180,12 @@ async def receive_order(
         raise HTTPException(status_code=status, detail=message) from exc
 
 
-@router.post("/{order_id}/receive-line", response_model=models.PurchaseOrderDetail)
+@router.post("/{order_id}/receive-line", response_model=models.PurchaseOrderReceiveLineResponse)
 async def receive_order_line(
     order_id: int,
     payload: models.PurchaseOrderReceiveLinePayload,
     user: models.User = Depends(get_current_user),
-) -> models.PurchaseOrderDetail:
+) -> models.PurchaseOrderReceiveLineResponse:
     _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")

@@ -1071,6 +1071,8 @@ class PurchaseOrderItem(BaseModel):
     return_employee_item_id: int | None = None
     return_qty: int = 0
     return_status: Literal["none", "to_prepare", "shipped", "supplier_received", "cancelled"] = "none"
+    received_conforme_qty: int = 0
+    received_non_conforme_qty: int = 0
 
 
 class PurchaseOrderItemInput(BaseModel):
@@ -1104,6 +1106,7 @@ class PurchaseOrderReceipt(BaseModel):
     site_key: str
     purchase_order_id: int
     purchase_order_line_id: int
+    module: str | None = None
     received_qty: int
     conformity_status: Literal["conforme", "non_conforme"]
     nonconformity_reason: str | None = None
@@ -1120,6 +1123,14 @@ class PurchaseOrderReceiveLinePayload(BaseModel):
     nonconformity_reason: str | None = Field(default=None, max_length=256)
     nonconformity_action: Literal["replacement", "credit_note", "return_to_supplier"] | None = None
     note: str | None = Field(default=None, max_length=256)
+
+
+class PurchaseOrderReceiveLineResponse(BaseModel):
+    ok: bool
+    line_id: int
+    received_conforme_qty: int
+    received_non_conforme_qty: int
+    blocked_assignment: bool
 
 
 class PendingClothingAssignment(BaseModel):
@@ -1139,6 +1150,7 @@ class PendingClothingAssignment(BaseModel):
     created_at: datetime
     validated_at: datetime | None = None
     validated_by: str | None = None
+    source_receipt: PurchaseOrderReceipt | None = None
 
 
 class ClothingSupplierReturn(BaseModel):

@@ -927,6 +927,7 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     site_key TEXT NOT NULL,
                     purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
                     purchase_order_line_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+                    module TEXT NOT NULL DEFAULT 'clothing',
                     received_qty INTEGER NOT NULL,
                     conformity_status TEXT NOT NULL,
                     nonconformity_reason TEXT,
