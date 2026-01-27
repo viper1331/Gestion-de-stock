@@ -337,10 +337,11 @@ def render_purchase_order_pdf(
             max_width=qty_max,
             padding=padding,
         )
+        size_variant_label = "Taille/Variante"
         if is_clothing:
             unit_width = _measure_column_width(
                 size_variant_values,
-                label="Taille / Variante",
+                label=size_variant_label,
                 font_name=theme.font_family,
                 font_size=font_size,
                 min_width=unit_min,
@@ -400,7 +401,7 @@ def render_purchase_order_pdf(
             columns.append(
                 {
                     "key": "size_variant",
-                    "label": "Taille / Variante",
+                    "label": size_variant_label,
                     "width": unit_width,
                     "align": "center",
                 }

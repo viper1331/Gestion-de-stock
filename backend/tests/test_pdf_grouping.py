@@ -85,7 +85,8 @@ def test_purchase_order_pdf_includes_expected_headers() -> None:
     assert b"SKU" in content
     assert b"D\\351signation" in content or b"D\xc3\xa9signation" in content
     assert b"Quantit\\351" in content or b"Quantit\xc3\xa9" in content
-    assert b"Unit\\351" in content or b"Unit\xc3\xa9" in content
+    assert b"Taille/Variante" in content
+    assert b"Unit\\351" not in content and b"Unit\xc3\xa9" not in content
     assert b"R\\351ceptionn\\351" not in content and b"R\xc3\xa9ceptionn\xc3\xa9" not in content
 
 

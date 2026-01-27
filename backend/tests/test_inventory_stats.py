@@ -79,6 +79,13 @@ def test_clothing_stats_site_scoping() -> None:
     gsm_sku = f"GSM-{uuid4().hex[:6]}"
 
     with db.get_stock_connection("JLL") as conn:
+        conn.execute("DELETE FROM purchase_orders")
+        conn.execute("DELETE FROM items")
+    with db.get_stock_connection("GSM") as conn:
+        conn.execute("DELETE FROM purchase_orders")
+        conn.execute("DELETE FROM items")
+
+    with db.get_stock_connection("JLL") as conn:
         conn.execute(
             """
             INSERT INTO items (name, sku, quantity, low_stock_threshold, track_low_stock)
@@ -150,6 +157,8 @@ def test_remise_stats_payload() -> None:
 
     sku = f"REM-{uuid4().hex[:6]}"
     with db.get_stock_connection("JLL") as conn:
+        conn.execute("DELETE FROM remise_purchase_orders")
+        conn.execute("DELETE FROM remise_items")
         conn.execute(
             """
             INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, track_low_stock)
@@ -188,6 +197,7 @@ def test_remise_stats_excludes_untracked_alerts() -> None:
     tracked_low_sku = f"REM-{uuid4().hex[:6]}"
 
     with db.get_stock_connection("JLL") as conn:
+        conn.execute("DELETE FROM remise_items")
         conn.execute(
             """
             INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, track_low_stock)
@@ -249,6 +259,7 @@ def test_pharmacy_stats_excludes_untracked_alerts() -> None:
     tracked_low_name = f"Pharma-{uuid4().hex[:6]}"
 
     with db.get_stock_connection("JLL") as conn:
+        conn.execute("DELETE FROM pharmacy_items")
         conn.execute(
             """
             INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, track_low_stock)

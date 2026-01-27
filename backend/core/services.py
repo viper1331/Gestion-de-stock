@@ -4300,6 +4300,9 @@ def refresh_auto_purchase_orders(module_key: str) -> models.PurchaseOrderAutoRef
             if spec.extra_json_column and spec.extra_json_column in row.keys():
                 extra = _parse_extra_json(row[spec.extra_json_column])
             supplier_id = spec.supplier_resolver(conn, row, extra)
+            if supplier_id is None:
+                skipped += 1
+                continue
             threshold = row["low_stock_threshold"] or 0
             quantity = row["quantity"] or 0
             shortage = threshold - quantity
@@ -5038,8 +5041,6 @@ def _validate_sku_requirements(name: str | None, quantity: int | None, supplier_
         raise ValueError("Nom obligatoire")
     if quantity is None or quantity < 0:
         raise ValueError("Quantité obligatoire")
-    if supplier_id is None:
-        raise ValueError("Fournisseur obligatoire")
 
 
 def _sku_requires_validation(new_sku: str | None, current_sku: str | None) -> bool:
@@ -9538,33 +9539,6 @@ def _build_purchase_order_detail(
             receipt_counts[line_id] = receipt_counts.get(line_id, 0) + 1
     nonconformities: list[models.PurchaseOrderNonconformity] = []
     if _table_exists(conn, "purchase_order_nonconformities"):
-        nonconformity_rows = conn.execute(
-            """
-            SELECT *
-            FROM purchase_order_nonconformities
-            WHERE purchase_order_id = ? AND site_key = ?
-            ORDER BY updated_at DESC, id DESC
-            """,
-            (order_row["id"], resolved_site_key),
-        ).fetchall()
-        nonconformities = [
-            models.PurchaseOrderNonconformity(
-                id=row["id"],
-                site_key=row["site_key"],
-                module=row["module"],
-                purchase_order_id=row["purchase_order_id"],
-                purchase_order_line_id=row["purchase_order_line_id"],
-                receipt_id=row["receipt_id"],
-                status=row["status"],
-                reason=row["reason"],
-                note=_row_get(row, "note"),
-                requested_replacement=bool(_row_get(row, "requested_replacement", 0)),
-                created_by=_row_get(row, "created_by"),
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            for row in nonconformity_rows
-        ]
         module_expr = "module AS module"
         if not _table_has_column(conn, "purchase_order_nonconformities", "module"):
             module_expr = "'clothing' AS module"
@@ -9780,6 +9754,8 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
     status = _normalize_purchase_order_status(payload.status)
     if not payload.items:
         raise ValueError("Au moins un article est requis pour créer un bon de commande")
+    if payload.supplier_id is None:
+        raise ValueError("Fournisseur obligatoire")
     with db.get_stock_connection() as conn:
         if payload.supplier_id is not None:
             supplier_cur = conn.execute(
@@ -12190,6 +12166,8 @@ def create_remise_purchase_order(
 ) -> models.RemisePurchaseOrderDetail:
     ensure_database_ready()
     status = _normalize_purchase_order_status(payload.status)
+    if payload.supplier_id is None:
+        raise ValueError("Fournisseur obligatoire")
     aggregated = _aggregate_positive_quantities(
         (line.remise_item_id, line.quantity_ordered) for line in payload.items
     )
@@ -13998,7 +13976,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     supplier_id,
                     extra_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     payload.name,
@@ -14352,6 +14330,8 @@ def create_pharmacy_purchase_order(
 ) -> models.PharmacyPurchaseOrderDetail:
     ensure_database_ready()
     status = _normalize_purchase_order_status(payload.status)
+    if payload.supplier_id is None:
+        raise ValueError("Fournisseur obligatoire")
     aggregated = _aggregate_positive_quantities(
         (line.pharmacy_item_id, line.quantity_ordered) for line in payload.items
     )
