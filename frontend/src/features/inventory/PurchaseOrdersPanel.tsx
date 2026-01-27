@@ -769,6 +769,8 @@ export function PurchaseOrdersPanel({
       setPendingValidationError(null);
       await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ["clothing-dotations-assignees"] });
+      await queryClient.invalidateQueries({ queryKey: ["clothing-assigned-items"] });
     },
     onError: (mutationError) => {
       const detail = mutationError.response?.data?.detail;
