@@ -1057,10 +1057,15 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     perceived_at DATE DEFAULT CURRENT_DATE,
                     is_lost INTEGER NOT NULL DEFAULT 0,
                     is_degraded INTEGER NOT NULL DEFAULT 0,
-                    allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    degraded_qty INTEGER NOT NULL DEFAULT 0 CHECK (degraded_qty >= 0),
+                    lost_qty INTEGER NOT NULL DEFAULT 0 CHECK (lost_qty >= 0),
+                    allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                    CHECK (degraded_qty <= quantity),
+                    CHECK (lost_qty <= quantity),
+                    CHECK (degraded_qty + lost_qty <= quantity)
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_dotations_unique
-                    ON dotations(collaborator_id, item_id, is_lost, is_degraded);
+                    ON dotations(collaborator_id, item_id);
                 CREATE TABLE IF NOT EXISTS pharmacy_categories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL

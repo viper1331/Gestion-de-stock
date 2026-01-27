@@ -34,6 +34,8 @@ interface Dotation {
   perceived_at: string;
   is_lost: boolean;
   is_degraded: boolean;
+  degraded_qty: number;
+  lost_qty: number;
   allocated_at: string;
   is_obsolete: boolean;
   size_variant: string | null;
@@ -47,6 +49,8 @@ interface DotationFormValues {
   perceived_at: string;
   is_lost: boolean;
   is_degraded: boolean;
+  degraded_qty: number;
+  lost_qty: number;
 }
 
 interface DotationEditFormValues {
@@ -56,6 +60,8 @@ interface DotationEditFormValues {
   perceived_at: string;
   is_lost: boolean;
   is_degraded: boolean;
+  degraded_qty: number;
+  lost_qty: number;
 }
 
 interface ScannedDotationLine {
@@ -90,8 +96,20 @@ const buildDefaultFormValues = (): DotationFormValues => ({
   notes: "",
   perceived_at: new Date().toISOString().slice(0, 10),
   is_lost: false,
-  is_degraded: false
+  is_degraded: false,
+  degraded_qty: 0,
+  lost_qty: 0
 });
+
+const clampValue = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const clampDotationQuantities = (quantity: number, degraded_qty: number, lost_qty: number) => {
+  const maxDegraded = Math.max(quantity - lost_qty, 0);
+  const nextDegraded = clampValue(degraded_qty, 0, maxDegraded);
+  const maxLost = Math.max(quantity - nextDegraded, 0);
+  const nextLost = clampValue(lost_qty, 0, maxLost);
+  return { degraded_qty: nextDegraded, lost_qty: nextLost };
+};
 
 export function DotationsPage() {
   const { user } = useAuth();
@@ -166,6 +184,8 @@ export function DotationsPage() {
       perceived_at: string;
       is_lost: boolean;
       is_degraded: boolean;
+      degraded_qty: number;
+      lost_qty: number;
     }) => {
       await api.post("/dotations/dotations", payload);
     },
@@ -217,6 +237,8 @@ export function DotationsPage() {
         perceived_at: string;
         is_lost: boolean;
         is_degraded: boolean;
+        degraded_qty: number;
+        lost_qty: number;
       };
     }) => {
       await api.put(`/dotations/dotations/${id}`, payload);
@@ -376,6 +398,20 @@ export function DotationsPage() {
       setError("La quantité doit être positive.");
       return;
     }
+    const degradedQty = formValues.is_degraded ? formValues.degraded_qty : 0;
+    const lostQty = formValues.is_lost ? formValues.lost_qty : 0;
+    if (formValues.is_degraded && degradedQty <= 0) {
+      setError("Indiquez une quantité dégradée supérieure à zéro.");
+      return;
+    }
+    if (formValues.is_lost && lostQty <= 0) {
+      setError("Indiquez une quantité perdue supérieure à zéro.");
+      return;
+    }
+    if (degradedQty + lostQty > formValues.quantity) {
+      setError("Les quantités perdues et dégradées dépassent la quantité attribuée.");
+      return;
+    }
     setMessage(null);
     setError(null);
     const perceived_at = formValues.perceived_at || new Date().toISOString().slice(0, 10);
@@ -386,7 +422,9 @@ export function DotationsPage() {
       notes: formValues.notes.trim() ? formValues.notes.trim() : null,
       perceived_at,
       is_lost: formValues.is_lost,
-      is_degraded: formValues.is_degraded
+      is_degraded: formValues.is_degraded,
+      degraded_qty: degradedQty,
+      lost_qty: lostQty
     });
     setFormValues(buildDefaultFormValues());
   };
@@ -419,7 +457,9 @@ export function DotationsPage() {
       notes: dotation.notes ?? "",
       perceived_at: dotation.perceived_at.slice(0, 10),
       is_lost: dotation.is_lost,
-      is_degraded: dotation.is_degraded
+      is_degraded: dotation.is_degraded,
+      degraded_qty: dotation.degraded_qty,
+      lost_qty: dotation.lost_qty
     });
   };
 
@@ -441,6 +481,20 @@ export function DotationsPage() {
       setError("La quantité doit être positive.");
       return;
     }
+    const degradedQty = editFormValues.is_degraded ? editFormValues.degraded_qty : 0;
+    const lostQty = editFormValues.is_lost ? editFormValues.lost_qty : 0;
+    if (editFormValues.is_degraded && degradedQty <= 0) {
+      setError("Indiquez une quantité dégradée supérieure à zéro.");
+      return;
+    }
+    if (editFormValues.is_lost && lostQty <= 0) {
+      setError("Indiquez une quantité perdue supérieure à zéro.");
+      return;
+    }
+    if (degradedQty + lostQty > editFormValues.quantity) {
+      setError("Les quantités perdues et dégradées dépassent la quantité attribuée.");
+      return;
+    }
     setMessage(null);
     setError(null);
     const perceived_at = editFormValues.perceived_at || new Date().toISOString().slice(0, 10);
@@ -452,7 +506,9 @@ export function DotationsPage() {
         notes: editFormValues.notes.trim() ? editFormValues.notes.trim() : null,
         perceived_at,
         is_lost: editFormValues.is_lost,
-        is_degraded: editFormValues.is_degraded
+        is_degraded: editFormValues.is_degraded,
+        degraded_qty: degradedQty,
+        lost_qty: lostQty
       }
     });
   };
@@ -468,14 +524,14 @@ export function DotationsPage() {
         className: "rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-300"
       });
     }
-    if (dotation.is_lost) {
+    if (dotation.lost_qty > 0) {
       alerts.push({
         key: "lost",
         label: "Perte",
         className: "rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-red-300"
       });
     }
-    if (dotation.is_degraded) {
+    if (dotation.degraded_qty > 0 && dotation.lost_qty === 0) {
       alerts.push({
         key: "degraded",
         label: "Dégradation",
@@ -518,6 +574,22 @@ export function DotationsPage() {
             <dt className="text-xs uppercase tracking-wide text-slate-500">Perçue le</dt>
             <dd>{formatDateOnly(dotation.perceived_at)}</dd>
           </div>
+          {dotation.degraded_qty > 0 ? (
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">Dégradé</dt>
+              <dd>
+                {dotation.degraded_qty} / {dotation.quantity}
+              </dd>
+            </div>
+          ) : null}
+          {dotation.lost_qty > 0 ? (
+            <div>
+              <dt className="text-xs uppercase tracking-wide text-slate-500">Perdu</dt>
+              <dd>
+                {dotation.lost_qty} / {dotation.quantity}
+              </dd>
+            </div>
+          ) : null}
           <div className="sm:col-span-2">
             <dt className="text-xs uppercase tracking-wide text-slate-500">Notes</dt>
             <dd>{dotation.notes ? dotation.notes : <span className="text-slate-500">-</span>}</dd>
@@ -572,7 +644,21 @@ export function DotationsPage() {
                           prev
                             ? {
                                 ...prev,
-                                quantity: Number(event.target.value)
+                                quantity: Number(event.target.value),
+                                ...(() => {
+                                  const nextQuantity = Number(event.target.value);
+                                  const { degraded_qty, lost_qty } = clampDotationQuantities(
+                                    nextQuantity,
+                                    prev.degraded_qty,
+                                    prev.lost_qty
+                                  );
+                                  return {
+                                    degraded_qty,
+                                    lost_qty,
+                                    is_degraded: degraded_qty > 0,
+                                    is_lost: lost_qty > 0
+                                  };
+                                })()
                               }
                             : prev
                         )
@@ -634,7 +720,20 @@ export function DotationsPage() {
                           prev
                             ? {
                                 ...prev,
-                                is_lost: event.target.checked
+                                is_lost:
+                                  event.target.checked &&
+                                  Math.max(prev.quantity - prev.degraded_qty, 0) > 0,
+                                lost_qty: event.target.checked
+                                  ? (() => {
+                                      const maxAvailable = Math.max(
+                                        prev.quantity - prev.degraded_qty,
+                                        0
+                                      );
+                                      return maxAvailable > 0
+                                        ? Math.max(1, Math.min(prev.lost_qty || 1, maxAvailable))
+                                        : 0;
+                                    })()
+                                  : 0
                               }
                             : prev
                         )
@@ -653,7 +752,23 @@ export function DotationsPage() {
                           prev
                             ? {
                                 ...prev,
-                                is_degraded: event.target.checked
+                                is_degraded:
+                                  event.target.checked &&
+                                  Math.max(prev.quantity - prev.lost_qty, 0) > 0,
+                                degraded_qty: event.target.checked
+                                  ? (() => {
+                                      const maxAvailable = Math.max(
+                                        prev.quantity - prev.lost_qty,
+                                        0
+                                      );
+                                      return maxAvailable > 0
+                                        ? Math.max(
+                                            1,
+                                            Math.min(prev.degraded_qty || 1, maxAvailable)
+                                          )
+                                        : 0;
+                                    })()
+                                  : 0
                               }
                             : prev
                         )
@@ -663,6 +778,80 @@ export function DotationsPage() {
                     Dégradation constatée
                   </label>
                 </div>
+                {(editFormValues?.is_lost ?? false) || (editFormValues?.is_degraded ?? false) ? (
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    {editFormValues?.is_degraded ? (
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-degraded-qty-${dotation.id}`}>
+                          Quantité dégradée
+                        </label>
+                        <AppTextInput
+                          id={`edit-degraded-qty-${dotation.id}`}
+                          type="number"
+                          min={1}
+                          max={Math.max((editFormValues?.quantity ?? 0) - (editFormValues?.lost_qty ?? 0), 1)}
+                          value={editFormValues?.degraded_qty ?? 0}
+                          onChange={(event) =>
+                            setEditFormValues((prev) => {
+                              if (!prev) {
+                                return prev;
+                              }
+                              const nextQty = Number(event.target.value);
+                              const { degraded_qty, lost_qty } = clampDotationQuantities(
+                                prev.quantity,
+                                nextQty,
+                                prev.lost_qty
+                              );
+                              return {
+                                ...prev,
+                                degraded_qty,
+                                lost_qty,
+                                is_degraded: degraded_qty > 0,
+                                is_lost: lost_qty > 0
+                              };
+                            })
+                          }
+                          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                    ) : null}
+                    {editFormValues?.is_lost ? (
+                      <div className="space-y-1">
+                        <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-lost-qty-${dotation.id}`}>
+                          Quantité perdue
+                        </label>
+                        <AppTextInput
+                          id={`edit-lost-qty-${dotation.id}`}
+                          type="number"
+                          min={1}
+                          max={Math.max((editFormValues?.quantity ?? 0) - (editFormValues?.degraded_qty ?? 0), 1)}
+                          value={editFormValues?.lost_qty ?? 0}
+                          onChange={(event) =>
+                            setEditFormValues((prev) => {
+                              if (!prev) {
+                                return prev;
+                              }
+                              const nextQty = Number(event.target.value);
+                              const { degraded_qty, lost_qty } = clampDotationQuantities(
+                                prev.quantity,
+                                prev.degraded_qty,
+                                nextQty
+                              );
+                              return {
+                                ...prev,
+                                degraded_qty,
+                                lost_qty,
+                                is_degraded: degraded_qty > 0,
+                                is_lost: lost_qty > 0
+                              };
+                            })
+                          }
+                          className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                        />
+                      </div>
+                    ) : null}
+                  </div>
+                ) : null}
                 <div className="flex flex-wrap items-center gap-3">
                   <button
                     type="submit"
@@ -940,7 +1129,22 @@ export function DotationsPage() {
                   min={1}
                   value={formValues.quantity}
                   onChange={(event) =>
-                    setFormValues((prev) => ({ ...prev, quantity: Number(event.target.value) }))
+                    setFormValues((prev) => {
+                      const nextQuantity = Number(event.target.value);
+                      const { degraded_qty, lost_qty } = clampDotationQuantities(
+                        nextQuantity,
+                        prev.degraded_qty,
+                        prev.lost_qty
+                      );
+                      return {
+                        ...prev,
+                        quantity: nextQuantity,
+                        degraded_qty,
+                        lost_qty,
+                        is_degraded: degraded_qty > 0,
+                        is_lost: lost_qty > 0
+                      };
+                    })
                   }
                   className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                   required
@@ -982,7 +1186,18 @@ export function DotationsPage() {
                     type="checkbox"
                     checked={formValues.is_lost}
                     onChange={(event) =>
-                      setFormValues((prev) => ({ ...prev, is_lost: event.target.checked }))
+                      setFormValues((prev) => {
+                        const maxAvailable = Math.max(prev.quantity - prev.degraded_qty, 0);
+                        return {
+                          ...prev,
+                          is_lost: event.target.checked && maxAvailable > 0,
+                          lost_qty: event.target.checked
+                            ? maxAvailable > 0
+                              ? Math.max(1, Math.min(prev.lost_qty || 1, maxAvailable))
+                              : 0
+                            : 0
+                        };
+                      })
                     }
                     className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
                   />
@@ -997,13 +1212,92 @@ export function DotationsPage() {
                     type="checkbox"
                     checked={formValues.is_degraded}
                     onChange={(event) =>
-                      setFormValues((prev) => ({ ...prev, is_degraded: event.target.checked }))
+                      setFormValues((prev) => {
+                        const maxAvailable = Math.max(prev.quantity - prev.lost_qty, 0);
+                        return {
+                          ...prev,
+                          is_degraded: event.target.checked && maxAvailable > 0,
+                          degraded_qty: event.target.checked
+                            ? maxAvailable > 0
+                              ? Math.max(1, Math.min(prev.degraded_qty || 1, maxAvailable))
+                              : 0
+                            : 0
+                        };
+                      })
                     }
                     className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
                   />
                   Dégradation constatée
                 </label>
               </div>
+              {formValues.is_lost || formValues.is_degraded ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  {formValues.is_degraded ? (
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-degraded-qty">
+                        Quantité dégradée
+                      </label>
+                      <AppTextInput
+                        id="dotation-degraded-qty"
+                        type="number"
+                        min={1}
+                        max={Math.max(formValues.quantity - formValues.lost_qty, 1)}
+                        value={formValues.degraded_qty}
+                        onChange={(event) =>
+                          setFormValues((prev) => {
+                            const nextQty = Number(event.target.value);
+                            const { degraded_qty, lost_qty } = clampDotationQuantities(
+                              prev.quantity,
+                              nextQty,
+                              prev.lost_qty
+                            );
+                            return {
+                              ...prev,
+                              degraded_qty,
+                              lost_qty,
+                              is_degraded: degraded_qty > 0,
+                              is_lost: lost_qty > 0
+                            };
+                          })
+                        }
+                        className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                  ) : null}
+                  {formValues.is_lost ? (
+                    <div className="space-y-1">
+                      <label className="text-xs font-semibold text-slate-300" htmlFor="dotation-lost-qty">
+                        Quantité perdue
+                      </label>
+                      <AppTextInput
+                        id="dotation-lost-qty"
+                        type="number"
+                        min={1}
+                        max={Math.max(formValues.quantity - formValues.degraded_qty, 1)}
+                        value={formValues.lost_qty}
+                        onChange={(event) =>
+                          setFormValues((prev) => {
+                            const nextQty = Number(event.target.value);
+                            const { degraded_qty, lost_qty } = clampDotationQuantities(
+                              prev.quantity,
+                              prev.degraded_qty,
+                              nextQty
+                            );
+                            return {
+                              ...prev,
+                              degraded_qty,
+                              lost_qty,
+                              is_degraded: degraded_qty > 0,
+                              is_lost: lost_qty > 0
+                            };
+                          })
+                        }
+                        className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                      />
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
               <button
                 type="submit"
                 disabled={createDotation.isPending}
@@ -1070,10 +1364,10 @@ function formatDateOnly(value: string) {
 }
 
 function getDotationStatus(dotation: Dotation): DotationStatus {
-  if (dotation.is_lost) {
+  if (dotation.lost_qty > 0) {
     return "PERTE";
   }
-  if (dotation.is_degraded) {
+  if (dotation.degraded_qty > 0) {
     return "DEGRADATION";
   }
   return "RAS";
