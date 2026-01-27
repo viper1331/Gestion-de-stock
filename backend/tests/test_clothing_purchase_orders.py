@@ -447,15 +447,30 @@ def test_validate_pending_repairs_dotation_without_creating_new_card() -> None:
     services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
     with db.get_stock_connection() as conn:
         updated_dotation = conn.execute(
-            "SELECT id, is_lost, is_degraded FROM dotations WHERE id = ?",
+            "SELECT id FROM dotations WHERE id = ?",
             (dotation_id,),
         ).fetchone()
-        assert updated_dotation is not None
-        assert updated_dotation["is_lost"] == 0
-        assert updated_dotation["is_degraded"] == 0
+        assert updated_dotation is None
+        ras_dotation = conn.execute(
+            """
+            SELECT quantity, is_lost, is_degraded
+            FROM dotations
+            WHERE collaborator_id = ? AND item_id = ?
+              AND is_lost = 0
+              AND is_degraded = 0
+            """,
+            (collaborator_id, old_item_id),
+        ).fetchone()
+        assert ras_dotation is not None
+        assert ras_dotation["quantity"] == 1
         count_row = conn.execute(
-            "SELECT COUNT(*) AS count FROM dotations WHERE collaborator_id = ?",
-            (collaborator_id,),
+            """
+            SELECT COUNT(*) AS count
+            FROM dotations
+            WHERE collaborator_id = ? AND item_id = ?
+              AND is_lost = 0 AND is_degraded = 0
+            """,
+            (collaborator_id, old_item_id),
         ).fetchone()
         assert count_row["count"] == 1
         movement_rows = conn.execute(
