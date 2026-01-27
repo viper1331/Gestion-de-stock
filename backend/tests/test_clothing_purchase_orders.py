@@ -894,6 +894,13 @@ def test_validate_pending_loss_does_not_return_supplier() -> None:
     pending_id = order.pending_assignments[0].id
     services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
     with db.get_stock_connection() as conn:
+        updated_dotation = conn.execute(
+            "SELECT quantity, lost_qty FROM dotations WHERE id = ?",
+            (dotation_id,),
+        ).fetchone()
+        assert updated_dotation is not None
+        assert updated_dotation["quantity"] == 1
+        assert updated_dotation["lost_qty"] == 0
         movement_rows = conn.execute(
             "SELECT reason FROM movements WHERE item_id = ?",
             (item_id,),
@@ -903,6 +910,74 @@ def test_validate_pending_loss_does_not_return_supplier() -> None:
         assert "RETURN_FROM_EMPLOYEE" not in reasons
         returns = conn.execute("SELECT COUNT(*) AS count FROM clothing_supplier_returns").fetchone()
         assert returns["count"] == 0
+
+
+def test_validate_pending_allows_repeat_replacement() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Polo", sku="HAB-040")
+        collaborator_id = _create_collaborator(conn, full_name="Sonia Marchand")
+        supplier_id = _create_supplier(conn, name="Supplier-Polo-Repeat")
+        conn.execute("UPDATE items SET quantity = 2 WHERE id = ?", (item_id,))
+        dotation_id = _create_dotation(
+            conn,
+            collaborator_id=collaborator_id,
+            item_id=item_id,
+            quantity=2,
+            degraded_qty=2,
+        )
+        conn.commit()
+    for _ in range(2):
+        order = services.create_purchase_order(
+            models.PurchaseOrderCreate(
+                supplier_id=supplier_id,
+                status="ORDERED",
+                note=None,
+                items=[
+                    models.PurchaseOrderItemInput(
+                        item_id=item_id,
+                        quantity_ordered=1,
+                        line_type="replacement",
+                        beneficiary_employee_id=collaborator_id,
+                        return_expected=True,
+                        return_reason="Dégradation",
+                        target_dotation_id=dotation_id,
+                        return_qty=1,
+                    )
+                ],
+            )
+        )
+        services.receive_purchase_order_line(
+            order.id,
+            models.PurchaseOrderReceiveLinePayload(
+                purchase_order_line_id=order.items[0].id,
+                received_qty=1,
+                conformity_status="conforme",
+            ),
+            created_by="tester",
+        )
+        order = services.get_purchase_order(order.id)
+        pending_id = order.pending_assignments[0].id
+        services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
+    with db.get_stock_connection() as conn:
+        updated_dotation = conn.execute(
+            "SELECT quantity, degraded_qty, lost_qty, notes FROM dotations WHERE id = ?",
+            (dotation_id,),
+        ).fetchone()
+        assert updated_dotation is not None
+        assert updated_dotation["quantity"] == 2
+        assert updated_dotation["degraded_qty"] == 0
+        assert updated_dotation["lost_qty"] == 0
+        assert (updated_dotation["notes"] or "").count("Remplacement BC") == 2
+        count_row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM dotations
+            WHERE collaborator_id = ? AND item_id = ?
+            """,
+            (collaborator_id, item_id),
+        ).fetchone()
+        assert count_row["count"] == 1
 
 
 def test_validate_fails_if_return_item_not_assigned() -> None:
