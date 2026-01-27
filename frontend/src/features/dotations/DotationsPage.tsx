@@ -12,6 +12,9 @@ import { AppTextArea } from "components/AppTextArea";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 import { DraggableModal } from "../../components/DraggableModal";
+import { Timeline, type TimelineEvent, type TimelineEventType } from "../../components/Timeline";
+import { TruncatedText } from "../../components/TruncatedText";
+import { fetchQolSettings, DEFAULT_QOL_SETTINGS } from "../../lib/qolSettings";
 
 interface Collaborator {
   id: number;
@@ -39,6 +42,14 @@ interface Dotation {
   allocated_at: string;
   is_obsolete: boolean;
   size_variant: string | null;
+}
+
+interface DotationEvent {
+  id: number;
+  dotation_id: number;
+  event_type: string;
+  message: string;
+  created_at: string;
 }
 
 interface DotationFormValues {
@@ -125,10 +136,17 @@ export function DotationsPage() {
   const [scanValue, setScanValue] = useState("");
   const [scannedLines, setScannedLines] = useState<ScannedDotationLine[]>([]);
   const [expandedEmployees, setExpandedEmployees] = useState<Set<number>>(() => new Set());
+  const [expandedTimelines, setExpandedTimelines] = useState<Record<number, boolean>>({});
 
   const canView = user?.role === "admin" || modulePermissions.canAccess("dotations");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("dotations", "edit");
   const moduleTitle = useModuleTitle("dotations");
+  const { data: qolSettings } = useQuery({
+    queryKey: ["qol-settings"],
+    queryFn: fetchQolSettings,
+    enabled: Boolean(user)
+  });
+  const notePreviewLength = qolSettings?.note_preview_length ?? DEFAULT_QOL_SETTINGS.note_preview_length;
 
   useEffect(() => {
     if (!isCreateModalOpen) {
@@ -516,6 +534,8 @@ export function DotationsPage() {
   const renderDotationCard = (dotation: Dotation) => {
     const item = itemById.get(dotation.item_id);
     const isEditing = editingDotationId === dotation.id && editFormValues;
+    const isReadOnly = dotation.is_obsolete;
+    const isTimelineExpanded = Boolean(expandedTimelines[dotation.id]);
     const alerts: Array<{ key: string; label: string; className: string }> = [];
     if (dotation.is_obsolete) {
       alerts.push({
@@ -592,9 +612,35 @@ export function DotationsPage() {
           ) : null}
           <div className="sm:col-span-2">
             <dt className="text-xs uppercase tracking-wide text-slate-500">Notes</dt>
-            <dd>{dotation.notes ? dotation.notes : <span className="text-slate-500">-</span>}</dd>
+            <dd>
+              {dotation.notes ? (
+                <TruncatedText text={dotation.notes} maxLength={notePreviewLength} />
+              ) : (
+                <span className="text-slate-500">-</span>
+              )}
+            </dd>
           </div>
         </dl>
+        <div className="mt-4 space-y-2">
+          <button
+            type="button"
+            onClick={() =>
+              setExpandedTimelines((prev) => ({
+                ...prev,
+                [dotation.id]: !prev[dotation.id]
+              }))
+            }
+            className="text-xs font-semibold text-indigo-300 hover:text-indigo-200"
+          >
+            {isTimelineExpanded ? "Masquer l'historique" : "Afficher l'historique"}
+          </button>
+          {isTimelineExpanded ? <DotationTimeline dotationId={dotation.id} /> : null}
+        </div>
+        {isReadOnly ? (
+          <p className="mt-4 text-xs text-amber-200">
+            Dotation finalisée : lecture seule activée.
+          </p>
+        ) : null}
         {canEdit ? (
           <div className="mt-4 space-y-3">
             {isEditing ? (
@@ -874,7 +920,8 @@ export function DotationsPage() {
                 <button
                   type="button"
                   onClick={() => handleStartEditing(dotation)}
-                  className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-indigo-300 hover:border-indigo-400 hover:text-indigo-200"
+                  disabled={isReadOnly}
+                  className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-indigo-300 hover:border-indigo-400 hover:text-indigo-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Modifier
                 </button>
@@ -891,7 +938,8 @@ export function DotationsPage() {
                     setError(null);
                     void deleteDotation.mutateAsync({ id: dotation.id, restock });
                   }}
-                  className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-red-300 hover:border-red-400 hover:text-red-200"
+                  disabled={isReadOnly}
+                  className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-red-300 hover:border-red-400 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
                 >
                   Supprimer
                 </button>
@@ -1361,6 +1409,41 @@ function formatDateOnly(value: string) {
   } catch (error) {
     return value;
   }
+}
+
+const mapDotationEventType = (eventType: string): TimelineEventType => {
+  switch (eventType) {
+    case "CREATION":
+      return "CREATION";
+    case "replacement":
+      return "REMPLACEMENT_DEMANDE";
+    default:
+      return "CREATION";
+  }
+};
+
+function DotationTimeline({ dotationId }: { dotationId: number }) {
+  const { data: events = [], isLoading } = useQuery({
+    queryKey: ["dotations", "events", dotationId],
+    queryFn: async () => {
+      const response = await api.get<DotationEvent[]>(`/dotations/dotations/${dotationId}/events`);
+      return response.data;
+    }
+  });
+
+  const timelineEvents: TimelineEvent[] = events.map((event) => ({
+    id: String(event.id),
+    type: mapDotationEventType(event.event_type),
+    date: event.created_at,
+    user: null,
+    message: event.message
+  }));
+
+  if (isLoading) {
+    return <p className="text-xs text-slate-400">Chargement de l'historique...</p>;
+  }
+
+  return <Timeline events={timelineEvents} title="Historique" />;
 }
 
 function getDotationStatus(dotation: Dotation): DotationStatus {

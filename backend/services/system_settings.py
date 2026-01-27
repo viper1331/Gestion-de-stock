@@ -16,9 +16,13 @@ logger = logging.getLogger(__name__)
 SMTP_SETTINGS_KEY = "email.smtp"
 OTP_EMAIL_SETTINGS_KEY = "email.otp"
 PURCHASE_SUGGESTION_SETTINGS_KEY = "purchase_suggestions"
+QOL_SETTINGS_KEY = "qol.settings"
 
 _DEFAULT_FROM_EMAIL = "StockOps <no-reply@localhost>"
 _DEFAULT_EXPIRY_SOON_DAYS = 30
+_DEFAULT_QOL_TIMEZONE = "Europe/Paris"
+_DEFAULT_QOL_DATE_FORMAT = "DD/MM/YYYY"
+_DEFAULT_QOL_NOTE_PREVIEW_LENGTH = 180
 
 
 @dataclass(frozen=True)
@@ -47,6 +51,14 @@ class OtpEmailConfig:
 @dataclass(frozen=True)
 class PurchaseSuggestionSettings:
     expiry_soon_days: int
+
+
+@dataclass(frozen=True)
+class QolSettings:
+    timezone: str
+    date_format: str
+    auto_archive_days: int | None
+    note_preview_length: int
 
 
 def _utc_now_iso() -> str:
@@ -118,6 +130,17 @@ def _purchase_suggestion_env_defaults() -> dict[str, Any]:
     }
 
 
+def _qol_env_defaults() -> dict[str, Any]:
+    return {
+        "timezone": os.getenv("QOL_TIMEZONE", _DEFAULT_QOL_TIMEZONE),
+        "date_format": os.getenv("QOL_DATE_FORMAT", _DEFAULT_QOL_DATE_FORMAT),
+        "auto_archive_days": _get_int_env("QOL_AUTO_ARCHIVE_DAYS", 0),
+        "note_preview_length": _get_int_env(
+            "QOL_NOTE_PREVIEW_LENGTH", _DEFAULT_QOL_NOTE_PREVIEW_LENGTH
+        ),
+    }
+
+
 def get_setting_json(key: str) -> dict[str, Any] | None:
     with db.get_core_connection() as conn:
         row = conn.execute(
@@ -180,6 +203,7 @@ def seed_default_system_settings() -> None:
     otp_value = _otp_env_defaults()
     purchase_suggestion_value = _purchase_suggestion_env_defaults()
 
+    qol_value = _qol_env_defaults()
     with db.get_core_connection() as conn:
         smtp_exists = conn.execute(
             "SELECT 1 FROM system_settings WHERE key = ?",
@@ -219,6 +243,20 @@ def seed_default_system_settings() -> None:
                 (
                     PURCHASE_SUGGESTION_SETTINGS_KEY,
                     json.dumps(purchase_suggestion_value, ensure_ascii=False),
+                    _utc_now_iso(),
+                    None,
+                ),
+            )
+        qol_exists = conn.execute(
+            "SELECT 1 FROM system_settings WHERE key = ?",
+            (QOL_SETTINGS_KEY,),
+        ).fetchone()
+        if not qol_exists:
+            conn.execute(
+                "INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                (
+                    QOL_SETTINGS_KEY,
+                    json.dumps(qol_value, ensure_ascii=False),
                     _utc_now_iso(),
                     None,
                 ),
@@ -341,3 +379,60 @@ def get_purchase_suggestion_settings() -> PurchaseSuggestionSettings:
         defaults = _purchase_suggestion_env_defaults()
         return PurchaseSuggestionSettings(expiry_soon_days=defaults["expiry_soon_days"])
     return _purchase_suggestion_from_dict(raw)
+
+
+def _qol_from_dict(payload: dict[str, Any]) -> QolSettings:
+    defaults = _qol_env_defaults()
+    timezone_value = str(payload.get("timezone") or defaults["timezone"]).strip() or defaults["timezone"]
+    date_format_value = (
+        str(payload.get("date_format") or defaults["date_format"]).strip() or defaults["date_format"]
+    )
+    auto_archive_raw = payload.get("auto_archive_days", defaults["auto_archive_days"])
+    auto_archive_days: int | None
+    try:
+        auto_archive_days = int(auto_archive_raw)
+    except (TypeError, ValueError):
+        auto_archive_days = None
+    if auto_archive_days is not None and auto_archive_days <= 0:
+        auto_archive_days = None
+    note_preview_length = _coerce_int(
+        payload.get("note_preview_length", defaults["note_preview_length"]),
+        defaults["note_preview_length"],
+    )
+    return QolSettings(
+        timezone=timezone_value,
+        date_format=date_format_value,
+        auto_archive_days=auto_archive_days,
+        note_preview_length=max(30, note_preview_length),
+    )
+
+
+def get_qol_settings() -> QolSettings:
+    raw = get_setting_json(QOL_SETTINGS_KEY)
+    if raw is None:
+        defaults = _qol_env_defaults()
+        auto_archive_days = defaults["auto_archive_days"]
+        if auto_archive_days <= 0:
+            auto_archive_days = None
+        return QolSettings(
+            timezone=defaults["timezone"],
+            date_format=defaults["date_format"],
+            auto_archive_days=auto_archive_days,
+            note_preview_length=max(30, defaults["note_preview_length"]),
+        )
+    return _qol_from_dict(raw)
+
+
+def set_qol_settings(payload: dict[str, Any], updated_by: str | None) -> QolSettings:
+    settings = _qol_from_dict(payload)
+    set_setting_json(
+        QOL_SETTINGS_KEY,
+        {
+            "timezone": settings.timezone,
+            "date_format": settings.date_format,
+            "auto_archive_days": settings.auto_archive_days,
+            "note_preview_length": settings.note_preview_length,
+        },
+        updated_by,
+    )
+    return settings

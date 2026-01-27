@@ -840,6 +840,13 @@ class ConfigEntry(BaseModel):
     value: str
 
 
+class QolSettings(BaseModel):
+    timezone: str
+    date_format: str
+    auto_archive_days: int | None = None
+    note_preview_length: int
+
+
 class LayoutItem(BaseModel):
     i: str
     x: int
@@ -1496,6 +1503,21 @@ class DotationUpdate(BaseModel):
     lost_qty: Optional[int] = Field(default=None, ge=0)
 
 
+class DotationEvent(BaseModel):
+    id: int
+    dotation_id: int
+    event_type: str
+    order_id: int | None = None
+    item_id: int | None = None
+    item_name: str | None = None
+    sku: str | None = None
+    size: str | None = None
+    quantity: int | None = None
+    reason: str | None = None
+    message: str
+    created_at: datetime
+
+
 class DotationBeneficiary(BaseModel):
     employee_id: int
     display_name: str
@@ -1536,6 +1558,14 @@ class DotationAssigneeItem(BaseModel):
 
 class DotationAssigneeItemsResponse(BaseModel):
     items: list[DotationAssigneeItem]
+
+
+class GlobalSearchResult(BaseModel):
+    result_type: str
+    entity_id: int
+    label: str
+    description: str | None = None
+    path: str
 
 
 class DotationScanAddPayload(BaseModel):

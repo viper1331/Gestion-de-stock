@@ -14,6 +14,10 @@ import { AppTextInput } from "components/AppTextInput";
 import { AppTextArea } from "components/AppTextArea";
 import { DraggableModal } from "components/DraggableModal";
 import { PurchaseOrderCreateModal } from "components/PurchaseOrderCreateModal";
+import { Timeline, type TimelineEvent } from "components/Timeline";
+import { StatusBadge } from "components/StatusBadge";
+import { TruncatedText } from "components/TruncatedText";
+import { fetchQolSettings, DEFAULT_QOL_SETTINGS } from "../../lib/qolSettings";
 
 interface Supplier {
   id: number;
@@ -88,8 +92,59 @@ const ORDER_STATUSES: Array<{ value: string; label: string }> = [
   { value: "CANCELLED", label: "Annulé" }
 ];
 
+type PrimaryOrderStatus = "CONFORME" | "REMPLACEMENT_EN_COURS" | "ARCHIVE";
+
+const STATUS_BADGE_LABELS: Record<
+  PrimaryOrderStatus,
+  { label: string; tone: "success" | "info" | "neutral"; tooltip: string }
+> = {
+  CONFORME: {
+    label: "Conforme",
+    tone: "success",
+    tooltip: "Bon de commande réceptionné."
+  },
+  REMPLACEMENT_EN_COURS: {
+    label: "Remplacement en cours",
+    tone: "info",
+    tooltip: "Bon de commande en cours de traitement."
+  },
+  ARCHIVE: {
+    label: "Archivé",
+    tone: "neutral",
+    tooltip: "Bon de commande archivé en lecture seule."
+  }
+};
+
+const buildPharmacyTimeline = (order: PharmacyPurchaseOrderDetail): TimelineEvent[] => {
+  const events: TimelineEvent[] = [
+    {
+      id: `creation-${order.id}`,
+      type: "CREATION",
+      date: order.created_at,
+      user: null,
+      message: order.auto_created ? "Création automatique du bon de commande." : "Bon de commande créé."
+    }
+  ];
+  if (order.archived_at) {
+    events.push({
+      id: `archive-${order.id}`,
+      type: "ARCHIVAGE",
+      date: order.archived_at,
+      user: null,
+      message: "Bon de commande archivé."
+    });
+  }
+  return events.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+};
+
 export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const { user } = useAuth();
+  const { data: qolSettings } = useQuery({
+    queryKey: ["qol-settings"],
+    queryFn: fetchQolSettings,
+    enabled: Boolean(user)
+  });
+  const notePreviewLength = qolSettings?.note_preview_length ?? DEFAULT_QOL_SETTINGS.note_preview_length;
   const { data: suppliers = [] } = useQuery({
     queryKey: ["suppliers", { module: "pharmacy" }],
     queryFn: async () => {
@@ -706,6 +761,7 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                 {visibleOrders.map((order) => {
                   const isArchived = Boolean(order.is_archived);
                   const isReadOnly = isArchived;
+                  const timelineEvents = buildPharmacyTimeline(order);
                   const outstanding = order.items
                     .map((line) => {
                       const remaining = line.quantity_ordered - line.quantity_received;
@@ -716,10 +772,29 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                     })
                     .filter((line): line is { line_id: number; qty: number } => line !== null);
                   const canReceive = outstanding.length > 0 && !isReadOnly;
+                  const canArchive = canEdit && order.status === "RECEIVED" && outstanding.length === 0;
                   const canSendToSupplier = Boolean(order.supplier_id && order.supplier_email);
                   const sendTooltip = order.supplier_id
                     ? "Ajoutez un email fournisseur pour activer l'envoi"
                     : "Bon de commande non associé à un fournisseur";
+                  const primaryStatus: PrimaryOrderStatus = isArchived
+                    ? "ARCHIVE"
+                    : order.status === "RECEIVED"
+                      ? "CONFORME"
+                      : "REMPLACEMENT_EN_COURS";
+                  const primaryBadge = STATUS_BADGE_LABELS[primaryStatus];
+                  let primaryActionKey: string | null = null;
+                  if (isArchived && canEdit) {
+                    primaryActionKey = "unarchive";
+                  } else if (canReceive) {
+                    primaryActionKey = "receive_all";
+                  } else if (canEdit && order.status !== "RECEIVED") {
+                    primaryActionKey = "send_supplier";
+                  } else if (canArchive) {
+                    primaryActionKey = "archive";
+                  }
+                  const resolveActionClass = (key: string, primary: string, secondary: string) =>
+                    key === primaryActionKey ? `${primary} ring-1 ring-white/20` : secondary;
                   return (
                     <tr key={order.id}>
                       <td className="px-4 py-3 text-slate-300">
@@ -739,40 +814,42 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-slate-200">
-                        {isArchived ? (
-                          <div className="flex flex-col gap-2 text-xs">
+                        <div className="flex flex-col gap-2 text-xs">
+                          <StatusBadge
+                            label={primaryBadge.label}
+                            tone={primaryBadge.tone}
+                            tooltip={primaryBadge.tooltip}
+                          />
+                          {isArchived ? (
                             <span>
                               {ORDER_STATUSES.find((option) => option.value === order.status)?.label ??
                                 order.status}
                             </span>
-                            <span className="w-fit rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-200">
-                              Archivé
-                            </span>
-                          </div>
-                        ) : (
-                          <select
-                            value={order.status}
-                            onChange={(event) => {
-                              if (!canEdit) {
-                                return;
-                              }
-                              setError(null);
-                              updateOrder.mutate({
-                                orderId: order.id,
-                                status: event.target.value,
-                                successMessage: "Statut mis à jour."
-                              });
-                            }}
-                            className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-                            disabled={!canEdit}
-                          >
-                            {ORDER_STATUSES.map((option) => (
-                              <option key={option.value} value={option.value}>
-                                {option.label}
-                              </option>
-                            ))}
-                          </select>
-                        )}
+                          ) : (
+                            <select
+                              value={order.status}
+                              onChange={(event) => {
+                                if (!canEdit) {
+                                  return;
+                                }
+                                setError(null);
+                                updateOrder.mutate({
+                                  orderId: order.id,
+                                  status: event.target.value,
+                                  successMessage: "Statut mis à jour."
+                                });
+                              }}
+                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                              disabled={!canEdit}
+                            >
+                              {ORDER_STATUSES.map((option) => (
+                                <option key={option.value} value={option.value}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          )}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-slate-200">
                         <ul className="space-y-1 text-xs">
@@ -787,8 +864,19 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                               </span>
                             </li>
                           ))}
+                          <li className="pt-2">
+                            <Timeline events={timelineEvents} title="Historique" />
+                          </li>
+                          {isReadOnly ? (
+                            <li className="text-[11px] text-amber-200">
+                              Bon de commande archivé : lecture seule activée.
+                            </li>
+                          ) : null}
                           {order.note ? (
-                            <li className="text-slate-400">Note: {order.note}</li>
+                            <li className="text-slate-400">
+                              Note:{" "}
+                              <TruncatedText text={order.note} maxLength={notePreviewLength} />
+                            </li>
                           ) : null}
                         </ul>
                       </td>
@@ -798,7 +886,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                             type="button"
                             onClick={() => handleDownload(order.id)}
                             disabled={downloadingId === order.id}
-                            className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            className={resolveActionClass(
+                              "download",
+                              "rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60",
+                              "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                            )}
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
@@ -808,7 +900,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                                 type="button"
                                 onClick={() => handleUnarchiveOrder(order)}
                                 disabled={unarchiveOrder.isPending}
-                                className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={resolveActionClass(
+                                  "unarchive",
+                                  "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60",
+                                  "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                )}
                               >
                                 Désarchiver
                               </button>
@@ -821,7 +917,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                                   receiveOrder.mutate({ orderId: order.id, lines: outstanding })
                                 }
                                 disabled={!canEdit || !canReceive}
-                                className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={resolveActionClass(
+                                  "receive_all",
+                                  "rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60",
+                                  "rounded border border-emerald-500/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                )}
                                 title={
                                   canReceive
                                     ? "Enregistrer la réception des quantités restantes"
@@ -834,7 +934,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                                 type="button"
                                 onClick={() => handleOpenReceiveModal(order)}
                                 disabled={!canEdit || !canReceive}
-                                className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                className={resolveActionClass(
+                                  "receive_partial",
+                                  "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60",
+                                  "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                                )}
                               >
                                 Réception partielle
                               </button>
@@ -842,7 +946,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                                 <button
                                   type="button"
                                   onClick={() => handleEditOrder(order)}
-                                  className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                                  className={resolveActionClass(
+                                    "edit",
+                                    "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600",
+                                    "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                                  )}
                                 >
                                   Modifier
                                 </button>
@@ -852,7 +960,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                                   type="button"
                                   onClick={() => sendToSupplier.mutate(order)}
                                   disabled={sendingId === order.id || !canSendToSupplier}
-                                  className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                  className={resolveActionClass(
+                                    "send_supplier",
+                                    "rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60",
+                                    "rounded border border-indigo-400/60 px-3 py-1 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  )}
                                   title={
                                     canSendToSupplier
                                       ? "Envoyer le bon de commande au fournisseur"
@@ -862,11 +974,15 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                                   {sendingId === order.id ? "Envoi..." : "Envoyer au fournisseur"}
                                 </button>
                               ) : null}
-                              {canEdit && order.status === "RECEIVED" ? (
+                              {canArchive ? (
                                 <button
                                   type="button"
                                   onClick={() => handleOpenArchiveModal(order)}
-                                  className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+                                  className={resolveActionClass(
+                                    "archive",
+                                    "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400",
+                                    "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+                                  )}
                                 >
                                   Archiver
                                 </button>
@@ -876,7 +992,11 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                                   type="button"
                                   onClick={() => handleDeleteOrder(order)}
                                   disabled={deletingId === order.id}
-                                  className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  className={resolveActionClass(
+                                    "delete",
+                                    "rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60",
+                                    "rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  )}
                                 >
                                   {deletingId === order.id ? "Suppression..." : "Supprimer"}
                                 </button>

@@ -458,6 +458,30 @@ def update_purchase_suggestion_settings(
     return payload
 
 
+@router.get("/qol-settings", response_model=models.QolSettings)
+def get_qol_settings(user: models.User = Depends(require_admin)) -> models.QolSettings:
+    settings = system_settings.get_qol_settings()
+    return models.QolSettings(
+        timezone=settings.timezone,
+        date_format=settings.date_format,
+        auto_archive_days=settings.auto_archive_days,
+        note_preview_length=settings.note_preview_length,
+    )
+
+
+@router.put("/qol-settings", response_model=models.QolSettings)
+def update_qol_settings(
+    payload: models.QolSettings, user: models.User = Depends(require_admin)
+) -> models.QolSettings:
+    settings = system_settings.set_qol_settings(payload.model_dump(), user.username)
+    return models.QolSettings(
+        timezone=settings.timezone,
+        date_format=settings.date_format,
+        auto_archive_days=settings.auto_archive_days,
+        note_preview_length=settings.note_preview_length,
+    )
+
+
 @router.get("/backup/settings", response_model=models.BackupSettingsStatus)
 async def get_backup_settings(user: models.User = Depends(require_admin)):
     site_key = db.get_current_site_key()

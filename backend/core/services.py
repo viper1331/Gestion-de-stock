@@ -13961,6 +13961,37 @@ def list_dotations(
         return dotations
 
 
+def list_dotation_events(dotation_id: int) -> list[models.DotationEvent]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM dotation_events
+            WHERE dotation_id = ?
+            ORDER BY datetime(created_at) DESC
+            """,
+            (dotation_id,),
+        ).fetchall()
+    return [
+        models.DotationEvent(
+            id=row["id"],
+            dotation_id=row["dotation_id"],
+            event_type=row["event_type"],
+            order_id=row["order_id"],
+            item_id=row["item_id"],
+            item_name=row["item_name"],
+            sku=row["sku"],
+            size=row["size"],
+            quantity=row["quantity"],
+            reason=row["reason"],
+            message=row["message"],
+            created_at=row["created_at"],
+        )
+        for row in rows
+    ]
+
+
 def list_dotation_beneficiaries() -> list[models.DotationBeneficiary]:
     ensure_database_ready()
     query = """
@@ -14077,6 +14108,153 @@ def list_dotation_assignee_items(employee_id: int) -> list[models.DotationAssign
         ]
 
 
+def search_global(user: models.User, query: str) -> list[models.GlobalSearchResult]:
+    ensure_database_ready()
+    search = query.strip()
+    if not search:
+        return []
+    like = f"%{search}%"
+    results: list[models.GlobalSearchResult] = []
+
+    if has_module_access(user, "purchase_orders", action="view"):
+        with db.get_stock_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT po.id AS order_id,
+                       po.status AS status,
+                       s.name AS supplier_name
+                FROM purchase_orders AS po
+                LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+                LEFT JOIN purchase_order_items AS poi ON poi.purchase_order_id = po.id
+                LEFT JOIN items AS i ON i.id = poi.item_id
+                WHERE CAST(po.id AS TEXT) LIKE ?
+                   OR s.name LIKE ?
+                   OR i.name LIKE ?
+                   OR i.sku LIKE ?
+                   OR poi.sku LIKE ?
+                   OR po.note LIKE ?
+                ORDER BY po.created_at DESC
+                LIMIT 50
+                """,
+                (like, like, like, like, like, like),
+            ).fetchall()
+        for row in rows:
+            supplier_label = row["supplier_name"] or "Fournisseur inconnu"
+            results.append(
+                models.GlobalSearchResult(
+                    result_type="BC",
+                    entity_id=row["order_id"],
+                    label=f"BC #{row['order_id']}",
+                    description=f"{supplier_label} · {row['status']}",
+                    path="/purchase-orders",
+                )
+            )
+
+    if has_module_access(user, "inventory_remise", action="view"):
+        with db.get_stock_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT po.id AS order_id,
+                       po.status AS status,
+                       s.name AS supplier_name
+                FROM remise_purchase_orders AS po
+                LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+                LEFT JOIN remise_purchase_order_items AS poi ON poi.purchase_order_id = po.id
+                LEFT JOIN remise_items AS i ON i.id = poi.remise_item_id
+                WHERE CAST(po.id AS TEXT) LIKE ?
+                   OR s.name LIKE ?
+                   OR i.name LIKE ?
+                   OR i.sku LIKE ?
+                   OR poi.sku LIKE ?
+                   OR po.note LIKE ?
+                ORDER BY po.created_at DESC
+                LIMIT 50
+                """,
+                (like, like, like, like, like, like),
+            ).fetchall()
+        for row in rows:
+            supplier_label = row["supplier_name"] or "Fournisseur inconnu"
+            results.append(
+                models.GlobalSearchResult(
+                    result_type="BC",
+                    entity_id=row["order_id"],
+                    label=f"BC Remise #{row['order_id']}",
+                    description=f"{supplier_label} · {row['status']}",
+                    path="/remise-inventory",
+                )
+            )
+
+    if has_module_access(user, "pharmacy", action="view"):
+        with db.get_stock_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT po.id AS order_id,
+                       po.status AS status,
+                       s.name AS supplier_name
+                FROM pharmacy_purchase_orders AS po
+                LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+                LEFT JOIN pharmacy_purchase_order_items AS poi ON poi.purchase_order_id = po.id
+                LEFT JOIN pharmacy_items AS i ON i.id = poi.pharmacy_item_id
+                WHERE CAST(po.id AS TEXT) LIKE ?
+                   OR s.name LIKE ?
+                   OR i.name LIKE ?
+                   OR i.barcode LIKE ?
+                   OR po.note LIKE ?
+                ORDER BY po.created_at DESC
+                LIMIT 50
+                """,
+                (like, like, like, like, like),
+            ).fetchall()
+        for row in rows:
+            supplier_label = row["supplier_name"] or "Fournisseur inconnu"
+            results.append(
+                models.GlobalSearchResult(
+                    result_type="BC",
+                    entity_id=row["order_id"],
+                    label=f"BC Pharmacie #{row['order_id']}",
+                    description=f"{supplier_label} · {row['status']}",
+                    path="/pharmacy",
+                )
+            )
+
+    if has_module_access(user, "dotations", action="view"):
+        with db.get_stock_connection() as conn:
+            rows = conn.execute(
+                """
+                SELECT DISTINCT d.id AS dotation_id,
+                       c.full_name AS collaborator_name,
+                       i.name AS item_name,
+                       i.sku AS item_sku
+                FROM dotations AS d
+                JOIN collaborators AS c ON c.id = d.collaborator_id
+                JOIN items AS i ON i.id = d.item_id
+                WHERE CAST(d.id AS TEXT) LIKE ?
+                   OR c.full_name LIKE ?
+                   OR i.name LIKE ?
+                   OR i.sku LIKE ?
+                   OR d.notes LIKE ?
+                ORDER BY d.allocated_at DESC
+                LIMIT 50
+                """,
+                (like, like, like, like, like),
+            ).fetchall()
+        for row in rows:
+            label = row["collaborator_name"] or "Collaborateur"
+            item_label = row["item_name"] or "Article"
+            sku = row["item_sku"] or "SKU"
+            results.append(
+                models.GlobalSearchResult(
+                    result_type="Dotation",
+                    entity_id=row["dotation_id"],
+                    label=f"Dotation #{row['dotation_id']} · {label}",
+                    description=f"{item_label} ({sku})",
+                    path="/dotations",
+                )
+            )
+
+    return results
+
+
 def get_dotation(dotation_id: int) -> models.Dotation:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
@@ -14182,6 +14360,21 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
                 degraded_qty,
                 lost_qty,
             ),
+        )
+        occurred_at = datetime.now()
+        _record_dotation_event(
+            conn,
+            dotation_id=cur.lastrowid,
+            event_type="CREATION",
+            message="Dotation créée.",
+            order_id=None,
+            item_id=payload.item_id,
+            item_name=None,
+            sku=None,
+            size=None,
+            quantity=payload.quantity,
+            reason=None,
+            occurred_at=occurred_at,
         )
         conn.execute(
             "UPDATE items SET quantity = quantity - ? WHERE id = ?",
