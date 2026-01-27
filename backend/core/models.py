@@ -547,6 +547,14 @@ class VehiclePharmacyLotApplyResult(BaseModel):
 class VehicleAppliedLot(BaseModel):
     id: int
     vehicle_id: int
+    vehicle_type: str | None = None
+    view: str | None = None
+    source: str | None = None
+    pharmacy_lot_id: int | None = None
+    lot_name: str | None = None
+    position_x: float | None = None
+    position_y: float | None = None
+    created_at: str | None = None
 
 
 class VehicleAppliedLotUpdate(BaseModel):

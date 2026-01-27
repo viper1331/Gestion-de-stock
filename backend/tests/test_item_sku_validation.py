@@ -37,7 +37,7 @@ def _create_supplier(headers: dict[str, str]) -> int:
     return response.json()["id"]
 
 
-def test_create_item_requires_supplier_when_sku_provided() -> None:
+def test_create_item_allows_missing_supplier_when_sku_provided() -> None:
     headers = _login_headers()
     response = client.post(
         "/items/",
@@ -48,8 +48,8 @@ def test_create_item_requires_supplier_when_sku_provided() -> None:
         },
         headers=headers,
     )
-    assert response.status_code == 400, response.text
-    assert response.json()["detail"] == "Fournisseur obligatoire"
+    assert response.status_code == 201, response.text
+    assert response.json()["supplier_id"] is None
 
 
 def test_update_item_requires_name_when_sku_changes() -> None:

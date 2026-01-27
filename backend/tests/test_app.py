@@ -650,6 +650,14 @@ def test_manual_purchase_order_flow() -> None:
 def test_pharmacy_purchase_order_flow() -> None:
     headers = _login_headers("admin", "admin123")
 
+    supplier_resp = client.post(
+        "/suppliers/",
+        json={"name": f"Pharma-Supplier-{uuid4().hex[:6]}", "modules": ["pharmacy"]},
+        headers=headers,
+    )
+    assert supplier_resp.status_code == 201, supplier_resp.text
+    supplier_id = supplier_resp.json()["id"]
+
     item_resp = client.post(
         "/pharmacy/",
         json={
@@ -669,6 +677,7 @@ def test_pharmacy_purchase_order_flow() -> None:
     order_resp = client.post(
         "/pharmacy/orders/",
         json={
+            "supplier_id": supplier_id,
             "status": "ORDERED",
             "note": "Réapprovisionnement",
             "items": [
@@ -717,8 +726,14 @@ def test_module_permissions_control_supplier_access() -> None:
     admin_headers = _login_headers("admin", "admin123")
     worker_headers = _login_headers("worker", "worker1234")
 
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM supplier_modules")
+        conn.execute("DELETE FROM suppliers")
+        conn.commit()
+
     blocked = client.get("/suppliers/", headers=worker_headers)
-    assert blocked.status_code == 403
+    assert blocked.status_code == 200
+    assert blocked.json() == []
 
     grant_view = client.put(
         "/permissions/modules",

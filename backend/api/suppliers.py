@@ -21,7 +21,8 @@ async def list_suppliers(
     module: str | None = Query(default=None),
     user: models.User = Depends(get_current_user),
 ) -> list[models.Supplier]:
-    _require_permission(user, action="view")
+    if not services.has_module_access(user, MODULE_KEY, action="view"):
+        return []
     site_key = db.get_current_site_key()
     return services.list_suppliers(site_key=site_key, module=module)
 
