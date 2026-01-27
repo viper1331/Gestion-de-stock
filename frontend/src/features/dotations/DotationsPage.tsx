@@ -67,15 +67,20 @@ interface ScannedDotationLine {
 
 type DotationStatus = "RAS" | "DEGRADATION" | "PERTE";
 
-interface DotationCompactRow {
+interface DotationChip {
   id: number;
-  employeeName: string;
   itemName: string;
   sku: string;
   variant: string | null;
   quantity: number;
   receivedAt: string;
   status: DotationStatus;
+}
+
+interface EmployeeDotationsRow {
+  collaboratorId: number;
+  employeeName: string;
+  chips: DotationChip[];
 }
 
 const buildDefaultFormValues = (): DotationFormValues => ({
@@ -101,6 +106,7 @@ export function DotationsPage() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [scanValue, setScanValue] = useState("");
   const [scannedLines, setScannedLines] = useState<ScannedDotationLine[]>([]);
+  const [expandedEmployees, setExpandedEmployees] = useState<Set<number>>(() => new Set());
 
   const canView = user?.role === "admin" || modulePermissions.canAccess("dotations");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("dotations", "edit");
@@ -317,22 +323,24 @@ export function DotationsPage() {
 
   const isAllCollaborators = !filters.collaborator || filters.collaborator === "all";
 
-  const compactRows = useMemo(() => {
-    return dotations.map((dotation) => {
-      const collaborator = collaboratorById.get(dotation.collaborator_id);
-      const item = itemById.get(dotation.item_id);
-      return {
-        id: dotation.id,
-        employeeName: collaborator?.full_name ?? `Collaborateur #${dotation.collaborator_id}`,
-        itemName: item?.name ?? `Article #${dotation.item_id}`,
-        sku: item?.sku ?? "",
-        variant: dotation.size_variant,
-        quantity: dotation.quantity,
-        receivedAt: dotation.perceived_at,
-        status: getDotationStatus(dotation)
-      };
-    });
-  }, [dotations, collaboratorById, itemById]);
+  const compactRows = useMemo<EmployeeDotationsRow[]>(() => {
+    return groupedDotations.map((group) => ({
+      collaboratorId: group.collaboratorId,
+      employeeName: group.collaborator?.full_name ?? `Collaborateur #${group.collaboratorId}`,
+      chips: group.dotations.map((dotation) => {
+        const item = itemById.get(dotation.item_id);
+        return {
+          id: dotation.id,
+          itemName: item?.name ?? `Article #${dotation.item_id}`,
+          sku: item?.sku ?? "",
+          variant: dotation.size_variant,
+          quantity: dotation.quantity,
+          receivedAt: dotation.perceived_at,
+          status: getDotationStatus(dotation)
+        };
+      })
+    }));
+  }, [groupedDotations, itemById]);
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
     return (
@@ -708,6 +716,19 @@ export function DotationsPage() {
 
   const selectedCollaboratorId = !isAllCollaborators && filters.collaborator ? Number(filters.collaborator) : null;
   const selectedCollaborator = selectedCollaboratorId ? collaboratorById.get(selectedCollaboratorId) : undefined;
+  const maxChips = 6;
+
+  const handleToggleEmployee = (collaboratorId: number) => {
+    setExpandedEmployees((prev) => {
+      const next = new Set(prev);
+      if (next.has(collaboratorId)) {
+        next.delete(collaboratorId);
+      } else {
+        next.add(collaboratorId);
+      }
+      return next;
+    });
+  };
 
   const content = (
     <section className="space-y-6">
@@ -780,7 +801,12 @@ export function DotationsPage() {
         ) : null}
         {groupedDotations.length > 0 ? (
           isAllCollaborators ? (
-            <DotationsCompactList rows={compactRows} />
+            <DotationsCompactList
+              rows={compactRows}
+              maxChips={maxChips}
+              expandedEmployees={expandedEmployees}
+              onToggleEmployee={handleToggleEmployee}
+            />
           ) : (
             <div className="space-y-4">
               <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
@@ -791,7 +817,7 @@ export function DotationsPage() {
                   {dotations.length} article{dotations.length > 1 ? "s" : ""} attribué{dotations.length > 1 ? "s" : ""}
                 </p>
               </div>
-              <div className="grid gap-4 lg:grid-cols-2">
+              <div className="grid gap-4">
                 {dotations.map((dotation) => renderDotationCard(dotation))}
               </div>
             </div>
@@ -1068,37 +1094,72 @@ function StatusBadge({ status }: { status: DotationStatus }) {
   );
 }
 
-function DotationsCompactList({ rows }: { rows: DotationCompactRow[] }) {
+function DotationsCompactList({
+  rows,
+  maxChips,
+  expandedEmployees,
+  onToggleEmployee
+}: {
+  rows: EmployeeDotationsRow[];
+  maxChips: number;
+  expandedEmployees: Set<number>;
+  onToggleEmployee: (collaboratorId: number) => void;
+}) {
   return (
     <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20">
-      <div className="grid grid-cols-[1.3fr_1.7fr_.6fr_.9fr_.7fr] gap-3 border-b border-white/10 px-4 py-3 text-xs uppercase tracking-wide text-slate-300">
+      <div className="grid gap-3 border-b border-white/10 px-4 py-3 text-xs uppercase tracking-wide text-slate-300 sm:grid-cols-[220px_1fr]">
         <div>Collaborateur</div>
-        <div>Article</div>
-        <div>Qté</div>
-        <div>Reçu le</div>
-        <div>Statut</div>
+        <div>Dotations</div>
       </div>
       <div className="divide-y divide-white/5">
-        {rows.map((row) => (
-          <div
-            key={row.id}
-            className="grid grid-cols-[1.3fr_1.7fr_.6fr_.9fr_.7fr] items-center gap-3 px-4 py-3"
-          >
-            <div className="truncate font-medium text-white/90">{row.employeeName}</div>
-            <div className="truncate">
-              <div className="text-white/90">{row.itemName}</div>
-              <div className="truncate text-xs text-slate-400">
-                {row.sku}
-                {row.variant ? ` • ${row.variant}` : ""}
+        {rows.map((row) => {
+          const isExpanded = expandedEmployees.has(row.collaboratorId);
+          const visibleChips = isExpanded ? row.chips : row.chips.slice(0, maxChips);
+          const hiddenCount = Math.max(row.chips.length - visibleChips.length, 0);
+          return (
+            <div key={row.collaboratorId} className="grid gap-3 px-4 py-3 sm:grid-cols-[220px_1fr]">
+              <div className="font-medium text-white/90">{row.employeeName}</div>
+              <div className="flex flex-wrap items-center gap-2">
+                {visibleChips.map((chip) => (
+                  <div
+                    key={chip.id}
+                    className="min-w-[150px] rounded-lg border border-slate-800 bg-slate-950 px-2 py-1"
+                  >
+                    <div className="flex flex-wrap items-center gap-1 text-[11px] text-slate-300">
+                      <span className="font-semibold text-white/90">{chip.itemName}</span>
+                      {chip.sku ? <span className="text-[10px] text-slate-400">({chip.sku})</span> : null}
+                    </div>
+                    <div className="mt-1 flex flex-wrap items-center gap-2 text-[10px] text-slate-400">
+                      <span title={chip.variant ?? undefined}>
+                        Taille: {chip.variant ? chip.variant : "—"}
+                      </span>
+                      <span>Qté {chip.quantity}</span>
+                      <span>{formatDateOnly(chip.receivedAt)}</span>
+                      <StatusBadge status={chip.status} />
+                    </div>
+                  </div>
+                ))}
+                {hiddenCount > 0 ? (
+                  <button
+                    type="button"
+                    onClick={() => onToggleEmployee(row.collaboratorId)}
+                    className="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-300 hover:border-slate-500"
+                  >
+                    +{hiddenCount}
+                  </button>
+                ) : row.chips.length > maxChips ? (
+                  <button
+                    type="button"
+                    onClick={() => onToggleEmployee(row.collaboratorId)}
+                    className="rounded-full border border-slate-700 px-3 py-1 text-[11px] font-semibold text-slate-300 hover:border-slate-500"
+                  >
+                    Réduire
+                  </button>
+                ) : null}
               </div>
             </div>
-            <div className="font-semibold text-white/90">{row.quantity}</div>
-            <div className="text-slate-300">{formatDateOnly(row.receivedAt)}</div>
-            <div>
-              <StatusBadge status={row.status} />
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
