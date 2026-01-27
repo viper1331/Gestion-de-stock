@@ -78,6 +78,7 @@ interface PharmacyItem {
   name: string;
   quantity: number;
   low_stock_threshold: number | null;
+  track_low_stock?: boolean;
   expiration_date: string | null;
 }
 
@@ -278,6 +279,9 @@ export function HomePage() {
     }
 
     return pharmacyItems.filter((item) => {
+      if (item.track_low_stock === false) {
+        return false;
+      }
       const threshold = item.low_stock_threshold ?? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD;
       if (threshold <= 0) {
         return false;

@@ -174,3 +174,125 @@ def test_remise_stats_payload() -> None:
         with db.get_stock_connection("JLL") as conn:
             conn.execute("DELETE FROM remise_purchase_orders")
             conn.execute("DELETE FROM remise_items WHERE sku = ?", (sku,))
+
+
+def test_remise_stats_excludes_untracked_alerts() -> None:
+    services.ensure_database_ready()
+    services.ensure_site_database_ready("JLL")
+    admin_headers = login_headers(client, "admin", "admin123")
+    headers = {**admin_headers, "X-Site-Key": "JLL"}
+
+    tracked_stockout_sku = f"REM-{uuid4().hex[:6]}"
+    untracked_stockout_sku = f"REM-{uuid4().hex[:6]}"
+    untracked_low_sku = f"REM-{uuid4().hex[:6]}"
+    tracked_low_sku = f"REM-{uuid4().hex[:6]}"
+
+    with db.get_stock_connection("JLL") as conn:
+        conn.execute(
+            """
+            INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("Gants", tracked_stockout_sku, 0, 2, 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("Casque", untracked_stockout_sku, 0, 2, 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("Bottes", untracked_low_sku, 1, 3, 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO remise_items (name, sku, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("Gilet", tracked_low_sku, 1, 3, 1),
+        )
+
+    try:
+        response = client.get("/remise-inventory/stats", headers=headers)
+        assert response.status_code == 200, response.text
+        payload = response.json()
+        assert payload["references"] == 4
+        assert payload["total_stock"] == 2
+        assert payload["low_stock"] == 2
+        assert payload["stockouts"] == 1
+    finally:
+        with db.get_stock_connection("JLL") as conn:
+            conn.execute(
+                "DELETE FROM remise_items WHERE sku IN (?, ?, ?, ?)",
+                (
+                    tracked_stockout_sku,
+                    untracked_stockout_sku,
+                    untracked_low_sku,
+                    tracked_low_sku,
+                ),
+            )
+
+
+def test_pharmacy_stats_excludes_untracked_alerts() -> None:
+    services.ensure_database_ready()
+    services.ensure_site_database_ready("JLL")
+    token = db.set_current_site("JLL")
+
+    tracked_stockout_name = f"Pharma-{uuid4().hex[:6]}"
+    untracked_stockout_name = f"Pharma-{uuid4().hex[:6]}"
+    untracked_low_name = f"Pharma-{uuid4().hex[:6]}"
+    tracked_low_name = f"Pharma-{uuid4().hex[:6]}"
+
+    with db.get_stock_connection("JLL") as conn:
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?)
+            """,
+            (tracked_stockout_name, 0, 2, 1),
+        )
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?)
+            """,
+            (untracked_stockout_name, 0, 2, 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?)
+            """,
+            (untracked_low_name, 1, 3, 0),
+        )
+        conn.execute(
+            """
+            INSERT INTO pharmacy_items (name, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?)
+            """,
+            (tracked_low_name, 1, 3, 1),
+        )
+
+    try:
+        stats = services.get_inventory_stats("pharmacy")
+        assert stats.references == 4
+        assert stats.total_stock == 2
+        assert stats.low_stock == 2
+        assert stats.stockouts == 1
+    finally:
+        with db.get_stock_connection("JLL") as conn:
+            conn.execute(
+                "DELETE FROM pharmacy_items WHERE name IN (?, ?, ?, ?)",
+                (
+                    tracked_stockout_name,
+                    untracked_stockout_name,
+                    untracked_low_name,
+                    tracked_low_name,
+                ),
+            )
+        db.reset_current_site(token)

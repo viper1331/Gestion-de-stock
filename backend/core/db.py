@@ -1054,6 +1054,7 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     barcode TEXT,
                     quantity INTEGER NOT NULL DEFAULT 0,
                     low_stock_threshold INTEGER NOT NULL DEFAULT 5,
+                    track_low_stock INTEGER NOT NULL DEFAULT 1,
                     expiration_date DATE,
                     location TEXT,
                     category_id INTEGER REFERENCES pharmacy_categories(id) ON DELETE SET NULL,
