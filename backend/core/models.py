@@ -1061,6 +1061,7 @@ class PurchaseOrderItem(BaseModel):
     quantity_received: int
     item_name: str | None = None
     sku: str | None = None
+    size: str | None = None
     unit: str | None = None
     beneficiary_employee_id: int | None = None
     beneficiary_name: str | None = None
