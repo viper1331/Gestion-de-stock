@@ -107,6 +107,14 @@ def _extract_item_name(item: object) -> str:
     return "Article"
 
 
+def _resolve_size_variant(item: object) -> str | None:
+    for attr in ("variant", "size", "size_label", "variant_label"):
+        value = getattr(item, attr, None)
+        if value:
+            return str(value)
+    return None
+
+
 def render_purchase_order_pdf(
     *,
     title: str,
@@ -116,7 +124,9 @@ def render_purchase_order_pdf(
     delivery_block: dict[str, str | None],
     include_received: bool,
 ) -> bytes:
-    resolved = resolve_pdf_config(_resolve_module_key(purchase_order))
+    module_key = _resolve_module_key(purchase_order)
+    is_clothing = module_key == "purchase_orders"
+    resolved = resolve_pdf_config(module_key)
     pdf_config = resolved.config
     buffer = io.BytesIO()
     page_size = page_size_for_format(pdf_config.format)
@@ -261,6 +271,9 @@ def render_purchase_order_pdf(
         font_size = theme.base_font_size - (1 * scale)
         sku_values = [_format_value(getattr(item, "sku", None)) for item in items]
         qty_values = [str(getattr(item, "quantity_ordered", 0)) for item in items]
+        size_variant_values = [
+            _format_value(_resolve_size_variant(item)) for item in items
+        ]
         unit_values = [_format_value(getattr(item, "unit", None)) for item in items]
         received_values = [str(getattr(item, "quantity_received", 0)) for item in items]
         beneficiary_values = [
@@ -324,15 +337,26 @@ def render_purchase_order_pdf(
             max_width=qty_max,
             padding=padding,
         )
-        unit_width = _measure_column_width(
-            unit_values,
-            label="Unité",
-            font_name=theme.font_family,
-            font_size=font_size,
-            min_width=unit_min,
-            max_width=unit_max,
-            padding=padding,
-        )
+        if is_clothing:
+            unit_width = _measure_column_width(
+                size_variant_values,
+                label="Taille / Variante",
+                font_name=theme.font_family,
+                font_size=font_size,
+                min_width=unit_min,
+                max_width=unit_max,
+                padding=padding,
+            )
+        else:
+            unit_width = _measure_column_width(
+                unit_values,
+                label="Unité",
+                font_name=theme.font_family,
+                font_size=font_size,
+                min_width=unit_min,
+                max_width=unit_max,
+                padding=padding,
+            )
         received_width = 0.0
         if include_received:
             received_width = _measure_column_width(
@@ -367,9 +391,30 @@ def render_purchase_order_pdf(
             {"key": "beneficiary", "label": "Bénéficiaire", "width": beneficiary_width, "align": "left"},
             {"key": "return_info", "label": "Retour attendu", "width": return_width, "align": "left"},
             {"key": "quantity", "label": "Quantité", "width": qty_width, "align": "right"},
-            {"key": "unit", "label": "Unité", "width": unit_width, "align": "center"},
         ]
-        if include_received:
+        if include_received and is_clothing:
+            columns.append(
+                {"key": "received", "label": "Réceptionné", "width": received_width, "align": "right"}
+            )
+        if is_clothing:
+            columns.append(
+                {
+                    "key": "size_variant",
+                    "label": "Taille / Variante",
+                    "width": unit_width,
+                    "align": "center",
+                }
+            )
+        else:
+            columns.append(
+                {
+                    "key": "unit",
+                    "label": "Unité",
+                    "width": unit_width,
+                    "align": "center",
+                }
+            )
+        if include_received and not is_clothing:
             columns.append(
                 {"key": "received", "label": "Réceptionné", "width": received_width, "align": "right"}
             )
@@ -448,6 +493,7 @@ def render_purchase_order_pdf(
     for item in purchase_order.items:
         sku = _format_value(getattr(item, "sku", None))
         unit = _format_value(getattr(item, "unit", None))
+        size_variant = _format_value(_resolve_size_variant(item))
         designation = _extract_item_name(item)
         quantity = str(getattr(item, "quantity_ordered", 0))
         received = str(getattr(item, "quantity_received", 0))
@@ -463,6 +509,7 @@ def render_purchase_order_pdf(
             "return_info": return_info,
             "quantity": quantity,
             "unit": unit,
+            "size_variant": size_variant,
             "received": received,
         }
 
