@@ -3746,6 +3746,7 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 site_key TEXT NOT NULL,
                 purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
                 purchase_order_line_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+                module TEXT NOT NULL DEFAULT 'clothing',
                 received_qty INTEGER NOT NULL,
                 conformity_status TEXT NOT NULL,
                 nonconformity_reason TEXT,
@@ -3794,6 +3795,20 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             ON clothing_supplier_returns(purchase_order_id);
             """
         )
+
+        receipt_info = execute("PRAGMA table_info(purchase_order_receipts)").fetchall()
+        receipt_columns = {row["name"] for row in receipt_info}
+        if "module" not in receipt_columns:
+            execute(
+                "ALTER TABLE purchase_order_receipts ADD COLUMN module TEXT NOT NULL DEFAULT 'clothing'"
+            )
+            execute(
+                """
+                UPDATE purchase_order_receipts
+                SET module = 'clothing'
+                WHERE module IS NULL
+                """
+            )
 
         executescript(
             """
@@ -9434,6 +9449,70 @@ def _build_purchase_order_detail(
         """,
         (order_row["id"],),
     )
+    items_rows = items_cur.fetchall()
+    resolved_email = None
+    supplier_has_email = False
+    supplier_missing_reason = None
+    supplier_id = _row_get(order_row, "supplier_id")
+    supplier = resolve_supplier_for_order(conn, site_key or db.get_current_site_key(), supplier_id)
+    if supplier_id is None:
+        supplier_missing_reason = "SUPPLIER_MISSING"
+    elif supplier is None:
+        supplier_missing_reason = "SUPPLIER_NOT_FOUND"
+    else:
+        try:
+            resolved_email = require_supplier_email(supplier)
+            supplier_has_email = True
+        except SupplierResolutionError as exc:
+            supplier_missing_reason = exc.code
+    resolved_site_key = site_key or db.get_current_site_key()
+    receipts: list[models.PurchaseOrderReceipt] = []
+    receipt_summaries: dict[int, dict[str, int]] = {}
+    receipt_counts: dict[int, int] = {}
+    if _table_exists(conn, "purchase_order_receipts"):
+        receipt_rows = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ? AND site_key = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (order_row["id"], resolved_site_key),
+        ).fetchall()
+        receipts = [
+            models.PurchaseOrderReceipt(
+                id=row["id"],
+                site_key=row["site_key"],
+                purchase_order_id=row["purchase_order_id"],
+                purchase_order_line_id=row["purchase_order_line_id"],
+                module=_row_get(row, "module"),
+                received_qty=row["received_qty"],
+                conformity_status=row["conformity_status"],
+                nonconformity_reason=_row_get(row, "nonconformity_reason"),
+                nonconformity_action=_row_get(row, "nonconformity_action"),
+                note=_row_get(row, "note"),
+                created_by=_row_get(row, "created_by"),
+                created_at=row["created_at"],
+            )
+            for row in receipt_rows
+        ]
+        summary_rows = conn.execute(
+            """
+            SELECT purchase_order_line_id,
+                   conformity_status,
+                   SUM(received_qty) AS total
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ? AND site_key = ?
+            GROUP BY purchase_order_line_id, conformity_status
+            """,
+            (order_row["id"], resolved_site_key),
+        ).fetchall()
+        for row in summary_rows:
+            line_id = row["purchase_order_line_id"]
+            receipt_summaries.setdefault(line_id, {})[row["conformity_status"]] = int(
+                row["total"] or 0
+            )
+            receipt_counts[line_id] = receipt_counts.get(line_id, 0) + 1
     items = [
         models.PurchaseOrderItem(
             id=item_row["id"],
@@ -9453,81 +9532,19 @@ def _build_purchase_order_detail(
             return_employee_item_id=_row_get(item_row, "return_employee_item_id"),
             return_qty=_row_get(item_row, "return_qty", 0),
             return_status=_row_get(item_row, "return_status", "none"),
+            received_conforme_qty=(
+                receipt_summaries.get(item_row["id"], {}).get("conforme", 0)
+                if receipt_counts.get(item_row["id"])
+                else item_row["quantity_received"]
+            ),
+            received_non_conforme_qty=(
+                receipt_summaries.get(item_row["id"], {}).get("non_conforme", 0)
+                if receipt_counts.get(item_row["id"])
+                else 0
+            ),
         )
-        for item_row in items_cur.fetchall()
+        for item_row in items_rows
     ]
-    resolved_email = None
-    supplier_has_email = False
-    supplier_missing_reason = None
-    supplier_id = _row_get(order_row, "supplier_id")
-    supplier = resolve_supplier_for_order(conn, site_key or db.get_current_site_key(), supplier_id)
-    if supplier_id is None:
-        supplier_missing_reason = "SUPPLIER_MISSING"
-    elif supplier is None:
-        supplier_missing_reason = "SUPPLIER_NOT_FOUND"
-    else:
-        try:
-            resolved_email = require_supplier_email(supplier)
-            supplier_has_email = True
-        except SupplierResolutionError as exc:
-            supplier_missing_reason = exc.code
-    resolved_site_key = site_key or db.get_current_site_key()
-    receipts: list[models.PurchaseOrderReceipt] = []
-    if _table_exists(conn, "purchase_order_receipts"):
-        receipt_rows = conn.execute(
-            """
-            SELECT *
-            FROM purchase_order_receipts
-            WHERE purchase_order_id = ? AND site_key = ?
-            ORDER BY created_at DESC, id DESC
-            """,
-            (order_row["id"], resolved_site_key),
-        ).fetchall()
-        receipts = [
-            models.PurchaseOrderReceipt(
-                id=row["id"],
-                site_key=row["site_key"],
-                purchase_order_id=row["purchase_order_id"],
-                purchase_order_line_id=row["purchase_order_line_id"],
-                received_qty=row["received_qty"],
-                conformity_status=row["conformity_status"],
-                nonconformity_reason=_row_get(row, "nonconformity_reason"),
-                nonconformity_action=_row_get(row, "nonconformity_action"),
-                note=_row_get(row, "note"),
-                created_by=_row_get(row, "created_by"),
-                created_at=row["created_at"],
-            )
-            for row in receipt_rows
-        ]
-    nonconformities: list[models.PurchaseOrderNonconformity] = []
-    if _table_exists(conn, "purchase_order_nonconformities"):
-        nonconformity_rows = conn.execute(
-            """
-            SELECT *
-            FROM purchase_order_nonconformities
-            WHERE purchase_order_id = ? AND site_key = ?
-            ORDER BY created_at DESC, id DESC
-            """,
-            (order_row["id"], resolved_site_key),
-        ).fetchall()
-        nonconformities = [
-            models.PurchaseOrderNonconformity(
-                id=row["id"],
-                site_key=row["site_key"],
-                module=row["module"],
-                purchase_order_id=row["purchase_order_id"],
-                purchase_order_line_id=row["purchase_order_line_id"],
-                receipt_id=row["receipt_id"],
-                status=row["status"],
-                reason=row["reason"],
-                note=_row_get(row, "note"),
-                requested_replacement=bool(_row_get(row, "requested_replacement", 0)),
-                created_by=_row_get(row, "created_by"),
-                created_at=row["created_at"],
-                updated_at=row["updated_at"],
-            )
-            for row in nonconformity_rows
-        ]
     pending_assignments: list[models.PendingClothingAssignment] = []
     if _table_exists(conn, "pending_clothing_assignments"):
         pending_rows = conn.execute(
@@ -9539,6 +9556,7 @@ def _build_purchase_order_detail(
             """,
             (order_row["id"], resolved_site_key),
         ).fetchall()
+        receipt_by_id = {receipt.id: receipt for receipt in receipts}
         pending_assignments = [
             models.PendingClothingAssignment(
                 id=row["id"],
@@ -9557,6 +9575,7 @@ def _build_purchase_order_detail(
                 created_at=row["created_at"],
                 validated_at=_row_get(row, "validated_at"),
                 validated_by=_row_get(row, "validated_by"),
+                source_receipt=receipt_by_id.get(row["receipt_id"]),
             )
             for row in pending_rows
         ]
@@ -11286,7 +11305,7 @@ def receive_purchase_order_line(
     payload: models.PurchaseOrderReceiveLinePayload,
     *,
     created_by: str | None,
-) -> models.PurchaseOrderDetail:
+) -> models.PurchaseOrderReceiveLineResponse:
     ensure_database_ready()
     normalized_site_key = db.get_current_site_key()
     with db.get_stock_connection() as conn:
@@ -11316,8 +11335,6 @@ def receive_purchase_order_line(
         if payload.conformity_status == "non_conforme":
             if not payload.nonconformity_reason:
                 raise ValueError("Motif de non-conformité requis")
-            if not payload.nonconformity_action:
-                raise ValueError("Action de non-conformité requise")
         try:
             if payload.conformity_status == "conforme":
                 new_received = line["quantity_received"] + payload.received_qty
@@ -11343,18 +11360,20 @@ def receive_purchase_order_line(
                     site_key,
                     purchase_order_id,
                     purchase_order_line_id,
+                    module,
                     received_qty,
                     conformity_status,
                     nonconformity_reason,
                     nonconformity_action,
                     note,
                     created_by
-                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     normalized_site_key,
                     order_id,
                     payload.purchase_order_line_id,
+                    "clothing",
                     payload.received_qty,
                     payload.conformity_status,
                     payload.nonconformity_reason,
@@ -11433,7 +11452,26 @@ def receive_purchase_order_line(
         except Exception:
             conn.rollback()
             raise
-    return get_purchase_order(order_id)
+    with db.get_stock_connection() as conn:
+        summary_row = conn.execute(
+            """
+            SELECT
+                COALESCE(SUM(CASE WHEN conformity_status = 'conforme' THEN received_qty END), 0)
+                    AS received_conforme_qty,
+                COALESCE(SUM(CASE WHEN conformity_status = 'non_conforme' THEN received_qty END), 0)
+                    AS received_non_conforme_qty
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ? AND purchase_order_line_id = ? AND site_key = ?
+            """,
+            (order_id, payload.purchase_order_line_id, normalized_site_key),
+        ).fetchone()
+    return models.PurchaseOrderReceiveLineResponse(
+        ok=True,
+        line_id=payload.purchase_order_line_id,
+        received_conforme_qty=int(summary_row["received_conforme_qty"] or 0),
+        received_non_conforme_qty=int(summary_row["received_non_conforme_qty"] or 0),
+        blocked_assignment=payload.conformity_status == "non_conforme",
+    )
 
 
 def request_purchase_order_replacement(
@@ -11544,6 +11582,35 @@ def validate_pending_assignment(
         ).fetchone()
         if line_row is None:
             raise ValueError("Ligne de commande introuvable")
+        last_receipt = conn.execute(
+            """
+            SELECT conformity_status
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ? AND purchase_order_line_id = ? AND site_key = ?
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (order_id, pending_row["purchase_order_line_id"], normalized_site_key),
+        ).fetchone()
+        if last_receipt and last_receipt["conformity_status"] == "non_conforme":
+            raise PendingAssignmentConflictError(
+                "Réception non conforme : attribution impossible tant qu’une réception conforme n’a pas été enregistrée."
+            )
+        conforming_total = conn.execute(
+            """
+            SELECT COALESCE(SUM(received_qty), 0) AS total
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ?
+              AND purchase_order_line_id = ?
+              AND site_key = ?
+              AND conformity_status = 'conforme'
+            """,
+            (order_id, pending_row["purchase_order_line_id"], normalized_site_key),
+        ).fetchone()
+        if conforming_total and conforming_total["total"] < pending_row["qty"]:
+            raise PendingAssignmentConflictError(
+                "Quantité reçue conforme insuffisante pour l'attribution."
+            )
         return_employee_item_id = _row_get(pending_row, "return_employee_item_id")
         if not return_employee_item_id:
             raise ValueError("Article à retourner manquant")

@@ -232,7 +232,6 @@ def test_receive_non_conforme_creates_receipt_no_stock_in() -> None:
             received_qty=1,
             conformity_status="non_conforme",
             nonconformity_reason="Endommagé",
-            nonconformity_action="replacement",
         ),
         created_by="tester",
     )
@@ -250,72 +249,34 @@ def test_receive_non_conforme_creates_receipt_no_stock_in() -> None:
         assert receipt_row["conformity_status"] == "non_conforme"
 
 
-def test_request_replacement_creates_nonconformity() -> None:
+def test_non_conforme_blocks_pending_assignment_validation() -> None:
     _reset_stock_tables()
-    _create_admin_user("admin_replacement", "password")
     with db.get_stock_connection() as conn:
-        item_id = _create_item(conn, name="Pantalon", sku="HAB-011")
-        conn.commit()
-    order = services.create_purchase_order(
-        models.PurchaseOrderCreate(
-            supplier_id=None,
-            status="ORDERED",
-            note=None,
-            items=[models.PurchaseOrderItemInput(item_id=item_id, quantity_ordered=1)],
+        new_item_id = _create_item(conn, name="Pantalon", sku="HAB-013")
+        old_item_id = _create_item(conn, name="Pantalon ancien", sku="HAB-014")
+        collaborator_id = _create_collaborator(conn, full_name="Claire Durand")
+        conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
+        dotation_id = _create_dotation(
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1
         )
-    )
-    services.receive_purchase_order_line(
-        order.id,
-        models.PurchaseOrderReceiveLinePayload(
-            purchase_order_line_id=order.items[0].id,
-            received_qty=1,
-            conformity_status="non_conforme",
-            nonconformity_reason="Déchiré",
-            nonconformity_action="replacement",
-        ),
-        created_by="tester",
-    )
-    with db.get_stock_connection() as conn:
-        receipt_row = conn.execute(
-            "SELECT id, purchase_order_line_id FROM purchase_order_receipts WHERE purchase_order_id = ?",
-            (order.id,),
-        ).fetchone()
-        assert receipt_row is not None
-    headers = login_headers(client, "admin_replacement", "password")
-    response = client.post(
-        f"/purchase-orders/{order.id}/request-replacement",
-        json={"line_id": receipt_row["purchase_order_line_id"], "receipt_id": receipt_row["id"]},
-        headers=headers,
-    )
-    assert response.status_code == 200
-    payload = response.json()
-    assert payload["ok"] is True
-    with db.get_stock_connection() as conn:
-        row = conn.execute(
-            """
-            SELECT status, requested_replacement
-            FROM purchase_order_nonconformities
-            WHERE id = ?
-            """,
-            (payload["nonconformity_id"],),
-        ).fetchone()
-        assert row is not None
-        assert row["requested_replacement"] == 1
-        assert row["status"] == "replacement_requested"
-
-
-def test_request_replacement_rejects_conforme_receipt() -> None:
-    _reset_stock_tables()
-    _create_admin_user("admin_replacement_conforme", "password")
-    with db.get_stock_connection() as conn:
-        item_id = _create_item(conn, name="Gilet", sku="HAB-012")
         conn.commit()
     order = services.create_purchase_order(
         models.PurchaseOrderCreate(
             supplier_id=None,
             status="ORDERED",
             note=None,
-            items=[models.PurchaseOrderItemInput(item_id=item_id, quantity_ordered=1)],
+            items=[
+                models.PurchaseOrderItemInput(
+                    item_id=new_item_id,
+                    quantity_ordered=2,
+                    line_type="replacement",
+                    beneficiary_employee_id=collaborator_id,
+                    return_expected=True,
+                    return_reason="Vétusté",
+                    return_employee_item_id=dotation_id,
+                    return_qty=1,
+                )
+            ],
         )
     )
     services.receive_purchase_order_line(
@@ -327,83 +288,79 @@ def test_request_replacement_rejects_conforme_receipt() -> None:
         ),
         created_by="tester",
     )
-    with db.get_stock_connection() as conn:
-        receipt_row = conn.execute(
-            "SELECT id, purchase_order_line_id FROM purchase_order_receipts WHERE purchase_order_id = ?",
-            (order.id,),
-        ).fetchone()
-        assert receipt_row is not None
-    headers = login_headers(client, "admin_replacement_conforme", "password")
-    response = client.post(
-        f"/purchase-orders/{order.id}/request-replacement",
-        json={"line_id": receipt_row["purchase_order_line_id"], "receipt_id": receipt_row["id"]},
-        headers=headers,
-    )
-    assert response.status_code == 409
-    with db.get_stock_connection() as conn:
-        count_row = conn.execute(
-            "SELECT COUNT(*) AS count FROM purchase_order_nonconformities"
-        ).fetchone()
-        assert count_row is not None
-        assert count_row["count"] == 0
-
-
-def test_request_replacement_is_idempotent() -> None:
-    _reset_stock_tables()
-    _create_admin_user("admin_replacement_idempotent", "password")
-    with db.get_stock_connection() as conn:
-        item_id = _create_item(conn, name="Pull", sku="HAB-013")
-        conn.commit()
-    order = services.create_purchase_order(
-        models.PurchaseOrderCreate(
-            supplier_id=None,
-            status="ORDERED",
-            note=None,
-            items=[models.PurchaseOrderItemInput(item_id=item_id, quantity_ordered=1)],
-        )
-    )
     services.receive_purchase_order_line(
         order.id,
         models.PurchaseOrderReceiveLinePayload(
             purchase_order_line_id=order.items[0].id,
             received_qty=1,
             conformity_status="non_conforme",
-            nonconformity_reason="Couture défectueuse",
-            nonconformity_action="replacement",
+            nonconformity_reason="Erreur taille",
         ),
         created_by="tester",
     )
+    order = services.get_purchase_order(order.id)
+    assert order.pending_assignments
     with db.get_stock_connection() as conn:
-        receipt_row = conn.execute(
-            "SELECT id, purchase_order_line_id FROM purchase_order_receipts WHERE purchase_order_id = ?",
-            (order.id,),
-        ).fetchone()
-        assert receipt_row is not None
-    headers = login_headers(client, "admin_replacement_idempotent", "password")
-    payload = {"line_id": receipt_row["purchase_order_line_id"], "receipt_id": receipt_row["id"]}
-    first_response = client.post(
-        f"/purchase-orders/{order.id}/request-replacement",
-        json=payload,
-        headers=headers,
-    )
-    assert first_response.status_code == 200
-    second_response = client.post(
-        f"/purchase-orders/{order.id}/request-replacement",
-        json=payload,
-        headers=headers,
-    )
-    assert second_response.status_code == 200
+        item_row = conn.execute("SELECT quantity FROM items WHERE id = ?", (new_item_id,)).fetchone()
+        assert item_row is not None
+        assert item_row["quantity"] == 1
+    with pytest.raises(
+        services.PendingAssignmentConflictError,
+        match="Réception non conforme : attribution impossible",
+    ):
+        services.validate_pending_assignment(
+            order.id, order.pending_assignments[0].id, validated_by="tester"
+        )
+
+
+def test_receipt_summaries_include_conforme_and_non_conforme() -> None:
+    _reset_stock_tables()
     with db.get_stock_connection() as conn:
-        count_row = conn.execute(
+        item_id = _create_item(conn, name="Chemise", sku="HAB-015")
+        order_cur = conn.execute(
             """
-            SELECT COUNT(*) AS count
-            FROM purchase_order_nonconformities
-            WHERE purchase_order_id = ?
+            INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+            VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
             """,
-            (order.id,),
-        ).fetchone()
-        assert count_row is not None
-        assert count_row["count"] == 1
+            (None, "ORDERED", None),
+        )
+        conn.execute(
+            """
+            INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered, quantity_received)
+            VALUES (?, ?, ?, 0)
+            """,
+            (order_cur.lastrowid, item_id, 3),
+        )
+        conn.commit()
+        order_id = int(order_cur.lastrowid)
+        line_id = conn.execute(
+            "SELECT id FROM purchase_order_items WHERE purchase_order_id = ?",
+            (order_id,),
+        ).fetchone()["id"]
+    services.receive_purchase_order_line(
+        order_id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=line_id,
+            received_qty=2,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
+    services.receive_purchase_order_line(
+        order_id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=line_id,
+            received_qty=1,
+            conformity_status="non_conforme",
+            nonconformity_reason="Manquant",
+        ),
+        created_by="tester",
+    )
+    order = services.get_purchase_order(order_id)
+    assert order.items
+    line = order.items[0]
+    assert line.received_conforme_qty == 2
+    assert line.received_non_conforme_qty == 1
 
 
 def test_validate_pending_assigns_new_unassigns_old_and_creates_return_movements_in_order() -> None:
