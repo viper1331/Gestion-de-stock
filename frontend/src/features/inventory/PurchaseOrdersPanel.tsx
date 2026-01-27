@@ -95,6 +95,7 @@ interface PurchaseOrderReceipt {
   received_qty: number;
   conformity_status: "conforme" | "non_conforme";
   nonconformity_reason?: string | null;
+  nonconformity_action?: string | null;
   note?: string | null;
   created_by?: string | null;
   created_at: string;
@@ -1347,10 +1348,21 @@ export function PurchaseOrdersPanel({
                             const receipts = receiptsByLine.get(line.id) ?? [];
                             const latestReceipt =
                               receipts.length > 0 ? receipts[receipts.length - 1] : null;
+                            const lineNonconformity = (order.nonconformities ?? []).find(
+                              (nonconformity) =>
+                                nonconformity.purchase_order_line_id === line.id &&
+                                (!latestReceipt || nonconformity.receipt_id === latestReceipt.id)
+                            );
                             const latestIsNonConforming =
                               latestReceipt?.conformity_status === "non_conforme" ||
                               latestReceipt?.is_non_conforming === true ||
                               latestReceipt?.non_conforming === true;
+                            const replacementRequested = latestReceipt
+                              ? Boolean(latestReceipt?.nonconformity_action) &&
+                                ["replacement", "replacement_requested", "remplacement"].includes(
+                                  String(latestReceipt.nonconformity_action)
+                                )
+                              : false;
                             const receivedConformeQty =
                               line.received_conforme_qty ?? line.quantity_received;
                             const receivedNonConformeQty = line.received_non_conforme_qty ?? 0;
