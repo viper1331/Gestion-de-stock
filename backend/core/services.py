@@ -3655,10 +3655,20 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE dotations ADD COLUMN is_lost INTEGER NOT NULL DEFAULT 0")
         if "is_degraded" not in dotation_columns:
             execute("ALTER TABLE dotations ADD COLUMN is_degraded INTEGER NOT NULL DEFAULT 0")
+        if "degraded_qty" not in dotation_columns:
+            execute("ALTER TABLE dotations ADD COLUMN degraded_qty INTEGER NOT NULL DEFAULT 0")
+        if "lost_qty" not in dotation_columns:
+            execute("ALTER TABLE dotations ADD COLUMN lost_qty INTEGER NOT NULL DEFAULT 0")
+        execute(
+            "UPDATE dotations SET degraded_qty = quantity WHERE is_degraded = 1 AND degraded_qty = 0"
+        )
+        execute("UPDATE dotations SET lost_qty = quantity WHERE is_lost = 1 AND lost_qty = 0")
+        _consolidate_dotation_rows(conn)
+        execute("DROP INDEX IF EXISTS idx_dotations_unique")
         execute(
             """
             CREATE UNIQUE INDEX IF NOT EXISTS idx_dotations_unique
-                ON dotations(collaborator_id, item_id, is_lost, is_degraded)
+                ON dotations(collaborator_id, item_id)
             """
         )
         execute(
@@ -9837,7 +9847,7 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                         )
                     dotation_row = conn.execute(
                         """
-                        SELECT collaborator_id, is_lost, is_degraded
+                        SELECT collaborator_id, degraded_qty, lost_qty
                         FROM dotations
                         WHERE id = ?
                         """,
@@ -9847,11 +9857,16 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                         raise ValueError("Article attribué introuvable pour le retour")
                     if dotation_row["collaborator_id"] != beneficiary_id:
                         raise ValueError("L'article retourné n'appartient pas au bénéficiaire")
-                    if not (dotation_row["is_lost"] or dotation_row["is_degraded"]):
+                    if not (dotation_row["lost_qty"] or dotation_row["degraded_qty"]):
                         raise ValueError(
                             "La dotation sélectionnée doit être en perte ou dégradation."
                         )
-                    return_status = "to_prepare"
+                    if dotation_row["lost_qty"]:
+                        return_expected = False
+                        return_qty = 0
+                        return_status = "none"
+                    else:
+                        return_status = "to_prepare"
                 elif return_expected:
                     if not return_reason:
                         raise ValueError("Le motif de retour est requis")
@@ -11745,17 +11760,29 @@ def validate_pending_assignment(
             raise PendingAssignmentConflictError(
                 "L'article retourné n'appartient pas au collaborateur"
             )
-        if not (dotation_row["is_lost"] or dotation_row["is_degraded"]):
+        degraded_qty = int(_row_get(dotation_row, "degraded_qty", 0) or 0)
+        lost_qty = int(_row_get(dotation_row, "lost_qty", 0) or 0)
+        if not (lost_qty or degraded_qty):
             raise PendingAssignmentConflictError(
                 "Remplacement : la dotation ciblée doit être en PERTE ou DÉGRADATION."
             )
+        return_expected = bool(_row_get(line_row, "return_expected", 1))
+        if lost_qty:
+            return_expected = False
         return_qty = _row_get(line_row, "return_qty", pending_row["qty"])
-        if return_qty <= 0:
-            return_qty = pending_row["qty"]
-        if dotation_row["quantity"] < return_qty:
-            raise PendingAssignmentConflictError(
-                "Quantité à retirer > quantité attribuée"
-            )
+        if return_expected:
+            if return_qty <= 0:
+                return_qty = pending_row["qty"]
+            if degraded_qty < return_qty:
+                raise PendingAssignmentConflictError(
+                    "Quantité retour > quantité dégradée à remplacer"
+                )
+            if dotation_row["quantity"] < return_qty:
+                raise PendingAssignmentConflictError(
+                    "Quantité à retirer > quantité attribuée"
+                )
+        else:
+            return_qty = 0
         item_row = conn.execute(
             "SELECT quantity FROM items WHERE id = ?",
             (pending_row["new_item_id"],),
@@ -11765,37 +11792,124 @@ def validate_pending_assignment(
         if item_row["quantity"] < pending_row["qty"]:
             raise ValueError("Stock insuffisant pour la dotation")
         received_qty = pending_row["qty"]
-        if dotation_row["quantity"] == return_qty:
-            conn.execute("DELETE FROM dotations WHERE id = ?", (target_dotation_id,))
-        else:
+        same_item = pending_row["new_item_id"] == dotation_row["item_id"]
+        returned_item_row = conn.execute(
+            "SELECT name, sku, size FROM items WHERE id = ?",
+            (dotation_row["item_id"],),
+        ).fetchone()
+        replacement_note = (
+            "Remplacement BC #"
+            f"{order_id} — Remplacé: {returned_item_row['name']} ({returned_item_row['sku']})"
+            f" — Taille/Variante: {returned_item_row['size'] or '—'}"
+            f" — Qté: {received_qty}"
+            f" — Motif: {_row_get(line_row, 'return_reason') or '—'}"
+        )
+        replaced_note = f"Remplacé via BC #{order_id} — Qté remplacée: {received_qty}"
+        if same_item:
+            new_quantity = dotation_row["quantity"] + received_qty - (return_qty if return_expected else 0)
+            new_degraded_qty = degraded_qty - return_qty if return_expected else degraded_qty
+            new_lost_qty = lost_qty
+            is_lost, is_degraded = _derive_dotation_flags(new_degraded_qty, new_lost_qty)
+            combined_notes = _append_dotation_note(dotation_row["notes"], replaced_note)
+            combined_notes = _append_dotation_note(combined_notes, replacement_note)
             conn.execute(
                 """
                 UPDATE dotations
-                SET quantity = quantity - ?
+                SET quantity = ?,
+                    degraded_qty = ?,
+                    lost_qty = ?,
+                    is_lost = ?,
+                    is_degraded = ?,
+                    notes = ?
                 WHERE id = ?
                 """,
-                (return_qty, target_dotation_id),
+                (
+                    new_quantity,
+                    new_degraded_qty,
+                    new_lost_qty,
+                    is_lost,
+                    is_degraded,
+                    combined_notes,
+                    target_dotation_id,
+                ),
             )
-        conn.execute(
-            """
-            INSERT INTO dotations (
-                collaborator_id,
-                item_id,
-                quantity,
-                notes,
-                perceived_at,
-                is_lost,
-                is_degraded
-            ) VALUES (?, ?, ?, NULL, DATE('now'), 0, 0)
-            ON CONFLICT(collaborator_id, item_id, is_lost, is_degraded)
-            DO UPDATE SET quantity = dotations.quantity + excluded.quantity
-            """,
-            (
-                dotation_row["collaborator_id"],
-                dotation_row["item_id"],
-                received_qty,
-            ),
-        )
+        else:
+            if return_expected:
+                new_quantity = dotation_row["quantity"] - return_qty
+                new_degraded_qty = degraded_qty - return_qty
+                new_lost_qty = lost_qty
+                is_lost, is_degraded = _derive_dotation_flags(new_degraded_qty, new_lost_qty)
+                updated_notes = _append_dotation_note(dotation_row["notes"], replaced_note)
+                conn.execute(
+                    """
+                    UPDATE dotations
+                    SET quantity = ?,
+                        degraded_qty = ?,
+                        lost_qty = ?,
+                        is_lost = ?,
+                        is_degraded = ?,
+                        notes = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_quantity,
+                        new_degraded_qty,
+                        new_lost_qty,
+                        is_lost,
+                        is_degraded,
+                        updated_notes,
+                        target_dotation_id,
+                    ),
+                )
+                if new_quantity <= 0 and new_lost_qty == 0 and new_degraded_qty == 0:
+                    conn.execute("DELETE FROM dotations WHERE id = ?", (target_dotation_id,))
+            else:
+                updated_notes = _append_dotation_note(dotation_row["notes"], replaced_note)
+                conn.execute(
+                    "UPDATE dotations SET notes = ? WHERE id = ?",
+                    (updated_notes, target_dotation_id),
+                )
+            existing_new = conn.execute(
+                """
+                SELECT id, notes
+                FROM dotations
+                WHERE collaborator_id = ? AND item_id = ?
+                """,
+                (dotation_row["collaborator_id"], pending_row["new_item_id"]),
+            ).fetchone()
+            if existing_new is None:
+                conn.execute(
+                    """
+                    INSERT INTO dotations (
+                        collaborator_id,
+                        item_id,
+                        quantity,
+                        notes,
+                        perceived_at,
+                        is_lost,
+                        is_degraded,
+                        degraded_qty,
+                        lost_qty
+                    ) VALUES (?, ?, ?, ?, DATE('now'), 0, 0, 0, 0)
+                    """,
+                    (
+                        dotation_row["collaborator_id"],
+                        pending_row["new_item_id"],
+                        received_qty,
+                        replacement_note,
+                    ),
+                )
+            else:
+                updated_note = _append_dotation_note(existing_new["notes"], replacement_note)
+                conn.execute(
+                    """
+                    UPDATE dotations
+                    SET quantity = quantity + ?,
+                        notes = ?
+                    WHERE id = ?
+                    """,
+                    (received_qty, updated_note, existing_new["id"]),
+                )
         conn.execute(
             "UPDATE items SET quantity = quantity - ? WHERE id = ?",
             (pending_row["qty"], pending_row["new_item_id"]),
@@ -11804,53 +11918,54 @@ def validate_pending_assignment(
             "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
             (pending_row["new_item_id"], -pending_row["qty"], "DOTATION_ASSIGNMENT"),
         )
-        conn.execute(
-            "UPDATE items SET quantity = quantity + ? WHERE id = ?",
-            (return_qty, dotation_row["item_id"]),
-        )
-        conn.execute(
-            "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
-            (dotation_row["item_id"], return_qty, "RETURN_FROM_EMPLOYEE"),
-        )
-        conn.execute(
-            "UPDATE items SET quantity = quantity - ? WHERE id = ?",
-            (return_qty, dotation_row["item_id"]),
-        )
-        conn.execute(
-            "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
-            (dotation_row["item_id"], -return_qty, "RETURN_TO_SUPPLIER"),
-        )
-        conn.execute(
-            """
-            INSERT INTO clothing_supplier_returns (
-                site_key,
-                purchase_order_id,
-                purchase_order_line_id,
-                employee_id,
-                employee_item_id,
-                item_id,
-                qty,
-                reason,
-                status
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-            """,
-            (
-                normalized_site_key,
-                order_id,
-                pending_row["purchase_order_line_id"],
-                pending_row["employee_id"],
-                target_dotation_id,
-                dotation_row["item_id"],
-                return_qty,
-                _row_get(line_row, "return_reason"),
-                "shipped",
-            ),
-        )
-        if _table_has_column(conn, "purchase_order_items", "return_status"):
+        if return_expected:
             conn.execute(
-                "UPDATE purchase_order_items SET return_status = ? WHERE id = ?",
-                ("shipped", pending_row["purchase_order_line_id"]),
+                "UPDATE items SET quantity = quantity + ? WHERE id = ?",
+                (return_qty, dotation_row["item_id"]),
             )
+            conn.execute(
+                "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                (dotation_row["item_id"], return_qty, "RETURN_FROM_EMPLOYEE"),
+            )
+            conn.execute(
+                "UPDATE items SET quantity = quantity - ? WHERE id = ?",
+                (return_qty, dotation_row["item_id"]),
+            )
+            conn.execute(
+                "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
+                (dotation_row["item_id"], -return_qty, "RETURN_TO_SUPPLIER"),
+            )
+            conn.execute(
+                """
+                INSERT INTO clothing_supplier_returns (
+                    site_key,
+                    purchase_order_id,
+                    purchase_order_line_id,
+                    employee_id,
+                    employee_item_id,
+                    item_id,
+                    qty,
+                    reason,
+                    status
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    normalized_site_key,
+                    order_id,
+                    pending_row["purchase_order_line_id"],
+                    pending_row["employee_id"],
+                    target_dotation_id,
+                    dotation_row["item_id"],
+                    return_qty,
+                    _row_get(line_row, "return_reason"),
+                    "shipped",
+                ),
+            )
+            if _table_has_column(conn, "purchase_order_items", "return_status"):
+                conn.execute(
+                    "UPDATE purchase_order_items SET return_status = ? WHERE id = ?",
+                    ("shipped", pending_row["purchase_order_line_id"]),
+                )
         conn.execute(
             """
             UPDATE pending_clothing_assignments
@@ -12896,6 +13011,114 @@ def bulk_import_collaborators(
     )
 
 
+def _append_dotation_note(existing: str | None, note: str) -> str:
+    cleaned_note = note.strip()
+    if not cleaned_note:
+        return existing or ""
+    if not existing:
+        return cleaned_note
+    return f"{existing}\n{cleaned_note}"
+
+
+def _derive_dotation_flags(degraded_qty: int, lost_qty: int) -> tuple[int, int]:
+    return (1 if lost_qty > 0 else 0, 1 if degraded_qty > 0 else 0)
+
+
+def _validate_dotation_quantities(*, quantity: int, degraded_qty: int, lost_qty: int) -> None:
+    if quantity <= 0:
+        raise ValueError("La quantité doit être positive")
+    if degraded_qty < 0 or lost_qty < 0:
+        raise ValueError("Les quantités de perte/dégradation doivent être positives")
+    if degraded_qty > quantity or lost_qty > quantity:
+        raise ValueError("Les quantités de perte/dégradation dépassent la quantité totale")
+    if degraded_qty + lost_qty > quantity:
+        raise ValueError("La somme des quantités perdues et dégradées dépasse la quantité totale")
+
+
+def _consolidate_dotation_rows(conn: sqlite3.Connection) -> None:
+    if not _table_exists(conn, "dotations"):
+        return
+    duplicates = conn.execute(
+        """
+        SELECT collaborator_id, item_id, COUNT(*) AS count
+        FROM dotations
+        GROUP BY collaborator_id, item_id
+        HAVING COUNT(*) > 1
+        """
+    ).fetchall()
+    if not duplicates:
+        return
+    reference_columns: list[tuple[str, str]] = []
+    for table, column in (
+        ("purchase_order_items", "return_employee_item_id"),
+        ("purchase_order_items", "target_dotation_id"),
+        ("pending_clothing_assignments", "return_employee_item_id"),
+        ("pending_clothing_assignments", "target_dotation_id"),
+        ("clothing_supplier_returns", "employee_item_id"),
+    ):
+        if _table_has_column(conn, table, column):
+            reference_columns.append((table, column))
+    for row in duplicates:
+        rows = conn.execute(
+            """
+            SELECT id, quantity, notes, degraded_qty, lost_qty, is_lost, is_degraded
+            FROM dotations
+            WHERE collaborator_id = ? AND item_id = ?
+            ORDER BY id
+            """,
+            (row["collaborator_id"], row["item_id"]),
+        ).fetchall()
+        if not rows:
+            continue
+        keep = rows[0]
+        keep_id = keep["id"]
+        total_quantity = sum(int(entry["quantity"]) for entry in rows)
+        total_degraded = sum(
+            int(entry["degraded_qty"])
+            if entry["degraded_qty"] is not None
+            else (int(entry["quantity"]) if entry["is_degraded"] else 0)
+            for entry in rows
+        )
+        total_lost = sum(
+            int(entry["lost_qty"])
+            if entry["lost_qty"] is not None
+            else (int(entry["quantity"]) if entry["is_lost"] else 0)
+            for entry in rows
+        )
+        note = keep["notes"]
+        if not note:
+            note = next((entry["notes"] for entry in rows if entry["notes"]), None)
+        is_lost, is_degraded = _derive_dotation_flags(total_degraded, total_lost)
+        conn.execute(
+            """
+            UPDATE dotations
+            SET quantity = ?,
+                degraded_qty = ?,
+                lost_qty = ?,
+                is_lost = ?,
+                is_degraded = ?,
+                notes = ?
+            WHERE id = ?
+            """,
+            (
+                total_quantity,
+                total_degraded,
+                total_lost,
+                is_lost,
+                is_degraded,
+                note,
+                keep_id,
+            ),
+        )
+        for entry in rows[1:]:
+            for table, column in reference_columns:
+                conn.execute(
+                    f"UPDATE {table} SET {column} = ? WHERE {column} = ?",
+                    (keep_id, entry["id"]),
+                )
+            conn.execute("DELETE FROM dotations WHERE id = ?", (entry["id"],))
+
+
 def list_dotations(
     *, collaborator_id: Optional[int] = None, item_id: Optional[int] = None
 ) -> list[models.Dotation]:
@@ -12926,6 +13149,8 @@ def list_dotations(
             allocated_at_value = row["allocated_at"]
             allocated_date = _ensure_date(allocated_at_value)
             perceived_at = _ensure_date(row["perceived_at"], fallback=allocated_date)
+            degraded_qty = int(_row_get(row, "degraded_qty", 0) or 0)
+            lost_qty = int(_row_get(row, "lost_qty", 0) or 0)
             dotations.append(
                 models.Dotation(
                     id=row["id"],
@@ -12934,8 +13159,10 @@ def list_dotations(
                     quantity=row["quantity"],
                     notes=row["notes"],
                     perceived_at=perceived_at,
-                    is_lost=bool(row["is_lost"]),
-                    is_degraded=bool(row["is_degraded"]),
+                    is_lost=lost_qty > 0,
+                    is_degraded=degraded_qty > 0,
+                    degraded_qty=degraded_qty,
+                    lost_qty=lost_qty,
                     allocated_at=allocated_at_value,
                     is_obsolete=_is_obsolete(perceived_at),
                     size_variant=_normalize_variant_value(row["size_variant"])
@@ -13036,8 +13263,8 @@ def list_dotation_assignee_items(employee_id: int) -> list[models.DotationAssign
             i.name AS name,
             i.size AS size_variant,
             d.quantity AS qty,
-            d.is_lost AS is_lost,
-            d.is_degraded AS is_degraded
+            d.degraded_qty AS degraded_qty,
+            d.lost_qty AS lost_qty
         FROM dotations AS d
         JOIN items AS i ON i.id = d.item_id
         WHERE d.collaborator_id = ?
@@ -13053,8 +13280,10 @@ def list_dotation_assignee_items(employee_id: int) -> list[models.DotationAssign
                 name=row["name"],
                 size_variant=_normalize_variant_value(row["size_variant"]),
                 qty=row["qty"],
-                is_lost=bool(row["is_lost"]),
-                is_degraded=bool(row["is_degraded"]),
+                is_lost=bool(row["lost_qty"]),
+                is_degraded=bool(row["degraded_qty"]),
+                degraded_qty=int(row["degraded_qty"] or 0),
+                lost_qty=int(row["lost_qty"] or 0),
             )
             for row in rows
         ]
@@ -13080,6 +13309,8 @@ def get_dotation(dotation_id: int) -> models.Dotation:
         allocated_at_value = row["allocated_at"]
         allocated_date = _ensure_date(allocated_at_value)
         perceived_at = _ensure_date(row["perceived_at"], fallback=allocated_date)
+        degraded_qty = int(_row_get(row, "degraded_qty", 0) or 0)
+        lost_qty = int(_row_get(row, "lost_qty", 0) or 0)
         return models.Dotation(
             id=row["id"],
             collaborator_id=row["collaborator_id"],
@@ -13087,8 +13318,10 @@ def get_dotation(dotation_id: int) -> models.Dotation:
             quantity=row["quantity"],
             notes=row["notes"],
             perceived_at=perceived_at,
-            is_lost=bool(row["is_lost"]),
-            is_degraded=bool(row["is_degraded"]),
+            is_lost=lost_qty > 0,
+            is_degraded=degraded_qty > 0,
+            degraded_qty=degraded_qty,
+            lost_qty=lost_qty,
             allocated_at=allocated_at_value,
             is_obsolete=_is_obsolete(perceived_at),
             size_variant=_normalize_variant_value(row["size_variant"])
@@ -13116,6 +13349,19 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
             raise ValueError("Collaborateur introuvable")
         collaborator_name = collaborator_row["full_name"]
 
+        degraded_qty = payload.degraded_qty
+        lost_qty = payload.lost_qty
+        if payload.is_degraded and degraded_qty == 0:
+            degraded_qty = payload.quantity
+        if payload.is_lost and lost_qty == 0:
+            lost_qty = payload.quantity
+        _validate_dotation_quantities(
+            quantity=payload.quantity,
+            degraded_qty=degraded_qty,
+            lost_qty=lost_qty,
+        )
+        is_lost, is_degraded = _derive_dotation_flags(degraded_qty, lost_qty)
+
         cur = conn.execute(
             """
             INSERT INTO dotations (
@@ -13125,9 +13371,11 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
                 notes,
                 perceived_at,
                 is_lost,
-                is_degraded
+                is_degraded,
+                degraded_qty,
+                lost_qty
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 payload.collaborator_id,
@@ -13135,8 +13383,10 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
                 payload.quantity,
                 payload.notes,
                 payload.perceived_at.isoformat(),
-                int(payload.is_lost),
-                int(payload.is_degraded),
+                is_lost,
+                is_degraded,
+                degraded_qty,
+                lost_qty,
             ),
         )
         conn.execute(
@@ -13194,10 +13444,24 @@ def update_dotation(dotation_id: int, payload: models.DotationUpdate) -> models.
             raise ValueError("La quantité doit être positive")
         new_notes = payload.notes if payload.notes is not None else row["notes"]
         new_perceived_at = payload.perceived_at if payload.perceived_at is not None else base_perceived_at
-        new_is_lost = payload.is_lost if payload.is_lost is not None else bool(row["is_lost"])
-        new_is_degraded = (
-            payload.is_degraded if payload.is_degraded is not None else bool(row["is_degraded"])
+        base_degraded_qty = int(_row_get(row, "degraded_qty", 0) or 0)
+        base_lost_qty = int(_row_get(row, "lost_qty", 0) or 0)
+        if payload.degraded_qty is not None:
+            new_degraded_qty = payload.degraded_qty
+        elif payload.is_degraded is not None:
+            new_degraded_qty = new_quantity if payload.is_degraded else 0
+        else:
+            new_degraded_qty = base_degraded_qty
+        if payload.lost_qty is not None:
+            new_lost_qty = payload.lost_qty
+        elif payload.is_lost is not None:
+            new_lost_qty = new_quantity if payload.is_lost else 0
+        else:
+            new_lost_qty = base_lost_qty
+        _validate_dotation_quantities(
+            quantity=new_quantity, degraded_qty=new_degraded_qty, lost_qty=new_lost_qty
         )
+        new_is_lost, new_is_degraded = _derive_dotation_flags(new_degraded_qty, new_lost_qty)
 
         collaborator_cur = conn.execute(
             "SELECT full_name FROM collaborators WHERE id = ?",
@@ -13277,7 +13541,9 @@ def update_dotation(dotation_id: int, payload: models.DotationUpdate) -> models.
                 notes = ?,
                 perceived_at = ?,
                 is_lost = ?,
-                is_degraded = ?
+                is_degraded = ?,
+                degraded_qty = ?,
+                lost_qty = ?
             WHERE id = ?
             """,
             (
@@ -13286,8 +13552,10 @@ def update_dotation(dotation_id: int, payload: models.DotationUpdate) -> models.
                 new_quantity,
                 new_notes,
                 new_perceived_at.isoformat(),
-                int(new_is_lost),
-                int(new_is_degraded),
+                new_is_lost,
+                new_is_degraded,
+                new_degraded_qty,
+                new_lost_qty,
                 dotation_id,
             ),
         )

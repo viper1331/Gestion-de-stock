@@ -1451,6 +1451,8 @@ class DotationBase(BaseModel):
     perceived_at: date = Field(default_factory=date.today)
     is_lost: bool = False
     is_degraded: bool = False
+    degraded_qty: int = Field(default=0, ge=0)
+    lost_qty: int = Field(default=0, ge=0)
 
 
 class DotationCreate(DotationBase):
@@ -1472,6 +1474,8 @@ class DotationUpdate(BaseModel):
     perceived_at: Optional[date] = None
     is_lost: Optional[bool] = None
     is_degraded: Optional[bool] = None
+    degraded_qty: Optional[int] = Field(default=None, ge=0)
+    lost_qty: Optional[int] = Field(default=None, ge=0)
 
 
 class DotationBeneficiary(BaseModel):
@@ -1508,6 +1512,8 @@ class DotationAssigneeItem(BaseModel):
     qty: int
     is_lost: bool = False
     is_degraded: bool = False
+    degraded_qty: int = 0
+    lost_qty: int = 0
 
 
 class DotationAssigneeItemsResponse(BaseModel):
