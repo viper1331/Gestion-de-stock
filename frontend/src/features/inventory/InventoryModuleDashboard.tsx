@@ -53,6 +53,7 @@ interface Item {
   quantity: number;
   low_stock_threshold: number;
   track_low_stock: boolean;
+  track_stock_alerts?: boolean;
   supplier_id: number | null;
   expiration_date: string | null;
   remise_item_id: number | null;
@@ -159,6 +160,7 @@ type InventoryColumnKey =
   | "lotMembership"
   | "supplier"
   | "threshold"
+  | "stockAlert"
   | "expiration";
 
 type ExpirationStatus = "expired" | "expiring-soon" | null;
@@ -500,6 +502,7 @@ export function InventoryModuleDashboard({
     lotMembership: 160,
     supplier: 180,
     threshold: 120,
+    stockAlert: 150,
     expiration: 170
   };
 
@@ -513,6 +516,7 @@ export function InventoryModuleDashboard({
     lotMembership: Boolean(config.showLotMembershipColumn),
     supplier: true,
     threshold: true,
+    stockAlert: true,
     expiration: supportsExpirationDate
   };
 
@@ -537,7 +541,8 @@ export function InventoryModuleDashboard({
         ? ([{ key: "lotMembership", label: "Lot", kind: "native" }] as const)
         : []),
       { key: "supplier", label: "Fournisseur", kind: "native" },
-      { key: "threshold", label: "Seuil", kind: "native" }
+      { key: "threshold", label: "Seuil", kind: "native" },
+      { key: "stockAlert", label: "Alerte stock", kind: "native" }
     ];
     if (supportsExpirationDate) {
       options.push({ key: "expiration", label: "Péremption", kind: "native" });
@@ -680,6 +685,12 @@ export function InventoryModuleDashboard({
         headerClass: "hidden lg:table-cell text-center",
         cellClass: "hidden lg:table-cell text-center",
         width: baseColumnWidths.threshold
+      },
+      stockAlert: {
+        label: "Alerte stock",
+        headerClass: "hidden xl:table-cell text-center",
+        cellClass: "hidden xl:table-cell text-center",
+        width: baseColumnWidths.stockAlert
       }
     };
     if (config.showLotMembershipColumn) {
@@ -1065,6 +1076,9 @@ export function InventoryModuleDashboard({
                     item,
                     supportsLowStockOptOut
                   );
+                  const trackingEnabled = supportsLowStockOptOut
+                    ? (item.track_stock_alerts ?? item.track_low_stock)
+                    : true;
                   const expirationStatus = supportsExpirationDate
                     ? getExpirationStatus(item.expiration_date)
                     : null;
@@ -1248,6 +1262,21 @@ export function InventoryModuleDashboard({
                               }`}
                             >
                               {item.low_stock_threshold}
+                            </td>
+                          );
+                        }
+                        if (columnKey === "stockAlert") {
+                          const badgeTone = trackingEnabled
+                            ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-200"
+                            : "border-amber-500/40 bg-amber-500/20 text-amber-200";
+                          return (
+                            <td key={columnKey} style={style} className={`${sharedClass} text-center`}>
+                              <span
+                                className={`inline-flex items-center gap-1 rounded border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide ${badgeTone}`}
+                              >
+                                {trackingEnabled ? "✅" : "⛔"}
+                                {trackingEnabled ? "Suivi" : "Non suivi"}
+                              </span>
                             </td>
                           );
                         }

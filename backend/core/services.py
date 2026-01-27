@@ -4636,6 +4636,7 @@ def _build_inventory_item(row: sqlite3.Row) -> models.Item:
         quantity=row["quantity"],
         low_stock_threshold=row["low_stock_threshold"],
         track_low_stock=track_low_stock,
+        track_stock_alerts=track_low_stock,
         supplier_id=supplier_id,
         expiration_date=expiration_date,
         remise_item_id=remise_item_id,
