@@ -36,6 +36,7 @@ interface Dotation {
   is_degraded: boolean;
   allocated_at: string;
   is_obsolete: boolean;
+  size_variant: string | null;
 }
 
 interface DotationFormValues {
@@ -530,6 +531,9 @@ export function DotationsPage() {
                         <div>
                           <p className="text-sm font-semibold text-white">
                             {item ? `${item.name} (${item.sku})` : `Article #${dotation.item_id}`}
+                          </p>
+                          <p className="text-xs text-slate-400">
+                            Taille / Variante : {dotation.size_variant ? dotation.size_variant : "—"}
                           </p>
                           <p className="text-xs text-slate-400">Dotation créée le {formatDate(dotation.allocated_at)}</p>
                         </div>

@@ -12563,18 +12563,24 @@ def list_dotations(
     *, collaborator_id: Optional[int] = None, item_id: Optional[int] = None
 ) -> list[models.Dotation]:
     ensure_database_ready()
-    query = "SELECT * FROM dotations"
+    query = """
+        SELECT
+            d.*,
+            i.size AS size_variant
+        FROM dotations AS d
+        LEFT JOIN items AS i ON i.id = d.item_id
+    """
     clauses: list[str] = []
     params: list[object] = []
     if collaborator_id is not None:
-        clauses.append("collaborator_id = ?")
+        clauses.append("d.collaborator_id = ?")
         params.append(collaborator_id)
     if item_id is not None:
-        clauses.append("item_id = ?")
+        clauses.append("d.item_id = ?")
         params.append(item_id)
     if clauses:
         query += " WHERE " + " AND ".join(clauses)
-    query += " ORDER BY allocated_at DESC"
+    query += " ORDER BY d.allocated_at DESC"
     with db.get_stock_connection() as conn:
         cur = conn.execute(query, tuple(params))
         rows = cur.fetchall()
@@ -12595,6 +12601,9 @@ def list_dotations(
                     is_degraded=bool(row["is_degraded"]),
                     allocated_at=allocated_at_value,
                     is_obsolete=_is_obsolete(perceived_at),
+                    size_variant=_normalize_variant_value(row["size_variant"])
+                    if "size_variant" in row.keys()
+                    else None,
                 )
             )
         return dotations
@@ -12658,7 +12667,17 @@ def list_dotation_assigned_items(employee_id: int) -> list[models.DotationAssign
 def get_dotation(dotation_id: int) -> models.Dotation:
     ensure_database_ready()
     with db.get_stock_connection() as conn:
-        cur = conn.execute("SELECT * FROM dotations WHERE id = ?", (dotation_id,))
+        cur = conn.execute(
+            """
+            SELECT
+                d.*,
+                i.size AS size_variant
+            FROM dotations AS d
+            LEFT JOIN items AS i ON i.id = d.item_id
+            WHERE d.id = ?
+            """,
+            (dotation_id,),
+        )
         row = cur.fetchone()
         if row is None:
             raise ValueError("Dotation introuvable")
@@ -12676,6 +12695,9 @@ def get_dotation(dotation_id: int) -> models.Dotation:
             is_degraded=bool(row["is_degraded"]),
             allocated_at=allocated_at_value,
             is_obsolete=_is_obsolete(perceived_at),
+            size_variant=_normalize_variant_value(row["size_variant"])
+            if "size_variant" in row.keys()
+            else None,
         )
 
 
