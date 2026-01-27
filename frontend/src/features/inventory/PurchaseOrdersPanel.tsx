@@ -1273,8 +1273,10 @@ export function PurchaseOrdersPanel({
                     receiptsByLine.set(receipt.purchase_order_line_id, existing);
                   });
                   const hasNonConformingLatestReceipt = order.items.some((line) => {
-                    const lineReceipts = receiptsByLine.get(line.id);
-                    return lineReceipts && lineReceipts[0]?.conformity_status === "non_conforme";
+                    const lineReceipts = receiptsByLine.get(line.id) ?? [];
+                    const latestReceipt =
+                      lineReceipts.length > 0 ? lineReceipts[lineReceipts.length - 1] : null;
+                    return latestReceipt?.conformity_status === "non_conforme";
                   });
                   const pendingAssignments = (order.pending_assignments ?? []).filter(
                     (assignment) => assignment.status === "pending"
@@ -1324,8 +1326,13 @@ export function PurchaseOrdersPanel({
                         <ul className="space-y-1 text-xs">
                           {order.items.map((line) => {
                             const itemId = resolveItemId(line);
-                            const lineReceipts = receiptsByLine.get(line.id) ?? [];
-                            const latestReceipt = lineReceipts[0];
+                            const receipts = receiptsByLine.get(line.id) ?? [];
+                            const latestReceipt =
+                              receipts.length > 0 ? receipts[receipts.length - 1] : null;
+                            const latestIsNonConforming =
+                              latestReceipt?.conformity_status === "non_conforme" ||
+                              latestReceipt?.is_non_conforming === true ||
+                              latestReceipt?.non_conforming === true;
                             const receivedConformeQty =
                               line.received_conforme_qty ?? line.quantity_received;
                             const receivedNonConformeQty = line.received_non_conforme_qty ?? 0;
