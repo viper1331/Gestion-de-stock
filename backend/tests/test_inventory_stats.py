@@ -75,6 +75,7 @@ def test_clothing_stats_site_scoping() -> None:
 
     jll_sku_a = f"JLL-{uuid4().hex[:6]}"
     jll_sku_b = f"JLL-{uuid4().hex[:6]}"
+    jll_sku_c = f"JLL-{uuid4().hex[:6]}"
     gsm_sku = f"GSM-{uuid4().hex[:6]}"
 
     with db.get_stock_connection("JLL") as conn:
@@ -93,6 +94,13 @@ def test_clothing_stats_site_scoping() -> None:
             ("Veste", jll_sku_b, 0, 1, 1),
         )
         conn.execute(
+            """
+            INSERT INTO items (name, sku, quantity, low_stock_threshold, track_low_stock)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            ("Casquette", jll_sku_c, 0, 1, 0),
+        )
+        conn.execute(
             "INSERT INTO purchase_orders (status) VALUES ('PENDING'), ('RECEIVED')"
         )
 
@@ -109,7 +117,7 @@ def test_clothing_stats_site_scoping() -> None:
         jll_response = client.get("/items/stats", headers=jll_headers)
         assert jll_response.status_code == 200, jll_response.text
         jll_stats = jll_response.json()
-        assert jll_stats["references"] == 2
+        assert jll_stats["references"] == 3
         assert jll_stats["total_stock"] == 2
         assert jll_stats["low_stock"] == 2
         assert jll_stats["stockouts"] == 1
@@ -126,7 +134,10 @@ def test_clothing_stats_site_scoping() -> None:
     finally:
         with db.get_stock_connection("JLL") as conn:
             conn.execute("DELETE FROM purchase_orders")
-            conn.execute("DELETE FROM items WHERE sku IN (?, ?)", (jll_sku_a, jll_sku_b))
+            conn.execute(
+                "DELETE FROM items WHERE sku IN (?, ?, ?)",
+                (jll_sku_a, jll_sku_b, jll_sku_c),
+            )
         with db.get_stock_connection("GSM") as conn:
             conn.execute("DELETE FROM items WHERE sku = ?", (gsm_sku,))
 

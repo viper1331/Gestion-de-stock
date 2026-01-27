@@ -1417,9 +1417,16 @@ def get_inventory_stats(module_key: str) -> models.InventoryStats:
             ).fetchone()["total"]
             or 0
         )
+        stockouts_where = ["quantity = 0"]
+        if resolved.module_key == "clothing" and "track_low_stock" in item_columns:
+            stockouts_where.append("track_low_stock = 1")
         stockouts = int(
             conn.execute(
-                f"SELECT COUNT(1) AS count FROM {resolved.items_table} WHERE quantity = 0"
+                f"""
+                SELECT COUNT(1) AS count
+                FROM {resolved.items_table}
+                WHERE {" AND ".join(stockouts_where)}
+                """
             ).fetchone()["count"]
             or 0
         )
