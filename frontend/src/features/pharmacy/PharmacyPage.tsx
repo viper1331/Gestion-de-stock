@@ -41,6 +41,7 @@ interface PharmacyItem {
   barcode: string | null;
   quantity: number;
   low_stock_threshold: number;
+  track_low_stock?: boolean;
   expiration_date: string | null;
   location: string | null;
   category_id: number | null;
@@ -621,12 +622,18 @@ export function PharmacyPage() {
   const lowStockItems = useMemo(
     () =>
       items.filter((item) => {
+        if (item.track_low_stock === false) {
+          return false;
+        }
         const threshold = item.low_stock_threshold ?? DEFAULT_PHARMACY_LOW_STOCK_THRESHOLD;
         return threshold > 0 && item.quantity <= threshold;
       }),
     [items]
   );
-  const stockoutCount = useMemo(() => items.filter((item) => item.quantity === 0).length, [items]);
+  const stockoutCount = useMemo(
+    () => items.filter((item) => item.track_low_stock !== false && item.quantity === 0).length,
+    [items]
+  );
 
   const expiredItems = useMemo(
     () => items.filter((item) => getExpirationStatus(item.expiration_date) === "expired"),

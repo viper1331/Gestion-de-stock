@@ -1475,6 +1475,7 @@ class PharmacyItemBase(BaseModel):
     barcode: Optional[str] = Field(default=None, min_length=1, max_length=64)
     quantity: int = Field(default=0, ge=0)
     low_stock_threshold: int = Field(default=5, ge=0)
+    track_low_stock: bool = True
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
     category_id: Optional[int] = Field(default=None, gt=0)
@@ -1494,6 +1495,7 @@ class PharmacyItemUpdate(BaseModel):
     barcode: Optional[str] = Field(default=None, min_length=1, max_length=64)
     quantity: Optional[int] = Field(default=None, ge=0)
     low_stock_threshold: Optional[int] = Field(default=None, ge=0)
+    track_low_stock: Optional[bool] = None
     expiration_date: Optional[date] = None
     location: Optional[str] = Field(default=None, max_length=128)
     category_id: Optional[int] = Field(default=None, gt=0)

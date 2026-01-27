@@ -1418,7 +1418,7 @@ def get_inventory_stats(module_key: str) -> models.InventoryStats:
             or 0
         )
         stockouts_where = ["quantity = 0"]
-        if resolved.module_key == "clothing" and "track_low_stock" in item_columns:
+        if "track_low_stock" in item_columns:
             stockouts_where.append("track_low_stock = 1")
         stockouts = int(
             conn.execute(
@@ -3660,6 +3660,10 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         if "low_stock_threshold" not in pharmacy_columns:
             execute(
                 "ALTER TABLE pharmacy_items ADD COLUMN low_stock_threshold INTEGER NOT NULL DEFAULT 5"
+            )
+        if "track_low_stock" not in pharmacy_columns:
+            execute(
+                "ALTER TABLE pharmacy_items ADD COLUMN track_low_stock INTEGER NOT NULL DEFAULT 1"
             )
         if "supplier_id" not in pharmacy_columns:
             execute("ALTER TABLE pharmacy_items ADD COLUMN supplier_id INTEGER")
@@ -13052,6 +13056,7 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
                 barcode=row["barcode"],
                 quantity=row["quantity"],
                 low_stock_threshold=row["low_stock_threshold"],
+                track_low_stock=bool(row["track_low_stock"]) if "track_low_stock" in row.keys() else True,
                 expiration_date=row["expiration_date"],
                 location=row["location"],
                 category_id=row["category_id"],
@@ -13572,6 +13577,7 @@ def get_pharmacy_item(item_id: int) -> models.PharmacyItem:
             barcode=row["barcode"],
             quantity=row["quantity"],
             low_stock_threshold=row["low_stock_threshold"],
+            track_low_stock=bool(row["track_low_stock"]) if "track_low_stock" in row.keys() else True,
             expiration_date=row["expiration_date"],
             location=row["location"],
             category_id=row["category_id"],
@@ -13603,6 +13609,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     barcode,
                     quantity,
                     low_stock_threshold,
+                    track_low_stock,
                     expiration_date,
                     location,
                     category_id,
@@ -13619,6 +13626,7 @@ def create_pharmacy_item(payload: models.PharmacyItemCreate) -> models.PharmacyI
                     barcode,
                     payload.quantity,
                     payload.low_stock_threshold,
+                    int(payload.track_low_stock),
                     expiration_date,
                     payload.location,
                     payload.category_id,
@@ -13639,6 +13647,8 @@ def update_pharmacy_item(item_id: int, payload: models.PharmacyItemUpdate) -> mo
     extra_payload = fields.pop("extra", None)
     if "barcode" in fields:
         fields["barcode"] = _normalize_barcode(fields["barcode"])
+    if "track_low_stock" in fields:
+        fields["track_low_stock"] = int(bool(fields["track_low_stock"]))
     if "expiration_date" in fields and fields["expiration_date"] is not None:
         fields["expiration_date"] = fields["expiration_date"].isoformat()
     if extra_payload is not None:
