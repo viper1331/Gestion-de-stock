@@ -202,6 +202,32 @@ async def receive_order_line(
 
 
 @router.post(
+    "/{order_id}/request-replacement",
+    response_model=models.PurchaseOrderReplacementResponse,
+)
+async def request_replacement(
+    order_id: int,
+    payload: models.PurchaseOrderReplacementRequest,
+    user: models.User = Depends(get_current_user),
+) -> models.PurchaseOrderReplacementResponse:
+    _require_permission(user, action="edit")
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    try:
+        return services.request_purchase_order_replacement(
+            order_id,
+            payload,
+            requested_by=user.email or user.username,
+        )
+    except services.NonConformeReceiptRequiredError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post(
     "/{order_id}/pending-assignments/{pending_id}/validate",
     response_model=models.PendingClothingAssignment,
 )

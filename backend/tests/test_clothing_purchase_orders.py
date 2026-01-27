@@ -18,6 +18,7 @@ def _reset_stock_tables() -> None:
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM clothing_supplier_returns")
         conn.execute("DELETE FROM pending_clothing_assignments")
+        conn.execute("DELETE FROM purchase_order_nonconformities")
         conn.execute("DELETE FROM purchase_order_receipts")
         conn.execute("DELETE FROM purchase_order_items")
         conn.execute("DELETE FROM purchase_orders")

@@ -940,6 +940,26 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                 ON purchase_order_receipts(purchase_order_id);
                 CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_line
                 ON purchase_order_receipts(purchase_order_line_id);
+                CREATE TABLE IF NOT EXISTS purchase_order_nonconformities (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    site_key TEXT NOT NULL,
+                    module TEXT NOT NULL,
+                    purchase_order_id INTEGER NOT NULL REFERENCES purchase_orders(id) ON DELETE CASCADE,
+                    purchase_order_line_id INTEGER NOT NULL REFERENCES purchase_order_items(id) ON DELETE CASCADE,
+                    receipt_id INTEGER NOT NULL REFERENCES purchase_order_receipts(id) ON DELETE CASCADE,
+                    status TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    note TEXT,
+                    requested_replacement INTEGER NOT NULL DEFAULT 0,
+                    created_by TEXT,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+                    UNIQUE(site_key, receipt_id, purchase_order_line_id)
+                );
+                CREATE INDEX IF NOT EXISTS idx_purchase_order_nonconformities_order
+                ON purchase_order_nonconformities(purchase_order_id);
+                CREATE INDEX IF NOT EXISTS idx_purchase_order_nonconformities_line
+                ON purchase_order_nonconformities(purchase_order_line_id);
                 CREATE TABLE IF NOT EXISTS pending_clothing_assignments (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     site_key TEXT NOT NULL,
