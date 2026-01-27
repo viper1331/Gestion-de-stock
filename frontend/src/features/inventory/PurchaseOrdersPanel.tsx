@@ -1,4 +1,4 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { QueryKey, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
@@ -28,19 +28,27 @@ interface Collaborator {
   full_name: string;
 }
 
-interface DotationBeneficiary {
+interface DotationAssignee {
   employee_id: number;
   display_name: string;
-  assigned_count: number;
+  count: number;
 }
 
-interface DotationAssignedItem {
+interface DotationAssigneesResponse {
+  assignees: DotationAssignee[];
+}
+
+interface DotationAssigneeItem {
   assignment_id: number;
   item_id: number;
   sku: string;
-  label: string;
-  variant?: string | null;
+  name: string;
+  size_variant?: string | null;
   qty: number;
+}
+
+interface DotationAssigneeItemsResponse {
+  items: DotationAssigneeItem[];
 }
 
 interface ItemOption {
@@ -265,6 +273,7 @@ export function PurchaseOrdersPanel({
   const [draftLines, setDraftLines] = useState<DraftLine[]>([
     { itemId: "", quantity: 1, lineType: "standard", returnExpected: false }
   ]);
+  const [replacementAccess, setReplacementAccess] = useState(enableReplacementFlow);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
@@ -304,6 +313,34 @@ export function PurchaseOrdersPanel({
   const createFormId = `purchase-order-create-${itemIdField}`;
   const canRefresh =
     user?.role === "admin" || modulePermissions.canAccess(moduleKey, "edit");
+
+  useEffect(() => {
+    setReplacementAccess(enableReplacementFlow);
+  }, [enableReplacementFlow]);
+
+  useEffect(() => {
+    if (replacementAccess) {
+      return;
+    }
+    setDraftLines((prev) =>
+      prev.map((line) => ({
+        ...line,
+        lineType: "standard",
+        returnExpected: false,
+        beneficiaryId: "",
+        returnReason: "",
+        returnEmployeeItemId: "",
+        returnQty: 0
+      }))
+    );
+  }, [replacementAccess]);
+
+  const handleDotationsForbidden = (requestError: unknown) => {
+    const status = (requestError as AxiosError)?.response?.status;
+    if (status === 403) {
+      setReplacementAccess(false);
+    }
+  };
 
   const renderSupplierDetails = (supplier?: Supplier) => {
     if (!supplier) {
@@ -409,10 +446,10 @@ export function PurchaseOrdersPanel({
     return `${item.name}${sku}${size}`;
   };
 
-  const resolveAssignedItemLabel = (assignedItem: DotationAssignedItem) => {
-    const size = assignedItem.variant ? ` · ${assignedItem.variant}` : "";
+  const resolveAssignedItemLabel = (assignedItem: DotationAssigneeItem) => {
     const sku = assignedItem.sku ? ` (${assignedItem.sku})` : "";
-    return `${assignedItem.label}${sku}${size}`;
+    const size = assignedItem.size_variant ? assignedItem.size_variant : "—";
+    return `${assignedItem.name}${sku} — ${size} — x${assignedItem.qty}`;
   };
 
   const formatConflictLabel = (match: BarcodeLookupItem) => {
@@ -481,29 +518,25 @@ export function PurchaseOrdersPanel({
     }
   });
 
-  const hasReplacementLine = useMemo(
-    () => draftLines.some((line) => line.lineType === "replacement"),
-    [draftLines]
-  );
-
   const { data: collaborators = [] } = useQuery({
     queryKey: ["clothing-collaborators"],
     queryFn: async () => {
       const response = await api.get<Collaborator[]>("/collaborators");
       return response.data;
     },
-    enabled: enableReplacementFlow
+    enabled: replacementAccess
   });
 
-  const { data: beneficiaries = [] } = useQuery({
-    queryKey: ["clothing-dotations-beneficiaries"],
+  const { data: assignees = [] } = useQuery({
+    queryKey: ["clothing-dotations-assignees"],
     queryFn: async () => {
-      const response = await api.get<DotationBeneficiary[]>("/dotations/beneficiaries", {
+      const response = await api.get<DotationAssigneesResponse>("/dotations/assignees", {
         params: { module: "clothing" }
       });
-      return response.data;
+      return response.data.assignees;
     },
-    enabled: enableReplacementFlow && hasReplacementLine
+    enabled: replacementAccess,
+    onError: handleDotationsForbidden
   });
 
   const assignedItemEmployeeIds = useMemo(() => {
@@ -528,20 +561,24 @@ export function PurchaseOrdersPanel({
       assignedItemEmployeeIds.map((beneficiaryId) => ({
         queryKey: ["clothing-assigned-items", beneficiaryId],
         queryFn: async () => {
-          const response = await api.get<DotationAssignedItem[]>("/dotations/assigned-items", {
-            params: { module: "clothing", employee_id: beneficiaryId }
-          });
-          return response.data;
+          const response = await api.get<DotationAssigneeItemsResponse>(
+            `/dotations/assignees/${beneficiaryId}/items`,
+            {
+              params: { module: "clothing" }
+            }
+          );
+          return response.data.items;
         },
-        enabled: enableReplacementFlow
+        enabled: replacementAccess,
+        onError: handleDotationsForbidden
       })),
-    [assignedItemEmployeeIds, enableReplacementFlow]
+    [assignedItemEmployeeIds, replacementAccess]
   );
 
   const assignedItemsQueries = useQueries({ queries: assignedItemQueries });
 
   const assignedItemsByBeneficiary = useMemo(() => {
-    const map = new Map<number, DotationAssignedItem[]>();
+    const map = new Map<number, DotationAssigneeItem[]>();
     assignedItemsQueries.forEach((query, index) => {
       const beneficiaryId = assignedItemEmployeeIds[index];
       if (beneficiaryId) {
@@ -822,7 +859,7 @@ export function PurchaseOrdersPanel({
       setError("Ajoutez au moins une ligne de commande valide.");
       return;
     }
-    if (enableReplacementFlow) {
+    if (replacementAccess) {
       const invalidReplacement = normalizedLines.find((line) => {
         if (line.line_type !== "replacement") {
           return false;
@@ -1680,6 +1717,7 @@ export function PurchaseOrdersPanel({
                 </div>
 
                 {enableReplacementFlow ? (
+                  replacementAccess ? (
                   <div className="space-y-3 text-sm text-slate-200">
                     <label className="flex items-center gap-2 text-xs font-semibold text-slate-300">
                       <input
@@ -1714,7 +1752,7 @@ export function PurchaseOrdersPanel({
                         <div className="grid gap-2 md:grid-cols-2">
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-slate-300">
-                              Bénéficiaire
+                              Bénéficiaire (doté)
                             </label>
                             <select
                               value={line.beneficiaryId ?? ""}
@@ -1734,21 +1772,21 @@ export function PurchaseOrdersPanel({
                               className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
                             >
                               <option value="">Sélectionnez un collaborateur (doté)</option>
-                              {beneficiaries.map((beneficiary) => (
+                              {assignees.map((beneficiary) => (
                                 <option
                                   key={beneficiary.employee_id}
                                   value={beneficiary.employee_id}
                                 >
                                   {beneficiary.display_name}
-                                  {beneficiary.assigned_count > 0
-                                    ? ` (${beneficiary.assigned_count} ${
-                                        beneficiary.assigned_count > 1 ? "articles" : "article"
+                                  {beneficiary.count > 0
+                                    ? ` (${beneficiary.count} ${
+                                        beneficiary.count > 1 ? "articles" : "article"
                                       })`
                                     : ""}
                                 </option>
                               ))}
                             </select>
-                            {beneficiaries.length === 0 ? (
+                            {assignees.length === 0 ? (
                               <p className="text-xs text-slate-400">
                                 Aucun collaborateur doté sur ce site.
                               </p>
@@ -1868,6 +1906,9 @@ export function PurchaseOrdersPanel({
                       </>
                     ) : null}
                   </div>
+                ) : (
+                  <p className="text-xs text-slate-400">Accès dotations requis.</p>
+                )
                 ) : null}
               </div>
             );

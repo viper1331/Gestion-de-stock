@@ -167,3 +167,26 @@ async def list_dotation_assigned_items(
     _require_permission(user, DOTATIONS_MODULE_KEY, action="view")
     _require_clothing_module(module)
     return services.list_dotation_assigned_items(employee_id)
+
+
+@router.get("/assignees", response_model=models.DotationAssigneesResponse)
+async def list_dotation_assignees(
+    module: str = Query(default="clothing"),
+    user: models.User = Depends(get_current_user),
+) -> models.DotationAssigneesResponse:
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="view")
+    _require_clothing_module(module)
+    assignees = services.list_dotation_assignees()
+    return models.DotationAssigneesResponse(assignees=assignees)
+
+
+@router.get("/assignees/{employee_id}/items", response_model=models.DotationAssigneeItemsResponse)
+async def list_dotation_assignee_items(
+    employee_id: int,
+    module: str = Query(default="clothing"),
+    user: models.User = Depends(get_current_user),
+) -> models.DotationAssigneeItemsResponse:
+    _require_permission(user, DOTATIONS_MODULE_KEY, action="view")
+    _require_clothing_module(module)
+    items = services.list_dotation_assignee_items(employee_id)
+    return models.DotationAssigneeItemsResponse(items=items)

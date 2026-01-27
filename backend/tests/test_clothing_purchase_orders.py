@@ -28,13 +28,13 @@ def _reset_stock_tables() -> None:
         conn.commit()
 
 
-def _create_item(conn: sqlite3.Connection, *, name: str, sku: str) -> int:
+def _create_item(conn: sqlite3.Connection, *, name: str, sku: str, size: str | None = None) -> int:
     cur = conn.execute(
         """
-        INSERT INTO items (name, sku, quantity, low_stock_threshold, track_low_stock)
-        VALUES (?, ?, 0, 0, 0)
+        INSERT INTO items (name, sku, size, quantity, low_stock_threshold, track_low_stock)
+        VALUES (?, ?, ?, 0, 0, 0)
         """,
-        (name, sku),
+        (name, sku, size),
     )
     return int(cur.lastrowid)
 
@@ -78,6 +78,46 @@ def _create_admin_user(username: str, password: str) -> None:
             (username, username, username.lower(), security.hash_password(password)),
         )
         conn.commit()
+
+
+def test_dotation_assignees_and_items() -> None:
+    _reset_stock_tables()
+    _create_admin_user("dotations_admin", "secret")
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Polos", sku="HAB-POLOS", size="S")
+        collaborator_id = _create_collaborator(conn, full_name="CANGEMI SEBASTIEN")
+        _create_collaborator(conn, full_name="Alice Martin")
+        dotation_id = _create_dotation(
+            conn, collaborator_id=collaborator_id, item_id=item_id, quantity=2
+        )
+        conn.commit()
+    headers = login_headers(client, "dotations_admin", "secret")
+    response = client.get("/dotations/assignees?module=clothing", headers=headers)
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["assignees"] == [
+        {
+            "employee_id": collaborator_id,
+            "display_name": "CANGEMI SEBASTIEN",
+            "count": 1,
+        }
+    ]
+    items_response = client.get(
+        f"/dotations/assignees/{collaborator_id}/items?module=clothing",
+        headers=headers,
+    )
+    assert items_response.status_code == 200
+    items_payload = items_response.json()
+    assert items_payload["items"] == [
+        {
+            "assignment_id": dotation_id,
+            "item_id": item_id,
+            "sku": "HAB-POLOS",
+            "name": "Polos",
+            "size_variant": "S",
+            "qty": 2,
+        }
+    ]
 
 
 def test_po_line_replacement_requires_beneficiary() -> None:
