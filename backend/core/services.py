@@ -9513,6 +9513,65 @@ def _build_purchase_order_detail(
                 row["total"] or 0
             )
             receipt_counts[line_id] = receipt_counts.get(line_id, 0) + 1
+    nonconformities: list[models.PurchaseOrderNonconformity] = []
+    if _table_exists(conn, "purchase_order_nonconformities"):
+        module_expr = "module AS module"
+        if not _table_has_column(conn, "purchase_order_nonconformities", "module"):
+            module_expr = "'clothing' AS module"
+        note_expr = "note AS note"
+        if not _table_has_column(conn, "purchase_order_nonconformities", "note"):
+            note_expr = "NULL AS note"
+        requested_expr = "requested_replacement AS requested_replacement"
+        if not _table_has_column(conn, "purchase_order_nonconformities", "requested_replacement"):
+            requested_expr = "0 AS requested_replacement"
+        created_by_expr = "created_by AS created_by"
+        if not _table_has_column(conn, "purchase_order_nonconformities", "created_by"):
+            created_by_expr = "NULL AS created_by"
+        updated_at_expr = "updated_at AS updated_at"
+        if not _table_has_column(conn, "purchase_order_nonconformities", "updated_at"):
+            updated_at_expr = "created_at AS updated_at"
+        try:
+            nonconformity_rows = conn.execute(
+                f"""
+                SELECT id,
+                       site_key,
+                       {module_expr},
+                       purchase_order_id,
+                       purchase_order_line_id,
+                       receipt_id,
+                       status,
+                       reason,
+                       {note_expr},
+                       {requested_expr},
+                       {created_by_expr},
+                       created_at,
+                       {updated_at_expr}
+                FROM purchase_order_nonconformities
+                WHERE purchase_order_id = ? AND site_key = ?
+                ORDER BY created_at DESC, id DESC
+                """,
+                (order_row["id"], resolved_site_key),
+            ).fetchall()
+            nonconformities = [
+                models.PurchaseOrderNonconformity(
+                    id=row["id"],
+                    site_key=row["site_key"],
+                    module=row["module"],
+                    purchase_order_id=row["purchase_order_id"],
+                    purchase_order_line_id=row["purchase_order_line_id"],
+                    receipt_id=row["receipt_id"],
+                    status=row["status"],
+                    reason=row["reason"],
+                    note=_row_get(row, "note"),
+                    requested_replacement=bool(_row_get(row, "requested_replacement", 0)),
+                    created_by=_row_get(row, "created_by"),
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
+                for row in nonconformity_rows
+            ]
+        except sqlite3.OperationalError:
+            nonconformities = []
     items = [
         models.PurchaseOrderItem(
             id=item_row["id"],
