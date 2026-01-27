@@ -11728,6 +11728,26 @@ def validate_pending_assignment(
         ).fetchone()
         if pending_row is None:
             raise ValueError("Attribution en attente introuvable")
+        if pending_row["status"] == "validated":
+            return models.PendingClothingAssignment(
+                id=pending_row["id"],
+                site_key=pending_row["site_key"],
+                purchase_order_id=pending_row["purchase_order_id"],
+                purchase_order_line_id=pending_row["purchase_order_line_id"],
+                receipt_id=pending_row["receipt_id"],
+                employee_id=pending_row["employee_id"],
+                new_item_id=pending_row["new_item_id"],
+                new_item_sku=_row_get(pending_row, "new_item_sku"),
+                new_item_size=_row_get(pending_row, "new_item_size"),
+                qty=pending_row["qty"],
+                return_employee_item_id=_row_get(pending_row, "return_employee_item_id"),
+                target_dotation_id=_row_get(pending_row, "target_dotation_id"),
+                return_reason=_row_get(pending_row, "return_reason"),
+                status=pending_row["status"],
+                created_at=pending_row["created_at"],
+                validated_at=_row_get(pending_row, "validated_at"),
+                validated_by=_row_get(pending_row, "validated_by"),
+            )
         if pending_row["status"] != "pending":
             raise ValueError("Attribution déjà traitée")
         line_row = conn.execute(
@@ -11789,8 +11809,10 @@ def validate_pending_assignment(
                 "Remplacement : la dotation ciblée doit être en PERTE ou DÉGRADATION."
             )
         return_expected = bool(_row_get(line_row, "return_expected", 1))
+        lost_offset_qty = 0
         if lost_qty:
             return_expected = False
+            lost_offset_qty = min(pending_row["qty"], lost_qty)
         return_qty = _row_get(line_row, "return_qty", pending_row["qty"])
         if return_expected:
             if return_qty <= 0:
@@ -11840,9 +11862,12 @@ def validate_pending_assignment(
             occurred_at=occurred_at,
         )
         if same_item:
-            new_quantity = dotation_row["quantity"] + received_qty - (return_qty if return_expected else 0)
-            new_degraded_qty = degraded_qty - return_qty if return_expected else degraded_qty
-            new_lost_qty = lost_qty
+            adjusted_return_qty = return_qty if return_expected else lost_offset_qty
+            new_quantity = dotation_row["quantity"] + received_qty - adjusted_return_qty
+            new_degraded_qty = (
+                max(0, degraded_qty - return_qty) if return_expected else degraded_qty
+            )
+            new_lost_qty = max(0, lost_qty - lost_offset_qty)
             is_lost, is_degraded = _derive_dotation_flags(new_degraded_qty, new_lost_qty)
             combined_notes = _append_dotation_note(dotation_row["notes"], replacement_line_old)
             conn.execute(
@@ -11883,7 +11908,7 @@ def validate_pending_assignment(
         else:
             if return_expected:
                 new_quantity = dotation_row["quantity"] - return_qty
-                new_degraded_qty = degraded_qty - return_qty
+                new_degraded_qty = max(0, degraded_qty - return_qty)
                 new_lost_qty = lost_qty
                 is_lost, is_degraded = _derive_dotation_flags(new_degraded_qty, new_lost_qty)
                 updated_notes = _append_dotation_note(dotation_row["notes"], replacement_line_old)
@@ -11913,8 +11938,21 @@ def validate_pending_assignment(
             else:
                 updated_notes = _append_dotation_note(dotation_row["notes"], replacement_line_old)
                 conn.execute(
-                    "UPDATE dotations SET notes = ? WHERE id = ?",
-                    (updated_notes, target_dotation_id),
+                    """
+                    UPDATE dotations
+                    SET lost_qty = ?,
+                        is_lost = ?,
+                        is_degraded = ?,
+                        notes = ?
+                    WHERE id = ?
+                    """,
+                    (
+                        new_lost_qty,
+                        is_lost,
+                        is_degraded,
+                        updated_notes,
+                        target_dotation_id,
+                    ),
                 )
             _record_dotation_event(
                 conn,
