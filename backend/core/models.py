@@ -430,6 +430,7 @@ class Item(BaseModel):
     quantity: int
     low_stock_threshold: int = 0
     track_low_stock: bool = True
+    track_stock_alerts: bool = True
     supplier_id: int | None = None
     expiration_date: date | None = None
     remise_item_id: int | None = None
