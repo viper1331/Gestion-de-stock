@@ -11447,7 +11447,9 @@ def validate_pending_assignment(
         if return_qty <= 0:
             return_qty = pending_row["qty"]
         if dotation_row["quantity"] < return_qty:
-            raise ValueError("Quantité de retour supérieure à la dotation")
+            raise PendingAssignmentConflictError(
+                "Quantité à retirer > quantité attribuée"
+            )
         item_row = conn.execute(
             "SELECT quantity FROM items WHERE id = ?",
             (pending_row["new_item_id"],),
@@ -11483,7 +11485,14 @@ def validate_pending_assignment(
             "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
             (pending_row["new_item_id"], -pending_row["qty"], "DOTATION_ASSIGNMENT"),
         )
-        conn.execute("DELETE FROM dotations WHERE id = ?", (return_employee_item_id,))
+        remaining_qty = dotation_row["quantity"] - return_qty
+        if remaining_qty == 0:
+            conn.execute("DELETE FROM dotations WHERE id = ?", (return_employee_item_id,))
+        else:
+            conn.execute(
+                "UPDATE dotations SET quantity = ? WHERE id = ?",
+                (remaining_qty, return_employee_item_id),
+            )
         conn.execute(
             "UPDATE items SET quantity = quantity + ? WHERE id = ?",
             (return_qty, dotation_row["item_id"]),
