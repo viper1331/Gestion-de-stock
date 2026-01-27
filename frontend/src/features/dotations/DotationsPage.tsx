@@ -65,6 +65,19 @@ interface ScannedDotationLine {
   quantity: number;
 }
 
+type DotationStatus = "RAS" | "DEGRADATION" | "PERTE";
+
+interface DotationCompactRow {
+  id: number;
+  employeeName: string;
+  itemName: string;
+  sku: string;
+  variant: string | null;
+  quantity: number;
+  receivedAt: string;
+  status: DotationStatus;
+}
+
 const buildDefaultFormValues = (): DotationFormValues => ({
   collaborator_id: "",
   item_id: "",
@@ -302,6 +315,25 @@ export function DotationsPage() {
       });
   }, [dotations, collaboratorById]);
 
+  const isAllCollaborators = !filters.collaborator || filters.collaborator === "all";
+
+  const compactRows = useMemo(() => {
+    return dotations.map((dotation) => {
+      const collaborator = collaboratorById.get(dotation.collaborator_id);
+      const item = itemById.get(dotation.item_id);
+      return {
+        id: dotation.id,
+        employeeName: collaborator?.full_name ?? `Collaborateur #${dotation.collaborator_id}`,
+        itemName: item?.name ?? `Article #${dotation.item_id}`,
+        sku: item?.sku ?? "",
+        variant: dotation.size_variant,
+        quantity: dotation.quantity,
+        receivedAt: dotation.perceived_at,
+        status: getDotationStatus(dotation)
+      };
+    });
+  }, [dotations, collaboratorById, itemById]);
+
   if (modulePermissions.isLoading && user?.role !== "admin") {
     return (
       <section className="space-y-4">
@@ -417,6 +449,266 @@ export function DotationsPage() {
     });
   };
 
+  const renderDotationCard = (dotation: Dotation) => {
+    const item = itemById.get(dotation.item_id);
+    const isEditing = editingDotationId === dotation.id && editFormValues;
+    const alerts: Array<{ key: string; label: string; className: string }> = [];
+    if (dotation.is_obsolete) {
+      alerts.push({
+        key: "obsolete",
+        label: "Vétusté",
+        className: "rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-300"
+      });
+    }
+    if (dotation.is_lost) {
+      alerts.push({
+        key: "lost",
+        label: "Perte",
+        className: "rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-red-300"
+      });
+    }
+    if (dotation.is_degraded) {
+      alerts.push({
+        key: "degraded",
+        label: "Dégradation",
+        className: "rounded border border-orange-500/40 bg-orange-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-orange-300"
+      });
+    }
+
+    return (
+      <article key={dotation.id} className="rounded border border-slate-800 bg-slate-950 p-4">
+        <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
+          <div>
+            <p className="text-sm font-semibold text-white">
+              {item ? `${item.name} (${item.sku})` : `Article #${dotation.item_id}`}
+            </p>
+            <p className="text-xs text-slate-400">
+              Taille / Variante : {dotation.size_variant ? dotation.size_variant : "—"}
+            </p>
+            <p className="text-xs text-slate-400">Dotation créée le {formatDate(dotation.allocated_at)}</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {alerts.length > 0 ? (
+              alerts.map((alert) => (
+                <span key={alert.key} className={alert.className}>
+                  {alert.label}
+                </span>
+              ))
+            ) : (
+              <span className="rounded border border-slate-800 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-400">
+                RAS
+              </span>
+            )}
+          </div>
+        </div>
+        <dl className="mt-3 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-slate-500">Quantité</dt>
+            <dd className="font-semibold text-white">{dotation.quantity}</dd>
+          </div>
+          <div>
+            <dt className="text-xs uppercase tracking-wide text-slate-500">Perçue le</dt>
+            <dd>{formatDateOnly(dotation.perceived_at)}</dd>
+          </div>
+          <div className="sm:col-span-2">
+            <dt className="text-xs uppercase tracking-wide text-slate-500">Notes</dt>
+            <dd>{dotation.notes ? dotation.notes : <span className="text-slate-500">-</span>}</dd>
+          </div>
+        </dl>
+        {canEdit ? (
+          <div className="mt-4 space-y-3">
+            {isEditing ? (
+              <form
+                className="space-y-3 rounded border border-slate-800 bg-slate-950 p-3"
+                onSubmit={(event) => void handleUpdateSubmit(event, dotation)}
+              >
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-item-${dotation.id}`}>
+                    Article attribué
+                  </label>
+                  <select
+                    id={`edit-item-${dotation.id}`}
+                    value={editFormValues?.item_id ?? ""}
+                    onChange={(event) =>
+                      setEditFormValues((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              item_id: event.target.value
+                            }
+                          : prev
+                      )
+                    }
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  >
+                    <option value="">Sélectionner...</option>
+                    {items.map((option) => (
+                      <option key={option.id} value={option.id}>
+                        {option.name} - Stock: {option.quantity}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-quantity-${dotation.id}`}>
+                      Quantité
+                    </label>
+                    <AppTextInput
+                      id={`edit-quantity-${dotation.id}`}
+                      type="number"
+                      min={1}
+                      value={editFormValues?.quantity ?? dotation.quantity}
+                      onChange={(event) =>
+                        setEditFormValues((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                quantity: Number(event.target.value)
+                              }
+                            : prev
+                        )
+                      }
+                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                  <div className="space-y-1">
+                    <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-perceived-${dotation.id}`}>
+                      Date de perception
+                    </label>
+                    <AppTextInput
+                      id={`edit-perceived-${dotation.id}`}
+                      type="date"
+                      value={editFormValues?.perceived_at ?? dotation.perceived_at.slice(0, 10)}
+                      onChange={(event) =>
+                        setEditFormValues((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                perceived_at: event.target.value
+                              }
+                            : prev
+                        )
+                      }
+                      className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                    />
+                  </div>
+                </div>
+                <div className="space-y-1">
+                  <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-notes-${dotation.id}`}>
+                    Notes
+                  </label>
+                  <AppTextArea
+                    id={`edit-notes-${dotation.id}`}
+                    rows={3}
+                    value={editFormValues?.notes ?? dotation.notes ?? ""}
+                    onChange={(event) =>
+                      setEditFormValues((prev) =>
+                        prev
+                          ? {
+                              ...prev,
+                              notes: event.target.value
+                            }
+                          : prev
+                      )
+                    }
+                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+                  />
+                </div>
+                <div className="flex flex-wrap items-center gap-4">
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-lost-${dotation.id}`}>
+                    <AppTextInput
+                      id={`edit-lost-${dotation.id}`}
+                      type="checkbox"
+                      checked={editFormValues?.is_lost ?? dotation.is_lost}
+                      onChange={(event) =>
+                        setEditFormValues((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                is_lost: event.target.checked
+                              }
+                            : prev
+                        )
+                      }
+                      className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                    />
+                    Perte déclarée
+                  </label>
+                  <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-degraded-${dotation.id}`}>
+                    <AppTextInput
+                      id={`edit-degraded-${dotation.id}`}
+                      type="checkbox"
+                      checked={editFormValues?.is_degraded ?? dotation.is_degraded}
+                      onChange={(event) =>
+                        setEditFormValues((prev) =>
+                          prev
+                            ? {
+                                ...prev,
+                                is_degraded: event.target.checked
+                              }
+                            : prev
+                        )
+                      }
+                      className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                    />
+                    Dégradation constatée
+                  </label>
+                </div>
+                <div className="flex flex-wrap items-center gap-3">
+                  <button
+                    type="submit"
+                    disabled={updateDotation.isPending}
+                    className="rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
+                  >
+                    {updateDotation.isPending ? "Enregistrement..." : "Enregistrer les modifications"}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCancelEditing}
+                    className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-slate-500"
+                  >
+                    Annuler
+                  </button>
+                </div>
+              </form>
+            ) : (
+              <div className="flex flex-wrap gap-3 text-xs">
+                <button
+                  type="button"
+                  onClick={() => handleStartEditing(dotation)}
+                  className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-indigo-300 hover:border-indigo-400 hover:text-indigo-200"
+                >
+                  Modifier
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (!window.confirm("Supprimer cette dotation ?")) {
+                      return;
+                    }
+                    const restock = window.confirm(
+                      "Faut-il réintégrer les quantités au stock ?\nOK pour réintégrer, Annuler pour ignorer."
+                    );
+                    setMessage(null);
+                    setError(null);
+                    void deleteDotation.mutateAsync({ id: dotation.id, restock });
+                  }}
+                  className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-red-300 hover:border-red-400 hover:text-red-200"
+                >
+                  Supprimer
+                </button>
+              </div>
+            )}
+          </div>
+        ) : null}
+      </article>
+    );
+  };
+
+  const selectedCollaboratorId = !isAllCollaborators && filters.collaborator ? Number(filters.collaborator) : null;
+  const selectedCollaborator = selectedCollaboratorId ? collaboratorById.get(selectedCollaboratorId) : undefined;
+
   const content = (
     <section className="space-y-6">
       <header className="flex flex-wrap items-start justify-between gap-4">
@@ -486,279 +778,25 @@ export function DotationsPage() {
             Aucune dotation enregistrée pour le moment.
           </p>
         ) : null}
-        <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-3">
-          {groupedDotations.map(({ collaboratorId, collaborator, dotations: collaboratorDotations }) => (
-            <article key={collaboratorId} className="space-y-4 rounded-lg border border-slate-800 bg-slate-950 p-4">
-              <header className="flex flex-wrap items-center justify-between gap-3 border-b border-slate-800 pb-3">
-                <div>
-                  <h3 className="text-lg font-semibold text-white">
-                    {collaborator?.full_name ?? `Collaborateur #${collaboratorId}`}
-                  </h3>
-                  <p className="text-xs text-slate-400">
-                    {collaboratorDotations.length} article{collaboratorDotations.length > 1 ? "s" : ""} attribué{collaboratorDotations.length > 1 ? "s" : ""}
-                  </p>
-                </div>
-              </header>
-              <ul className="space-y-3">
-                {collaboratorDotations.map((dotation) => {
-                  const item = itemById.get(dotation.item_id);
-                  const isEditing = editingDotationId === dotation.id && editFormValues;
-                  const alerts: Array<{ key: string; label: string; className: string }> = [];
-                  if (dotation.is_obsolete) {
-                    alerts.push({
-                      key: "obsolete",
-                      label: "Vétusté",
-                      className: "rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-amber-300"
-                    });
-                  }
-                  if (dotation.is_lost) {
-                    alerts.push({
-                      key: "lost",
-                      label: "Perte",
-                      className: "rounded border border-red-500/40 bg-red-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-red-300"
-                    });
-                  }
-                  if (dotation.is_degraded) {
-                    alerts.push({
-                      key: "degraded",
-                      label: "Dégradation",
-                      className: "rounded border border-orange-500/40 bg-orange-500/10 px-2 py-0.5 text-[11px] font-semibold uppercase tracking-wide text-orange-300"
-                    });
-                  }
-                  return (
-                    <li key={dotation.id} className="rounded border border-slate-800 bg-slate-900/40 p-4">
-                      <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
-                        <div>
-                          <p className="text-sm font-semibold text-white">
-                            {item ? `${item.name} (${item.sku})` : `Article #${dotation.item_id}`}
-                          </p>
-                          <p className="text-xs text-slate-400">
-                            Taille / Variante : {dotation.size_variant ? dotation.size_variant : "—"}
-                          </p>
-                          <p className="text-xs text-slate-400">Dotation créée le {formatDate(dotation.allocated_at)}</p>
-                        </div>
-                        <div className="flex flex-wrap gap-2">
-                          {alerts.length > 0 ? (
-                            alerts.map((alert) => (
-                              <span key={alert.key} className={alert.className}>
-                                {alert.label}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="rounded border border-slate-800 px-2 py-0.5 text-[11px] uppercase tracking-wide text-slate-400">
-                              RAS
-                            </span>
-                          )}
-                        </div>
-                      </div>
-                      <dl className="mt-3 grid gap-3 text-sm text-slate-300 sm:grid-cols-2">
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide text-slate-500">Quantité</dt>
-                          <dd className="font-semibold text-white">{dotation.quantity}</dd>
-                        </div>
-                        <div>
-                          <dt className="text-xs uppercase tracking-wide text-slate-500">Perçue le</dt>
-                          <dd>{formatDateOnly(dotation.perceived_at)}</dd>
-                        </div>
-                        <div className="sm:col-span-2">
-                          <dt className="text-xs uppercase tracking-wide text-slate-500">Notes</dt>
-                          <dd>{dotation.notes ? dotation.notes : <span className="text-slate-500">-</span>}</dd>
-                        </div>
-                      </dl>
-                      {canEdit ? (
-                        <div className="mt-4 space-y-3">
-                          {isEditing ? (
-                            <form
-                              className="space-y-3 rounded border border-slate-800 bg-slate-950 p-3"
-                              onSubmit={(event) => void handleUpdateSubmit(event, dotation)}
-                            >
-                              <div className="space-y-1">
-                                <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-item-${dotation.id}`}>
-                                  Article attribué
-                                </label>
-                                <select
-                                  id={`edit-item-${dotation.id}`}
-                                  value={editFormValues?.item_id ?? ""}
-                                  onChange={(event) =>
-                                    setEditFormValues((prev) =>
-                                      prev
-                                        ? {
-                                            ...prev,
-                                            item_id: event.target.value
-                                          }
-                                        : prev
-                                    )
-                                  }
-                                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                                >
-                                  <option value="">Sélectionner...</option>
-                                  {items.map((option) => (
-                                    <option key={option.id} value={option.id}>
-                                      {option.name} - Stock: {option.quantity}
-                                    </option>
-                                  ))}
-                                </select>
-                              </div>
-                              <div className="grid gap-3 sm:grid-cols-2">
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-quantity-${dotation.id}`}>
-                                    Quantité
-                                  </label>
-                                  <AppTextInput
-                                    id={`edit-quantity-${dotation.id}`}
-                                    type="number"
-                                    min={1}
-                                    value={editFormValues?.quantity ?? dotation.quantity}
-                                    onChange={(event) =>
-                                      setEditFormValues((prev) =>
-                                        prev
-                                          ? {
-                                              ...prev,
-                                              quantity: Number(event.target.value)
-                                            }
-                                          : prev
-                                      )
-                                    }
-                                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                                  />
-                                </div>
-                                <div className="space-y-1">
-                                  <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-perceived-${dotation.id}`}>
-                                    Date de perception
-                                  </label>
-                                  <AppTextInput
-                                    id={`edit-perceived-${dotation.id}`}
-                                    type="date"
-                                    value={editFormValues?.perceived_at ?? dotation.perceived_at.slice(0, 10)}
-                                    onChange={(event) =>
-                                      setEditFormValues((prev) =>
-                                        prev
-                                          ? {
-                                              ...prev,
-                                              perceived_at: event.target.value
-                                            }
-                                          : prev
-                                      )
-                                    }
-                                    className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                                  />
-                                </div>
-                              </div>
-                              <div className="space-y-1">
-                                <label className="text-xs font-semibold text-slate-300" htmlFor={`edit-notes-${dotation.id}`}>
-                                  Notes
-                                </label>
-                                <AppTextArea
-                                  id={`edit-notes-${dotation.id}`}
-                                  rows={3}
-                                  value={editFormValues?.notes ?? dotation.notes ?? ""}
-                                  onChange={(event) =>
-                                    setEditFormValues((prev) =>
-                                      prev
-                                        ? {
-                                            ...prev,
-                                            notes: event.target.value
-                                          }
-                                        : prev
-                                    )
-                                  }
-                                  className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-                                />
-                              </div>
-                              <div className="flex flex-wrap items-center gap-4">
-                                <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-lost-${dotation.id}`}>
-                                  <AppTextInput
-                                    id={`edit-lost-${dotation.id}`}
-                                    type="checkbox"
-                                    checked={editFormValues?.is_lost ?? dotation.is_lost}
-                                    onChange={(event) =>
-                                      setEditFormValues((prev) =>
-                                        prev
-                                          ? {
-                                              ...prev,
-                                              is_lost: event.target.checked
-                                            }
-                                          : prev
-                                      )
-                                    }
-                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
-                                  />
-                                  Perte déclarée
-                                </label>
-                                <label className="flex items-center gap-2 text-xs font-semibold text-slate-300" htmlFor={`edit-degraded-${dotation.id}`}>
-                                  <AppTextInput
-                                    id={`edit-degraded-${dotation.id}`}
-                                    type="checkbox"
-                                    checked={editFormValues?.is_degraded ?? dotation.is_degraded}
-                                    onChange={(event) =>
-                                      setEditFormValues((prev) =>
-                                        prev
-                                          ? {
-                                              ...prev,
-                                              is_degraded: event.target.checked
-                                            }
-                                          : prev
-                                      )
-                                    }
-                                    className="h-4 w-4 rounded border-slate-700 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
-                                  />
-                                  Dégradation constatée
-                                </label>
-                              </div>
-                              <div className="flex flex-wrap items-center gap-3">
-                                <button
-                                  type="submit"
-                                  disabled={updateDotation.isPending}
-                                  className="rounded-md bg-emerald-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-70"
-                                >
-                                  {updateDotation.isPending ? "Enregistrement..." : "Enregistrer les modifications"}
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={handleCancelEditing}
-                                  className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-300 hover:border-slate-500"
-                                >
-                                  Annuler
-                                </button>
-                              </div>
-                            </form>
-                          ) : (
-                            <div className="flex flex-wrap gap-3 text-xs">
-                              <button
-                                type="button"
-                                onClick={() => handleStartEditing(dotation)}
-                                className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-indigo-300 hover:border-indigo-400 hover:text-indigo-200"
-                              >
-                                Modifier
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (!window.confirm("Supprimer cette dotation ?")) {
-                                    return;
-                                  }
-                                  const restock = window.confirm(
-                                    "Faut-il réintégrer les quantités au stock ?\nOK pour réintégrer, Annuler pour ignorer."
-                                  );
-                                  setMessage(null);
-                                  setError(null);
-                                  void deleteDotation.mutateAsync({ id: dotation.id, restock });
-                                }}
-                                className="rounded-md border border-slate-700 px-3 py-1 font-semibold text-red-300 hover:border-red-400 hover:text-red-200"
-                              >
-                                Supprimer
-                              </button>
-                            </div>
-                          )}
-                        </div>
-                      ) : null}
-                    </li>
-                  );
-                })}
-              </ul>
-            </article>
-          ))}
-        </div>
+        {groupedDotations.length > 0 ? (
+          isAllCollaborators ? (
+            <DotationsCompactList rows={compactRows} />
+          ) : (
+            <div className="space-y-4">
+              <div className="rounded-lg border border-slate-800 bg-slate-950 p-4">
+                <h3 className="text-lg font-semibold text-white">
+                  {selectedCollaborator?.full_name ?? "Collaborateur sélectionné"}
+                </h3>
+                <p className="text-xs text-slate-400">
+                  {dotations.length} article{dotations.length > 1 ? "s" : ""} attribué{dotations.length > 1 ? "s" : ""}
+                </p>
+              </div>
+              <div className="grid gap-4 lg:grid-cols-2">
+                {dotations.map((dotation) => renderDotationCard(dotation))}
+              </div>
+            </div>
+          )
+        ) : null}
       </div>
 
       <DraggableModal
@@ -1003,4 +1041,65 @@ function formatDateOnly(value: string) {
   } catch (error) {
     return value;
   }
+}
+
+function getDotationStatus(dotation: Dotation): DotationStatus {
+  if (dotation.is_lost) {
+    return "PERTE";
+  }
+  if (dotation.is_degraded) {
+    return "DEGRADATION";
+  }
+  return "RAS";
+}
+
+function StatusBadge({ status }: { status: DotationStatus }) {
+  const cls =
+    status === "PERTE"
+      ? "bg-red-500/15 text-red-300 border-red-500/30"
+      : status === "DEGRADATION"
+      ? "bg-amber-500/15 text-amber-300 border-amber-500/30"
+      : "bg-slate-500/15 text-slate-200 border-slate-500/30";
+
+  return (
+    <span className={`inline-flex items-center rounded-md border px-2 py-1 text-xs ${cls}`}>
+      {status}
+    </span>
+  );
+}
+
+function DotationsCompactList({ rows }: { rows: DotationCompactRow[] }) {
+  return (
+    <div className="overflow-hidden rounded-xl border border-white/10 bg-black/20">
+      <div className="grid grid-cols-[1.3fr_1.7fr_.6fr_.9fr_.7fr] gap-3 border-b border-white/10 px-4 py-3 text-xs uppercase tracking-wide text-slate-300">
+        <div>Collaborateur</div>
+        <div>Article</div>
+        <div>Qté</div>
+        <div>Reçu le</div>
+        <div>Statut</div>
+      </div>
+      <div className="divide-y divide-white/5">
+        {rows.map((row) => (
+          <div
+            key={row.id}
+            className="grid grid-cols-[1.3fr_1.7fr_.6fr_.9fr_.7fr] items-center gap-3 px-4 py-3"
+          >
+            <div className="truncate font-medium text-white/90">{row.employeeName}</div>
+            <div className="truncate">
+              <div className="text-white/90">{row.itemName}</div>
+              <div className="truncate text-xs text-slate-400">
+                {row.sku}
+                {row.variant ? ` • ${row.variant}` : ""}
+              </div>
+            </div>
+            <div className="font-semibold text-white/90">{row.quantity}</div>
+            <div className="text-slate-300">{formatDateOnly(row.receivedAt)}</div>
+            <div>
+              <StatusBadge status={row.status} />
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
