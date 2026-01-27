@@ -898,6 +898,9 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                 CREATE TABLE IF NOT EXISTS purchase_orders (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     supplier_id INTEGER REFERENCES suppliers(id) ON DELETE SET NULL,
+                    parent_id INTEGER REFERENCES purchase_orders(id) ON DELETE SET NULL,
+                    replacement_for_line_id INTEGER REFERENCES purchase_order_items(id) ON DELETE SET NULL,
+                    kind TEXT NOT NULL DEFAULT 'standard',
                     status TEXT NOT NULL DEFAULT 'PENDING',
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     note TEXT,
@@ -914,6 +917,8 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     quantity_received INTEGER NOT NULL DEFAULT 0,
                     sku TEXT,
                     unit TEXT,
+                    nonconformity_reason TEXT,
+                    is_nonconforme INTEGER NOT NULL DEFAULT 0,
                     beneficiary_employee_id INTEGER,
                     line_type TEXT NOT NULL DEFAULT 'standard',
                     return_expected INTEGER NOT NULL DEFAULT 0,

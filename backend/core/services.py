@@ -3611,6 +3611,12 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_orders ADD COLUMN last_sent_to TEXT")
         if "last_sent_by" not in po_columns:
             execute("ALTER TABLE purchase_orders ADD COLUMN last_sent_by TEXT")
+        if "parent_id" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN parent_id INTEGER")
+        if "replacement_for_line_id" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN replacement_for_line_id INTEGER")
+        if "kind" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'standard'")
 
         poi_info = execute("PRAGMA table_info(purchase_order_items)").fetchall()
         poi_columns = {row["name"] for row in poi_info}
@@ -3622,6 +3628,12 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_order_items ADD COLUMN sku TEXT")
         if "unit" not in poi_columns:
             execute("ALTER TABLE purchase_order_items ADD COLUMN unit TEXT")
+        if "nonconformity_reason" not in poi_columns:
+            execute("ALTER TABLE purchase_order_items ADD COLUMN nonconformity_reason TEXT")
+        if "is_nonconforme" not in poi_columns:
+            execute(
+                "ALTER TABLE purchase_order_items ADD COLUMN is_nonconforme INTEGER NOT NULL DEFAULT 0"
+            )
         if "beneficiary_employee_id" not in poi_columns:
             execute("ALTER TABLE purchase_order_items ADD COLUMN beneficiary_employee_id INTEGER")
         if "line_type" not in poi_columns:
@@ -9439,6 +9451,10 @@ def _build_purchase_order_detail(
 ) -> models.PurchaseOrderDetail:
     has_line_sku = _table_has_column(conn, "purchase_order_items", "sku")
     has_line_unit = _table_has_column(conn, "purchase_order_items", "unit")
+    has_line_nonconformity_reason = _table_has_column(
+        conn, "purchase_order_items", "nonconformity_reason"
+    )
+    has_line_is_nonconforme = _table_has_column(conn, "purchase_order_items", "is_nonconforme")
     has_beneficiary = _table_has_column(conn, "purchase_order_items", "beneficiary_employee_id")
     has_line_type = _table_has_column(conn, "purchase_order_items", "line_type")
     has_return_expected = _table_has_column(conn, "purchase_order_items", "return_expected")
@@ -9462,6 +9478,12 @@ def _build_purchase_order_detail(
     if has_beneficiary:
         beneficiary_expr = "poi.beneficiary_employee_id AS beneficiary_employee_id"
         beneficiary_name_expr = "c.full_name AS beneficiary_name"
+    nonconformity_reason_expr = "NULL AS nonconformity_reason"
+    if has_line_nonconformity_reason:
+        nonconformity_reason_expr = "poi.nonconformity_reason AS nonconformity_reason"
+    is_nonconforme_expr = "0 AS is_nonconforme"
+    if has_line_is_nonconforme:
+        is_nonconforme_expr = "poi.is_nonconforme AS is_nonconforme"
     line_type_expr = "'standard' AS line_type"
     if has_line_type:
         line_type_expr = "poi.line_type AS line_type"
@@ -9496,6 +9518,8 @@ def _build_purchase_order_detail(
                {unit_expr},
                {beneficiary_expr},
                {beneficiary_name_expr},
+               {nonconformity_reason_expr},
+               {is_nonconforme_expr},
                {line_type_expr},
                {return_expected_expr},
                {return_reason_expr},
@@ -9645,6 +9669,8 @@ def _build_purchase_order_detail(
             size=_row_get(item_row, "size"),
             sku=_row_get(item_row, "sku"),
             unit=_row_get(item_row, "unit"),
+            nonconformity_reason=_row_get(item_row, "nonconformity_reason"),
+            is_nonconforme=bool(_row_get(item_row, "is_nonconforme", 0)),
             beneficiary_employee_id=_row_get(item_row, "beneficiary_employee_id"),
             beneficiary_name=_row_get(item_row, "beneficiary_name"),
             line_type=_row_get(item_row, "line_type", "standard"),
@@ -9732,6 +9758,9 @@ def _build_purchase_order_detail(
     return models.PurchaseOrderDetail(
         id=order_row["id"],
         supplier_id=supplier_id,
+        parent_id=_row_get(order_row, "parent_id"),
+        replacement_for_line_id=_row_get(order_row, "replacement_for_line_id"),
+        kind=_row_get(order_row, "kind", "standard") or "standard",
         supplier_name=order_row["supplier_name"],
         supplier_email=supplier.email if supplier else None,
         supplier_email_resolved=resolved_email,
@@ -11705,6 +11734,201 @@ def request_purchase_order_replacement(
             ok=True,
             nonconformity_id=row["id"],
             status=row["status"],
+        )
+
+
+def request_purchase_order_replacement_order(
+    order_id: int,
+    line_id: int,
+    *,
+    requested_by: str | None,
+) -> models.PurchaseOrderReplacementOrderResponse:
+    ensure_database_ready()
+    normalized_site_key = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        order_row = conn.execute(
+            "SELECT * FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if order_row is None:
+            raise ValueError("Bon de commande introuvable")
+        line_row = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_items
+            WHERE id = ? AND purchase_order_id = ?
+            """,
+            (line_id, order_id),
+        ).fetchone()
+        if line_row is None:
+            raise ValueError("Ligne de commande introuvable")
+        existing_row = conn.execute(
+            """
+            SELECT id, status, supplier_id
+            FROM purchase_orders
+            WHERE parent_id = ? AND replacement_for_line_id = ? AND kind = 'replacement_request'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (order_id, line_id),
+        ).fetchone()
+        if existing_row is not None:
+            can_send = False
+            if existing_row["status"] in {"PENDING", "ORDERED"}:
+                supplier = resolve_supplier_for_order(
+                    conn, normalized_site_key, existing_row["supplier_id"]
+                )
+                if supplier is not None:
+                    try:
+                        require_supplier_email(supplier)
+                        can_send = True
+                    except SupplierResolutionError:
+                        can_send = False
+            return models.PurchaseOrderReplacementOrderResponse(
+                replacement_order_id=existing_row["id"],
+                replacement_order_status=existing_row["status"],
+                can_send_to_supplier=can_send,
+            )
+        receipt_row = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ?
+              AND purchase_order_line_id = ?
+              AND site_key = ?
+              AND conformity_status = 'non_conforme'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (order_id, line_id, normalized_site_key),
+        ).fetchone()
+        if receipt_row is None:
+            raise NonConformeReceiptRequiredError("La réception doit être non conforme.")
+        reason = _row_get(receipt_row, "nonconformity_reason")
+        if not reason:
+            raise ValueError("Motif de non conformité manquant")
+        total_row = conn.execute(
+            """
+            SELECT COALESCE(SUM(received_qty), 0) AS total
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ?
+              AND purchase_order_line_id = ?
+              AND site_key = ?
+              AND conformity_status = 'non_conforme'
+            """,
+            (order_id, line_id, normalized_site_key),
+        ).fetchone()
+        total_nonconforme = int(total_row["total"] or 0)
+        if total_nonconforme <= 0:
+            raise ValueError("Quantité non conforme introuvable")
+        supplier_id = _row_get(order_row, "supplier_id")
+        if supplier_id is None:
+            raise ValueError("Fournisseur obligatoire")
+        note = f"Remplacement suite non-conformité BC #{order_id}"
+        line_note = _row_get(receipt_row, "note")
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO purchase_orders (
+                    supplier_id,
+                    status,
+                    note,
+                    auto_created,
+                    created_at,
+                    parent_id,
+                    replacement_for_line_id,
+                    kind
+                )
+                VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP, ?, ?, 'replacement_request')
+                """,
+                (supplier_id, "PENDING", note, order_id, line_id),
+            )
+            replacement_order_id = cur.lastrowid
+            item_row = conn.execute(
+                "SELECT sku, size FROM items WHERE id = ?",
+                (line_row["item_id"],),
+            ).fetchone()
+            if item_row is None:
+                raise ValueError("Article introuvable")
+            columns = [
+                "purchase_order_id",
+                "item_id",
+                "quantity_ordered",
+                "quantity_received",
+            ]
+            values: list[object] = [replacement_order_id, line_row["item_id"], total_nonconforme, 0]
+            if _table_has_column(conn, "purchase_order_items", "sku"):
+                columns.append("sku")
+                values.append(item_row["sku"])
+            if _table_has_column(conn, "purchase_order_items", "unit"):
+                columns.append("unit")
+                values.append(item_row["size"] if item_row["size"] else None)
+            if _table_has_column(conn, "purchase_order_items", "nonconformity_reason"):
+                columns.append("nonconformity_reason")
+                values.append(reason)
+            if _table_has_column(conn, "purchase_order_items", "is_nonconforme"):
+                columns.append("is_nonconforme")
+                values.append(1)
+            if _table_has_column(conn, "purchase_order_items", "line_type"):
+                columns.append("line_type")
+                values.append("standard")
+            conn.execute(
+                f"INSERT INTO purchase_order_items ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                values,
+            )
+            conn.execute(
+                """
+                INSERT INTO purchase_order_nonconformities (
+                    site_key,
+                    module,
+                    purchase_order_id,
+                    purchase_order_line_id,
+                    receipt_id,
+                    status,
+                    reason,
+                    note,
+                    requested_replacement,
+                    created_by,
+                    created_at,
+                    updated_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(site_key, receipt_id, purchase_order_line_id) DO UPDATE SET
+                    status = excluded.status,
+                    reason = excluded.reason,
+                    note = excluded.note,
+                    requested_replacement = 1,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (
+                    normalized_site_key,
+                    "clothing",
+                    order_id,
+                    line_id,
+                    receipt_row["id"],
+                    "replacement_requested",
+                    reason,
+                    line_note,
+                    requested_by,
+                ),
+            )
+            conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
+        can_send = False
+        if supplier_id is not None:
+            supplier = resolve_supplier_for_order(conn, normalized_site_key, supplier_id)
+            if supplier is not None:
+                try:
+                    require_supplier_email(supplier)
+                    can_send = True
+                except SupplierResolutionError:
+                    can_send = False
+        return models.PurchaseOrderReplacementOrderResponse(
+            replacement_order_id=replacement_order_id,
+            replacement_order_status="PENDING",
+            can_send_to_supplier=can_send,
         )
 
 

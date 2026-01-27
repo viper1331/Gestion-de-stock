@@ -76,6 +76,8 @@ interface PurchaseOrderItem {
   quantity_received: number;
   received_conforme_qty?: number;
   received_non_conforme_qty?: number;
+  nonconformity_reason?: string | null;
+  is_nonconforme?: boolean;
   beneficiary_employee_id?: number | null;
   beneficiary_name?: string | null;
   line_type?: "standard" | "replacement";
@@ -154,6 +156,9 @@ interface PurchaseOrderDetail {
   supplier_email: string | null;
   supplier_missing?: boolean;
   supplier_missing_reason?: string | null;
+  parent_id?: number | null;
+  replacement_for_line_id?: number | null;
+  kind?: "standard" | "replacement_request";
   status: string;
   created_at: string;
   note: string | null;
@@ -204,13 +209,12 @@ interface ReceiveLinePayload {
 interface RequestReplacementPayload {
   orderId: number;
   lineId: number;
-  receiptId: number;
 }
 
 interface PurchaseOrderReplacementResponse {
-  ok: boolean;
-  nonconformity_id: number;
-  status: "open" | "replacement_requested" | "closed";
+  replacement_order_id: number;
+  replacement_order_status: string;
+  can_send_to_supplier: boolean;
 }
 
 interface UpdateOrderPayload {
@@ -539,12 +543,25 @@ export function PurchaseOrdersPanel({
     };
   };
 
+  const resolveOrderStatusLabel = (status: string) => {
+    const match = ORDER_STATUSES.find((option) => option.value === status);
+    return match ? match.label : status;
+  };
+
+  const resolveReplacementStatusLabel = (status: string) => {
+    if (status === "PENDING") {
+      return "À préparer";
+    }
+    return resolveOrderStatusLabel(status);
+  };
+
   const { data: orders = [], isLoading: loadingOrders } = useQuery({
     queryKey: ordersQueryKey,
     queryFn: async () => {
       const response = await api.get<PurchaseOrderDetail[]>(`${purchaseOrdersPath}/`);
       return response.data.map((order) => ({
         ...order,
+        kind: order.kind ?? "standard",
         items: order.items.map((item) => {
           const candidate = item[itemIdField];
           const normalizedId = typeof candidate === "number" ? candidate : item.item_id;
@@ -559,6 +576,28 @@ export function PurchaseOrdersPanel({
       }));
     }
   });
+
+  const replacementOrdersByParent = useMemo(() => {
+    const map = new Map<number, Map<number, PurchaseOrderDetail>>();
+    orders.forEach((order) => {
+      if (order.kind !== "replacement_request" || !order.parent_id) {
+        return;
+      }
+      const lineId = order.replacement_for_line_id;
+      if (!lineId) {
+        return;
+      }
+      const existing = map.get(order.parent_id) ?? new Map<number, PurchaseOrderDetail>();
+      existing.set(lineId, order);
+      map.set(order.parent_id, existing);
+    });
+    return map;
+  }, [orders]);
+
+  const visibleOrders = useMemo(
+    () => orders.filter((order) => order.kind !== "replacement_request"),
+    [orders]
+  );
 
   const { data: items = [] } = useQuery({
     queryKey: ["purchase-order-items-options", purchaseOrdersPath],
@@ -730,13 +769,9 @@ export function PurchaseOrdersPanel({
     AxiosError<ApiErrorResponse>,
     RequestReplacementPayload
   >({
-    mutationFn: async ({ orderId, lineId, receiptId }) => {
+    mutationFn: async ({ orderId, lineId }) => {
       const response = await api.post<PurchaseOrderReplacementResponse>(
-        `${purchaseOrdersPath}/${orderId}/request-replacement`,
-        {
-          line_id: lineId,
-          receipt_id: receiptId
-        }
+        `${purchaseOrdersPath}/${orderId}/nonconformities/${lineId}/replacement-request`
       );
       return response.data;
     },
@@ -1273,7 +1308,7 @@ export function PurchaseOrdersPanel({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
-                {orders.map((order) => {
+                {visibleOrders.map((order) => {
                   const outstanding = order.items
                     .map((line) => {
                       const remaining = line.quantity_ordered - line.quantity_received;
@@ -1305,6 +1340,8 @@ export function PurchaseOrdersPanel({
                   const conformingPendingAssignments = pendingAssignments.filter(
                     (assignment) => assignment.source_receipt?.conformity_status === "conforme"
                   );
+                  const replacementOrdersForLines =
+                    replacementOrdersByParent.get(order.id) ?? new Map<number, PurchaseOrderDetail>();
                   return (
                     <tr key={order.id}>
                       <td className="px-4 py-3 text-slate-300">
@@ -1359,12 +1396,10 @@ export function PurchaseOrdersPanel({
                               latestReceipt?.conformity_status === "non_conforme" ||
                               latestReceipt?.is_non_conforming === true ||
                               latestReceipt?.non_conforming === true;
-                            const replacementRequested = latestReceipt
-                              ? Boolean(latestReceipt?.nonconformity_action) &&
-                                ["replacement", "replacement_requested", "remplacement"].includes(
-                                  String(latestReceipt.nonconformity_action)
-                                )
-                              : false;
+                            const replacementOrder = replacementOrdersForLines.get(line.id);
+                            const replacementRequested =
+                              Boolean(replacementOrder) ||
+                              Boolean(lineNonconformity?.requested_replacement);
                             const receivedConformeQty =
                               line.received_conforme_qty ?? line.quantity_received;
                             const receivedNonConformeQty = line.received_non_conforme_qty ?? 0;
@@ -1424,20 +1459,76 @@ export function PurchaseOrdersPanel({
                                       Motif:{" "}
                                       {latestReceipt?.nonconformity_reason ?? "Non précisé"}
                                     </p>
+                                    <p className="text-[11px] text-rose-100/90">
+                                      Bénéficiaire:{" "}
+                                      {line.beneficiary_employee_id
+                                        ? line.beneficiary_name ??
+                                          resolveCollaboratorName(line.beneficiary_employee_id)
+                                        : "Non renseigné"}
+                                    </p>
+                                    <p className="text-[11px] text-rose-100/90">
+                                      Retour attendu: {line.return_expected ? "Oui" : "Non"}
+                                      {line.return_reason ? ` · ${line.return_reason}` : ""}
+                                    </p>
                                     {replacementRequested ? (
-                                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-emerald-200">
-                                        <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] uppercase text-emerald-200">
-                                          Remplacement demandé
-                                        </span>
-                                        {lineNonconformity?.created_at ? (
-                                          <span>
-                                            {new Date(
-                                              lineNonconformity.created_at
-                                            ).toLocaleString()}
+                                      <div className="space-y-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-2 text-[11px] text-emerald-200">
+                                        <div className="flex flex-wrap items-center gap-2">
+                                          <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] uppercase text-emerald-200">
+                                            Remplacement demandé
                                           </span>
-                                        ) : null}
-                                        {lineNonconformity?.created_by ? (
-                                          <span>par {lineNonconformity.created_by}</span>
+                                          {lineNonconformity?.created_at ? (
+                                            <span>
+                                              {new Date(
+                                                lineNonconformity.created_at
+                                              ).toLocaleString()}
+                                            </span>
+                                          ) : null}
+                                          {lineNonconformity?.created_by ? (
+                                            <span>par {lineNonconformity.created_by}</span>
+                                          ) : null}
+                                        </div>
+                                        {replacementOrder ? (
+                                          <div className="space-y-1 text-[11px] text-emerald-100/90">
+                                            <p>
+                                              Demande de remplacement : BC #{replacementOrder.id}{" "}
+                                              (statut:{" "}
+                                              {resolveReplacementStatusLabel(
+                                                replacementOrder.status
+                                              )}
+                                              )
+                                            </p>
+                                            <p>Motif: {latestReceipt?.nonconformity_reason ?? "—"}</p>
+                                            <div className="flex flex-wrap gap-2">
+                                              <button
+                                                type="button"
+                                                onClick={() => handleDownload(replacementOrder.id)}
+                                                className="rounded border border-emerald-400/60 px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/10"
+                                              >
+                                                Télécharger PDF (demande)
+                                              </button>
+                                              {(() => {
+                                                const canSendReplacement =
+                                                  replacementOrder.status === "PENDING" ||
+                                                  replacementOrder.status === "ORDERED";
+                                                const supplierState =
+                                                  getSupplierSendState(replacementOrder);
+                                                if (!canSendReplacement || !supplierState.canSend) {
+                                                  return null;
+                                                }
+                                                return (
+                                                  <button
+                                                    type="button"
+                                                    onClick={() =>
+                                                      handleOpenSendModal(replacementOrder)
+                                                    }
+                                                    className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-400"
+                                                  >
+                                                    Envoyer la demande de remplacement
+                                                  </button>
+                                                );
+                                              })()}
+                                            </div>
+                                          </div>
                                         ) : null}
                                       </div>
                                     ) : (
@@ -1446,8 +1537,7 @@ export function PurchaseOrdersPanel({
                                         onClick={() =>
                                           requestReplacement.mutate({
                                             orderId: order.id,
-                                            lineId: line.id,
-                                            receiptId: latestReceipt.id
+                                            lineId: line.id
                                           })
                                         }
                                         disabled={requestReplacement.isPending}
@@ -1626,7 +1716,7 @@ export function PurchaseOrdersPanel({
                     </tr>
                   );
                 })}
-                {orders.length === 0 && !loadingOrders ? (
+                {visibleOrders.length === 0 && !loadingOrders ? (
                   <tr>
                     <td className="px-4 py-4 text-sm text-slate-400" colSpan={5}>
                       Aucun bon de commande pour le moment.
