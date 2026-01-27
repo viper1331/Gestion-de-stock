@@ -18,6 +18,7 @@ def _reset_stock_tables() -> None:
     with db.get_stock_connection() as conn:
         conn.execute("DELETE FROM clothing_supplier_returns")
         conn.execute("DELETE FROM pending_clothing_assignments")
+        conn.execute("DELETE FROM purchase_order_nonconformities")
         conn.execute("DELETE FROM purchase_order_receipts")
         conn.execute("DELETE FROM purchase_order_items")
         conn.execute("DELETE FROM purchase_orders")
@@ -247,6 +248,162 @@ def test_receive_non_conforme_creates_receipt_no_stock_in() -> None:
         ).fetchone()
         assert receipt_row is not None
         assert receipt_row["conformity_status"] == "non_conforme"
+
+
+def test_request_replacement_creates_nonconformity() -> None:
+    _reset_stock_tables()
+    _create_admin_user("admin_replacement", "password")
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Pantalon", sku="HAB-011")
+        conn.commit()
+    order = services.create_purchase_order(
+        models.PurchaseOrderCreate(
+            supplier_id=None,
+            status="ORDERED",
+            note=None,
+            items=[models.PurchaseOrderItemInput(item_id=item_id, quantity_ordered=1)],
+        )
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="non_conforme",
+            nonconformity_reason="Déchiré",
+            nonconformity_action="replacement",
+        ),
+        created_by="tester",
+    )
+    with db.get_stock_connection() as conn:
+        receipt_row = conn.execute(
+            "SELECT id, purchase_order_line_id FROM purchase_order_receipts WHERE purchase_order_id = ?",
+            (order.id,),
+        ).fetchone()
+        assert receipt_row is not None
+    headers = login_headers(client, "admin_replacement", "password")
+    response = client.post(
+        f"/purchase-orders/{order.id}/request-replacement",
+        json={"line_id": receipt_row["purchase_order_line_id"], "receipt_id": receipt_row["id"]},
+        headers=headers,
+    )
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["ok"] is True
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT status, requested_replacement
+            FROM purchase_order_nonconformities
+            WHERE id = ?
+            """,
+            (payload["nonconformity_id"],),
+        ).fetchone()
+        assert row is not None
+        assert row["requested_replacement"] == 1
+        assert row["status"] == "replacement_requested"
+
+
+def test_request_replacement_rejects_conforme_receipt() -> None:
+    _reset_stock_tables()
+    _create_admin_user("admin_replacement_conforme", "password")
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Gilet", sku="HAB-012")
+        conn.commit()
+    order = services.create_purchase_order(
+        models.PurchaseOrderCreate(
+            supplier_id=None,
+            status="ORDERED",
+            note=None,
+            items=[models.PurchaseOrderItemInput(item_id=item_id, quantity_ordered=1)],
+        )
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
+    with db.get_stock_connection() as conn:
+        receipt_row = conn.execute(
+            "SELECT id, purchase_order_line_id FROM purchase_order_receipts WHERE purchase_order_id = ?",
+            (order.id,),
+        ).fetchone()
+        assert receipt_row is not None
+    headers = login_headers(client, "admin_replacement_conforme", "password")
+    response = client.post(
+        f"/purchase-orders/{order.id}/request-replacement",
+        json={"line_id": receipt_row["purchase_order_line_id"], "receipt_id": receipt_row["id"]},
+        headers=headers,
+    )
+    assert response.status_code == 409
+    with db.get_stock_connection() as conn:
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM purchase_order_nonconformities"
+        ).fetchone()
+        assert count_row is not None
+        assert count_row["count"] == 0
+
+
+def test_request_replacement_is_idempotent() -> None:
+    _reset_stock_tables()
+    _create_admin_user("admin_replacement_idempotent", "password")
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Pull", sku="HAB-013")
+        conn.commit()
+    order = services.create_purchase_order(
+        models.PurchaseOrderCreate(
+            supplier_id=None,
+            status="ORDERED",
+            note=None,
+            items=[models.PurchaseOrderItemInput(item_id=item_id, quantity_ordered=1)],
+        )
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="non_conforme",
+            nonconformity_reason="Couture défectueuse",
+            nonconformity_action="replacement",
+        ),
+        created_by="tester",
+    )
+    with db.get_stock_connection() as conn:
+        receipt_row = conn.execute(
+            "SELECT id, purchase_order_line_id FROM purchase_order_receipts WHERE purchase_order_id = ?",
+            (order.id,),
+        ).fetchone()
+        assert receipt_row is not None
+    headers = login_headers(client, "admin_replacement_idempotent", "password")
+    payload = {"line_id": receipt_row["purchase_order_line_id"], "receipt_id": receipt_row["id"]}
+    first_response = client.post(
+        f"/purchase-orders/{order.id}/request-replacement",
+        json=payload,
+        headers=headers,
+    )
+    assert first_response.status_code == 200
+    second_response = client.post(
+        f"/purchase-orders/{order.id}/request-replacement",
+        json=payload,
+        headers=headers,
+    )
+    assert second_response.status_code == 200
+    with db.get_stock_connection() as conn:
+        count_row = conn.execute(
+            """
+            SELECT COUNT(*) AS count
+            FROM purchase_order_nonconformities
+            WHERE purchase_order_id = ?
+            """,
+            (order.id,),
+        ).fetchone()
+        assert count_row is not None
+        assert count_row["count"] == 1
 
 
 def test_validate_pending_assigns_new_unassigns_old_and_creates_return_movements_in_order() -> None:
