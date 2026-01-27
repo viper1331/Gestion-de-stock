@@ -1234,6 +1234,12 @@ def _append_note(existing: str | None, note: str) -> str:
     return note
 
 
+def _truncate_note(note: str, max_length: int = 256) -> str:
+    if len(note) <= max_length:
+        return note
+    return f"{note[: max_length - 1].rstrip()}…"
+
+
 def _extract_variant_from_row(row: sqlite3.Row | None, fields: Iterable[str]) -> str | None:
     if row is None:
         return None
@@ -10633,6 +10639,7 @@ def send_purchase_order_to_supplier(
     sent_by_user: models.User,
     *,
     to_email_override: str | None = None,
+    context_note: str | None = None,
 ) -> models.PurchaseOrderSendResponse:
     ensure_database_ready()
     normalized_site_key = sites.normalize_site_key(site_key) or db.DEFAULT_SITE_KEY
@@ -10683,7 +10690,10 @@ def send_purchase_order_to_supplier(
     sent_at = datetime.now(timezone.utc).isoformat()
     site_info = _get_site_info_for_email(normalized_site_key)
     subject, body_text, body_html = notifications.build_purchase_order_email(
-        order, site_info, sent_by_user
+        order,
+        site_info,
+        sent_by_user,
+        context_note=context_note,
     )
     pdf_bytes = generate_purchase_order_pdf(
         order,
@@ -10849,7 +10859,10 @@ def send_remise_purchase_order_to_supplier(
         to_email = _normalize_email(to_email_override)
     site_info = _get_site_info_for_email(normalized_site_key)
     subject, body_text, body_html = notifications.build_purchase_order_email(
-        order, site_info, sent_by_user
+        order,
+        site_info,
+        sent_by_user,
+        context_note=None,
     )
     subject = f"Bon de commande REMISE - {site_info.display_name or site_info.site_key} - #{order.id}"
     pdf_bytes = generate_remise_purchase_order_pdf(
@@ -11154,7 +11167,10 @@ def send_pharmacy_purchase_order_to_supplier(
     supplier_email = supplier.email if supplier else supplier_email
     site_info = _get_site_info_for_email(normalized_site_key)
     subject, body_text, body_html = notifications.build_purchase_order_email(
-        order, site_info, sent_by_user
+        order,
+        site_info,
+        sent_by_user,
+        context_note=None,
     )
     pdf_bytes = generate_pharmacy_purchase_order_pdf(
         order,
@@ -11869,6 +11885,9 @@ def request_purchase_order_replacement_order(
             if _table_has_column(conn, "purchase_order_items", "is_nonconforme"):
                 columns.append("is_nonconforme")
                 values.append(1)
+            if _table_has_column(conn, "purchase_order_items", "beneficiary_employee_id"):
+                columns.append("beneficiary_employee_id")
+                values.append(_row_get(line_row, "beneficiary_employee_id"))
             if _table_has_column(conn, "purchase_order_items", "line_type"):
                 columns.append("line_type")
                 values.append("standard")
@@ -11930,6 +11949,129 @@ def request_purchase_order_replacement_order(
             replacement_order_status="PENDING",
             can_send_to_supplier=can_send,
         )
+
+
+def finalize_purchase_order_nonconformity(
+    order_id: int,
+    *,
+    finalized_by: str | None,
+) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    normalized_site_key = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        order_row = conn.execute(
+            "SELECT id, note FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if order_row is None:
+            raise ValueError("Bon de commande introuvable")
+        nonconforming_rows = conn.execute(
+            """
+            SELECT purchase_order_line_id,
+                   COALESCE(SUM(received_qty), 0) AS total_non_conforme
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ?
+              AND site_key = ?
+              AND conformity_status = 'non_conforme'
+            GROUP BY purchase_order_line_id
+            """,
+            (order_id, normalized_site_key),
+        ).fetchall()
+        if not nonconforming_rows:
+            raise ValueError("Aucune ligne non conforme à finaliser")
+        replacement_rows = conn.execute(
+            """
+            SELECT id, last_sent_at
+            FROM purchase_orders
+            WHERE parent_id = ? AND kind = 'replacement_request'
+            ORDER BY created_at DESC, id DESC
+            """,
+            (order_id,),
+        ).fetchall()
+        if not replacement_rows:
+            raise ValueError("Aucune demande de remplacement trouvée")
+        sent_replacements = [
+            row for row in replacement_rows if _row_get(row, "last_sent_at")
+        ]
+        if not sent_replacements:
+            raise ValueError("La demande de remplacement doit être envoyée avant de finaliser")
+        selected_replacement = max(
+            sent_replacements,
+            key=lambda row: _row_get(row, "last_sent_at") or "",
+        )
+        order_note = _row_get(order_row, "note")
+        final_note = _truncate_note(
+            _append_note(
+                order_note,
+                f"Finalisé conforme suite remplacement BC #{selected_replacement['id']}",
+            )
+        )
+        receipt_targets: list[tuple[int, int]] = []
+        for row in nonconforming_rows:
+            line_id = row["purchase_order_line_id"]
+            total_non_conforme = int(row["total_non_conforme"] or 0)
+            if total_non_conforme <= 0:
+                continue
+            line_row = conn.execute(
+                """
+                SELECT id, quantity_ordered, quantity_received
+                FROM purchase_order_items
+                WHERE id = ? AND purchase_order_id = ?
+                """,
+                (line_id, order_id),
+            ).fetchone()
+            if line_row is None:
+                raise ValueError("Ligne de commande introuvable")
+            remaining = line_row["quantity_ordered"] - line_row["quantity_received"]
+            if remaining <= 0:
+                continue
+            qty_to_receive = min(remaining, total_non_conforme)
+            if qty_to_receive > 0:
+                receipt_targets.append((line_id, qty_to_receive))
+        if not receipt_targets:
+            raise ValueError("Aucune quantité conforme à recevoir")
+    for line_id, qty in receipt_targets:
+        receive_purchase_order_line(
+            order_id,
+            models.PurchaseOrderReceiveLinePayload(
+                purchase_order_line_id=line_id,
+                received_qty=qty,
+                conformity_status="conforme",
+            ),
+            created_by=finalized_by,
+        )
+    with db.get_stock_connection() as conn:
+        if _table_exists(conn, "purchase_order_nonconformities"):
+            conn.execute(
+                """
+                UPDATE purchase_order_nonconformities
+                SET status = 'closed',
+                    updated_at = CURRENT_TIMESTAMP
+                WHERE purchase_order_id = ? AND site_key = ? AND status != 'closed'
+                """,
+                (order_id, normalized_site_key),
+            )
+        conn.execute(
+            "UPDATE purchase_orders SET note = ? WHERE id = ?",
+            (final_note, order_id),
+        )
+        pending_rows = conn.execute(
+            """
+            SELECT id, purchase_order_line_id
+            FROM pending_clothing_assignments
+            WHERE purchase_order_id = ? AND site_key = ? AND status = 'pending'
+            """,
+            (order_id, normalized_site_key),
+        ).fetchall()
+    target_line_ids = {line_id for line_id, _ in receipt_targets}
+    for pending in pending_rows:
+        if pending["purchase_order_line_id"] in target_line_ids:
+            validate_pending_assignment(
+                order_id,
+                pending["id"],
+                validated_by=finalized_by,
+            )
+    return get_purchase_order(order_id)
 
 
 def validate_pending_assignment(

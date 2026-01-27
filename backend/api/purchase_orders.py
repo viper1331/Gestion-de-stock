@@ -119,6 +119,7 @@ async def send_to_supplier(
             order_id,
             user,
             to_email_override=payload.to_email_override if payload else None,
+            context_note=payload.context_note if payload else None,
         )
     except services.SupplierResolutionError as exc:
         status_code = 409 if exc.code == "SUPPLIER_NOT_FOUND" else 400
@@ -270,6 +271,30 @@ async def validate_pending_assignment(
             order_id,
             pending_id,
             validated_by=user.email or user.username,
+        )
+    except services.PendingAssignmentConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post(
+    "/{order_id}/finalize-nonconformity",
+    response_model=models.PurchaseOrderDetail,
+)
+async def finalize_nonconformity(
+    order_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.PurchaseOrderDetail:
+    _require_permission(user, action="edit")
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    try:
+        return services.finalize_purchase_order_nonconformity(
+            order_id,
+            finalized_by=user.email or user.username,
         )
     except services.PendingAssignmentConflictError as exc:
         raise HTTPException(status_code=409, detail=str(exc)) from exc
