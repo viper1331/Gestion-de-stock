@@ -694,6 +694,11 @@ def _normalize_purchase_order_status(status: str | None) -> str:
     return candidate
 
 
+def _assert_purchase_order_archivable(status: str) -> None:
+    if status != "RECEIVED":
+        raise ValueError("Seuls les bons de commande reçus peuvent être archivés")
+
+
 def _get_purchase_suggestions_safety_buffer() -> int:
     config = system_config.get_config()
     raw = config.extra.get("purchase_suggestions_safety_buffer", 0)
@@ -3634,6 +3639,12 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_orders ADD COLUMN replacement_for_line_id INTEGER")
         if "kind" not in po_columns:
             execute("ALTER TABLE purchase_orders ADD COLUMN kind TEXT NOT NULL DEFAULT 'standard'")
+        if "is_archived" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+        if "archived_at" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN archived_at TIMESTAMP")
+        if "archived_by" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN archived_by INTEGER")
 
         poi_info = execute("PRAGMA table_info(purchase_order_items)").fetchall()
         poi_columns = {row["name"] for row in poi_info}
@@ -3795,6 +3806,14 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute(
                 "ALTER TABLE pharmacy_purchase_orders ADD COLUMN auto_created INTEGER NOT NULL DEFAULT 0"
             )
+        if "is_archived" not in pharmacy_po_columns:
+            execute(
+                "ALTER TABLE pharmacy_purchase_orders ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0"
+            )
+        if "archived_at" not in pharmacy_po_columns:
+            execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN archived_at TIMESTAMP")
+        if "archived_by" not in pharmacy_po_columns:
+            execute("ALTER TABLE pharmacy_purchase_orders ADD COLUMN archived_by INTEGER")
 
         pharmacy_poi_info = execute("PRAGMA table_info(pharmacy_purchase_order_items)").fetchall()
         pharmacy_poi_columns = {row["name"] for row in pharmacy_poi_info}
@@ -4089,7 +4108,10 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 status TEXT NOT NULL DEFAULT 'PENDING',
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 note TEXT,
-                auto_created INTEGER NOT NULL DEFAULT 0
+                auto_created INTEGER NOT NULL DEFAULT 0,
+                is_archived INTEGER NOT NULL DEFAULT 0,
+                archived_at TIMESTAMP,
+                archived_by INTEGER
             );
             CREATE TABLE IF NOT EXISTS remise_purchase_order_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -4102,6 +4124,15 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             );
             """
         )
+        remise_po_info = execute("PRAGMA table_info(remise_purchase_orders)").fetchall()
+        remise_po_columns = {row["name"] for row in remise_po_info}
+        if "is_archived" not in remise_po_columns:
+            execute("ALTER TABLE remise_purchase_orders ADD COLUMN is_archived INTEGER NOT NULL DEFAULT 0")
+        if "archived_at" not in remise_po_columns:
+            execute("ALTER TABLE remise_purchase_orders ADD COLUMN archived_at TIMESTAMP")
+        if "archived_by" not in remise_po_columns:
+            execute("ALTER TABLE remise_purchase_orders ADD COLUMN archived_by INTEGER")
+
         remise_poi_info = execute("PRAGMA table_info(remise_purchase_order_items)").fetchall()
         remise_poi_columns = {row["name"] for row in remise_poi_info}
         if "sku" not in remise_poi_columns:
@@ -9790,6 +9821,9 @@ def _build_purchase_order_detail(
         last_sent_at=order_row["last_sent_at"],
         last_sent_to=order_row["last_sent_to"],
         last_sent_by=order_row["last_sent_by"],
+        is_archived=bool(_row_get(order_row, "is_archived", 0)),
+        archived_at=_row_get(order_row, "archived_at"),
+        archived_by=_row_get(order_row, "archived_by"),
         items=items,
         receipts=receipts,
         nonconformities=nonconformities,
@@ -9798,16 +9832,28 @@ def _build_purchase_order_detail(
     )
 
 
-def list_purchase_orders() -> list[models.PurchaseOrderDetail]:
+def list_purchase_orders(
+    *,
+    include_archived: bool = False,
+    archived_only: bool = False,
+) -> list[models.PurchaseOrderDetail]:
     ensure_database_ready()
+    where_clause = ""
+    params: tuple[object, ...] = ()
+    if archived_only:
+        where_clause = "WHERE COALESCE(po.is_archived, 0) = 1"
+    elif not include_archived:
+        where_clause = "WHERE COALESCE(po.is_archived, 0) = 0"
     with db.get_stock_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
             FROM purchase_orders AS po
             LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            {where_clause}
             ORDER BY po.created_at DESC, po.id DESC
-            """
+            """,
+            params,
         )
         rows = cur.fetchall()
         return [
@@ -9831,6 +9877,59 @@ def get_purchase_order(order_id: int) -> models.PurchaseOrderDetail:
         if row is None:
             raise ValueError("Bon de commande introuvable")
         return _build_purchase_order_detail(conn, row, site_key=db.get_current_site_key())
+
+
+def archive_purchase_order(
+    order_id: int,
+    *,
+    archived_by: int | None = None,
+) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT status, is_archived FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        if _row_get(row, "is_archived"):
+            return get_purchase_order(order_id)
+        _assert_purchase_order_archivable(row["status"])
+        conn.execute(
+            """
+            UPDATE purchase_orders
+            SET is_archived = 1,
+                archived_at = CURRENT_TIMESTAMP,
+                archived_by = ?
+            WHERE id = ?
+            """,
+            (archived_by, order_id),
+        )
+    return get_purchase_order(order_id)
+
+
+def unarchive_purchase_order(
+    order_id: int,
+) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        conn.execute(
+            """
+            UPDATE purchase_orders
+            SET is_archived = 0,
+                archived_at = NULL,
+                archived_by = NULL
+            WHERE id = ?
+            """,
+            (order_id,),
+        )
+    return get_purchase_order(order_id)
 
 
 def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.PurchaseOrderDetail:
@@ -12642,20 +12741,35 @@ def _build_remise_purchase_order_detail(
         created_at=order_row["created_at"],
         note=order_row["note"],
         auto_created=bool(order_row["auto_created"]),
+        is_archived=bool(_row_get(order_row, "is_archived", 0)),
+        archived_at=_row_get(order_row, "archived_at"),
+        archived_by=_row_get(order_row, "archived_by"),
         items=items,
     )
 
 
-def list_remise_purchase_orders() -> list[models.RemisePurchaseOrderDetail]:
+def list_remise_purchase_orders(
+    *,
+    include_archived: bool = False,
+    archived_only: bool = False,
+) -> list[models.RemisePurchaseOrderDetail]:
     ensure_database_ready()
+    where_clause = ""
+    params: tuple[object, ...] = ()
+    if archived_only:
+        where_clause = "WHERE COALESCE(po.is_archived, 0) = 1"
+    elif not include_archived:
+        where_clause = "WHERE COALESCE(po.is_archived, 0) = 0"
     with db.get_stock_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             SELECT po.*, s.name AS supplier_name
             FROM remise_purchase_orders AS po
             LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            {where_clause}
             ORDER BY po.created_at DESC, po.id DESC
-            """
+            """,
+            params,
         )
         rows = cur.fetchall()
         supplier_ids = {row["supplier_id"] for row in rows if row["supplier_id"] is not None}
@@ -12733,6 +12847,59 @@ def get_remise_purchase_order(order_id: int) -> models.RemisePurchaseOrderDetail
             site_key=db.get_current_site_key(),
             suppliers_map=suppliers_map,
         )
+
+
+def archive_remise_purchase_order(
+    order_id: int,
+    *,
+    archived_by: int | None = None,
+) -> models.RemisePurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT status, is_archived FROM remise_purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        if _row_get(row, "is_archived"):
+            return get_remise_purchase_order(order_id)
+        _assert_purchase_order_archivable(row["status"])
+        conn.execute(
+            """
+            UPDATE remise_purchase_orders
+            SET is_archived = 1,
+                archived_at = CURRENT_TIMESTAMP,
+                archived_by = ?
+            WHERE id = ?
+            """,
+            (archived_by, order_id),
+        )
+    return get_remise_purchase_order(order_id)
+
+
+def unarchive_remise_purchase_order(
+    order_id: int,
+) -> models.RemisePurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM remise_purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande introuvable")
+        conn.execute(
+            """
+            UPDATE remise_purchase_orders
+            SET is_archived = 0,
+                archived_at = NULL,
+                archived_by = NULL
+            WHERE id = ?
+            """,
+            (order_id,),
+        )
+    return get_remise_purchase_order(order_id)
 
 
 def create_remise_purchase_order(
@@ -15150,20 +15317,35 @@ def _build_pharmacy_purchase_order_detail(
         created_at=order_row["created_at"],
         note=order_row["note"],
         auto_created=bool(_row_get(order_row, "auto_created", 0)),
+        is_archived=bool(_row_get(order_row, "is_archived", 0)),
+        archived_at=_row_get(order_row, "archived_at"),
+        archived_by=_row_get(order_row, "archived_by"),
         items=items,
     )
 
 
-def list_pharmacy_purchase_orders() -> list[models.PharmacyPurchaseOrderDetail]:
+def list_pharmacy_purchase_orders(
+    *,
+    include_archived: bool = False,
+    archived_only: bool = False,
+) -> list[models.PharmacyPurchaseOrderDetail]:
     ensure_database_ready()
+    where_clause = ""
+    params: tuple[object, ...] = ()
+    if archived_only:
+        where_clause = "WHERE COALESCE(po.is_archived, 0) = 1"
+    elif not include_archived:
+        where_clause = "WHERE COALESCE(po.is_archived, 0) = 0"
     with db.get_stock_connection() as conn:
         cur = conn.execute(
-            """
+            f"""
             SELECT po.*, s.name AS supplier_name, s.email AS supplier_email
             FROM pharmacy_purchase_orders AS po
             LEFT JOIN suppliers AS s ON s.id = po.supplier_id
+            {where_clause}
             ORDER BY po.created_at DESC, po.id DESC
-            """
+            """,
+            params,
         )
         rows = cur.fetchall()
         return [
@@ -15187,6 +15369,59 @@ def get_pharmacy_purchase_order(order_id: int) -> models.PharmacyPurchaseOrderDe
         if row is None:
             raise ValueError("Bon de commande pharmacie introuvable")
         return _build_pharmacy_purchase_order_detail(conn, row, site_key=db.get_current_site_key())
+
+
+def archive_pharmacy_purchase_order(
+    order_id: int,
+    *,
+    archived_by: int | None = None,
+) -> models.PharmacyPurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT status, is_archived FROM pharmacy_purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande pharmacie introuvable")
+        if _row_get(row, "is_archived"):
+            return get_pharmacy_purchase_order(order_id)
+        _assert_purchase_order_archivable(row["status"])
+        conn.execute(
+            """
+            UPDATE pharmacy_purchase_orders
+            SET is_archived = 1,
+                archived_at = CURRENT_TIMESTAMP,
+                archived_by = ?
+            WHERE id = ?
+            """,
+            (archived_by, order_id),
+        )
+    return get_pharmacy_purchase_order(order_id)
+
+
+def unarchive_pharmacy_purchase_order(
+    order_id: int,
+) -> models.PharmacyPurchaseOrderDetail:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        row = conn.execute(
+            "SELECT 1 FROM pharmacy_purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Bon de commande pharmacie introuvable")
+        conn.execute(
+            """
+            UPDATE pharmacy_purchase_orders
+            SET is_archived = 0,
+                archived_at = NULL,
+                archived_by = NULL
+            WHERE id = ?
+            """,
+            (order_id,),
+        )
+    return get_pharmacy_purchase_order(order_id)
 
 
 def create_pharmacy_purchase_order(

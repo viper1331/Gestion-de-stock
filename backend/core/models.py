@@ -1062,6 +1062,9 @@ class PurchaseOrder(BaseModel):
     last_sent_at: datetime | None = None
     last_sent_to: str | None = None
     last_sent_by: str | None = None
+    is_archived: bool = False
+    archived_at: datetime | None = None
+    archived_by: int | None = None
 
 
 class PurchaseOrderItem(BaseModel):
@@ -1354,6 +1357,9 @@ class RemisePurchaseOrder(BaseModel):
     created_at: datetime
     note: str | None = None
     auto_created: bool = False
+    is_archived: bool = False
+    archived_at: datetime | None = None
+    archived_by: int | None = None
 
 
 class RemisePurchaseOrderItem(BaseModel):
@@ -1748,6 +1754,9 @@ class PharmacyPurchaseOrder(BaseModel):
     created_at: datetime
     note: str | None = None
     auto_created: bool = False
+    is_archived: bool = False
+    archived_at: datetime | None = None
+    archived_by: int | None = None
 
 
 class PharmacyPurchaseOrderDetail(PharmacyPurchaseOrder):

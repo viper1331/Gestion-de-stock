@@ -907,7 +907,10 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     auto_created INTEGER NOT NULL DEFAULT 0,
                     last_sent_at TEXT,
                     last_sent_to TEXT,
-                    last_sent_by TEXT
+                    last_sent_by TEXT,
+                    is_archived INTEGER NOT NULL DEFAULT 0,
+                    archived_at TIMESTAMP,
+                    archived_by INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS purchase_order_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -1127,7 +1130,10 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     status TEXT NOT NULL DEFAULT 'PENDING',
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     note TEXT,
-                    auto_created INTEGER NOT NULL DEFAULT 0
+                    auto_created INTEGER NOT NULL DEFAULT 0,
+                    is_archived INTEGER NOT NULL DEFAULT 0,
+                    archived_at TIMESTAMP,
+                    archived_by INTEGER
                 );
                 CREATE TABLE IF NOT EXISTS pharmacy_purchase_order_items (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,

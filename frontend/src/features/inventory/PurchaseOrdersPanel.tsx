@@ -169,6 +169,9 @@ interface PurchaseOrderDetail {
   last_sent_at: string | null;
   last_sent_to: string | null;
   last_sent_by: string | null;
+  is_archived?: boolean;
+  archived_at?: string | null;
+  archived_by?: number | null;
   items: PurchaseOrderItem[];
   receipts?: PurchaseOrderReceipt[];
   nonconformities?: PurchaseOrderNonconformity[];
@@ -358,6 +361,8 @@ export function PurchaseOrdersPanel({
   const [receiveModalOrder, setReceiveModalOrder] = useState<PurchaseOrderDetail | null>(null);
   const [finalizeModalData, setFinalizeModalData] =
     useState<FinalizeNonconformityModalData | null>(null);
+  const [archiveModalOrder, setArchiveModalOrder] = useState<PurchaseOrderDetail | null>(null);
+  const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">("active");
   const [receiveQuantities, setReceiveQuantities] = useState<Record<number, number>>({});
   const [receiveFormError, setReceiveFormError] = useState<string | null>(null);
   const [receiveDetails, setReceiveDetails] = useState<
@@ -383,6 +388,15 @@ export function PurchaseOrdersPanel({
   const createFormId = `purchase-order-create-${itemIdField}`;
   const canRefresh =
     user?.role === "admin" || modulePermissions.canAccess(moduleKey, "edit");
+  const showArchived = archiveFilter === "archived";
+  const ordersCacheKey = useMemo(
+    () => (Array.isArray(ordersQueryKey) ? ordersQueryKey : [ordersQueryKey]),
+    [ordersQueryKey]
+  );
+  const resolvedOrdersQueryKey = useMemo(
+    () => [...ordersCacheKey, showArchived ? "archived" : "active"],
+    [ordersCacheKey, showArchived]
+  );
 
   useEffect(() => {
     setReplacementAccess(enableReplacementFlow);
@@ -579,9 +593,11 @@ export function PurchaseOrdersPanel({
   };
 
   const { data: orders = [], isLoading: loadingOrders } = useQuery({
-    queryKey: ordersQueryKey,
+    queryKey: resolvedOrdersQueryKey,
     queryFn: async () => {
-      const response = await api.get<PurchaseOrderDetail[]>(`${purchaseOrdersPath}/`);
+      const response = await api.get<PurchaseOrderDetail[]>(`${purchaseOrdersPath}/`, {
+        params: showArchived ? { include_archived: true } : undefined
+      });
       return response.data.map((order) => ({
         ...order,
         kind: order.kind ?? "standard",
@@ -618,8 +634,13 @@ export function PurchaseOrdersPanel({
   }, [orders]);
 
   const visibleOrders = useMemo(
-    () => orders.filter((order) => order.kind !== "replacement_request"),
-    [orders]
+    () =>
+      orders.filter(
+        (order) =>
+          order.kind !== "replacement_request" &&
+          (showArchived ? order.is_archived : !order.is_archived)
+      ),
+    [orders, showArchived]
   );
 
   const { data: items = [] } = useQuery({
@@ -724,7 +745,7 @@ export function PurchaseOrdersPanel({
       setDraftSupplier("");
       setDraftStatus("ORDERED");
       setDraftNote("");
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
     onError: () => setError("Impossible de créer le bon de commande."),
@@ -739,7 +760,7 @@ export function PurchaseOrdersPanel({
     },
     onSuccess: async (_, variables) => {
       setMessage(variables.successMessage ?? "Bon de commande mis à jour.");
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       if (variables.status === "RECEIVED") {
         await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
       }
@@ -759,7 +780,7 @@ export function PurchaseOrdersPanel({
     },
     onSuccess: async () => {
       setMessage("Réception enregistrée.");
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
     onError: () => setError("Impossible d'enregistrer la réception."),
@@ -778,7 +799,7 @@ export function PurchaseOrdersPanel({
     },
     onSuccess: async () => {
       setMessage("Réception enregistrée.");
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
     onError: () => setError("Impossible d'enregistrer la réception."),
@@ -800,7 +821,7 @@ export function PurchaseOrdersPanel({
     },
     onSuccess: async () => {
       setMessage("Demande de remplacement créée.");
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
     },
     onError: (mutationError) => {
       const detail = mutationError.response?.data?.detail;
@@ -825,7 +846,7 @@ export function PurchaseOrdersPanel({
     onSuccess: async () => {
       setMessage("Attribution validée.");
       setPendingValidationError(null);
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
       await queryClient.invalidateQueries({ queryKey: ["clothing-dotations-assignees"] });
       await queryClient.invalidateQueries({ queryKey: ["clothing-assigned-items"] });
@@ -866,7 +887,7 @@ export function PurchaseOrdersPanel({
       setMessage("Email envoyé au fournisseur.");
       setOverrideEmail("");
       setSendModalOrder(null);
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({
         queryKey: ["purchase-order-email-log", order.id]
       });
@@ -892,7 +913,7 @@ export function PurchaseOrdersPanel({
     },
     onSuccess: async (_, { order }) => {
       setMessage("Demande de remplacement envoyée.");
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({
         queryKey: ["purchase-order-email-log", order.id]
       });
@@ -920,7 +941,7 @@ export function PurchaseOrdersPanel({
     onSuccess: async () => {
       setMessage("Non-conformité finalisée.");
       setFinalizeModalData(null);
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
       await queryClient.invalidateQueries({ queryKey: ["clothing-dotations-assignees"] });
       await queryClient.invalidateQueries({ queryKey: ["clothing-assigned-items"] });
@@ -928,6 +949,47 @@ export function PurchaseOrdersPanel({
     onError: (mutationError) => {
       const detail = mutationError.response?.data?.detail;
       setError(detail ?? "Impossible de finaliser la non-conformité.");
+    },
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const archiveOrder = useMutation<PurchaseOrderDetail, AxiosError<ApiErrorResponse>, number>({
+    mutationFn: async (orderId) => {
+      const response = await api.post<PurchaseOrderDetail>(
+        `${purchaseOrdersPath}/${orderId}/archive`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Bon de commande archivé.");
+      setArchiveModalOrder(null);
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible d'archiver le bon de commande.");
+    },
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const unarchiveOrder = useMutation<PurchaseOrderDetail, AxiosError<ApiErrorResponse>, number>({
+    mutationFn: async (orderId) => {
+      const response = await api.post<PurchaseOrderDetail>(
+        `${purchaseOrdersPath}/${orderId}/unarchive`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Bon de commande restauré.");
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible de restaurer le bon de commande.");
     },
     onSettled: () => {
       window.setTimeout(() => setMessage(null), 4000);
@@ -943,7 +1005,7 @@ export function PurchaseOrdersPanel({
     },
     onSuccess: async () => {
       setMessage("Bon de commande supprimé.");
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
     },
     onError: (mutationError) => {
       const detail = mutationError.response?.data?.detail;
@@ -977,7 +1039,7 @@ export function PurchaseOrdersPanel({
           : null;
       setMessage("Bons de commande mis à jour.");
       setRefreshSummary(summary);
-      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       window.setTimeout(() => {
         setMessage(null);
         setRefreshSummary(null);
@@ -1337,6 +1399,33 @@ export function PurchaseOrdersPanel({
     deleteOrder.mutate(order);
   };
 
+  const handleOpenArchiveModal = (order: PurchaseOrderDetail) => {
+    setError(null);
+    setArchiveModalOrder(order);
+  };
+
+  const handleCloseArchiveModal = () => {
+    setArchiveModalOrder(null);
+  };
+
+  const handleConfirmArchive = () => {
+    if (!archiveModalOrder) {
+      return;
+    }
+    archiveOrder.mutate(archiveModalOrder.id);
+  };
+
+  const handleUnarchiveOrder = (order: PurchaseOrderDetail) => {
+    if (
+      !window.confirm(
+        `Désarchiver le bon de commande #${order.id} ? Il réapparaîtra dans la liste active.`
+      )
+    ) {
+      return;
+    }
+    unarchiveOrder.mutate(order.id);
+  };
+
   return (
     <section className="space-y-4">
       <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -1377,6 +1466,30 @@ export function PurchaseOrdersPanel({
 
       <div className="grid gap-6 lg:grid-cols-2">
         <div className="space-y-4">
+          <div className="flex w-fit items-center rounded-full border border-slate-800 bg-slate-900/60 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setArchiveFilter("active")}
+              className={`rounded-full px-3 py-1 font-semibold transition ${
+                archiveFilter === "active"
+                  ? "bg-indigo-500 text-white"
+                  : "text-slate-300 hover:text-white"
+              }`}
+            >
+              Actifs
+            </button>
+            <button
+              type="button"
+              onClick={() => setArchiveFilter("archived")}
+              className={`rounded-full px-3 py-1 font-semibold transition ${
+                archiveFilter === "archived"
+                  ? "bg-indigo-500 text-white"
+                  : "text-slate-300 hover:text-white"
+              }`}
+            >
+              Archivés
+            </button>
+          </div>
           <div className="overflow-hidden rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
@@ -1390,6 +1503,8 @@ export function PurchaseOrdersPanel({
               </thead>
               <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
                 {visibleOrders.map((order) => {
+                  const isArchived = Boolean(order.is_archived);
+                  const isReadOnly = isArchived;
                   const outstanding = order.items
                     .map((line) => {
                       const remaining = line.quantity_ordered - line.quantity_received;
@@ -1402,7 +1517,7 @@ export function PurchaseOrdersPanel({
                       };
                     })
                     .filter((line): line is { line_id: number; qty: number } => line !== null);
-                  const canReceive = outstanding.length > 0;
+                  const canReceive = outstanding.length > 0 && !isReadOnly;
                   const receiptsByLine = new Map<number, PurchaseOrderReceipt[]>();
                   (order.receipts ?? []).forEach((receipt) => {
                     const existing = receiptsByLine.get(receipt.purchase_order_line_id) ?? [];
@@ -1478,24 +1593,34 @@ export function PurchaseOrdersPanel({
                         </div>
                       </td>
                       <td className="px-4 py-3 text-slate-200">
-                        <select
-                          value={order.status}
-                          onChange={(event) => {
-                            setError(null);
-                            updateOrder.mutate({
-                              orderId: order.id,
-                              status: event.target.value,
-                              successMessage: "Statut mis à jour."
-                            });
-                          }}
-                          className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-                        >
-                          {ORDER_STATUSES.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
+                        {isArchived ? (
+                          <div className="flex flex-col gap-2 text-xs">
+                            <span>{resolveOrderStatusLabel(order.status)}</span>
+                            <span className="w-fit rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-200">
+                              Archivé
+                            </span>
+                          </div>
+                        ) : (
+                          <select
+                            value={order.status}
+                            onChange={(event) => {
+                              setError(null);
+                              updateOrder.mutate({
+                                orderId: order.id,
+                                status: event.target.value,
+                                successMessage: "Statut mis à jour."
+                              });
+                            }}
+                            className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                            disabled={!canManageOrders}
+                          >
+                            {ORDER_STATUSES.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-slate-200">
                         <ul className="space-y-1 text-xs">
@@ -1631,7 +1756,8 @@ export function PurchaseOrdersPanel({
                                             if (
                                               !canManageOrders ||
                                               !canSendReplacement ||
-                                              !supplierState.canSend
+                                              !supplierState.canSend ||
+                                              isReadOnly
                                             ) {
                                               return null;
                                             }
@@ -1659,7 +1785,7 @@ export function PurchaseOrdersPanel({
                                       </div>
                                         ) : null}
                                       </div>
-                                    ) : (
+                                    ) : !isReadOnly ? (
                                       <button
                                         type="button"
                                         onClick={() =>
@@ -1673,7 +1799,7 @@ export function PurchaseOrdersPanel({
                                       >
                                         Créer demande de remplacement
                                       </button>
-                                    )}
+                                    ) : null}
                                   </div>
                                 ) : null}
                               </li>
@@ -1733,7 +1859,11 @@ export function PurchaseOrdersPanel({
                                           pendingId: assignment.id
                                         })
                                       }
-                                      disabled={validatePendingAssignment.isPending || isBlocked}
+                                      disabled={
+                                        validatePendingAssignment.isPending ||
+                                        isBlocked ||
+                                        isReadOnly
+                                      }
                                       title={
                                         isBlocked
                                           ? "Réception non conforme : attribution bloquée"
@@ -1764,119 +1894,145 @@ export function PurchaseOrdersPanel({
                         <div className="flex flex-col gap-2">
                           <button
                             type="button"
-                            onClick={() => {
-                              if (
-                                canManageOrders &&
-                                canFinalizeNonconformity &&
-                                sentReplacementOrders[0]
-                              ) {
-                                setFinalizeModalData({
-                                  order,
-                                  replacementOrder: sentReplacementOrders[0],
-                                  lines: nonconformingLineSummaries
-                                });
-                                return;
-                              }
-                              if (enableReplacementFlow) {
-                                receiveOrderLines.mutate({
-                                  orderId: order.id,
-                                  lines: outstanding.map((line) => ({
-                                    purchase_order_line_id: line.line_id,
-                                    received_qty: line.qty,
-                                    conformity_status: "conforme",
-                                    nonconformity_reason: null,
-                                    note: null
-                                  }))
-                                });
-                              } else {
-                                receiveOrder.mutate({ orderId: order.id, lines: outstanding });
-                              }
-                            }}
-                            disabled={!canReceive}
-                            className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
-                            title={
-                              canReceive
-                                ? "Enregistrer la réception des quantités restantes"
-                                : "Toutes les quantités ont été réceptionnées"
-                            }
-                          >
-                            Réceptionner tout
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenReceiveModal(order)}
-                            disabled={!canReceive}
-                            className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            Réception partielle
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleEditOrder(order)}
-                            className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
-                          >
-                            Modifier
-                          </button>
-                          <button
-                            type="button"
                             onClick={() => handleDownload(order.id)}
                             disabled={downloadingId === order.id}
                             className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
-                          {canManageOrders && hasNonConformingLatestReceipt && replacementToSend
-                            ? (() => {
-                                const supplierState = getSupplierSendState(replacementToSend);
-                                if (!supplierState.canSend) {
-                                  return null;
+                          {isArchived ? (
+                            canManageOrders ? (
+                              <button
+                                type="button"
+                                onClick={() => handleUnarchiveOrder(order)}
+                                disabled={unarchiveOrder.isPending}
+                                className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Désarchiver
+                              </button>
+                            ) : null
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  if (
+                                    canManageOrders &&
+                                    canFinalizeNonconformity &&
+                                    sentReplacementOrders[0]
+                                  ) {
+                                    setFinalizeModalData({
+                                      order,
+                                      replacementOrder: sentReplacementOrders[0],
+                                      lines: nonconformingLineSummaries
+                                    });
+                                    return;
+                                  }
+                                  if (enableReplacementFlow) {
+                                    receiveOrderLines.mutate({
+                                      orderId: order.id,
+                                      lines: outstanding.map((line) => ({
+                                        purchase_order_line_id: line.line_id,
+                                        received_qty: line.qty,
+                                        conformity_status: "conforme",
+                                        nonconformity_reason: null,
+                                        note: null
+                                      }))
+                                    });
+                                  } else {
+                                    receiveOrder.mutate({ orderId: order.id, lines: outstanding });
+                                  }
+                                }}
+                                disabled={!canReceive}
+                                className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                title={
+                                  canReceive
+                                    ? "Enregistrer la réception des quantités restantes"
+                                    : "Toutes les quantités ont été réceptionnées"
                                 }
-                                return (
-                                  <button
-                                    type="button"
-                                    onClick={() =>
-                                      sendReplacementToSupplier.mutate({
-                                        order: replacementToSend,
-                                        contextNote: replacementContextNote
-                                      })
+                              >
+                                Réceptionner tout
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReceiveModal(order)}
+                                disabled={!canReceive}
+                                className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Réception partielle
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleEditOrder(order)}
+                                disabled={!canManageOrders}
+                                className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Modifier
+                              </button>
+                              {canManageOrders && hasNonConformingLatestReceipt && replacementToSend
+                                ? (() => {
+                                    const supplierState =
+                                      getSupplierSendState(replacementToSend);
+                                    if (!supplierState.canSend) {
+                                      return null;
                                     }
-                                    disabled={sendReplacementToSupplier.isPending}
-                                    className="rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                    title="Envoyer la demande de remplacement au fournisseur"
-                                  >
-                                    {sendReplacementToSupplier.isPending
-                                      ? "Envoi..."
-                                      : "Envoyer demande de remplacement"}
-                                  </button>
-                                );
-                              })()
-                            : null}
-                          {canSendEmail
-                            ? (() => {
-                                const supplierState = getSupplierSendState(order);
-                                return (
-                                  <button
-                                    type="button"
-                                    onClick={() => handleOpenSendModal(order)}
-                                    disabled={!supplierState.canSend}
-                                    className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                    title={supplierState.tooltip}
-                                  >
-                                    Envoyer au fournisseur
-                                  </button>
-                                );
-                              })()
-                            : null}
-                          {user?.role === "admin" ? (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteOrder(order)}
-                              disabled={deletingId === order.id}
-                              className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {deletingId === order.id ? "Suppression..." : "Supprimer"}
-                            </button>
-                          ) : null}
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          sendReplacementToSupplier.mutate({
+                                            order: replacementToSend,
+                                            contextNote: replacementContextNote
+                                          })
+                                        }
+                                        disabled={sendReplacementToSupplier.isPending}
+                                        className="rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                        title="Envoyer la demande de remplacement au fournisseur"
+                                      >
+                                        {sendReplacementToSupplier.isPending
+                                          ? "Envoi..."
+                                          : "Envoyer demande de remplacement"}
+                                      </button>
+                                    );
+                                  })()
+                                : null}
+                              {canSendEmail && order.status !== "RECEIVED"
+                                ? (() => {
+                                    const supplierState = getSupplierSendState(order);
+                                    return (
+                                      <button
+                                        type="button"
+                                        onClick={() => handleOpenSendModal(order)}
+                                        disabled={!supplierState.canSend}
+                                        className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                        title={supplierState.tooltip}
+                                      >
+                                        Envoyer au fournisseur
+                                      </button>
+                                    );
+                                  })()
+                                : null}
+                              {canManageOrders && order.status === "RECEIVED" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenArchiveModal(order)}
+                                  className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+                                >
+                                  Archiver
+                                </button>
+                              ) : null}
+                              {user?.role === "admin" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteOrder(order)}
+                                  disabled={deletingId === order.id}
+                                  className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {deletingId === order.id ? "Suppression..." : "Supprimer"}
+                                </button>
+                              ) : null}
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -1885,7 +2041,9 @@ export function PurchaseOrdersPanel({
                 {visibleOrders.length === 0 && !loadingOrders ? (
                   <tr>
                     <td className="px-4 py-4 text-sm text-slate-400" colSpan={5}>
-                      Aucun bon de commande pour le moment.
+                      {showArchived
+                        ? "Aucun bon de commande archivé."
+                        : "Aucun bon de commande pour le moment."}
                     </td>
                   </tr>
                 ) : null}
@@ -2358,6 +2516,40 @@ export function PurchaseOrdersPanel({
           </button>
         </div>
       </PurchaseOrderCreateModal>
+
+      <DraggableModal
+        open={Boolean(archiveModalOrder)}
+        title={
+          archiveModalOrder
+            ? `Archiver le bon de commande #${archiveModalOrder.id}`
+            : "Archiver le bon de commande"
+        }
+        onClose={handleCloseArchiveModal}
+      >
+        <div className="space-y-4 text-sm text-slate-200">
+          <p>
+            Archiver ce bon de commande ? Il sera masqué de la liste principale. Action
+            réversible.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleCloseArchiveModal}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmArchive}
+              disabled={!archiveModalOrder || archiveOrder.isPending}
+              className="rounded-md bg-amber-500 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {archiveOrder.isPending ? "Archivage..." : "Archiver"}
+            </button>
+          </div>
+        </div>
+      </DraggableModal>
 
       <DraggableModal
         open={Boolean(finalizeModalData)}

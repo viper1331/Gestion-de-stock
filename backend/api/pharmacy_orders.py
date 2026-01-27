@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.api.admin import require_admin
@@ -26,10 +26,15 @@ def _require_permission(user: models.User, *, action: str) -> None:
 
 @router.get("/", response_model=list[models.PharmacyPurchaseOrderDetail])
 async def list_orders(
+    include_archived: bool = Query(False, description="Inclure les bons de commande archivés"),
+    archived_only: bool = Query(False, description="Afficher uniquement les bons de commande archivés"),
     user: models.User = Depends(get_current_user),
 ) -> list[models.PharmacyPurchaseOrderDetail]:
     _require_permission(user, action="view")
-    return services.list_pharmacy_purchase_orders()
+    return services.list_pharmacy_purchase_orders(
+        include_archived=include_archived,
+        archived_only=archived_only,
+    )
 
 
 @router.post("/", response_model=models.PharmacyPurchaseOrderDetail, status_code=201)
@@ -112,6 +117,34 @@ async def receive_order(
     _require_permission(user, action="edit")
     try:
         return services.receive_pharmacy_purchase_order(order_id, payload)
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post("/{order_id}/archive", response_model=models.PharmacyPurchaseOrderDetail)
+async def archive_order(
+    order_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.PharmacyPurchaseOrderDetail:
+    _require_permission(user, action="edit")
+    try:
+        return services.archive_pharmacy_purchase_order(order_id, archived_by=user.id)
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post("/{order_id}/unarchive", response_model=models.PharmacyPurchaseOrderDetail)
+async def unarchive_order(
+    order_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.PharmacyPurchaseOrderDetail:
+    _require_permission(user, action="edit")
+    try:
+        return services.unarchive_pharmacy_purchase_order(order_id)
     except ValueError as exc:
         message = str(exc)
         status = 404 if "introuvable" in message.lower() else 400
