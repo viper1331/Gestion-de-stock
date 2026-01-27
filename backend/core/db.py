@@ -1066,6 +1066,24 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                 );
                 CREATE UNIQUE INDEX IF NOT EXISTS idx_dotations_unique
                     ON dotations(collaborator_id, item_id);
+                CREATE TABLE IF NOT EXISTS dotation_events (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    dotation_id INTEGER NOT NULL REFERENCES dotations(id) ON DELETE CASCADE,
+                    event_type TEXT NOT NULL,
+                    order_id INTEGER,
+                    item_id INTEGER,
+                    item_name TEXT,
+                    sku TEXT,
+                    size TEXT,
+                    quantity INTEGER,
+                    reason TEXT,
+                    message TEXT NOT NULL,
+                    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+                );
+                CREATE INDEX IF NOT EXISTS idx_dotation_events_dotation
+                    ON dotation_events(dotation_id);
+                CREATE INDEX IF NOT EXISTS idx_dotation_events_created
+                    ON dotation_events(created_at);
                 CREATE TABLE IF NOT EXISTS pharmacy_categories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL

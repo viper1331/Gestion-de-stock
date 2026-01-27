@@ -3674,6 +3674,28 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         execute(
             "UPDATE dotations SET perceived_at = DATE(allocated_at) WHERE perceived_at IS NULL OR perceived_at = ''"
         )
+        executescript(
+            """
+            CREATE TABLE IF NOT EXISTS dotation_events (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                dotation_id INTEGER NOT NULL REFERENCES dotations(id) ON DELETE CASCADE,
+                event_type TEXT NOT NULL,
+                order_id INTEGER,
+                item_id INTEGER,
+                item_name TEXT,
+                sku TEXT,
+                size TEXT,
+                quantity INTEGER,
+                reason TEXT,
+                message TEXT NOT NULL,
+                created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
+            );
+            CREATE INDEX IF NOT EXISTS idx_dotation_events_dotation
+                ON dotation_events(dotation_id);
+            CREATE INDEX IF NOT EXISTS idx_dotation_events_created
+                ON dotation_events(created_at);
+            """
+        )
 
         pharmacy_info = execute("PRAGMA table_info(pharmacy_items)").fetchall()
         pharmacy_columns = {row["name"] for row in pharmacy_info}
@@ -11806,7 +11828,7 @@ def validate_pending_assignment(
         else:
             return_qty = 0
         item_row = conn.execute(
-            "SELECT quantity FROM items WHERE id = ?",
+            "SELECT id, name, sku, size, quantity FROM items WHERE id = ?",
             (pending_row["new_item_id"],),
         ).fetchone()
         if item_row is None:
@@ -11819,16 +11841,26 @@ def validate_pending_assignment(
             "SELECT name, sku, size FROM items WHERE id = ?",
             (dotation_row["item_id"],),
         ).fetchone()
-        replacement_date = datetime.now().strftime("%d/%m/%Y %H:%M")
-        replacement_note = (
-            "Remplacement BC #"
-            f"{order_id} — Remplacé: {returned_item_row['name']} ({returned_item_row['sku']})"
-            f" — Taille/Variante: {returned_item_row['size'] or '—'}"
-            f" — Qté: {received_qty}"
-            f" — Motif: {_row_get(line_row, 'return_reason') or '—'}"
-            f" — Le: {replacement_date}"
+        return_reason = _row_get(line_row, "return_reason")
+        occurred_at = datetime.now()
+        replacement_line_old = _format_dotation_replacement_line(
+            order_id=order_id,
+            item_name=returned_item_row["name"],
+            sku=_row_get(returned_item_row, "sku"),
+            size=_row_get(returned_item_row, "size"),
+            quantity=received_qty,
+            reason=return_reason,
+            occurred_at=occurred_at,
         )
-        replaced_note = f"Remplacé via BC #{order_id} — Qté remplacée: {received_qty}"
+        replacement_line_new = _format_dotation_replacement_line(
+            order_id=order_id,
+            item_name=item_row["name"],
+            sku=_row_get(item_row, "sku"),
+            size=_row_get(item_row, "size"),
+            quantity=received_qty,
+            reason=return_reason,
+            occurred_at=occurred_at,
+        )
         if same_item:
             adjusted_return_qty = return_qty if return_expected else lost_offset_qty
             new_quantity = dotation_row["quantity"] + received_qty - adjusted_return_qty
@@ -11837,8 +11869,7 @@ def validate_pending_assignment(
             )
             new_lost_qty = max(0, lost_qty - lost_offset_qty)
             is_lost, is_degraded = _derive_dotation_flags(new_degraded_qty, new_lost_qty)
-            combined_notes = _append_dotation_note(dotation_row["notes"], replaced_note)
-            combined_notes = _append_dotation_note(combined_notes, replacement_note)
+            combined_notes = _append_dotation_note(dotation_row["notes"], replacement_line_old)
             conn.execute(
                 """
                 UPDATE dotations
@@ -11860,13 +11891,27 @@ def validate_pending_assignment(
                     target_dotation_id,
                 ),
             )
+            _record_dotation_event(
+                conn,
+                dotation_id=target_dotation_id,
+                event_type="replacement",
+                message=replacement_line_old,
+                order_id=order_id,
+                item_id=dotation_row["item_id"],
+                item_name=returned_item_row["name"],
+                sku=_row_get(returned_item_row, "sku"),
+                size=_row_get(returned_item_row, "size"),
+                quantity=received_qty,
+                reason=return_reason,
+                occurred_at=occurred_at,
+            )
         else:
             if return_expected:
                 new_quantity = dotation_row["quantity"] - return_qty
                 new_degraded_qty = max(0, degraded_qty - return_qty)
                 new_lost_qty = lost_qty
                 is_lost, is_degraded = _derive_dotation_flags(new_degraded_qty, new_lost_qty)
-                updated_notes = _append_dotation_note(dotation_row["notes"], replaced_note)
+                updated_notes = _append_dotation_note(dotation_row["notes"], replacement_line_old)
                 conn.execute(
                     """
                     UPDATE dotations
@@ -11891,9 +11936,7 @@ def validate_pending_assignment(
                 if new_quantity <= 0 and new_lost_qty == 0 and new_degraded_qty == 0:
                     conn.execute("DELETE FROM dotations WHERE id = ?", (target_dotation_id,))
             else:
-                updated_notes = _append_dotation_note(dotation_row["notes"], replaced_note)
-                new_lost_qty = max(0, lost_qty - lost_offset_qty)
-                is_lost, is_degraded = _derive_dotation_flags(degraded_qty, new_lost_qty)
+                updated_notes = _append_dotation_note(dotation_row["notes"], replacement_line_old)
                 conn.execute(
                     """
                     UPDATE dotations
@@ -11911,6 +11954,20 @@ def validate_pending_assignment(
                         target_dotation_id,
                     ),
                 )
+            _record_dotation_event(
+                conn,
+                dotation_id=target_dotation_id,
+                event_type="replacement",
+                message=replacement_line_old,
+                order_id=order_id,
+                item_id=dotation_row["item_id"],
+                item_name=returned_item_row["name"],
+                sku=_row_get(returned_item_row, "sku"),
+                size=_row_get(returned_item_row, "size"),
+                quantity=received_qty,
+                reason=return_reason,
+                occurred_at=occurred_at,
+            )
             existing_new = conn.execute(
                 """
                 SELECT id, notes
@@ -11920,7 +11977,7 @@ def validate_pending_assignment(
                 (dotation_row["collaborator_id"], pending_row["new_item_id"]),
             ).fetchone()
             if existing_new is None:
-                conn.execute(
+                cur_new = conn.execute(
                     """
                     INSERT INTO dotations (
                         collaborator_id,
@@ -11938,11 +11995,12 @@ def validate_pending_assignment(
                         dotation_row["collaborator_id"],
                         pending_row["new_item_id"],
                         received_qty,
-                        replacement_note,
+                        replacement_line_new,
                     ),
                 )
+                new_dotation_id = cur_new.lastrowid
             else:
-                updated_note = _append_dotation_note(existing_new["notes"], replacement_note)
+                updated_note = _append_dotation_note(existing_new["notes"], replacement_line_new)
                 conn.execute(
                     """
                     UPDATE dotations
@@ -11952,6 +12010,21 @@ def validate_pending_assignment(
                     """,
                     (received_qty, updated_note, existing_new["id"]),
                 )
+                new_dotation_id = existing_new["id"]
+            _record_dotation_event(
+                conn,
+                dotation_id=new_dotation_id,
+                event_type="replacement",
+                message=replacement_line_new,
+                order_id=order_id,
+                item_id=item_row["id"],
+                item_name=item_row["name"],
+                sku=_row_get(item_row, "sku"),
+                size=_row_get(item_row, "size"),
+                quantity=received_qty,
+                reason=return_reason,
+                occurred_at=occurred_at,
+            )
         conn.execute(
             "UPDATE items SET quantity = quantity - ? WHERE id = ?",
             (pending_row["qty"], pending_row["new_item_id"]),
@@ -13053,13 +13126,102 @@ def bulk_import_collaborators(
     )
 
 
+DOTATION_NOTE_MAX_LENGTH = 256
+DOTATION_NOTE_MAX_LINES = 3
+
+
+def clamp_note(note: str, max_len: int = DOTATION_NOTE_MAX_LENGTH) -> str:
+    if max_len <= 0:
+        return ""
+    cleaned = note.strip()
+    if len(cleaned) <= max_len:
+        return cleaned
+    if max_len == 1:
+        return "…"
+    truncated = cleaned[: max_len - 1].rstrip()
+    return f"{truncated}…"
+
+
 def _append_dotation_note(existing: str | None, note: str) -> str:
     cleaned_note = note.strip()
     if not cleaned_note:
-        return existing or ""
-    if not existing:
-        return cleaned_note
-    return f"{existing}\n{cleaned_note}"
+        return clamp_note(existing or "", DOTATION_NOTE_MAX_LENGTH)
+    lines = []
+    if existing:
+        lines.extend([entry.strip() for entry in existing.splitlines() if entry.strip()])
+    lines.append(cleaned_note)
+    if DOTATION_NOTE_MAX_LINES:
+        lines = lines[-DOTATION_NOTE_MAX_LINES :]
+    combined = "\n".join(lines)
+    return clamp_note(combined, DOTATION_NOTE_MAX_LENGTH)
+
+
+def _format_dotation_replacement_line(
+    *,
+    order_id: int,
+    item_name: str,
+    sku: str | None,
+    size: str | None,
+    quantity: int,
+    reason: str | None,
+    occurred_at: datetime,
+) -> str:
+    safe_name = item_name.strip() if item_name else "—"
+    safe_sku = (sku or "—").strip() or "—"
+    safe_size = (size or "—").strip() or "—"
+    safe_reason = (reason or "—").strip() or "—"
+    timestamp = occurred_at.strftime("%d/%m %H:%M")
+    line = (
+        f"BC#{order_id} | {safe_name} {safe_sku} {safe_size} | x{quantity} | {safe_reason} | {timestamp}"
+    )
+    return clamp_note(line, DOTATION_NOTE_MAX_LENGTH)
+
+
+def _record_dotation_event(
+    conn: sqlite3.Connection,
+    *,
+    dotation_id: int,
+    event_type: str,
+    message: str,
+    order_id: int | None,
+    item_id: int | None,
+    item_name: str | None,
+    sku: str | None,
+    size: str | None,
+    quantity: int | None,
+    reason: str | None,
+    occurred_at: datetime,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO dotation_events (
+            dotation_id,
+            event_type,
+            order_id,
+            item_id,
+            item_name,
+            sku,
+            size,
+            quantity,
+            reason,
+            message,
+            created_at
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        (
+            dotation_id,
+            event_type,
+            order_id,
+            item_id,
+            item_name,
+            sku,
+            size,
+            quantity,
+            reason,
+            message,
+            occurred_at.isoformat(),
+        ),
+    )
 
 
 def _derive_dotation_flags(degraded_qty: int, lost_qty: int) -> tuple[int, int]:
@@ -13130,6 +13292,8 @@ def _consolidate_dotation_rows(conn: sqlite3.Connection) -> None:
         note = keep["notes"]
         if not note:
             note = next((entry["notes"] for entry in rows if entry["notes"]), None)
+        if note is not None:
+            note = clamp_note(note, DOTATION_NOTE_MAX_LENGTH)
         is_lost, is_degraded = _derive_dotation_flags(total_degraded, total_lost)
         conn.execute(
             """
@@ -13193,13 +13357,16 @@ def list_dotations(
             perceived_at = _ensure_date(row["perceived_at"], fallback=allocated_date)
             degraded_qty = int(_row_get(row, "degraded_qty", 0) or 0)
             lost_qty = int(_row_get(row, "lost_qty", 0) or 0)
+            notes = row["notes"]
+            if notes is not None:
+                notes = clamp_note(notes, DOTATION_NOTE_MAX_LENGTH)
             dotations.append(
                 models.Dotation(
                     id=row["id"],
                     collaborator_id=row["collaborator_id"],
                     item_id=row["item_id"],
                     quantity=row["quantity"],
-                    notes=row["notes"],
+                    notes=notes,
                     perceived_at=perceived_at,
                     is_lost=lost_qty > 0,
                     is_degraded=degraded_qty > 0,
@@ -13353,12 +13520,15 @@ def get_dotation(dotation_id: int) -> models.Dotation:
         perceived_at = _ensure_date(row["perceived_at"], fallback=allocated_date)
         degraded_qty = int(_row_get(row, "degraded_qty", 0) or 0)
         lost_qty = int(_row_get(row, "lost_qty", 0) or 0)
+        notes = row["notes"]
+        if notes is not None:
+            notes = clamp_note(notes, DOTATION_NOTE_MAX_LENGTH)
         return models.Dotation(
             id=row["id"],
             collaborator_id=row["collaborator_id"],
             item_id=row["item_id"],
             quantity=row["quantity"],
-            notes=row["notes"],
+            notes=notes,
             perceived_at=perceived_at,
             is_lost=lost_qty > 0,
             is_degraded=degraded_qty > 0,
@@ -13404,6 +13574,9 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
         )
         is_lost, is_degraded = _derive_dotation_flags(degraded_qty, lost_qty)
 
+        notes = payload.notes
+        if notes is not None:
+            notes = clamp_note(notes, DOTATION_NOTE_MAX_LENGTH)
         cur = conn.execute(
             """
             INSERT INTO dotations (
@@ -13423,7 +13596,7 @@ def create_dotation(payload: models.DotationCreate) -> models.Dotation:
                 payload.collaborator_id,
                 payload.item_id,
                 payload.quantity,
-                payload.notes,
+                notes,
                 payload.perceived_at.isoformat(),
                 is_lost,
                 is_degraded,
@@ -13485,6 +13658,8 @@ def update_dotation(dotation_id: int, payload: models.DotationUpdate) -> models.
         if new_quantity <= 0:
             raise ValueError("La quantité doit être positive")
         new_notes = payload.notes if payload.notes is not None else row["notes"]
+        if new_notes is not None:
+            new_notes = clamp_note(new_notes, DOTATION_NOTE_MAX_LENGTH)
         new_perceived_at = payload.perceived_at if payload.perceived_at is not None else base_perceived_at
         base_degraded_qty = int(_row_get(row, "degraded_qty", 0) or 0)
         base_lost_qty = int(_row_get(row, "lost_qty", 0) or 0)
