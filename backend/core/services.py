@@ -12634,6 +12634,31 @@ def list_dotation_beneficiaries() -> list[models.DotationBeneficiary]:
         ]
 
 
+def list_dotation_assignees() -> list[models.DotationAssignee]:
+    ensure_database_ready()
+    query = """
+        SELECT
+            d.collaborator_id AS employee_id,
+            c.full_name AS display_name,
+            COUNT(*) AS assigned_count
+        FROM dotations AS d
+        JOIN collaborators AS c ON c.id = d.collaborator_id
+        GROUP BY d.collaborator_id, c.full_name
+        HAVING COUNT(*) > 0
+        ORDER BY c.full_name COLLATE NOCASE
+    """
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(query).fetchall()
+        return [
+            models.DotationAssignee(
+                employee_id=row["employee_id"],
+                display_name=row["display_name"],
+                count=row["assigned_count"],
+            )
+            for row in rows
+        ]
+
+
 def list_dotation_assigned_items(employee_id: int) -> list[models.DotationAssignedItem]:
     ensure_database_ready()
     query = """
@@ -12658,6 +12683,36 @@ def list_dotation_assigned_items(employee_id: int) -> list[models.DotationAssign
                 sku=row["sku"],
                 label=row["label"],
                 variant=row["variant"],
+                qty=row["qty"],
+            )
+            for row in rows
+        ]
+
+
+def list_dotation_assignee_items(employee_id: int) -> list[models.DotationAssigneeItem]:
+    ensure_database_ready()
+    query = """
+        SELECT
+            d.id AS assignment_id,
+            d.item_id AS item_id,
+            i.sku AS sku,
+            i.name AS name,
+            i.size AS size_variant,
+            d.quantity AS qty
+        FROM dotations AS d
+        JOIN items AS i ON i.id = d.item_id
+        WHERE d.collaborator_id = ?
+        ORDER BY i.name COLLATE NOCASE
+    """
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(query, (employee_id,)).fetchall()
+        return [
+            models.DotationAssigneeItem(
+                assignment_id=row["assignment_id"],
+                item_id=row["item_id"],
+                sku=row["sku"],
+                name=row["name"],
+                size_variant=_normalize_variant_value(row["size_variant"]),
                 qty=row["qty"],
             )
             for row in rows

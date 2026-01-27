@@ -1427,6 +1427,16 @@ class DotationBeneficiary(BaseModel):
     assigned_count: int
 
 
+class DotationAssignee(BaseModel):
+    employee_id: int
+    display_name: str
+    count: int
+
+
+class DotationAssigneesResponse(BaseModel):
+    assignees: list[DotationAssignee]
+
+
 class DotationAssignedItem(BaseModel):
     assignment_id: int
     item_id: int
@@ -1434,6 +1444,19 @@ class DotationAssignedItem(BaseModel):
     label: str
     variant: Optional[str] = None
     qty: int
+
+
+class DotationAssigneeItem(BaseModel):
+    assignment_id: int
+    item_id: int
+    sku: str
+    name: str
+    size_variant: Optional[str] = None
+    qty: int
+
+
+class DotationAssigneeItemsResponse(BaseModel):
+    items: list[DotationAssigneeItem]
 
 
 class DotationScanAddPayload(BaseModel):
