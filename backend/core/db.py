@@ -1059,6 +1059,8 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     is_degraded INTEGER NOT NULL DEFAULT 0,
                     allocated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
                 );
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_dotations_unique
+                    ON dotations(collaborator_id, item_id, is_lost, is_degraded);
                 CREATE TABLE IF NOT EXISTS pharmacy_categories (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     name TEXT UNIQUE NOT NULL
