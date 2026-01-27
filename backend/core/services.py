@@ -11759,76 +11759,62 @@ def validate_pending_assignment(
         if item_row["quantity"] < pending_row["qty"]:
             raise ValueError("Stock insuffisant pour la dotation")
         replacement_note = f"Remplacement BC #{order_id}"
-        repair_qty = 1
-        if dotation_row["quantity"] < repair_qty:
-            raise PendingAssignmentConflictError(
-                "Quantité à réparer > quantité attribuée"
-            )
-        if dotation_row["quantity"] == 1:
-            new_notes = _append_note(dotation_row["notes"], replacement_note)
-            conn.execute(
-                """
-                UPDATE dotations
-                SET is_lost = 0,
-                    is_degraded = 0,
-                    notes = ?
-                WHERE id = ?
-                """,
-                (new_notes, target_dotation_id),
-            )
+        received_qty = pending_row["qty"]
+        if dotation_row["quantity"] == return_qty:
+            conn.execute("DELETE FROM dotations WHERE id = ?", (target_dotation_id,))
         else:
             conn.execute(
                 """
                 UPDATE dotations
-                SET quantity = quantity - 1
+                SET quantity = quantity - ?
                 WHERE id = ?
                 """,
-                (target_dotation_id,),
+                (return_qty, target_dotation_id),
             )
-            ras_row = conn.execute(
+        ras_row = conn.execute(
+            """
+            SELECT id, notes
+            FROM dotations
+            WHERE collaborator_id = ?
+              AND item_id = ?
+              AND is_lost = 0
+              AND is_degraded = 0
+            ORDER BY allocated_at DESC, id DESC
+            LIMIT 1
+            """,
+            (dotation_row["collaborator_id"], dotation_row["item_id"]),
+        ).fetchone()
+        if ras_row:
+            new_notes = _append_note(ras_row["notes"], replacement_note)
+            conn.execute(
                 """
-                SELECT id, notes
-                FROM dotations
-                WHERE collaborator_id = ?
-                  AND item_id = ?
-                  AND is_lost = 0
-                  AND is_degraded = 0
-                ORDER BY allocated_at DESC, id DESC
-                LIMIT 1
+                UPDATE dotations
+                SET quantity = quantity + ?,
+                    notes = ?
+                WHERE id = ?
                 """,
-                (dotation_row["collaborator_id"], dotation_row["item_id"]),
-            ).fetchone()
-            if ras_row:
-                new_notes = _append_note(ras_row["notes"], replacement_note)
-                conn.execute(
-                    """
-                    UPDATE dotations
-                    SET quantity = quantity + 1,
-                        notes = ?
-                    WHERE id = ?
-                    """,
-                    (new_notes, ras_row["id"]),
-                )
-            else:
-                conn.execute(
-                    """
-                    INSERT INTO dotations (
-                        collaborator_id,
-                        item_id,
-                        quantity,
-                        notes,
-                        perceived_at,
-                        is_lost,
-                        is_degraded
-                    ) VALUES (?, ?, ?, ?, DATE('now'), 0, 0)
-                    """,
-                    (
-                        dotation_row["collaborator_id"],
-                        dotation_row["item_id"],
-                        repair_qty,
-                        replacement_note,
-                    ),
-                )
+                (received_qty, new_notes, ras_row["id"]),
+            )
+        else:
+            conn.execute(
+                """
+                INSERT INTO dotations (
+                    collaborator_id,
+                    item_id,
+                    quantity,
+                    notes,
+                    perceived_at,
+                    is_lost,
+                    is_degraded
+                ) VALUES (?, ?, ?, ?, DATE('now'), 0, 0)
+                """,
+                (
+                    dotation_row["collaborator_id"],
+                    dotation_row["item_id"],
+                    received_qty,
+                    replacement_note,
+                ),
+            )
         conn.execute(
             "UPDATE items SET quantity = quantity - ? WHERE id = ?",
             (pending_row["qty"], pending_row["new_item_id"]),
