@@ -51,6 +51,9 @@ interface PharmacyPurchaseOrderDetail {
   created_at: string;
   note: string | null;
   auto_created: boolean;
+  is_archived?: boolean;
+  archived_at?: string | null;
+  archived_by?: number | null;
   items: PharmacyPurchaseOrderItem[];
 }
 
@@ -116,11 +119,19 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   const [sendingId, setSendingId] = useState<number | null>(null);
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [receiveModalOrder, setReceiveModalOrder] = useState<PharmacyPurchaseOrderDetail | null>(null);
+  const [archiveModalOrder, setArchiveModalOrder] =
+    useState<PharmacyPurchaseOrderDetail | null>(null);
+  const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">("active");
   const [receiveQuantities, setReceiveQuantities] = useState<Record<number, number>>({});
   const [receiveFormError, setReceiveFormError] = useState<string | null>(null);
   const selectedDraftSupplier = suppliers.find((supplier) => supplier.id === draftSupplier);
   const selectedEditSupplier = suppliers.find((supplier) => supplier.id === editSupplier);
   const createFormId = "pharmacy-purchase-order-create";
+  const showArchived = archiveFilter === "archived";
+  const ordersQueryKey = useMemo(
+    () => ["pharmacy-orders", showArchived ? "archived" : "active"],
+    [showArchived]
+  );
   const suppliersById = useMemo(() => {
     return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
   }, [suppliers]);
@@ -163,12 +174,19 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
   };
 
   const { data: orders = [], isLoading } = useQuery({
-    queryKey: ["pharmacy-orders"],
+    queryKey: ordersQueryKey,
     queryFn: async () => {
-      const response = await api.get<PharmacyPurchaseOrderDetail[]>("/pharmacy/orders/");
+      const response = await api.get<PharmacyPurchaseOrderDetail[]>("/pharmacy/orders/", {
+        params: showArchived ? { include_archived: true } : undefined
+      });
       return response.data;
     }
   });
+
+  const visibleOrders = useMemo(
+    () => orders.filter((order) => (showArchived ? order.is_archived : !order.is_archived)),
+    [orders, showArchived]
+  );
 
   const { data: pharmacyItems = [] } = useQuery({
     queryKey: ["pharmacy-items-options"],
@@ -293,6 +311,51 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
     },
     onSettled: () => {
       setSendingId(null);
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const archiveOrder = useMutation<PharmacyPurchaseOrderDetail, AxiosError<ApiErrorResponse>, number>({
+    mutationFn: async (orderId) => {
+      const response = await api.post<PharmacyPurchaseOrderDetail>(
+        `/pharmacy/orders/${orderId}/archive`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Bon de commande archivé.");
+      setArchiveModalOrder(null);
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-orders"] });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible d'archiver le bon de commande.");
+    },
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const unarchiveOrder = useMutation<
+    PharmacyPurchaseOrderDetail,
+    AxiosError<ApiErrorResponse>,
+    number
+  >({
+    mutationFn: async (orderId) => {
+      const response = await api.post<PharmacyPurchaseOrderDetail>(
+        `/pharmacy/orders/${orderId}/unarchive`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Bon de commande restauré.");
+      await queryClient.invalidateQueries({ queryKey: ["pharmacy-orders"] });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible de restaurer le bon de commande.");
+    },
+    onSettled: () => {
       window.setTimeout(() => setMessage(null), 4000);
     }
   });
@@ -538,6 +601,33 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
     deleteOrder.mutate(order);
   };
 
+  const handleOpenArchiveModal = (order: PharmacyPurchaseOrderDetail) => {
+    setError(null);
+    setArchiveModalOrder(order);
+  };
+
+  const handleCloseArchiveModal = () => {
+    setArchiveModalOrder(null);
+  };
+
+  const handleConfirmArchive = () => {
+    if (!archiveModalOrder) {
+      return;
+    }
+    archiveOrder.mutate(archiveModalOrder.id);
+  };
+
+  const handleUnarchiveOrder = (order: PharmacyPurchaseOrderDetail) => {
+    if (
+      !window.confirm(
+        `Désarchiver le bon de commande #${order.id} ? Il réapparaîtra dans la liste active.`
+      )
+    ) {
+      return;
+    }
+    unarchiveOrder.mutate(order.id);
+  };
+
   return (
     <section className="min-w-0 space-y-4">
       <header className="flex flex-col gap-2 lg:flex-row lg:items-center lg:justify-between">
@@ -577,6 +667,30 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
 
       <div className="grid min-w-0 gap-6 lg:grid-cols-2">
         <div className="min-w-0 space-y-4">
+          <div className="flex w-fit items-center rounded-full border border-slate-800 bg-slate-900/60 p-1 text-xs">
+            <button
+              type="button"
+              onClick={() => setArchiveFilter("active")}
+              className={`rounded-full px-3 py-1 font-semibold transition ${
+                archiveFilter === "active"
+                  ? "bg-indigo-500 text-white"
+                  : "text-slate-300 hover:text-white"
+              }`}
+            >
+              Actifs
+            </button>
+            <button
+              type="button"
+              onClick={() => setArchiveFilter("archived")}
+              className={`rounded-full px-3 py-1 font-semibold transition ${
+                archiveFilter === "archived"
+                  ? "bg-indigo-500 text-white"
+                  : "text-slate-300 hover:text-white"
+              }`}
+            >
+              Archivés
+            </button>
+          </div>
           <div className="min-w-0 overflow-auto rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
@@ -589,7 +703,9 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
-                {orders.map((order) => {
+                {visibleOrders.map((order) => {
+                  const isArchived = Boolean(order.is_archived);
+                  const isReadOnly = isArchived;
                   const outstanding = order.items
                     .map((line) => {
                       const remaining = line.quantity_ordered - line.quantity_received;
@@ -599,7 +715,7 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                       return { line_id: line.id, qty: remaining };
                     })
                     .filter((line): line is { line_id: number; qty: number } => line !== null);
-                  const canReceive = outstanding.length > 0;
+                  const canReceive = outstanding.length > 0 && !isReadOnly;
                   const canSendToSupplier = Boolean(order.supplier_id && order.supplier_email);
                   const sendTooltip = order.supplier_id
                     ? "Ajoutez un email fournisseur pour activer l'envoi"
@@ -623,28 +739,40 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-slate-200">
-                        <select
-                          value={order.status}
-                          onChange={(event) => {
-                            if (!canEdit) {
-                              return;
-                            }
-                            setError(null);
-                            updateOrder.mutate({
-                              orderId: order.id,
-                              status: event.target.value,
-                              successMessage: "Statut mis à jour."
-                            });
-                          }}
-                          className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-                          disabled={!canEdit}
-                        >
-                          {ORDER_STATUSES.map((option) => (
-                            <option key={option.value} value={option.value}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
+                        {isArchived ? (
+                          <div className="flex flex-col gap-2 text-xs">
+                            <span>
+                              {ORDER_STATUSES.find((option) => option.value === order.status)?.label ??
+                                order.status}
+                            </span>
+                            <span className="w-fit rounded-full bg-amber-500/20 px-2 py-0.5 text-[10px] font-semibold uppercase text-amber-200">
+                              Archivé
+                            </span>
+                          </div>
+                        ) : (
+                          <select
+                            value={order.status}
+                            onChange={(event) => {
+                              if (!canEdit) {
+                                return;
+                              }
+                              setError(null);
+                              updateOrder.mutate({
+                                orderId: order.id,
+                                status: event.target.value,
+                                successMessage: "Statut mis à jour."
+                              });
+                            }}
+                            className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
+                            disabled={!canEdit}
+                          >
+                            {ORDER_STATUSES.map((option) => (
+                              <option key={option.value} value={option.value}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        )}
                       </td>
                       <td className="px-4 py-3 text-slate-200">
                         <ul className="space-y-1 text-xs">
@@ -668,74 +796,104 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
                         <div className="flex flex-col gap-2">
                           <button
                             type="button"
-                            onClick={() =>
-                              receiveOrder.mutate({ orderId: order.id, lines: outstanding })
-                            }
-                            disabled={!canEdit || !canReceive}
-                            className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
-                            title={
-                              canReceive
-                                ? "Enregistrer la réception des quantités restantes"
-                                : "Toutes les quantités ont été réceptionnées"
-                            }
-                          >
-                            Réceptionner tout
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => handleOpenReceiveModal(order)}
-                            disabled={!canEdit || !canReceive}
-                            className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                          >
-                            Réception partielle
-                          </button>
-                          {canEdit ? (
-                            <button
-                              type="button"
-                              onClick={() => handleEditOrder(order)}
-                              className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
-                            >
-                              Modifier
-                            </button>
-                          ) : null}
-                          <button
-                            type="button"
                             onClick={() => handleDownload(order.id)}
                             disabled={downloadingId === order.id}
                             className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
-                          {canEdit ? (
-                            <button
-                              type="button"
-                              onClick={() => sendToSupplier.mutate(order)}
-                              disabled={sendingId === order.id || !canSendToSupplier}
-                              className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-                              title={canSendToSupplier ? "Envoyer le bon de commande au fournisseur" : sendTooltip}
-                            >
-                              {sendingId === order.id ? "Envoi..." : "Envoyer au fournisseur"}
-                            </button>
-                          ) : null}
-                          {user?.role === "admin" ? (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteOrder(order)}
-                              disabled={deletingId === order.id}
-                              className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                            >
-                              {deletingId === order.id ? "Suppression..." : "Supprimer"}
-                            </button>
-                          ) : null}
+                          {isArchived ? (
+                            canEdit ? (
+                              <button
+                                type="button"
+                                onClick={() => handleUnarchiveOrder(order)}
+                                disabled={unarchiveOrder.isPending}
+                                className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Désarchiver
+                              </button>
+                            ) : null
+                          ) : (
+                            <>
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  receiveOrder.mutate({ orderId: order.id, lines: outstanding })
+                                }
+                                disabled={!canEdit || !canReceive}
+                                className="rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+                                title={
+                                  canReceive
+                                    ? "Enregistrer la réception des quantités restantes"
+                                    : "Toutes les quantités ont été réceptionnées"
+                                }
+                              >
+                                Réceptionner tout
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenReceiveModal(order)}
+                                disabled={!canEdit || !canReceive}
+                                className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                Réception partielle
+                              </button>
+                              {canEdit ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditOrder(order)}
+                                  className="rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                                >
+                                  Modifier
+                                </button>
+                              ) : null}
+                              {canEdit && order.status !== "RECEIVED" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => sendToSupplier.mutate(order)}
+                                  disabled={sendingId === order.id || !canSendToSupplier}
+                                  className="rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                  title={
+                                    canSendToSupplier
+                                      ? "Envoyer le bon de commande au fournisseur"
+                                      : sendTooltip
+                                  }
+                                >
+                                  {sendingId === order.id ? "Envoi..." : "Envoyer au fournisseur"}
+                                </button>
+                              ) : null}
+                              {canEdit && order.status === "RECEIVED" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenArchiveModal(order)}
+                                  className="rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+                                >
+                                  Archiver
+                                </button>
+                              ) : null}
+                              {user?.role === "admin" ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteOrder(order)}
+                                  disabled={deletingId === order.id}
+                                  className="rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                >
+                                  {deletingId === order.id ? "Suppression..." : "Supprimer"}
+                                </button>
+                              ) : null}
+                            </>
+                          )}
                         </div>
                       </td>
                     </tr>
                   );
                 })}
-                {orders.length === 0 && !isLoading ? (
+                {visibleOrders.length === 0 && !isLoading ? (
                   <tr>
                     <td className="px-4 py-4 text-sm text-slate-400" colSpan={5}>
-                      Aucun bon de commande enregistré.
+                      {showArchived
+                        ? "Aucun bon de commande archivé."
+                        : "Aucun bon de commande enregistré."}
                     </td>
                   </tr>
                 ) : null}
@@ -977,6 +1135,40 @@ export function PharmacyOrdersPanel({ canEdit }: { canEdit: boolean }) {
           </button>
         </div>
       </PurchaseOrderCreateModal>
+
+      <DraggableModal
+        open={Boolean(archiveModalOrder)}
+        title={
+          archiveModalOrder
+            ? `Archiver le bon de commande #${archiveModalOrder.id}`
+            : "Archiver le bon de commande"
+        }
+        onClose={handleCloseArchiveModal}
+      >
+        <div className="space-y-4 text-sm text-slate-200">
+          <p>
+            Archiver ce bon de commande ? Il sera masqué de la liste principale. Action
+            réversible.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleCloseArchiveModal}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmArchive}
+              disabled={!archiveModalOrder || archiveOrder.isPending}
+              className="rounded-md bg-amber-500 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {archiveOrder.isPending ? "Archivage..." : "Archiver"}
+            </button>
+          </div>
+        </div>
+      </DraggableModal>
 
       <DraggableModal
         open={Boolean(receiveModalOrder)}
