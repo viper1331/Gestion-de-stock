@@ -165,6 +165,7 @@ def build_purchase_order_email(
     purchase_order: models.PurchaseOrderDetail,
     site: models.SiteInfo,
     user: models.User | None,
+    context_note: str | None = None,
 ) -> tuple[str, str, str]:
     site_label = site.display_name or site.site_key
     subject = f"Bon de commande #{purchase_order.id} - {site_label}"
@@ -175,10 +176,12 @@ def build_purchase_order_email(
         f"{sender_label} <{sender_email}>" if sender_email else sender_label
     )
     intro = f"Bonjour {supplier_name},"
+    note_block = f"\nNote : {context_note}\n" if context_note else ""
     body_text = (
         f"{intro}\n\n"
         f"Veuillez trouver ci-joint le bon de commande #{purchase_order.id} "
-        f"pour le site {site_label}.\n\n"
+        f"pour le site {site_label}.\n"
+        f"{note_block}\n"
         f"Expéditeur : {sender_contact}\n\n"
         f"Cordialement,\n{sender_label}\n"
     )
@@ -186,6 +189,7 @@ def build_purchase_order_email(
         f"<p>{intro}</p>"
         f"<p>Veuillez trouver ci-joint le bon de commande <strong>#{purchase_order.id}</strong> "
         f"pour le site <strong>{site_label}</strong>.</p>"
+        f"{f'<p><strong>Note :</strong> {context_note}</p>' if context_note else ''}"
         f"<p>Expéditeur : {sender_contact}</p>"
         f"<p>Cordialement,<br />{sender_label}</p>"
     )

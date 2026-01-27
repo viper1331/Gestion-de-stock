@@ -1270,6 +1270,7 @@ class PurchaseOrderEmailLogEntry(BaseModel):
 
 class PurchaseOrderSendRequest(BaseModel):
     to_email_override: str | None = None
+    context_note: str | None = Field(default=None, max_length=512)
 
 
 class PurchaseOrderSendResponse(BaseModel):

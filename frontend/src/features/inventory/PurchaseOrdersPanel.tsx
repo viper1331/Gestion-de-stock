@@ -72,6 +72,9 @@ interface PurchaseOrderItem {
   remise_item_id?: number;
   pharmacy_item_id?: number;
   item_name: string | null;
+  sku?: string | null;
+  size?: string | null;
+  unit?: string | null;
   quantity_ordered: number;
   quantity_received: number;
   received_conforme_qty?: number;
@@ -243,6 +246,20 @@ interface PurchaseOrderAutoRefreshResponse {
   purchase_order_id: number | null;
 }
 
+interface ReplacementFinalizeSummary {
+  lineId: number;
+  itemLabel: string;
+  sizeLabel: string;
+  qty: number;
+  reason: string;
+}
+
+interface FinalizeNonconformityModalData {
+  order: PurchaseOrderDetail;
+  replacementOrder: PurchaseOrderDetail;
+  lines: ReplacementFinalizeSummary[];
+}
+
 type ApiErrorResponse = { detail?: string };
 
 const ORDER_STATUSES: Array<{ value: string; label: string }> = [
@@ -314,6 +331,10 @@ export function PurchaseOrdersPanel({
     () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess("clothing", "edit"))),
     [modulePermissions, user]
   );
+  const canManageOrders = useMemo(
+    () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess(moduleKey, "edit"))),
+    [moduleKey, modulePermissions, user]
+  );
   const queryClient = useQueryClient();
   const [draftSupplier, setDraftSupplier] = useState<number | "">("");
   const [draftStatus, setDraftStatus] = useState<string>("ORDERED");
@@ -335,6 +356,8 @@ export function PurchaseOrdersPanel({
   const [overrideEmail, setOverrideEmail] = useState<string>("");
   const [deletingId, setDeletingId] = useState<number | null>(null);
   const [receiveModalOrder, setReceiveModalOrder] = useState<PurchaseOrderDetail | null>(null);
+  const [finalizeModalData, setFinalizeModalData] =
+    useState<FinalizeNonconformityModalData | null>(null);
   const [receiveQuantities, setReceiveQuantities] = useState<Record<number, number>>({});
   const [receiveFormError, setReceiveFormError] = useState<string | null>(null);
   const [receiveDetails, setReceiveDetails] = useState<
@@ -857,6 +880,60 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const sendReplacementToSupplier = useMutation<
+    void,
+    AxiosError<ApiErrorResponse>,
+    { order: PurchaseOrderDetail; contextNote: string }
+  >({
+    mutationFn: async ({ order, contextNote }) => {
+      await api.post(`${purchaseOrdersPath}/${order.id}/send-to-supplier`, {
+        context_note: contextNote
+      });
+    },
+    onSuccess: async (_, { order }) => {
+      setMessage("Demande de remplacement envoyée.");
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({
+        queryKey: ["purchase-order-email-log", order.id]
+      });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible d'envoyer la demande de remplacement.");
+    },
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const finalizeNonconformity = useMutation<
+    PurchaseOrderDetail,
+    AxiosError<ApiErrorResponse>,
+    { orderId: number }
+  >({
+    mutationFn: async ({ orderId }) => {
+      const response = await api.post<PurchaseOrderDetail>(
+        `${purchaseOrdersPath}/${orderId}/finalize-nonconformity`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Non-conformité finalisée.");
+      setFinalizeModalData(null);
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+      await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
+      await queryClient.invalidateQueries({ queryKey: ["clothing-dotations-assignees"] });
+      await queryClient.invalidateQueries({ queryKey: ["clothing-assigned-items"] });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible de finaliser la non-conformité.");
+    },
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
   const deleteOrder = useMutation<void, AxiosError<ApiErrorResponse>, PurchaseOrderDetail>({
     mutationFn: async (order) => {
       await api.delete(`${purchaseOrdersPath}/${order.id}`);
@@ -1047,6 +1124,10 @@ export function PurchaseOrdersPanel({
     setReceiveModalOrder(null);
     setReceiveQuantities({});
     setReceiveDetails({});
+  };
+
+  const handleCloseFinalizeModal = () => {
+    setFinalizeModalData(null);
   };
 
   const handleSubmitPartialReceive = async () => {
@@ -1328,12 +1409,28 @@ export function PurchaseOrdersPanel({
                     existing.push(receipt);
                     receiptsByLine.set(receipt.purchase_order_line_id, existing);
                   });
-                  const hasNonConformingLatestReceipt = order.items.some((line) => {
-                    const lineReceipts = receiptsByLine.get(line.id) ?? [];
-                    const latestReceipt =
-                      lineReceipts.length > 0 ? lineReceipts[lineReceipts.length - 1] : null;
-                    return latestReceipt?.conformity_status === "non_conforme";
-                  });
+                  const nonconformingLineSummaries = order.items
+                    .map((line) => {
+                      const lineReceipts = receiptsByLine.get(line.id) ?? [];
+                      const latestReceipt =
+                        lineReceipts.length > 0 ? lineReceipts[lineReceipts.length - 1] : null;
+                      if (latestReceipt?.conformity_status !== "non_conforme") {
+                        return null;
+                      }
+                      const sizeLabel = line.size?.trim() ? line.size.trim() : "—";
+                      return {
+                        lineId: line.id,
+                        itemLabel: line.item_name ?? `#${resolveItemId(line) ?? "?"}`,
+                        sizeLabel,
+                        qty: line.received_non_conforme_qty ?? 0,
+                        reason:
+                          latestReceipt.nonconformity_reason?.trim() ||
+                          line.nonconformity_reason?.trim() ||
+                          "Motif non renseigné"
+                      } satisfies ReplacementFinalizeSummary;
+                    })
+                    .filter((entry): entry is ReplacementFinalizeSummary => entry !== null);
+                  const hasNonConformingLatestReceipt = nonconformingLineSummaries.length > 0;
                   const pendingAssignments = (order.pending_assignments ?? []).filter(
                     (assignment) => assignment.status === "pending"
                   );
@@ -1342,6 +1439,26 @@ export function PurchaseOrdersPanel({
                   );
                   const replacementOrdersForLines =
                     replacementOrdersByParent.get(order.id) ?? new Map<number, PurchaseOrderDetail>();
+                  const replacementOrders = Array.from(replacementOrdersForLines.values());
+                  const sentReplacementOrders = replacementOrders
+                    .filter((replacement) => Boolean(replacement.last_sent_at))
+                    .sort((a, b) => {
+                      const aSent = a.last_sent_at ? new Date(a.last_sent_at).getTime() : 0;
+                      const bSent = b.last_sent_at ? new Date(b.last_sent_at).getTime() : 0;
+                      return bSent - aSent;
+                    });
+                  const replacementToSend = replacementOrders.find(
+                    (replacement) => !replacement.last_sent_at
+                  );
+                  const replacementContextNote = nonconformingLineSummaries.length
+                    ? `Motif non-conformité : ${nonconformingLineSummaries
+                        .map((line) => line.reason)
+                        .join(", ")}`
+                    : "Motif non-conformité : non renseigné";
+                  const canFinalizeNonconformity =
+                    enableReplacementFlow &&
+                    hasNonConformingLatestReceipt &&
+                    sentReplacementOrders.length > 0;
                   return (
                     <tr key={order.id}>
                       <td className="px-4 py-3 text-slate-300">
@@ -1487,48 +1604,59 @@ export function PurchaseOrdersPanel({
                                             <span>par {lineNonconformity.created_by}</span>
                                           ) : null}
                                         </div>
-                                        {replacementOrder ? (
-                                          <div className="space-y-1 text-[11px] text-emerald-100/90">
-                                            <p>
-                                              Demande de remplacement : BC #{replacementOrder.id}{" "}
-                                              (statut:{" "}
-                                              {resolveReplacementStatusLabel(
-                                                replacementOrder.status
-                                              )}
-                                              )
-                                            </p>
-                                            <p>Motif: {latestReceipt?.nonconformity_reason ?? "—"}</p>
-                                            <div className="flex flex-wrap gap-2">
+                                    {replacementOrder ? (
+                                      <div className="space-y-1 text-[11px] text-emerald-100/90">
+                                        <p className="text-[10px] font-semibold uppercase text-emerald-300">
+                                          Demande de remplacement
+                                        </p>
+                                        <p>
+                                          BC #{replacementOrder.id} (statut:{" "}
+                                          {resolveReplacementStatusLabel(replacementOrder.status)})
+                                        </p>
+                                        <p>Motif: {latestReceipt?.nonconformity_reason ?? "—"}</p>
+                                        <div className="flex flex-wrap gap-2">
+                                          <button
+                                            type="button"
+                                            onClick={() => handleDownload(replacementOrder.id)}
+                                            className="rounded border border-emerald-400/60 px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/10"
+                                          >
+                                            Télécharger PDF (demande)
+                                          </button>
+                                          {(() => {
+                                            const canSendReplacement =
+                                              replacementOrder.status === "PENDING" ||
+                                              replacementOrder.status === "ORDERED";
+                                            const supplierState =
+                                              getSupplierSendState(replacementOrder);
+                                            if (
+                                              !canManageOrders ||
+                                              !canSendReplacement ||
+                                              !supplierState.canSend
+                                            ) {
+                                              return null;
+                                            }
+                                            return (
                                               <button
                                                 type="button"
-                                                onClick={() => handleDownload(replacementOrder.id)}
-                                                className="rounded border border-emerald-400/60 px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/10"
-                                              >
-                                                Télécharger PDF (demande)
-                                              </button>
-                                              {(() => {
-                                                const canSendReplacement =
-                                                  replacementOrder.status === "PENDING" ||
-                                                  replacementOrder.status === "ORDERED";
-                                                const supplierState =
-                                                  getSupplierSendState(replacementOrder);
-                                                if (!canSendReplacement || !supplierState.canSend) {
-                                                  return null;
+                                                onClick={() =>
+                                                  sendReplacementToSupplier.mutate({
+                                                    order: replacementOrder,
+                                                    contextNote: latestReceipt?.nonconformity_reason
+                                                      ? `Motif non-conformité : ${latestReceipt.nonconformity_reason}`
+                                                      : "Motif non-conformité : non renseigné"
+                                                  })
                                                 }
-                                                return (
-                                                  <button
-                                                    type="button"
-                                                    onClick={() =>
-                                                      handleOpenSendModal(replacementOrder)
-                                                    }
-                                                    className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-400"
-                                                  >
-                                                    Envoyer la demande de remplacement
-                                                  </button>
-                                                );
-                                              })()}
-                                            </div>
-                                          </div>
+                                                disabled={sendReplacementToSupplier.isPending}
+                                                className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-400"
+                                              >
+                                                {sendReplacementToSupplier.isPending
+                                                  ? "Envoi..."
+                                                  : "Envoyer demande de remplacement"}
+                                              </button>
+                                            );
+                                          })()}
+                                        </div>
+                                      </div>
                                         ) : null}
                                       </div>
                                     ) : (
@@ -1637,6 +1765,18 @@ export function PurchaseOrdersPanel({
                           <button
                             type="button"
                             onClick={() => {
+                              if (
+                                canManageOrders &&
+                                canFinalizeNonconformity &&
+                                sentReplacementOrders[0]
+                              ) {
+                                setFinalizeModalData({
+                                  order,
+                                  replacementOrder: sentReplacementOrders[0],
+                                  lines: nonconformingLineSummaries
+                                });
+                                return;
+                              }
                               if (enableReplacementFlow) {
                                 receiveOrderLines.mutate({
                                   orderId: order.id,
@@ -1685,6 +1825,32 @@ export function PurchaseOrdersPanel({
                           >
                             {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
                           </button>
+                          {canManageOrders && hasNonConformingLatestReceipt && replacementToSend
+                            ? (() => {
+                                const supplierState = getSupplierSendState(replacementToSend);
+                                if (!supplierState.canSend) {
+                                  return null;
+                                }
+                                return (
+                                  <button
+                                    type="button"
+                                    onClick={() =>
+                                      sendReplacementToSupplier.mutate({
+                                        order: replacementToSend,
+                                        contextNote: replacementContextNote
+                                      })
+                                    }
+                                    disabled={sendReplacementToSupplier.isPending}
+                                    className="rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                    title="Envoyer la demande de remplacement au fournisseur"
+                                  >
+                                    {sendReplacementToSupplier.isPending
+                                      ? "Envoi..."
+                                      : "Envoyer demande de remplacement"}
+                                  </button>
+                                );
+                              })()
+                            : null}
                           {canSendEmail
                             ? (() => {
                                 const supplierState = getSupplierSendState(order);
@@ -2192,6 +2358,91 @@ export function PurchaseOrdersPanel({
           </button>
         </div>
       </PurchaseOrderCreateModal>
+
+      <DraggableModal
+        open={Boolean(finalizeModalData)}
+        title={
+          finalizeModalData
+            ? `Finaliser la non-conformité · BC #${finalizeModalData.order.id}`
+            : "Finaliser la non-conformité"
+        }
+        onClose={handleCloseFinalizeModal}
+        footer={
+          <div className="flex flex-wrap items-center justify-between gap-2">
+            <div className="flex flex-wrap gap-2">
+              {finalizeModalData ? (
+                <>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(finalizeModalData.replacementOrder.id)}
+                    className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                  >
+                    Télécharger PDF (demande de remplacement)
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => handleDownload(finalizeModalData.order.id)}
+                    className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                  >
+                    Télécharger PDF (BC initial)
+                  </button>
+                </>
+              ) : null}
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={handleCloseFinalizeModal}
+                className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                onClick={() =>
+                  finalizeModalData
+                    ? finalizeNonconformity.mutate({ orderId: finalizeModalData.order.id })
+                    : null
+                }
+                disabled={finalizeNonconformity.isPending || !finalizeModalData}
+                className="rounded-md bg-emerald-600 px-4 py-2 text-sm font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+              >
+                {finalizeNonconformity.isPending
+                  ? "Validation..."
+                  : "Valider conforme & attribuer"}
+              </button>
+            </div>
+          </div>
+        }
+      >
+        {finalizeModalData ? (
+          <div className="space-y-4 text-sm text-slate-200">
+            <div className="space-y-1 text-xs text-slate-400">
+              <p>BC initial : #{finalizeModalData.order.id}</p>
+              <p>BC remplacement : #{finalizeModalData.replacementOrder.id}</p>
+            </div>
+            <div className="space-y-2">
+              <p className="text-xs font-semibold uppercase text-slate-400">
+                Articles non conformes
+              </p>
+              <div className="space-y-2">
+                {finalizeModalData.lines.map((line) => (
+                  <div
+                    key={line.lineId}
+                    className="rounded-md border border-slate-800 bg-slate-950/70 px-3 py-2"
+                  >
+                    <p className="font-semibold text-slate-100">{line.itemLabel}</p>
+                    <p className="text-xs text-slate-400">
+                      Taille/variante : {line.sizeLabel} · Quantité : {line.qty}
+                    </p>
+                    <p className="text-xs text-rose-200">Motif : {line.reason}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        ) : null}
+      </DraggableModal>
 
       <DraggableModal
         open={Boolean(receiveModalOrder)}
