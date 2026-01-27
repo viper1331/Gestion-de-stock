@@ -45,6 +45,8 @@ interface DotationAssigneeItem {
   name: string;
   size_variant?: string | null;
   qty: number;
+  is_lost?: boolean;
+  is_degraded?: boolean;
 }
 
 interface DotationAssigneeItemsResponse {
@@ -80,6 +82,7 @@ interface PurchaseOrderItem {
   return_expected?: boolean;
   return_reason?: string | null;
   return_employee_item_id?: number | null;
+  target_dotation_id?: number | null;
   return_qty?: number;
   return_status?: "none" | "to_prepare" | "shipped" | "supplier_received" | "cancelled";
 }
@@ -121,6 +124,7 @@ interface PendingClothingAssignment {
   new_item_id: number;
   qty: number;
   return_employee_item_id?: number | null;
+  target_dotation_id?: number | null;
   return_reason?: string | null;
   status: "pending" | "validated" | "cancelled";
   created_at: string;
@@ -174,6 +178,7 @@ interface CreateOrderPayload {
         return_expected?: boolean;
         return_reason?: string | null;
         return_employee_item_id?: number | null;
+        target_dotation_id?: number | null;
         return_qty?: number | null;
       }
   >;
@@ -267,7 +272,7 @@ interface DraftLine {
   returnExpected?: boolean;
   returnReason?: string;
   returnReasonDetail?: string;
-  returnEmployeeItemId?: number | "";
+  targetDotationId?: number | "";
   returnQty?: number;
 }
 
@@ -366,7 +371,7 @@ export function PurchaseOrdersPanel({
         returnExpected: false,
         beneficiaryId: "",
         returnReason: "",
-        returnEmployeeItemId: "",
+        targetDotationId: "",
         returnQty: 0
       }))
     );
@@ -486,7 +491,14 @@ export function PurchaseOrdersPanel({
   const resolveAssignedItemLabel = (assignedItem: DotationAssigneeItem) => {
     const sku = assignedItem.sku ? ` (${assignedItem.sku})` : "";
     const size = assignedItem.size_variant ? assignedItem.size_variant : "—";
-    return `${assignedItem.name}${sku} — ${size} — x${assignedItem.qty}`;
+    const statusLabel = assignedItem.is_lost
+      ? assignedItem.is_degraded
+        ? "PERTE/DÉGRADATION"
+        : "PERTE"
+      : assignedItem.is_degraded
+        ? "DÉGRADATION"
+        : "RAS";
+    return `${assignedItem.name}${sku} — ${size} — ${statusLabel} — x${assignedItem.qty}`;
   };
 
   const formatConflictLabel = (match: BarcodeLookupItem) => {
@@ -585,7 +597,10 @@ export function PurchaseOrdersPanel({
     });
     orders.forEach((order) => {
       (order.pending_assignments ?? []).forEach((assignment) => {
-        if (assignment.return_employee_item_id && assignment.employee_id) {
+        if (
+          (assignment.target_dotation_id || assignment.return_employee_item_id) &&
+          assignment.employee_id
+        ) {
           ids.add(assignment.employee_id);
         }
       });
@@ -905,10 +920,10 @@ export function PurchaseOrdersPanel({
           line.returnReason === "Autre"
             ? line.returnReasonDetail?.trim() || null
             : line.returnReason?.trim() || null;
-        const returnEmployeeItemId =
-          line.returnEmployeeItemId === "" || line.returnEmployeeItemId === undefined
+        const targetDotationId =
+          line.targetDotationId === "" || line.targetDotationId === undefined
             ? null
-            : Number(line.returnEmployeeItemId);
+            : Number(line.targetDotationId);
         return {
           [itemIdField]: itemId,
           quantity_ordered: line.quantity,
@@ -916,7 +931,8 @@ export function PurchaseOrdersPanel({
           line_type: lineType,
           return_expected: lineType === "replacement",
           return_reason: returnReason,
-          return_employee_item_id: returnEmployeeItemId,
+          return_employee_item_id: targetDotationId,
+          target_dotation_id: targetDotationId,
           return_qty: lineType === "replacement" ? line.returnQty ?? line.quantity : null
         } satisfies { quantity_ordered: number } & Partial<Record<ItemIdKey, number>>;
       });
@@ -932,13 +948,15 @@ export function PurchaseOrdersPanel({
         return (
           !line.beneficiary_employee_id ||
           !line.return_reason ||
-          !line.return_employee_item_id ||
+          !line.target_dotation_id ||
           !line.return_qty ||
           line.return_qty <= 0
         );
       });
       if (invalidReplacement) {
-        setError("Complétez le bénéficiaire et le retour attendu pour les remplacements.");
+        setError(
+          "Complétez le bénéficiaire et la dotation en PERTE/DÉGRADATION à remplacer."
+        );
         return;
       }
     }
@@ -1451,20 +1469,23 @@ export function PurchaseOrdersPanel({
                                         {resolveCollaboratorName(assignment.employee_id)} ·{" "}
                                         {resolveItemLabel(assignment.new_item_id)}
                                       </p>
-                                      {assignment.return_employee_item_id ? (
+                                      {assignment.target_dotation_id ||
+                                      assignment.return_employee_item_id ? (
                                         <p className="text-[11px] text-slate-400">
                                           Retour:{" "}
                                           {(() => {
+                                            const targetId =
+                                              assignment.target_dotation_id ??
+                                              assignment.return_employee_item_id;
                                             const matched = (
                                               assignedItemsByBeneficiary.get(assignment.employee_id) ??
                                               []
                                             ).find(
-                                              (item) =>
-                                                item.assignment_id === assignment.return_employee_item_id
+                                              (item) => item.assignment_id === targetId
                                             );
                                             return matched
                                               ? resolveAssignedItemLabel(matched)
-                                              : `#${assignment.return_employee_item_id}`;
+                                              : `#${targetId}`;
                                           })()}
                                           {assignment.return_reason
                                             ? ` · ${assignment.return_reason}`
@@ -1786,9 +1807,12 @@ export function PurchaseOrdersPanel({
             const beneficiaryAssignments = beneficiaryId
               ? assignedItemsByBeneficiary.get(beneficiaryId) ?? []
               : [];
+            const eligibleAssignments = beneficiaryAssignments.filter(
+              (assignment) => Boolean(assignment.is_lost || assignment.is_degraded)
+            );
             const filteredAssignments =
-              selectedItem && beneficiaryAssignments.length > 0
-                ? beneficiaryAssignments.filter((assignment) => {
+              selectedItem && eligibleAssignments.length > 0
+                ? eligibleAssignments.filter((assignment) => {
                     const item = itemsById.get(assignment.item_id);
                     return (
                       item &&
@@ -1798,7 +1822,7 @@ export function PurchaseOrdersPanel({
                   })
                 : [];
             const returnOptions =
-              filteredAssignments.length > 0 ? filteredAssignments : beneficiaryAssignments;
+              filteredAssignments.length > 0 ? filteredAssignments : eligibleAssignments;
             const isFiltered = filteredAssignments.length > 0;
             return (
               <div
@@ -1877,8 +1901,8 @@ export function PurchaseOrdersPanel({
                               returnReason: isReplacement
                                 ? next[index].returnReason ?? RETURN_REASONS[0]
                                 : "",
-                              returnEmployeeItemId: isReplacement
-                                ? next[index].returnEmployeeItemId ?? ""
+                              targetDotationId: isReplacement
+                                ? next[index].targetDotationId ?? ""
                                 : "",
                               returnQty: isReplacement ? next[index].returnQty ?? line.quantity : 0
                             };
@@ -1906,7 +1930,7 @@ export function PurchaseOrdersPanel({
                                     beneficiaryId: event.target.value
                                       ? Number(event.target.value)
                                       : "",
-                                    returnEmployeeItemId: ""
+                                    targetDotationId: ""
                                   };
                                   return next;
                                 })
@@ -1936,16 +1960,16 @@ export function PurchaseOrdersPanel({
                           </div>
                           <div className="space-y-1">
                             <label className="text-xs font-semibold text-slate-300">
-                              Article attribué à retourner
+                              Dotation à remplacer
                             </label>
                             <select
-                              value={line.returnEmployeeItemId ?? ""}
+                              value={line.targetDotationId ?? ""}
                               onChange={(event) =>
                                 setDraftLines((prev) => {
                                   const next = [...prev];
                                   next[index] = {
                                     ...next[index],
-                                    returnEmployeeItemId: event.target.value
+                                    targetDotationId: event.target.value
                                       ? Number(event.target.value)
                                       : ""
                                   };
@@ -1957,7 +1981,7 @@ export function PurchaseOrdersPanel({
                             >
                               <option value="">
                                 {beneficiaryId
-                                  ? "Sélectionnez une dotation"
+                                  ? "Sélectionnez une dotation en PERTE/DÉGRADATION"
                                   : "Choisissez d'abord un collaborateur"}
                               </option>
                               {returnOptions.map((assignment) => (

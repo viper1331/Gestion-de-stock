@@ -919,6 +919,7 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     return_expected INTEGER NOT NULL DEFAULT 0,
                     return_reason TEXT,
                     return_employee_item_id INTEGER,
+                    target_dotation_id INTEGER,
                     return_qty INTEGER NOT NULL DEFAULT 0,
                     return_status TEXT NOT NULL DEFAULT 'none'
                 );
@@ -972,6 +973,7 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     new_item_size TEXT,
                     qty INTEGER NOT NULL,
                     return_employee_item_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
+                    target_dotation_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
                     return_reason TEXT,
                     status TEXT NOT NULL DEFAULT 'pending',
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
