@@ -57,13 +57,22 @@ def _create_dotation(
     collaborator_id: int,
     item_id: int,
     quantity: int,
+    is_lost: bool = False,
+    is_degraded: bool = False,
 ) -> int:
     cur = conn.execute(
         """
-        INSERT INTO dotations (collaborator_id, item_id, quantity, notes)
-        VALUES (?, ?, ?, ?)
+        INSERT INTO dotations (collaborator_id, item_id, quantity, notes, is_lost, is_degraded)
+        VALUES (?, ?, ?, ?, ?, ?)
         """,
-        (collaborator_id, item_id, quantity, "Dotation initiale"),
+        (
+            collaborator_id,
+            item_id,
+            quantity,
+            "Dotation initiale",
+            int(is_lost),
+            int(is_degraded),
+        ),
     )
     return int(cur.lastrowid)
 
@@ -117,6 +126,8 @@ def test_dotation_assignees_and_items() -> None:
             "name": "Polos",
             "size_variant": "S",
             "qty": 2,
+            "is_lost": False,
+            "is_degraded": False,
         }
     ]
 
@@ -151,7 +162,7 @@ def test_receive_conforme_creates_stock_in_and_pending() -> None:
         collaborator_id = _create_collaborator(conn, full_name="Alice Martin")
         conn.execute("UPDATE items SET quantity = 2 WHERE id = ?", (old_item_id,))
         dotation_id = _create_dotation(
-            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1, is_lost=True
         )
         conn.commit()
     order = services.create_purchase_order(
@@ -167,7 +178,7 @@ def test_receive_conforme_creates_stock_in_and_pending() -> None:
                     beneficiary_employee_id=collaborator_id,
                     return_expected=True,
                     return_reason="Vétusté",
-                    return_employee_item_id=dotation_id,
+                    target_dotation_id=dotation_id,
                     return_qty=1,
                 )
             ],
@@ -193,12 +204,16 @@ def test_receive_conforme_creates_stock_in_and_pending() -> None:
         assert receipt_row is not None
         assert receipt_row["conformity_status"] == "conforme"
         pending_row = conn.execute(
-            "SELECT status, return_employee_item_id FROM pending_clothing_assignments WHERE purchase_order_id = ?",
+            """
+            SELECT status, return_employee_item_id, target_dotation_id
+            FROM pending_clothing_assignments
+            WHERE purchase_order_id = ?
+            """,
             (order.id,),
         ).fetchone()
         assert pending_row is not None
         assert pending_row["status"] == "pending"
-        assert pending_row["return_employee_item_id"] == dotation_id
+        assert pending_row["target_dotation_id"] == dotation_id
 
 
 def test_receive_non_conforme_creates_receipt_no_stock_in() -> None:
@@ -257,7 +272,7 @@ def test_non_conforme_blocks_pending_assignment_validation() -> None:
         collaborator_id = _create_collaborator(conn, full_name="Claire Durand")
         conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
         dotation_id = _create_dotation(
-            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1, is_lost=True
         )
         conn.commit()
     order = services.create_purchase_order(
@@ -273,7 +288,7 @@ def test_non_conforme_blocks_pending_assignment_validation() -> None:
                     beneficiary_employee_id=collaborator_id,
                     return_expected=True,
                     return_reason="Vétusté",
-                    return_employee_item_id=dotation_id,
+                    target_dotation_id=dotation_id,
                     return_qty=1,
                 )
             ],
@@ -311,6 +326,14 @@ def test_non_conforme_blocks_pending_assignment_validation() -> None:
         services.validate_pending_assignment(
             order.id, order.pending_assignments[0].id, validated_by="tester"
         )
+    with db.get_stock_connection() as conn:
+        dotation_row = conn.execute(
+            "SELECT is_lost, is_degraded FROM dotations WHERE id = ?",
+            (dotation_id,),
+        ).fetchone()
+        assert dotation_row is not None
+        assert dotation_row["is_lost"] == 1
+        assert dotation_row["is_degraded"] == 0
 
 
 def test_receipt_summaries_include_conforme_and_non_conforme() -> None:
@@ -363,7 +386,7 @@ def test_receipt_summaries_include_conforme_and_non_conforme() -> None:
     assert line.received_non_conforme_qty == 1
 
 
-def test_validate_pending_assigns_new_unassigns_old_and_creates_return_movements_in_order() -> None:
+def test_validate_pending_repairs_dotation_without_creating_new_card() -> None:
     _reset_stock_tables()
     with db.get_stock_connection() as conn:
         new_item_id = _create_item(conn, name="Veste", sku="HAB-005")
@@ -371,7 +394,7 @@ def test_validate_pending_assigns_new_unassigns_old_and_creates_return_movements
         collaborator_id = _create_collaborator(conn, full_name="Jean Dupont")
         conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
         dotation_id = _create_dotation(
-            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1, is_lost=True
         )
         conn.commit()
     order = services.create_purchase_order(
@@ -387,80 +410,7 @@ def test_validate_pending_assigns_new_unassigns_old_and_creates_return_movements
                     beneficiary_employee_id=collaborator_id,
                     return_expected=True,
                     return_reason="Vétusté",
-                    return_employee_item_id=dotation_id,
-                    return_qty=1,
-                )
-            ],
-        )
-    )
-    services.receive_purchase_order_line(
-        order.id,
-        models.PurchaseOrderReceiveLinePayload(
-            purchase_order_line_id=order.items[0].id,
-            received_qty=1,
-            conformity_status="conforme",
-        ),
-        created_by="tester",
-    )
-    order = services.get_purchase_order(order.id)
-    pending_id = order.pending_assignments[0].id
-    services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
-    with db.get_stock_connection() as conn:
-        new_dotation = conn.execute(
-            "SELECT item_id FROM dotations WHERE collaborator_id = ?",
-            (collaborator_id,),
-        ).fetchone()
-        assert new_dotation is not None
-        assert new_dotation["item_id"] == new_item_id
-        old_dotation = conn.execute(
-            "SELECT 1 FROM dotations WHERE id = ?",
-            (dotation_id,),
-        ).fetchone()
-        assert old_dotation is None
-        movement_rows = conn.execute(
-            "SELECT delta, reason FROM movements WHERE item_id = ? ORDER BY id",
-            (old_item_id,),
-        ).fetchall()
-        assert len(movement_rows) >= 2
-        delta_in, reason_in = movement_rows[-2]
-        delta_out, reason_out = movement_rows[-1]
-        assert reason_in == "RETURN_FROM_EMPLOYEE"
-        assert delta_in > 0
-        assert reason_out == "RETURN_TO_SUPPLIER"
-        assert delta_out < 0
-        line_row = conn.execute(
-            "SELECT return_status FROM purchase_order_items WHERE id = ?",
-            (order.items[0].id,),
-        ).fetchone()
-        assert line_row is not None
-        assert line_row["return_status"] == "shipped"
-
-
-def test_validate_pending_decrements_returned_dotation_quantity() -> None:
-    _reset_stock_tables()
-    with db.get_stock_connection() as conn:
-        new_item_id = _create_item(conn, name="Casque neuf", sku="HAB-009")
-        old_item_id = _create_item(conn, name="Casque F1", sku="HAB-010")
-        collaborator_id = _create_collaborator(conn, full_name="Alice Martin")
-        conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
-        dotation_id = _create_dotation(
-            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=3
-        )
-        conn.commit()
-    order = services.create_purchase_order(
-        models.PurchaseOrderCreate(
-            supplier_id=None,
-            status="ORDERED",
-            note=None,
-            items=[
-                models.PurchaseOrderItemInput(
-                    item_id=new_item_id,
-                    quantity_ordered=1,
-                    line_type="replacement",
-                    beneficiary_employee_id=collaborator_id,
-                    return_expected=True,
-                    return_reason="Vétusté",
-                    return_employee_item_id=dotation_id,
+                    target_dotation_id=dotation_id,
                     return_qty=1,
                 )
             ],
@@ -480,32 +430,110 @@ def test_validate_pending_decrements_returned_dotation_quantity() -> None:
     services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
     with db.get_stock_connection() as conn:
         updated_dotation = conn.execute(
-            "SELECT quantity FROM dotations WHERE id = ?",
+            "SELECT id, is_lost, is_degraded FROM dotations WHERE id = ?",
+            (dotation_id,),
+        ).fetchone()
+        assert updated_dotation is not None
+        assert updated_dotation["is_lost"] == 0
+        assert updated_dotation["is_degraded"] == 0
+        count_row = conn.execute(
+            "SELECT COUNT(*) AS count FROM dotations WHERE collaborator_id = ?",
+            (collaborator_id,),
+        ).fetchone()
+        assert count_row["count"] == 1
+        movement_rows = conn.execute(
+            "SELECT delta, reason FROM movements WHERE item_id = ? ORDER BY id",
+            (old_item_id,),
+        ).fetchall()
+        assert len(movement_rows) >= 2
+        delta_in, reason_in = movement_rows[-2]
+        delta_out, reason_out = movement_rows[-1]
+        assert reason_in == "RETURN_FROM_EMPLOYEE"
+        assert delta_in > 0
+        assert reason_out == "RETURN_TO_SUPPLIER"
+        assert delta_out < 0
+        line_row = conn.execute(
+            "SELECT return_status FROM purchase_order_items WHERE id = ?",
+            (order.items[0].id,),
+        ).fetchone()
+        assert line_row is not None
+        assert line_row["return_status"] == "shipped"
+
+
+def test_validate_pending_repairs_single_unit_in_aggregated_dotation() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        new_item_id = _create_item(conn, name="Casque neuf", sku="HAB-009")
+        old_item_id = _create_item(conn, name="Casque F1", sku="HAB-010")
+        collaborator_id = _create_collaborator(conn, full_name="Alice Martin")
+        conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
+        dotation_id = _create_dotation(
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=3, is_lost=True
+        )
+        _create_dotation(conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=2)
+        conn.commit()
+    order = services.create_purchase_order(
+        models.PurchaseOrderCreate(
+            supplier_id=None,
+            status="ORDERED",
+            note=None,
+            items=[
+                models.PurchaseOrderItemInput(
+                    item_id=new_item_id,
+                    quantity_ordered=1,
+                    line_type="replacement",
+                    beneficiary_employee_id=collaborator_id,
+                    return_expected=True,
+                    return_reason="Vétusté",
+                    target_dotation_id=dotation_id,
+                    return_qty=1,
+                )
+            ],
+        )
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
+    order = services.get_purchase_order(order.id)
+    pending_id = order.pending_assignments[0].id
+    services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
+    with db.get_stock_connection() as conn:
+        updated_dotation = conn.execute(
+            "SELECT quantity, is_lost, is_degraded FROM dotations WHERE id = ?",
             (dotation_id,),
         ).fetchone()
         assert updated_dotation is not None
         assert updated_dotation["quantity"] == 2
-        new_dotation = conn.execute(
+        assert updated_dotation["is_lost"] == 1
+        assert updated_dotation["is_degraded"] == 0
+        ras_dotation = conn.execute(
             """
             SELECT quantity
             FROM dotations
             WHERE collaborator_id = ? AND item_id = ?
+              AND is_lost = 0
+              AND is_degraded = 0
             """,
-            (collaborator_id, new_item_id),
+            (collaborator_id, old_item_id),
         ).fetchone()
-        assert new_dotation is not None
-        assert new_dotation["quantity"] == 1
+        assert ras_dotation is not None
+        assert ras_dotation["quantity"] == 3
 
 
-def test_validate_pending_fails_when_return_qty_exceeds_dotation() -> None:
+def test_validate_pending_fails_when_target_is_not_lost_or_degraded() -> None:
     _reset_stock_tables()
     with db.get_stock_connection() as conn:
-        new_item_id = _create_item(conn, name="Parka", sku="HAB-011")
-        old_item_id = _create_item(conn, name="Parka ancienne", sku="HAB-012")
-        collaborator_id = _create_collaborator(conn, full_name="Louis Pasteur")
-        conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
+        new_item_id = _create_item(conn, name="Gilet", sku="HAB-016")
+        old_item_id = _create_item(conn, name="Gilet ancien", sku="HAB-017")
+        collaborator_id = _create_collaborator(conn, full_name="Jean Valjean")
         dotation_id = _create_dotation(
-            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1, is_lost=True
         )
         conn.commit()
     order = services.create_purchase_order(
@@ -521,7 +549,60 @@ def test_validate_pending_fails_when_return_qty_exceeds_dotation() -> None:
                     beneficiary_employee_id=collaborator_id,
                     return_expected=True,
                     return_reason="Vétusté",
-                    return_employee_item_id=dotation_id,
+                    target_dotation_id=dotation_id,
+                    return_qty=1,
+                )
+            ],
+        )
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            "UPDATE dotations SET is_lost = 0, is_degraded = 0 WHERE id = ?",
+            (dotation_id,),
+        )
+        conn.commit()
+    order = services.get_purchase_order(order.id)
+    pending_id = order.pending_assignments[0].id
+    with pytest.raises(
+        services.PendingAssignmentConflictError, match="dotation ciblée doit être en PERTE"
+    ):
+        services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
+
+
+def test_validate_pending_fails_when_return_qty_exceeds_dotation() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        new_item_id = _create_item(conn, name="Parka", sku="HAB-011")
+        old_item_id = _create_item(conn, name="Parka ancienne", sku="HAB-012")
+        collaborator_id = _create_collaborator(conn, full_name="Louis Pasteur")
+        conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
+        dotation_id = _create_dotation(
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1, is_lost=True
+        )
+        conn.commit()
+    order = services.create_purchase_order(
+        models.PurchaseOrderCreate(
+            supplier_id=None,
+            status="ORDERED",
+            note=None,
+            items=[
+                models.PurchaseOrderItemInput(
+                    item_id=new_item_id,
+                    quantity_ordered=1,
+                    line_type="replacement",
+                    beneficiary_employee_id=collaborator_id,
+                    return_expected=True,
+                    return_reason="Vétusté",
+                    target_dotation_id=dotation_id,
                     return_qty=2,
                 )
             ],
@@ -551,7 +632,7 @@ def test_validate_fails_if_return_item_not_assigned() -> None:
         other_collaborator_id = _create_collaborator(conn, full_name="Paul Durand")
         conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (old_item_id,))
         dotation_id = _create_dotation(
-            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1
+            conn, collaborator_id=collaborator_id, item_id=old_item_id, quantity=1, is_lost=True
         )
         conn.commit()
     order = services.create_purchase_order(
@@ -567,7 +648,7 @@ def test_validate_fails_if_return_item_not_assigned() -> None:
                     beneficiary_employee_id=collaborator_id,
                     return_expected=True,
                     return_reason="Vétusté",
-                    return_employee_item_id=dotation_id,
+                    target_dotation_id=dotation_id,
                     return_qty=1,
                 )
             ],

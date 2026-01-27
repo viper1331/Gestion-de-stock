@@ -1069,6 +1069,7 @@ class PurchaseOrderItem(BaseModel):
     return_expected: bool = False
     return_reason: str | None = None
     return_employee_item_id: int | None = None
+    target_dotation_id: int | None = None
     return_qty: int = 0
     return_status: Literal["none", "to_prepare", "shipped", "supplier_received", "cancelled"] = "none"
     received_conforme_qty: int = 0
@@ -1083,6 +1084,7 @@ class PurchaseOrderItemInput(BaseModel):
     return_expected: bool = False
     return_reason: str | None = Field(default=None, max_length=256)
     return_employee_item_id: int | None = Field(default=None, gt=0)
+    target_dotation_id: int | None = Field(default=None, gt=0)
     return_qty: int | None = Field(default=None, gt=0)
 
 
@@ -1161,6 +1163,7 @@ class PendingClothingAssignment(BaseModel):
     new_item_size: str | None = None
     qty: int
     return_employee_item_id: int | None = None
+    target_dotation_id: int | None = None
     return_reason: str | None = None
     status: Literal["pending", "validated", "cancelled"]
     created_at: datetime
@@ -1495,6 +1498,8 @@ class DotationAssigneeItem(BaseModel):
     name: str
     size_variant: Optional[str] = None
     qty: int
+    is_lost: bool = False
+    is_degraded: bool = False
 
 
 class DotationAssigneeItemsResponse(BaseModel):

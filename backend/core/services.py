@@ -1228,6 +1228,12 @@ def _normalize_variant_value(value: Any) -> str | None:
     return text if text else None
 
 
+def _append_note(existing: str | None, note: str) -> str:
+    if existing and existing.strip():
+        return f"{existing.strip()} | {note}"
+    return note
+
+
 def _extract_variant_from_row(row: sqlite3.Row | None, fields: Iterable[str]) -> str | None:
     if row is None:
         return None
@@ -3630,6 +3636,8 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_order_items ADD COLUMN return_reason TEXT")
         if "return_employee_item_id" not in poi_columns:
             execute("ALTER TABLE purchase_order_items ADD COLUMN return_employee_item_id INTEGER")
+        if "target_dotation_id" not in poi_columns:
+            execute("ALTER TABLE purchase_order_items ADD COLUMN target_dotation_id INTEGER")
         if "return_qty" not in poi_columns:
             execute(
                 "ALTER TABLE purchase_order_items ADD COLUMN return_qty INTEGER NOT NULL DEFAULT 0"
@@ -3771,6 +3779,7 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 new_item_size TEXT,
                 qty INTEGER NOT NULL,
                 return_employee_item_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
+                target_dotation_id INTEGER REFERENCES dotations(id) ON DELETE SET NULL,
                 return_reason TEXT,
                 status TEXT NOT NULL DEFAULT 'pending',
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -3808,6 +3817,13 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 SET module = 'clothing'
                 WHERE module IS NULL
                 """
+            )
+
+        pending_info = execute("PRAGMA table_info(pending_clothing_assignments)").fetchall()
+        pending_columns = {row["name"] for row in pending_info}
+        if pending_info and "target_dotation_id" not in pending_columns:
+            execute(
+                "ALTER TABLE pending_clothing_assignments ADD COLUMN target_dotation_id INTEGER"
             )
 
         executescript(
@@ -9391,6 +9407,9 @@ def _build_purchase_order_detail(
     has_return_employee_item_id = _table_has_column(
         conn, "purchase_order_items", "return_employee_item_id"
     )
+    has_target_dotation_id = _table_has_column(
+        conn, "purchase_order_items", "target_dotation_id"
+    )
     has_return_qty = _table_has_column(conn, "purchase_order_items", "return_qty")
     has_return_status = _table_has_column(conn, "purchase_order_items", "return_status")
     sku_expr = "i.sku AS sku"
@@ -9416,6 +9435,9 @@ def _build_purchase_order_detail(
     return_employee_expr = "NULL AS return_employee_item_id"
     if has_return_employee_item_id:
         return_employee_expr = "poi.return_employee_item_id AS return_employee_item_id"
+    target_dotation_expr = "NULL AS target_dotation_id"
+    if has_target_dotation_id:
+        target_dotation_expr = "poi.target_dotation_id AS target_dotation_id"
     return_qty_expr = "0 AS return_qty"
     if has_return_qty:
         return_qty_expr = "poi.return_qty AS return_qty"
@@ -9439,6 +9461,7 @@ def _build_purchase_order_detail(
                {return_expected_expr},
                {return_reason_expr},
                {return_employee_expr},
+               {target_dotation_expr},
                {return_qty_expr},
                {return_status_expr}
         FROM purchase_order_items AS poi
@@ -9513,6 +9536,35 @@ def _build_purchase_order_detail(
                 row["total"] or 0
             )
             receipt_counts[line_id] = receipt_counts.get(line_id, 0) + 1
+    nonconformities: list[models.PurchaseOrderNonconformity] = []
+    if _table_exists(conn, "purchase_order_nonconformities"):
+        nonconformity_rows = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_nonconformities
+            WHERE purchase_order_id = ? AND site_key = ?
+            ORDER BY updated_at DESC, id DESC
+            """,
+            (order_row["id"], resolved_site_key),
+        ).fetchall()
+        nonconformities = [
+            models.PurchaseOrderNonconformity(
+                id=row["id"],
+                site_key=row["site_key"],
+                module=row["module"],
+                purchase_order_id=row["purchase_order_id"],
+                purchase_order_line_id=row["purchase_order_line_id"],
+                receipt_id=row["receipt_id"],
+                status=row["status"],
+                reason=row["reason"],
+                note=_row_get(row, "note"),
+                requested_replacement=bool(_row_get(row, "requested_replacement", 0)),
+                created_by=_row_get(row, "created_by"),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in nonconformity_rows
+        ]
     items = [
         models.PurchaseOrderItem(
             id=item_row["id"],
@@ -9530,6 +9582,7 @@ def _build_purchase_order_detail(
             return_expected=bool(_row_get(item_row, "return_expected", 0)),
             return_reason=_row_get(item_row, "return_reason"),
             return_employee_item_id=_row_get(item_row, "return_employee_item_id"),
+            target_dotation_id=_row_get(item_row, "target_dotation_id"),
             return_qty=_row_get(item_row, "return_qty", 0),
             return_status=_row_get(item_row, "return_status", "none"),
             received_conforme_qty=(
@@ -9570,6 +9623,7 @@ def _build_purchase_order_detail(
                 new_item_size=_row_get(row, "new_item_size"),
                 qty=row["qty"],
                 return_employee_item_id=_row_get(row, "return_employee_item_id"),
+                target_dotation_id=_row_get(row, "target_dotation_id"),
                 return_reason=_row_get(row, "return_reason"),
                 status=row["status"],
                 created_at=row["created_at"],
@@ -9696,6 +9750,9 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
             has_return_employee_item_id = _table_has_column(
                 conn, "purchase_order_items", "return_employee_item_id"
             )
+            has_target_dotation_id = _table_has_column(
+                conn, "purchase_order_items", "target_dotation_id"
+            )
             has_return_qty = _table_has_column(conn, "purchase_order_items", "return_qty")
             has_return_status = _table_has_column(conn, "purchase_order_items", "return_status")
             for line in payload.items:
@@ -9721,7 +9778,8 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                         raise ValueError("Collaborateur introuvable")
                 return_expected = bool(line.return_expected)
                 return_reason = (line.return_reason or "").strip() if line.return_reason else None
-                return_employee_item_id = line.return_employee_item_id
+                target_dotation_id = line.target_dotation_id or line.return_employee_item_id
+                return_employee_item_id = line.return_employee_item_id or target_dotation_id
                 return_qty = line.return_qty if line.return_qty is not None else 0
                 return_status = "none"
                 if line_type == "replacement":
@@ -9734,20 +9792,26 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                         return_qty = quantity
                     if return_qty <= 0:
                         raise ValueError("La quantité de retour doit être positive")
-                    if not return_employee_item_id:
-                        raise ValueError("L'article à retourner est requis pour un remplacement")
+                    if not target_dotation_id:
+                        raise ValueError(
+                            "La dotation à remplacer est requise pour un remplacement"
+                        )
                     dotation_row = conn.execute(
                         """
-                        SELECT collaborator_id
+                        SELECT collaborator_id, is_lost, is_degraded
                         FROM dotations
                         WHERE id = ?
                         """,
-                        (return_employee_item_id,),
+                        (target_dotation_id,),
                     ).fetchone()
                     if dotation_row is None:
                         raise ValueError("Article attribué introuvable pour le retour")
                     if dotation_row["collaborator_id"] != beneficiary_id:
                         raise ValueError("L'article retourné n'appartient pas au bénéficiaire")
+                    if not (dotation_row["is_lost"] or dotation_row["is_degraded"]):
+                        raise ValueError(
+                            "La dotation sélectionnée doit être en perte ou dégradation."
+                        )
                     return_status = "to_prepare"
                 elif return_expected:
                     if not return_reason:
@@ -9783,6 +9847,9 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                 if has_return_employee_item_id:
                     columns.append("return_employee_item_id")
                     values.append(return_employee_item_id)
+                if has_target_dotation_id:
+                    columns.append("target_dotation_id")
+                    values.append(target_dotation_id)
                 if has_return_qty:
                     columns.append("return_qty")
                     values.append(return_qty)
@@ -11390,36 +11457,47 @@ def receive_purchase_order_line(
                     "SELECT sku, size FROM items WHERE id = ?",
                     (line["item_id"],),
                 ).fetchone()
+                target_dotation_id = _row_get(line, "target_dotation_id") or _row_get(
+                    line, "return_employee_item_id"
+                )
+                pending_columns = [
+                    "site_key",
+                    "purchase_order_id",
+                    "purchase_order_line_id",
+                    "receipt_id",
+                    "employee_id",
+                    "new_item_id",
+                    "new_item_sku",
+                    "new_item_size",
+                    "qty",
+                    "return_employee_item_id",
+                    "return_reason",
+                    "status",
+                ]
+                pending_values: list[object] = [
+                    normalized_site_key,
+                    order_id,
+                    line["id"],
+                    receipt_id,
+                    beneficiary_id,
+                    line["item_id"],
+                    _row_get(item_row, "sku"),
+                    _row_get(item_row, "size"),
+                    payload.received_qty,
+                    target_dotation_id,
+                    _row_get(line, "return_reason"),
+                    "pending",
+                ]
+                if _table_has_column(conn, "pending_clothing_assignments", "target_dotation_id"):
+                    pending_columns.insert(-2, "target_dotation_id")
+                    pending_values.insert(-2, target_dotation_id)
                 conn.execute(
-                    """
+                    f"""
                     INSERT OR IGNORE INTO pending_clothing_assignments (
-                        site_key,
-                        purchase_order_id,
-                        purchase_order_line_id,
-                        receipt_id,
-                        employee_id,
-                        new_item_id,
-                        new_item_sku,
-                        new_item_size,
-                        qty,
-                        return_employee_item_id,
-                        return_reason,
-                        status
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')
+                        {", ".join(pending_columns)}
+                    ) VALUES ({", ".join("?" for _ in pending_columns)})
                     """,
-                    (
-                        normalized_site_key,
-                        order_id,
-                        line["id"],
-                        receipt_id,
-                        beneficiary_id,
-                        line["item_id"],
-                        _row_get(item_row, "sku"),
-                        _row_get(item_row, "size"),
-                        payload.received_qty,
-                        _row_get(line, "return_employee_item_id"),
-                        _row_get(line, "return_reason"),
-                    ),
+                    pending_values,
                 )
                 if _table_has_column(conn, "purchase_order_items", "return_status") and _row_get(
                     line, "return_expected", 0
@@ -11611,18 +11689,26 @@ def validate_pending_assignment(
             raise PendingAssignmentConflictError(
                 "Quantité reçue conforme insuffisante pour l'attribution."
             )
-        return_employee_item_id = _row_get(pending_row, "return_employee_item_id")
-        if not return_employee_item_id:
-            raise ValueError("Article à retourner manquant")
+        target_dotation_id = _row_get(pending_row, "target_dotation_id") or _row_get(
+            pending_row, "return_employee_item_id"
+        )
+        if not target_dotation_id:
+            raise PendingAssignmentConflictError(
+                "Remplacement : sélectionnez l’article en PERTE/DÉGRADATION à corriger."
+            )
         dotation_row = conn.execute(
             "SELECT * FROM dotations WHERE id = ?",
-            (return_employee_item_id,),
+            (target_dotation_id,),
         ).fetchone()
         if dotation_row is None:
             raise PendingAssignmentConflictError("Article attribué introuvable")
         if dotation_row["collaborator_id"] != pending_row["employee_id"]:
             raise PendingAssignmentConflictError(
                 "L'article retourné n'appartient pas au collaborateur"
+            )
+        if not (dotation_row["is_lost"] or dotation_row["is_degraded"]):
+            raise PendingAssignmentConflictError(
+                "Remplacement : la dotation ciblée doit être en PERTE ou DÉGRADATION."
             )
         return_qty = _row_get(line_row, "return_qty", pending_row["qty"])
         if return_qty <= 0:
@@ -11639,25 +11725,77 @@ def validate_pending_assignment(
             raise ValueError("Article introuvable")
         if item_row["quantity"] < pending_row["qty"]:
             raise ValueError("Stock insuffisant pour la dotation")
-        conn.execute(
-            """
-            INSERT INTO dotations (
-                collaborator_id,
-                item_id,
-                quantity,
-                notes,
-                perceived_at,
-                is_lost,
-                is_degraded
-            ) VALUES (?, ?, ?, ?, DATE('now'), 0, 0)
-            """,
-            (
-                pending_row["employee_id"],
-                pending_row["new_item_id"],
-                pending_row["qty"],
-                f"Remplacement BC #{order_id}",
-            ),
-        )
+        replacement_note = f"Remplacement BC #{order_id}"
+        repair_qty = 1
+        if dotation_row["quantity"] < repair_qty:
+            raise PendingAssignmentConflictError(
+                "Quantité à réparer > quantité attribuée"
+            )
+        if dotation_row["quantity"] == 1:
+            new_notes = _append_note(dotation_row["notes"], replacement_note)
+            conn.execute(
+                """
+                UPDATE dotations
+                SET is_lost = 0,
+                    is_degraded = 0,
+                    notes = ?
+                WHERE id = ?
+                """,
+                (new_notes, target_dotation_id),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE dotations
+                SET quantity = quantity - 1
+                WHERE id = ?
+                """,
+                (target_dotation_id,),
+            )
+            ras_row = conn.execute(
+                """
+                SELECT id, notes
+                FROM dotations
+                WHERE collaborator_id = ?
+                  AND item_id = ?
+                  AND is_lost = 0
+                  AND is_degraded = 0
+                ORDER BY allocated_at DESC, id DESC
+                LIMIT 1
+                """,
+                (dotation_row["collaborator_id"], dotation_row["item_id"]),
+            ).fetchone()
+            if ras_row:
+                new_notes = _append_note(ras_row["notes"], replacement_note)
+                conn.execute(
+                    """
+                    UPDATE dotations
+                    SET quantity = quantity + 1,
+                        notes = ?
+                    WHERE id = ?
+                    """,
+                    (new_notes, ras_row["id"]),
+                )
+            else:
+                conn.execute(
+                    """
+                    INSERT INTO dotations (
+                        collaborator_id,
+                        item_id,
+                        quantity,
+                        notes,
+                        perceived_at,
+                        is_lost,
+                        is_degraded
+                    ) VALUES (?, ?, ?, ?, DATE('now'), 0, 0)
+                    """,
+                    (
+                        dotation_row["collaborator_id"],
+                        dotation_row["item_id"],
+                        repair_qty,
+                        replacement_note,
+                    ),
+                )
         conn.execute(
             "UPDATE items SET quantity = quantity - ? WHERE id = ?",
             (pending_row["qty"], pending_row["new_item_id"]),
@@ -11666,14 +11804,6 @@ def validate_pending_assignment(
             "INSERT INTO movements (item_id, delta, reason) VALUES (?, ?, ?)",
             (pending_row["new_item_id"], -pending_row["qty"], "DOTATION_ASSIGNMENT"),
         )
-        remaining_qty = dotation_row["quantity"] - return_qty
-        if remaining_qty == 0:
-            conn.execute("DELETE FROM dotations WHERE id = ?", (return_employee_item_id,))
-        else:
-            conn.execute(
-                "UPDATE dotations SET quantity = ? WHERE id = ?",
-                (remaining_qty, return_employee_item_id),
-            )
         conn.execute(
             "UPDATE items SET quantity = quantity + ? WHERE id = ?",
             (return_qty, dotation_row["item_id"]),
@@ -11709,7 +11839,7 @@ def validate_pending_assignment(
                 order_id,
                 pending_row["purchase_order_line_id"],
                 pending_row["employee_id"],
-                return_employee_item_id,
+                target_dotation_id,
                 dotation_row["item_id"],
                 return_qty,
                 _row_get(line_row, "return_reason"),
@@ -11750,6 +11880,7 @@ def validate_pending_assignment(
             new_item_size=_row_get(updated, "new_item_size"),
             qty=updated["qty"],
             return_employee_item_id=_row_get(updated, "return_employee_item_id"),
+            target_dotation_id=_row_get(updated, "target_dotation_id"),
             return_reason=_row_get(updated, "return_reason"),
             status=updated["status"],
             created_at=updated["created_at"],
@@ -12902,7 +13033,9 @@ def list_dotation_assignee_items(employee_id: int) -> list[models.DotationAssign
             i.sku AS sku,
             i.name AS name,
             i.size AS size_variant,
-            d.quantity AS qty
+            d.quantity AS qty,
+            d.is_lost AS is_lost,
+            d.is_degraded AS is_degraded
         FROM dotations AS d
         JOIN items AS i ON i.id = d.item_id
         WHERE d.collaborator_id = ?
@@ -12918,6 +13051,8 @@ def list_dotation_assignee_items(employee_id: int) -> list[models.DotationAssign
                 name=row["name"],
                 size_variant=_normalize_variant_value(row["size_variant"]),
                 qty=row["qty"],
+                is_lost=bool(row["is_lost"]),
+                is_degraded=bool(row["is_degraded"]),
             )
             for row in rows
         ]
