@@ -1113,6 +1113,22 @@ class PurchaseOrderReceipt(BaseModel):
     created_at: datetime
 
 
+class PurchaseOrderNonconformity(BaseModel):
+    id: int
+    site_key: str
+    module: str
+    purchase_order_id: int
+    purchase_order_line_id: int
+    receipt_id: int
+    status: Literal["open", "replacement_requested", "closed"]
+    reason: str
+    note: str | None = None
+    requested_replacement: bool = False
+    created_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class PurchaseOrderReceiveLinePayload(BaseModel):
     purchase_order_line_id: int = Field(..., gt=0)
     received_qty: int = Field(..., gt=0)
@@ -1186,8 +1202,20 @@ class PurchaseOrderDetail(PurchaseOrder):
     supplier_missing_reason: str | None = None
     items: list[PurchaseOrderItem] = Field(default_factory=list)
     receipts: list[PurchaseOrderReceipt] = Field(default_factory=list)
+    nonconformities: list[PurchaseOrderNonconformity] = Field(default_factory=list)
     pending_assignments: list[PendingClothingAssignment] = Field(default_factory=list)
     supplier_returns: list[ClothingSupplierReturn] = Field(default_factory=list)
+
+
+class PurchaseOrderReplacementRequest(BaseModel):
+    line_id: int = Field(..., gt=0)
+    receipt_id: int = Field(..., gt=0)
+
+
+class PurchaseOrderReplacementResponse(BaseModel):
+    ok: bool
+    nonconformity_id: int
+    status: Literal["open", "replacement_requested", "closed"]
 
 
 class PurchaseOrderEmailLogEntry(BaseModel):

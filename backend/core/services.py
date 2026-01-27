@@ -9238,6 +9238,10 @@ class PendingAssignmentConflictError(ValueError):
     pass
 
 
+class NonConformeReceiptRequiredError(ValueError):
+    pass
+
+
 def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
     ensure_database_ready()
     normalized_site_key = sites.normalize_site_key(str(site_key)) if site_key is not None else None
@@ -9495,6 +9499,35 @@ def _build_purchase_order_detail(
             )
             for row in receipt_rows
         ]
+    nonconformities: list[models.PurchaseOrderNonconformity] = []
+    if _table_exists(conn, "purchase_order_nonconformities"):
+        nonconformity_rows = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_nonconformities
+            WHERE purchase_order_id = ? AND site_key = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (order_row["id"], resolved_site_key),
+        ).fetchall()
+        nonconformities = [
+            models.PurchaseOrderNonconformity(
+                id=row["id"],
+                site_key=row["site_key"],
+                module=row["module"],
+                purchase_order_id=row["purchase_order_id"],
+                purchase_order_line_id=row["purchase_order_line_id"],
+                receipt_id=row["receipt_id"],
+                status=row["status"],
+                reason=row["reason"],
+                note=_row_get(row, "note"),
+                requested_replacement=bool(_row_get(row, "requested_replacement", 0)),
+                created_by=_row_get(row, "created_by"),
+                created_at=row["created_at"],
+                updated_at=row["updated_at"],
+            )
+            for row in nonconformity_rows
+        ]
     pending_assignments: list[models.PendingClothingAssignment] = []
     if _table_exists(conn, "pending_clothing_assignments"):
         pending_rows = conn.execute(
@@ -9571,6 +9604,7 @@ def _build_purchase_order_detail(
         last_sent_by=order_row["last_sent_by"],
         items=items,
         receipts=receipts,
+        nonconformities=nonconformities,
         pending_assignments=pending_assignments,
         supplier_returns=supplier_returns,
     )
@@ -11400,6 +11434,86 @@ def receive_purchase_order_line(
             conn.rollback()
             raise
     return get_purchase_order(order_id)
+
+
+def request_purchase_order_replacement(
+    order_id: int,
+    payload: models.PurchaseOrderReplacementRequest,
+    *,
+    requested_by: str | None,
+) -> models.PurchaseOrderReplacementResponse:
+    ensure_database_ready()
+    normalized_site_key = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        receipt_row = conn.execute(
+            """
+            SELECT *
+            FROM purchase_order_receipts
+            WHERE id = ? AND purchase_order_id = ? AND site_key = ?
+            """,
+            (payload.receipt_id, order_id, normalized_site_key),
+        ).fetchone()
+        if receipt_row is None:
+            raise ValueError("Réception introuvable")
+        if receipt_row["purchase_order_line_id"] != payload.line_id:
+            raise ValueError("Ligne de réception invalide")
+        if receipt_row["conformity_status"] != "non_conforme":
+            raise NonConformeReceiptRequiredError("La réception doit être non conforme.")
+        reason = _row_get(receipt_row, "nonconformity_reason")
+        if not reason:
+            raise ValueError("Motif de non conformité manquant")
+        note = _row_get(receipt_row, "note")
+        conn.execute(
+            """
+            INSERT INTO purchase_order_nonconformities (
+                site_key,
+                module,
+                purchase_order_id,
+                purchase_order_line_id,
+                receipt_id,
+                status,
+                reason,
+                note,
+                requested_replacement,
+                created_by,
+                created_at,
+                updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 1, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(site_key, receipt_id, purchase_order_line_id) DO UPDATE SET
+                status = excluded.status,
+                reason = excluded.reason,
+                note = excluded.note,
+                requested_replacement = 1,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                normalized_site_key,
+                "clothing",
+                order_id,
+                payload.line_id,
+                payload.receipt_id,
+                "replacement_requested",
+                reason,
+                note,
+                requested_by,
+            ),
+        )
+        row = conn.execute(
+            """
+            SELECT id, status
+            FROM purchase_order_nonconformities
+            WHERE site_key = ? AND receipt_id = ? AND purchase_order_line_id = ?
+            """,
+            (normalized_site_key, payload.receipt_id, payload.line_id),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Demande de remplacement introuvable")
+        return models.PurchaseOrderReplacementResponse(
+            ok=True,
+            nonconformity_id=row["id"],
+            status=row["status"],
+        )
 
 
 def validate_pending_assignment(

@@ -95,6 +95,21 @@ interface PurchaseOrderReceipt {
   created_at: string;
 }
 
+interface PurchaseOrderNonconformity {
+  id: number;
+  module: string;
+  purchase_order_id: number;
+  purchase_order_line_id: number;
+  receipt_id: number;
+  status: "open" | "replacement_requested" | "closed";
+  reason: string;
+  note?: string | null;
+  requested_replacement: boolean;
+  created_by?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 interface PendingClothingAssignment {
   id: number;
   purchase_order_id: number;
@@ -140,6 +155,7 @@ interface PurchaseOrderDetail {
   last_sent_by: string | null;
   items: PurchaseOrderItem[];
   receipts?: PurchaseOrderReceipt[];
+  nonconformities?: PurchaseOrderNonconformity[];
   pending_assignments?: PendingClothingAssignment[];
   supplier_returns?: ClothingSupplierReturn[];
 }
@@ -175,6 +191,18 @@ interface ReceiveLinePayload {
     nonconformity_action?: "replacement" | "credit_note" | "return_to_supplier" | null;
     note?: string | null;
   }>;
+}
+
+interface RequestReplacementPayload {
+  orderId: number;
+  lineId: number;
+  receiptId: number;
+}
+
+interface PurchaseOrderReplacementResponse {
+  ok: boolean;
+  nonconformity_id: number;
+  status: "open" | "replacement_requested" | "closed";
 }
 
 interface UpdateOrderPayload {
@@ -667,6 +695,34 @@ export function PurchaseOrdersPanel({
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
     onError: () => setError("Impossible d'enregistrer la réception."),
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
+  const requestReplacement = useMutation<
+    PurchaseOrderReplacementResponse,
+    AxiosError<ApiErrorResponse>,
+    RequestReplacementPayload
+  >({
+    mutationFn: async ({ orderId, lineId, receiptId }) => {
+      const response = await api.post<PurchaseOrderReplacementResponse>(
+        `${purchaseOrdersPath}/${orderId}/request-replacement`,
+        {
+          line_id: lineId,
+          receipt_id: receiptId
+        }
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Demande de remplacement créée.");
+      await queryClient.invalidateQueries({ queryKey: ordersQueryKey });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible de créer la demande de remplacement.");
+    },
     onSettled: () => {
       window.setTimeout(() => setMessage(null), 4000);
     }
@@ -1251,6 +1307,19 @@ export function PurchaseOrdersPanel({
                             const lineReceipts = (order.receipts ?? []).filter(
                               (receipt) => receipt.purchase_order_line_id === line.id
                             );
+                            const latestReceipt = lineReceipts[0];
+                            const latestIsNonConforming =
+                              latestReceipt?.conformity_status === "non_conforme";
+                            const lineNonconformity = latestReceipt
+                              ? (order.nonconformities ?? []).find(
+                                  (entry) =>
+                                    entry.receipt_id === latestReceipt.id &&
+                                    entry.purchase_order_line_id === line.id
+                                )
+                              : undefined;
+                            const replacementRequested = Boolean(
+                              lineNonconformity?.requested_replacement
+                            );
                             const hasNonConforming = lineReceipts.some(
                               (receipt) => receipt.conformity_status === "non_conforme"
                             );
@@ -1291,6 +1360,52 @@ export function PurchaseOrdersPanel({
                                     {line.return_reason ? ` · ${line.return_reason}` : ""}
                                     {line.return_status ? ` · ${line.return_status}` : ""}
                                   </p>
+                                ) : null}
+                                {latestIsNonConforming ? (
+                                  <div className="mt-2 space-y-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2">
+                                    <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase text-rose-200">
+                                      <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] text-rose-200">
+                                        Non conforme
+                                      </span>
+                                      <span>Action recommandée</span>
+                                    </div>
+                                    <p className="text-[11px] text-rose-100/90">
+                                      Motif:{" "}
+                                      {latestReceipt?.nonconformity_reason ?? "Non précisé"}
+                                    </p>
+                                    {replacementRequested ? (
+                                      <div className="flex flex-wrap items-center gap-2 text-[11px] text-emerald-200">
+                                        <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] uppercase text-emerald-200">
+                                          Remplacement demandé
+                                        </span>
+                                        {lineNonconformity?.created_at ? (
+                                          <span>
+                                            {new Date(
+                                              lineNonconformity.created_at
+                                            ).toLocaleString()}
+                                          </span>
+                                        ) : null}
+                                        {lineNonconformity?.created_by ? (
+                                          <span>par {lineNonconformity.created_by}</span>
+                                        ) : null}
+                                      </div>
+                                    ) : (
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          requestReplacement.mutate({
+                                            orderId: order.id,
+                                            lineId: line.id,
+                                            receiptId: latestReceipt.id
+                                          })
+                                        }
+                                        disabled={requestReplacement.isPending}
+                                        className="rounded bg-rose-500 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                      >
+                                        Créer demande de remplacement
+                                      </button>
+                                    )}
+                                  </div>
                                 ) : null}
                               </li>
                             );
