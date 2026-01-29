@@ -338,8 +338,20 @@ const STATUS_BADGE_LABELS: Record<PrimaryOrderStatus, { label: string; tone: "su
 const BLOCKING_RETURN_STATUSES = new Set(["to_prepare", "shipped"]);
 const BLOCKING_SUPPLIER_RETURN_STATUSES = new Set(["prepared", "shipped"]);
 
+const dedupeById = <T extends { id: number | string }>(rows: T[]): T[] => {
+  const seen = new Set<T["id"]>();
+  return rows.filter((row) => {
+    if (seen.has(row.id)) {
+      return false;
+    }
+    seen.add(row.id);
+    return true;
+  });
+};
+
 
 interface DraftLine {
+  id: number;
   itemId: number | "";
   quantity: number;
   lineType?: "standard" | "replacement";
@@ -536,12 +548,19 @@ export function PurchaseOrdersPanel({
     [moduleKey, modulePermissions, user]
   );
   const queryClient = useQueryClient();
+  const nextDraftLineId = useRef(0);
+  const createDraftLine = (overrides: Partial<DraftLine> = {}): DraftLine => ({
+    id: nextDraftLineId.current++,
+    itemId: "",
+    quantity: 1,
+    lineType: "standard",
+    returnExpected: false,
+    ...overrides
+  });
   const [draftSupplier, setDraftSupplier] = useState<number | "">("");
   const [draftStatus, setDraftStatus] = useState<string>("ORDERED");
   const [draftNote, setDraftNote] = useState("");
-  const [draftLines, setDraftLines] = useState<DraftLine[]>([
-    { itemId: "", quantity: 1, lineType: "standard", returnExpected: false }
-  ]);
+  const [draftLines, setDraftLines] = useState<DraftLine[]>([createDraftLine()]);
   const [replacementAccess, setReplacementAccess] = useState(enableReplacementFlow);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -685,7 +704,7 @@ export function PurchaseOrdersPanel({
       }
       return [
         ...prev,
-        { itemId: match.id, quantity: 1, lineType: "standard", returnExpected: false }
+        createDraftLine({ itemId: match.id })
       ];
     });
   };
@@ -896,6 +915,7 @@ export function PurchaseOrdersPanel({
       ),
     [dedupedOrders, showArchived]
   );
+  const ordersToRender = useMemo(() => dedupeById(visibleOrders), [visibleOrders]);
 
   const { data: items = [] } = useQuery({
     queryKey: ["purchase-order-items-options", purchaseOrdersPath],
@@ -1004,7 +1024,7 @@ export function PurchaseOrdersPanel({
     onSuccess: async () => {
       setMessage("Bon de commande créé.");
       setIsCreateModalOpen(false);
-      setDraftLines([{ itemId: "", quantity: 1, lineType: "standard", returnExpected: false }]);
+      setDraftLines([createDraftLine()]);
       setDraftSupplier("");
       setDraftStatus("ORDERED");
       setDraftNote("");
@@ -1351,14 +1371,11 @@ export function PurchaseOrdersPanel({
   };
 
   const handleAddLine = () => {
-    setDraftLines((prev) => [
-      ...prev,
-      { itemId: "", quantity: 1, lineType: "standard", returnExpected: false }
-    ]);
+    setDraftLines((prev) => [...prev, createDraftLine()]);
   };
 
-  const handleRemoveLine = (index: number) => {
-    setDraftLines((prev) => prev.filter((_, idx) => idx !== index));
+  const handleRemoveLine = (lineId: number) => {
+    setDraftLines((prev) => prev.filter((line) => line.id !== lineId));
   };
 
   const generateIdempotencyKey = () => {
@@ -1754,7 +1771,7 @@ export function PurchaseOrdersPanel({
     });
   };
 
-  const orderViews = visibleOrders.map((order) => {
+  const orderViews = ordersToRender.map((order) => {
     const isArchived = Boolean(order.is_archived);
     const isReadOnly = isArchived;
     const timelineEvents = buildPurchaseOrderTimeline(order);
@@ -2211,17 +2228,12 @@ export function PurchaseOrdersPanel({
       </ul>
     );
 
-    const renderActions = (layout: "table" | "card") => {
-      const actionWidthClass = layout === "card" ? "w-full" : "";
+    const renderActions = () => {
       const resolveActionClass = (key: string, primary: string, secondary: string) =>
-        `${key === primaryActionKey ? `${primary} ring-1 ring-white/20` : secondary} ${actionWidthClass}`.trim();
-      const containerClassName =
-        layout === "card"
-          ? "flex w-full flex-col gap-2"
-          : "flex flex-col items-end gap-2";
+        `${key === primaryActionKey ? `${primary} ring-1 ring-white/20` : secondary} w-full lg:w-auto`.trim();
 
       return (
-        <div className={containerClassName}>
+        <div className="flex w-full flex-col gap-2 lg:items-end">
           <button
             type="button"
             onClick={() => handleDownload(order.id)}
@@ -2429,24 +2441,38 @@ export function PurchaseOrdersPanel({
     };
 
     const tableRow = (
-      <tr key={order.id}>
-        <td className="w-[140px] px-4 py-3 text-slate-300">
-          {createdAtLabel}
-          {order.auto_created ? (
-            <span className="ml-2 rounded border border-indigo-500/40 bg-indigo-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
-              Auto
-            </span>
-          ) : null}
-        </td>
-        <td className="min-w-[220px] px-4 py-3 text-slate-200">
-          <div className="flex flex-col">
-            <span>{order.supplier_name ?? "-"}</span>
-            <span className="text-xs text-slate-400">
-              {order.supplier_email ?? "Email manquant"}
-            </span>
+      <div
+        key={order.id}
+        className="grid grid-cols-1 gap-4 px-4 py-4 text-sm text-slate-100 lg:grid-cols-[180px_280px_180px_1fr_220px] lg:gap-6 lg:py-3"
+      >
+        <div className="min-w-0 space-y-1 text-slate-300">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 lg:hidden">
+            Créé le
+          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <span>{createdAtLabel}</span>
+            {order.auto_created ? (
+              <span className="rounded border border-indigo-500/40 bg-indigo-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
+                Auto
+              </span>
+            ) : null}
           </div>
-        </td>
-        <td className="w-[160px] px-4 py-3 text-slate-200">
+        </div>
+        <div className="min-w-0 space-y-1 text-slate-200">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 lg:hidden">
+            Fournisseur
+          </p>
+          <div className="min-w-0">
+            <p className="truncate">{order.supplier_name ?? "-"}</p>
+            <p className="truncate text-xs text-slate-400">
+              {order.supplier_email ?? "Email manquant"}
+            </p>
+          </div>
+        </div>
+        <div className="min-w-0 space-y-2 text-slate-200">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 lg:hidden">
+            Statut
+          </p>
           <div className="flex flex-col gap-2 text-xs">
             <StatusBadge
               label={primaryBadge.label}
@@ -2455,69 +2481,13 @@ export function PurchaseOrdersPanel({
             />
             {statusControl}
           </div>
-        </td>
-        <td className="min-w-[420px] px-4 py-3 text-slate-200">
-          <div
-            className={`space-y-1 ${shouldClampLines && !isExpanded ? "md:max-h-40 md:overflow-hidden" : ""}`}
-          >
-            {linesList}
-          </div>
-          {shouldClampLines ? (
-            <button
-              type="button"
-              onClick={() => toggleExpandedLines(order.id)}
-              className="mt-2 hidden text-xs font-semibold text-indigo-200 hover:text-indigo-100 md:inline-flex lg:hidden"
-            >
-              {isExpanded ? "Réduire" : "Voir +"}
-            </button>
-          ) : null}
-        </td>
-        <td className="w-[220px] px-4 py-3 text-right align-top text-slate-200">
-          {renderActions("table")}
-        </td>
-      </tr>
-    );
-
-    const card = (
-      <article
-        key={`card-${order.id}`}
-        className="space-y-4 rounded-lg border border-slate-800 bg-slate-900/70 p-4"
-      >
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div className="space-y-1">
-            <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-              Créé le
-            </p>
-            <p className="text-sm text-slate-100">{createdAtLabel}</p>
-            {order.auto_created ? (
-              <span className="inline-flex rounded border border-indigo-500/40 bg-indigo-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
-                Auto
-              </span>
-            ) : null}
-          </div>
-          <StatusBadge
-            label={primaryBadge.label}
-            tone={primaryBadge.tone}
-            tooltip={primaryBadge.tooltip}
-          />
         </div>
-        <div className="space-y-1">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-            Fournisseur
+        <div className="min-w-0 space-y-2 text-slate-200">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 lg:hidden">
+            Lignes
           </p>
-          <p className="text-sm text-slate-100">{order.supplier_name ?? "-"}</p>
-          <p className="text-xs text-slate-400">{order.supplier_email ?? "Email manquant"}</p>
-        </div>
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Statut</p>
-          <div className="flex flex-col gap-2 text-xs">
-            {statusControl}
-          </div>
-        </div>
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Lignes</p>
           <div
-            className={`space-y-1 ${shouldClampLines && !isExpanded ? "max-h-40 overflow-hidden" : ""}`}
+            className={`space-y-1 ${shouldClampLines && !isExpanded ? "lg:max-h-40 lg:overflow-hidden" : ""}`}
           >
             {linesList}
           </div>
@@ -2525,20 +2495,22 @@ export function PurchaseOrdersPanel({
             <button
               type="button"
               onClick={() => toggleExpandedLines(order.id)}
-              className="inline-flex text-xs font-semibold text-indigo-200 hover:text-indigo-100 md:hidden"
+              className="text-xs font-semibold text-indigo-200 hover:text-indigo-100 lg:hidden"
             >
               {isExpanded ? "Réduire" : "Voir +"}
             </button>
           ) : null}
         </div>
-        <div className="space-y-2">
-          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Actions</p>
-          {renderActions("card")}
+        <div className="min-w-0 space-y-2 text-slate-200 lg:text-right">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400 lg:hidden">
+            Actions
+          </p>
+          {renderActions()}
         </div>
-      </article>
+      </div>
     );
 
-    return { id: order.id, row: tableRow, card };
+    return { id: order.id, row: tableRow };
   });
 
   return (
@@ -2611,763 +2583,26 @@ export function PurchaseOrdersPanel({
               Archivés
             </button>
           </div>
-          <div className="hidden md:block">
-            <div className="w-full overflow-x-auto rounded-lg border border-slate-800">
-              <div className="overflow-hidden rounded-lg border border-slate-800">
-            <table className="min-w-full divide-y divide-slate-800">
-              <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
-                <tr>
-                  <th className="px-4 py-3 text-left">Créé le</th>
-                  <th className="px-4 py-3 text-left">Fournisseur</th>
-                  <th className="px-4 py-3 text-left">Statut</th>
-                  <th className="px-4 py-3 text-left">Lignes</th>
-                  <th className="px-4 py-3 text-left">Actions</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
-                {visibleOrders.map((order) => {
-                  const isArchived = Boolean(order.is_archived);
-                  const isReadOnly = isArchived;
-                  const timelineEvents = buildPurchaseOrderTimeline(order);
-                  const outstanding = order.items
-                    .map((line) => {
-                      const remaining = line.quantity_ordered - line.quantity_received;
-                      if (remaining <= 0) {
-                        return null;
-                      }
-                      return {
-                        line_id: line.id,
-                        qty: remaining
-                      };
-                    })
-                    .filter((line): line is { line_id: number; qty: number } => line !== null);
-                  const isReplacementReceptionLocked = Boolean(order.replacement_lock_reception);
-                  const replacementLockTooltip =
-                    "Réception verrouillée : demande de remplacement en cours.";
-                  const canReceive =
-                    outstanding.length > 0 && !isReadOnly && !isReplacementReceptionLocked;
-                  const receiptsByLine = new Map<number, PurchaseOrderReceipt[]>();
-                  (order.receipts ?? []).forEach((receipt) => {
-                    const existing = receiptsByLine.get(receipt.purchase_order_line_id) ?? [];
-                    existing.push(receipt);
-                    receiptsByLine.set(receipt.purchase_order_line_id, existing);
-                  });
-                  const nonconformingLineSummaries = order.items
-                    .map((line) => {
-                      const lineReceipts = receiptsByLine.get(line.id) ?? [];
-                      const latestReceipt =
-                        lineReceipts.length > 0 ? lineReceipts[lineReceipts.length - 1] : null;
-                      if (latestReceipt?.conformity_status !== "non_conforme") {
-                        return null;
-                      }
-                      const sizeLabel = line.size?.trim() ? line.size.trim() : "—";
-                      return {
-                        lineId: line.id,
-                        itemLabel: line.item_name ?? `#${resolveItemId(line) ?? "?"}`,
-                        sizeLabel,
-                        qty: line.received_non_conforme_qty ?? 0,
-                        reason:
-                          latestReceipt.nonconformity_reason?.trim() ||
-                          line.nonconformity_reason?.trim() ||
-                          "Motif non renseigné"
-                      } satisfies ReplacementFinalizeSummary;
-                    })
-                    .filter((entry): entry is ReplacementFinalizeSummary => entry !== null);
-                  const hasNonConformingLatestReceipt = nonconformingLineSummaries.length > 0;
-                  const pendingAssignments = (order.pending_assignments ?? []).filter(
-                    (assignment) => assignment.status === "pending"
-                  );
-                  const conformingPendingAssignments = pendingAssignments.filter(
-                    (assignment) => assignment.source_receipt?.conformity_status === "conforme"
-                  );
-                  const replacementOrdersForLines =
-                    replacementOrdersByParent.get(order.id) ?? new Map<number, PurchaseOrderDetail>();
-                  const replacementOrders = Array.from(replacementOrdersForLines.values());
-                  const replacementRequested =
-                    hasNonConformingLatestReceipt &&
-                    ((order.nonconformities ?? []).some((nonconformity) => nonconformity.requested_replacement) ||
-                      replacementOrders.length > 0);
-                  const sentReplacementOrders = replacementOrders
-                    .filter((replacement) => Boolean(replacement.last_sent_at))
-                    .sort((a, b) => {
-                      const aSent = a.last_sent_at ? new Date(a.last_sent_at).getTime() : 0;
-                      const bSent = b.last_sent_at ? new Date(b.last_sent_at).getTime() : 0;
-                      return bSent - aSent;
-                    });
-                  const replacementToSend = replacementOrders.find(
-                    (replacement) => !replacement.last_sent_at
-                  );
-                  const replacementContextNote = nonconformingLineSummaries.length
-                    ? `Motif non-conformité : ${nonconformingLineSummaries
-                        .map((line) => line.reason)
-                        .join(", ")}`
-                    : "Motif non-conformité : non renseigné";
-                  const canFinalizeNonconformity =
-                    enableReplacementFlow &&
-                    hasNonConformingLatestReceipt &&
-                    sentReplacementOrders.length > 0 &&
-                    !isReplacementReceptionLocked;
-                  const archiveEligibility = resolveArchiveEligibility({
-                    order,
-                    outstanding,
-                    pendingAssignments,
-                    canManageOrders,
-                    hasNonConformingLatestReceipt
-                  });
-                  const replacementAssignmentCompleted = Boolean(
-                    order.replacement_assignment_completed
-                  );
-                  const replacementFlowStatus = order.replacement_flow_status ?? "none";
-                  const replacementClosed = replacementFlowStatus === "closed";
-                  const replacementSent =
-                    Boolean(order.replacement_sent_at) || sentReplacementOrders.length > 0;
-                  const showCloseReplacement =
-                    hasNonConformingLatestReceipt && replacementSent && !replacementClosed;
-                  const showReplacementCompleteMessage =
-                    replacementFlowStatus === "closed" && replacementAssignmentCompleted;
-                  const showReplacementClosedMessage =
-                    replacementFlowStatus === "closed" && hasNonConformingLatestReceipt;
-                  const showReplacementLockMessage = isReplacementReceptionLocked;
-                  let primaryStatus: PrimaryOrderStatus = "CONFORME";
-                  if (isArchived) {
-                    primaryStatus = "ARCHIVE";
-                  } else if (hasNonConformingLatestReceipt) {
-                    if (replacementOrders.length > 0) {
-                      primaryStatus =
-                        sentReplacementOrders.length > 0 ? "REMPLACEMENT_EN_COURS" : "REMPLACEMENT_DEMANDE";
-                    } else if (replacementRequested) {
-                      primaryStatus = "REMPLACEMENT_DEMANDE";
-                    } else {
-                      primaryStatus = "NON_CONFORME";
-                    }
-                  } else if (order.status === "RECEIVED") {
-                    primaryStatus = "CONFORME";
-                  }
-                  const primaryBadge = STATUS_BADGE_LABELS[primaryStatus];
-                  let primaryActionKey: string | null = null;
-                  if (isArchived && canManageOrders) {
-                    primaryActionKey = "unarchive";
-                  } else if (canFinalizeNonconformity) {
-                    primaryActionKey = "receive_all";
-                  } else if (hasNonConformingLatestReceipt && !replacementRequested && !isReadOnly) {
-                    primaryActionKey = "request_replacement";
-                  } else if (hasNonConformingLatestReceipt && replacementToSend) {
-                    primaryActionKey = "send_replacement";
-                  } else if (canReceive) {
-                    primaryActionKey = "receive_all";
-                  } else if (canSendEmail && order.status !== "RECEIVED") {
-                    primaryActionKey = "send_supplier";
-                  } else if (archiveEligibility.canArchive) {
-                    primaryActionKey = "archive";
-                  }
-                  const resolveActionClass = (key: string, primary: string, secondary: string) =>
-                    key === primaryActionKey ? `${primary} ring-1 ring-white/20` : secondary;
-                  const receiveAllLabel = canFinalizeNonconformity ? "Valider conforme" : "Réceptionner tout";
-                  return (
-                    <tr key={order.id}>
-                      <td className="px-4 py-3 text-slate-300">
-                        {new Date(order.created_at).toLocaleString()}
-                        {order.auto_created ? (
-                          <span className="ml-2 rounded border border-indigo-500/40 bg-indigo-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-indigo-200">
-                            Auto
-                          </span>
-                        ) : null}
-                      </td>
-                      <td className="px-4 py-3 text-slate-200">
-                        <div className="flex flex-col">
-                          <span>{order.supplier_name ?? "-"}</span>
-                          <span className="text-xs text-slate-400">
-                            {order.supplier_email ?? "Email manquant"}
-                          </span>
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-slate-200">
-                        <div className="flex flex-col gap-2 text-xs">
-                          <StatusBadge
-                            label={primaryBadge.label}
-                            tone={primaryBadge.tone}
-                            tooltip={primaryBadge.tooltip}
-                          />
-                          {replacementFlowStatus === "open" ? (
-                            <span className="w-fit rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-200">
-                              Remplacement en cours
-                            </span>
-                          ) : null}
-                          {isArchived ? (
-                            <span>{resolveOrderStatusLabel(order.status)}</span>
-                          ) : (
-                            <select
-                              value={order.status}
-                              onChange={(event) => {
-                                setError(null);
-                                updateOrder.mutate({
-                                  orderId: order.id,
-                                  status: event.target.value,
-                                  successMessage: "Statut mis à jour."
-                                });
-                              }}
-                              className="w-full rounded border border-slate-700 bg-slate-900 px-2 py-1 text-xs text-slate-100 focus:border-indigo-500 focus:outline-none"
-                              disabled={!canManageOrders}
-                            >
-                              {ORDER_STATUSES.map((option) => (
-                                <option key={option.value} value={option.value}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
-                          )}
-                        </div>
-                      </td>
-                      <td className="px-4 py-3 text-slate-200">
-                        <ul className="space-y-1 text-xs">
-                          {order.items.map((line) => {
-                            const itemId = resolveItemId(line);
-                            const receipts = receiptsByLine.get(line.id) ?? [];
-                            const latestReceipt =
-                              receipts.length > 0 ? receipts[receipts.length - 1] : null;
-                            const lineNonconformity = (order.nonconformities ?? []).find(
-                              (nonconformity) =>
-                                nonconformity.purchase_order_line_id === line.id &&
-                                (!latestReceipt || nonconformity.receipt_id === latestReceipt.id)
-                            );
-                            const latestIsNonConforming =
-                              latestReceipt?.conformity_status === "non_conforme" ||
-                              latestReceipt?.is_non_conforming === true ||
-                              latestReceipt?.non_conforming === true;
-                            const replacementOrder = replacementOrdersForLines.get(line.id);
-                            const replacementRequested =
-                              Boolean(replacementOrder) ||
-                              Boolean(lineNonconformity?.requested_replacement);
-                            const receivedConformeQty =
-                              line.received_conforme_qty ?? line.quantity_received;
-                            const receivedNonConformeQty = line.received_non_conforme_qty ?? 0;
-                            return (
-                              <li key={line.id}>
-                                <div className="flex flex-wrap items-center gap-2">
-                                  <span className="font-semibold">
-                                    {line.item_name ?? `#${itemId}`}
-                                  </span>
-                                  <span>
-                                    Conforme: {receivedConformeQty}/{line.quantity_ordered} — Non
-                                    conforme: {receivedNonConformeQty}
-                                  </span>
-                                  {latestReceipt?.conformity_status === "conforme" ? (
-                                    <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] text-emerald-200">
-                                      Conforme
-                                    </span>
-                                  ) : null}
-                                  {latestReceipt?.conformity_status === "non_conforme" ? (
-                                    <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] text-rose-200">
-                                      Non conforme
-                                    </span>
-                                  ) : null}
-                                </div>
-                                {latestReceipt?.conformity_status === "non_conforme" ? (
-                                  <p className="text-[11px] text-rose-300">
-                                    {latestReceipt.nonconformity_reason
-                                      ? `Motif: ${latestReceipt.nonconformity_reason}`
-                                      : "Motif non renseigné"}
-                                    {latestReceipt.note ? ` · Note: ${latestReceipt.note}` : ""}
-                                  </p>
-                                ) : null}
-                                {line.beneficiary_employee_id ? (
-                                  <p className="text-[11px] text-slate-400">
-                                    Bénéficiaire:{" "}
-                                    {line.beneficiary_name ??
-                                      resolveCollaboratorName(line.beneficiary_employee_id)}
-                                  </p>
-                                ) : null}
-                                {line.line_type === "replacement" ? (
-                                  <p className="text-[11px] text-slate-400">
-                                    Retour attendu:{" "}
-                                    {line.return_expected ? "Oui" : "Non"}
-                                    {line.return_reason ? ` · ${line.return_reason}` : ""}
-                                    {line.return_status ? ` · ${line.return_status}` : ""}
-                                  </p>
-                                ) : null}
-                                {latestIsNonConforming ? (
-                                  <div className="mt-2 space-y-2 rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2">
-                                    <div className="flex flex-wrap items-center gap-2 text-[11px] uppercase text-rose-200">
-                                      <span className="rounded-full bg-rose-500/20 px-2 py-0.5 text-[10px] text-rose-200">
-                                        Non conforme
-                                      </span>
-                                      <span>Action recommandée</span>
-                                    </div>
-                                    <p className="text-[11px] text-rose-100/90">
-                                      Motif:{" "}
-                                      {latestReceipt?.nonconformity_reason ?? "Non précisé"}
-                                    </p>
-                                    <p className="text-[11px] text-rose-100/90">
-                                      Bénéficiaire:{" "}
-                                      {line.beneficiary_employee_id
-                                        ? line.beneficiary_name ??
-                                          resolveCollaboratorName(line.beneficiary_employee_id)
-                                        : "Non renseigné"}
-                                    </p>
-                                    <p className="text-[11px] text-rose-100/90">
-                                      Retour attendu: {line.return_expected ? "Oui" : "Non"}
-                                      {line.return_reason ? ` · ${line.return_reason}` : ""}
-                                    </p>
-                                    {replacementRequested ? (
-                                      <div className="space-y-2 rounded-md border border-emerald-500/30 bg-emerald-500/10 px-2 py-2 text-[11px] text-emerald-200">
-                                        <div className="flex flex-wrap items-center gap-2">
-                                          <span className="rounded-full bg-emerald-500/20 px-2 py-0.5 text-[10px] uppercase text-emerald-200">
-                                            Remplacement demandé
-                                          </span>
-                                          {lineNonconformity?.created_at ? (
-                                            <span>
-                                              {new Date(
-                                                lineNonconformity.created_at
-                                              ).toLocaleString()}
-                                            </span>
-                                          ) : null}
-                                          {lineNonconformity?.created_by ? (
-                                            <span>par {lineNonconformity.created_by}</span>
-                                          ) : null}
-                                        </div>
-                                    {replacementOrder ? (
-                                      <div className="space-y-1 text-[11px] text-emerald-100/90">
-                                        <p className="text-[10px] font-semibold uppercase text-emerald-300">
-                                          Demande de remplacement
-                                        </p>
-                                        <p>
-                                          BC #{replacementOrder.id} (statut:{" "}
-                                          {resolveReplacementStatusLabel(replacementOrder.status)})
-                                        </p>
-                                        <p>Motif: {latestReceipt?.nonconformity_reason ?? "—"}</p>
-                                        <div className="flex flex-wrap gap-2">
-                                          <button
-                                            type="button"
-                                            onClick={() => handleDownload(replacementOrder.id)}
-                                            className="rounded border border-emerald-400/60 px-2 py-1 text-[11px] font-semibold text-emerald-100 hover:bg-emerald-500/10"
-                                          >
-                                            Télécharger PDF (demande)
-                                          </button>
-                                          {(() => {
-                                            const canSendReplacement =
-                                              replacementOrder.status === "PENDING" ||
-                                              replacementOrder.status === "ORDERED";
-                                            const wasSent = Boolean(replacementOrder.last_sent_at);
-                                            const supplierState =
-                                              getSupplierSendState(replacementOrder);
-                                            if (
-                                              !canManageOrders ||
-                                              !canSendReplacement ||
-                                              wasSent ||
-                                              !supplierState.canSend ||
-                                              isReadOnly
-                                            ) {
-                                              return null;
-                                            }
-                                            return (
-                                              <button
-                                                type="button"
-                                                onClick={() =>
-                                                  sendReplacementToSupplier.mutate({
-                                                    order: replacementOrder,
-                                                    contextNote: latestReceipt?.nonconformity_reason
-                                                      ? `Motif non-conformité : ${latestReceipt.nonconformity_reason}`
-                                                      : "Motif non-conformité : non renseigné"
-                                                  })
-                                                }
-                                                disabled={sendReplacementToSupplier.isPending}
-                                                className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-400"
-                                              >
-                                                {sendReplacementToSupplier.isPending
-                                                  ? "Envoi..."
-                                                  : "Envoyer demande de remplacement"}
-                                              </button>
-                                            );
-                                          })()}
-                                          {canManageOrders && showCloseReplacement && !isReadOnly ? (
-                                            <button
-                                              type="button"
-                                              onClick={() => handleOpenCloseReplacement(order)}
-                                              disabled={closeReplacement.isPending}
-                                              className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                            >
-                                              {closeReplacement.isPending
-                                                ? "Clôture..."
-                                                : "Clôturer la demande de remplacement"}
-                                            </button>
-                                          ) : null}
-                                        </div>
-                                      </div>
-                                        ) : null}
-                                      </div>
-                                    ) : !isReadOnly ? (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          requestReplacement.mutate({
-                                            orderId: order.id,
-                                            lineId: line.id
-                                          })
-                                        }
-                                        disabled={requestReplacement.isPending}
-                                        className={resolveActionClass(
-                                          "request_replacement",
-                                          "rounded bg-rose-500 px-3 py-1 text-[11px] font-semibold text-white hover:bg-rose-400 disabled:cursor-not-allowed disabled:opacity-60",
-                                          "rounded border border-rose-400/60 px-3 py-1 text-[11px] font-semibold text-rose-200 hover:bg-rose-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                        )}
-                                      >
-                                        Créer demande de remplacement
-                                      </button>
-                                    ) : null}
-                                  </div>
-                                ) : null}
-                              </li>
-                            );
-                          })}
-                          {showReplacementCompleteMessage ? (
-                            <li className="pt-2 text-[11px] text-emerald-200">
-                              Réception conforme : attribution validée.
-                            </li>
-                          ) : showReplacementClosedMessage ? (
-                            <li className="pt-2 text-[11px] text-emerald-200">
-                              Remplacement clôturé — vous pouvez réceptionner en conforme pour
-                              valider l’attribution.
-                            </li>
-                          ) : showReplacementLockMessage || hasNonConformingLatestReceipt ? (
-                            <li className="pt-2 text-[11px] text-rose-300">
-                              Réception non conforme : aucune attribution possible.
-                            </li>
-                          ) : conformingPendingAssignments.length > 0 ? (
-                            <li className="space-y-2 pt-2">
-                              <p className="text-[11px] uppercase text-slate-500">
-                                Attributions en attente
-                              </p>
-                              {conformingPendingAssignments.map((assignment) => {
-                                const isBlocked =
-                                  assignment.source_receipt?.conformity_status !== "conforme";
-                                return (
-                                  <div
-                                    key={assignment.id}
-                                    className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-slate-800 bg-slate-950 px-2 py-1"
-                                  >
-                                    <div>
-                                      <p className="text-xs text-slate-200">
-                                        {resolveCollaboratorName(assignment.employee_id)} ·{" "}
-                                        {resolveItemLabel(assignment.new_item_id)}
-                                      </p>
-                                      {assignment.target_dotation_id ||
-                                      assignment.return_employee_item_id ? (
-                                        <p className="text-[11px] text-slate-400">
-                                          Retour:{" "}
-                                          {(() => {
-                                            const targetId =
-                                              assignment.target_dotation_id ??
-                                              assignment.return_employee_item_id;
-                                            const matched = (
-                                              assignedItemsByBeneficiary.get(assignment.employee_id) ??
-                                              []
-                                            ).find(
-                                              (item) => item.assignment_id === targetId
-                                            );
-                                            return matched
-                                              ? resolveAssignedItemLabel(matched)
-                                              : `#${targetId}`;
-                                          })()}
-                                          {assignment.return_reason
-                                            ? ` · ${assignment.return_reason}`
-                                            : ""}
-                                        </p>
-                                      ) : null}
-                                    </div>
-                                    <button
-                                      type="button"
-                                      onClick={() =>
-                                        validatePendingAssignment.mutate({
-                                          orderId: order.id,
-                                          pendingId: assignment.id
-                                        })
-                                      }
-                                      disabled={
-                                        validatePendingAssignment.isPending ||
-                                        isBlocked ||
-                                        isReadOnly
-                                      }
-                                      title={
-                                        isBlocked
-                                          ? "Réception non conforme : attribution bloquée"
-                                          : undefined
-                                      }
-                                      className="rounded bg-indigo-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
-                                    >
-                                      Valider attribution + retour
-                                    </button>
-                                  </div>
-                                );
-                              })}
-                            </li>
-                          ) : null}
-                          <li className="pt-2">
-                            <Timeline events={timelineEvents} title="Historique" />
-                          </li>
-                          {isReadOnly ? (
-                            <li className="text-[11px] text-amber-200">
-                              Bon de commande archivé : lecture seule activée.
-                            </li>
-                          ) : null}
-                          {order.note ? (
-                            <li className="text-slate-400">
-                              Note:{" "}
-                              <TruncatedText text={order.note} maxLength={notePreviewLength} />
-                            </li>
-                          ) : null}
-                          {order.last_sent_at ? (
-                            <li className="text-slate-400">
-                              Dernier envoi: {new Date(order.last_sent_at).toLocaleString()}
-                              {order.last_sent_to ? ` → ${order.last_sent_to}` : ""}
-                              {order.last_sent_by ? ` (par ${order.last_sent_by})` : ""}
-                            </li>
-                          ) : null}
-                        </ul>
-                      </td>
-                      <td className="px-4 py-3 text-slate-200">
-                        <div className="flex flex-col gap-2">
-                          <button
-                            type="button"
-                            onClick={() => handleDownload(order.id)}
-                            disabled={downloadingId === order.id}
-                            className={resolveActionClass(
-                              "download",
-                              "rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60",
-                              "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                            )}
-                          >
-                            {downloadingId === order.id ? "Téléchargement..." : "Télécharger PDF"}
-                          </button>
-                          {isArchived ? (
-                            canManageOrders ? (
-                              <button
-                                type="button"
-                                onClick={() => handleUnarchiveOrder(order)}
-                                disabled={unarchiveOrder.isPending}
-                                className={resolveActionClass(
-                                  "unarchive",
-                                  "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60",
-                                  "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                )}
-                              >
-                                Désarchiver
-                              </button>
-                            ) : null
-                          ) : (
-                            <>
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  if (
-                                    canManageOrders &&
-                                    canFinalizeNonconformity &&
-                                    sentReplacementOrders[0]
-                                  ) {
-                                    setFinalizeModalData({
-                                      order,
-                                      replacementOrder: sentReplacementOrders[0],
-                                      lines: nonconformingLineSummaries
-                                    });
-                                    return;
-                                  }
-                                  if (enableReplacementFlow) {
-                                    receiveOrderLines.mutate({
-                                      orderId: order.id,
-                                      lines: outstanding.map((line) => ({
-                                        purchase_order_line_id: line.line_id,
-                                        received_qty: line.qty,
-                                        conformity_status: "conforme",
-                                        nonconformity_reason: null,
-                                        note: null
-                                      }))
-                                    });
-                                  } else {
-                                    receiveOrder.mutate({ orderId: order.id, lines: outstanding });
-                                  }
-                                }}
-                                disabled={!canReceive}
-                                className={resolveActionClass(
-                                  "receive_all",
-                                  "rounded bg-emerald-600 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60",
-                                  "rounded border border-emerald-500/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                )}
-                                title={
-                                  isReplacementReceptionLocked
-                                    ? replacementLockTooltip
-                                    : canReceive
-                                      ? "Enregistrer la réception des quantités restantes"
-                                      : "Toutes les quantités ont été réceptionnées"
-                                }
-                              >
-                                {receiveAllLabel}
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleOpenReceiveModal(order)}
-                                disabled={!canReceive}
-                                className={resolveActionClass(
-                                  "receive_partial",
-                                  "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60",
-                                  "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                                )}
-                                title={isReplacementReceptionLocked ? replacementLockTooltip : undefined}
-                              >
-                                Réception partielle
-                              </button>
-                              <button
-                                type="button"
-                                onClick={() => handleEditOrder(order)}
-                                disabled={!canManageOrders || isReadOnly}
-                                className={resolveActionClass(
-                                  "edit",
-                                  "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60",
-                                  "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
-                                )}
-                              >
-                                Modifier
-                              </button>
-                              {canManageOrders &&
-                              hasNonConformingLatestReceipt &&
-                              replacementToSend &&
-                              !showCloseReplacement
-                                ? (() => {
-                                    const supplierState =
-                                      getSupplierSendState(replacementToSend);
-                                    if (!supplierState.canSend) {
-                                      return null;
-                                    }
-                                    return (
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          sendReplacementToSupplier.mutate({
-                                            order: replacementToSend,
-                                            contextNote: replacementContextNote
-                                          })
-                                        }
-                                        disabled={sendReplacementToSupplier.isPending}
-                                        className={resolveActionClass(
-                                          "send_replacement",
-                                          "rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60",
-                                          "rounded border border-emerald-400/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                        )}
-                                        title="Envoyer la demande de remplacement au fournisseur"
-                                      >
-                                        {sendReplacementToSupplier.isPending
-                                          ? "Envoi..."
-                                          : "Envoyer demande de remplacement"}
-                                      </button>
-                                    );
-                                  })()
-                                : null}
-                              {canManageOrders && showCloseReplacement && !isReadOnly ? (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenCloseReplacement(order)}
-                                  disabled={closeReplacement.isPending}
-                                  className={resolveActionClass(
-                                    "close_replacement",
-                                    "rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60",
-                                    "rounded border border-emerald-400/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                  )}
-                                  title="Clôturer la demande de remplacement"
-                                >
-                                  {closeReplacement.isPending
-                                    ? "Clôture..."
-                                    : "Clôturer la demande de remplacement"}
-                                </button>
-                              ) : null}
-                              {canSendEmail && order.status !== "RECEIVED"
-                                ? (() => {
-                                    const supplierState = getSupplierSendState(order);
-                                    return (
-                                      <button
-                                        type="button"
-                                        onClick={() => handleOpenSendModal(order)}
-                                        disabled={!supplierState.canSend}
-                                        className={resolveActionClass(
-                                          "send_supplier",
-                                          "rounded bg-indigo-500 px-3 py-1 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60",
-                                          "rounded border border-indigo-400/60 px-3 py-1 text-xs font-semibold text-indigo-200 hover:bg-indigo-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                        )}
-                                        title={supplierState.tooltip}
-                                      >
-                                        Envoyer au fournisseur
-                                      </button>
-                                    );
-                                  })()
-                                : null}
-              {archiveEligibility.showArchiveButton ? (
-                <button
-                  type="button"
-                  onClick={() => handleOpenArchiveModal(order)}
-                  disabled={!archiveEligibility.canArchive}
-                  title={archiveEligibility.tooltip}
-                  className={resolveActionClass(
-                    "archive",
-                    "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400",
-                    "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                  )}
-                >
-                  Archiver
-                </button>
-                              ) : null}
-                              {user?.role === "admin" ? (
-                                <button
-                                  type="button"
-                                  onClick={() => handleDeleteOrder(order)}
-                                  disabled={deletingId === order.id}
-                                  className={resolveActionClass(
-                                    "delete",
-                                    "rounded bg-red-600 px-3 py-1 text-xs font-semibold text-white hover:bg-red-500 disabled:cursor-not-allowed disabled:opacity-60",
-                                    "rounded border border-red-500/60 px-3 py-1 text-xs font-semibold text-red-200 hover:bg-red-500/10 disabled:cursor-not-allowed disabled:opacity-60"
-                                  )}
-                                >
-                                  {deletingId === order.id ? "Suppression..." : "Supprimer"}
-                                </button>
-                              ) : null}
-                            </>
-                          )}
-                        </div>
-                      </td>
-                    </tr>
-                  );
-                })}
-                {visibleOrders.length === 0 && !loadingOrders ? (
-                  <tr>
-                    <th className="w-[140px] px-4 py-3 text-left">Créé le</th>
-                    <th className="min-w-[220px] px-4 py-3 text-left">Fournisseur</th>
-                    <th className="w-[160px] px-4 py-3 text-left">Statut</th>
-                    <th className="min-w-[420px] px-4 py-3 text-left">Lignes</th>
-                    <th className="w-[220px] px-4 py-3 text-right">Actions</th>
-                  </tr>
-                ) : null}
-              </tbody>
-              <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
-                {orderViews.map((view) => view.row)}
-                {visibleOrders.length === 0 && !loadingOrders ? (
-                  <tr>
-                    <td className="px-4 py-4 text-sm text-slate-400" colSpan={5}>
-                        {showArchived
-                          ? "Aucun bon de commande archivé."
-                          : "Aucun bon de commande pour le moment."}
-                      </td>
-                    </tr>
-                  ) : null}
-              </tbody>
-            </table>
-          </div>
-        </div>
-        </div>
-        <div className="space-y-4 md:hidden">
-          {orderViews.map((view) => view.card)}
-          {visibleOrders.length === 0 && !loadingOrders ? (
-              <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-400">
-                {showArchived
-                  ? "Aucun bon de commande archivé."
-                  : "Aucun bon de commande pour le moment."}
+          <div className="w-full">
+            <div className="w-full overflow-hidden rounded-lg border border-slate-800 bg-slate-950/60">
+              <div className="hidden bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400 lg:grid lg:grid-cols-[180px_280px_180px_1fr_220px]">
+                <div className="px-4 py-3">Créé le</div>
+                <div className="px-4 py-3">Fournisseur</div>
+                <div className="px-4 py-3">Statut</div>
+                <div className="px-4 py-3">Lignes</div>
+                <div className="px-4 py-3 text-right">Actions</div>
               </div>
-            ) : null}
+              <div className="divide-y divide-slate-900">
+                {orderViews.map((view) => view.row)}
+                {ordersToRender.length === 0 && !loadingOrders ? (
+                  <div className="px-4 py-4 text-sm text-slate-400">
+                    {showArchived
+                      ? "Aucun bon de commande archivé."
+                      : "Aucun bon de commande pour le moment."}
+                  </div>
+                ) : null}
+              </div>
+            </div>
           </div>
           {loadingOrders ? (
             <p className="text-sm text-slate-400">Chargement des bons de commande...</p>
@@ -3573,7 +2808,7 @@ export function PurchaseOrdersPanel({
             const isFiltered = filteredAssignments.length > 0;
             return (
               <div
-                key={index}
+                key={line.id}
                 className="space-y-3 rounded-md border border-slate-800 bg-slate-950/60 p-3"
               >
                 <div className="flex min-w-0 flex-wrap gap-2">
@@ -3620,7 +2855,7 @@ export function PurchaseOrdersPanel({
                   {draftLines.length > 1 ? (
                     <button
                       type="button"
-                      onClick={() => handleRemoveLine(index)}
+                      onClick={() => handleRemoveLine(line.id)}
                       className="rounded-md border border-slate-700 px-2 py-1 text-xs text-slate-300 hover:bg-slate-800"
                       title="Supprimer la ligne"
                     >
