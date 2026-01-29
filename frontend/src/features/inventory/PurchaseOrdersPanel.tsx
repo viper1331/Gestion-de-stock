@@ -3058,13 +3058,14 @@ export function PurchaseOrdersPanel({
                       </td>
                     </tr>
                   ) : null}
-                </tbody>
-              </table>
-            </div>
+              </tbody>
+            </table>
           </div>
-          <div className="space-y-4 md:hidden">
-            {orderViews.map((view) => view.card)}
-            {visibleOrders.length === 0 && !loadingOrders ? (
+        </div>
+        </div>
+        <div className="space-y-4 md:hidden">
+          {orderViews.map((view) => view.card)}
+          {visibleOrders.length === 0 && !loadingOrders ? (
               <div className="rounded-lg border border-dashed border-slate-800 bg-slate-950/40 p-4 text-sm text-slate-400">
                 {showArchived
                   ? "Aucun bon de commande archivé."
