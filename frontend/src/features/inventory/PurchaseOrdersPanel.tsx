@@ -376,6 +376,28 @@ const hasNonConformityHistory = (order: PurchaseOrderDetail) =>
     (receipt) => receipt.conformity_status === "non_conforme"
   ) || (order.nonconformities ?? []).length > 0;
 
+const resolveLatestReceipt = (
+  receipts: PurchaseOrderReceipt[]
+): PurchaseOrderReceipt | null => {
+  if (receipts.length === 0) {
+    return null;
+  }
+  return receipts.reduce<PurchaseOrderReceipt | null>((latest, receipt) => {
+    if (!latest) {
+      return receipt;
+    }
+    const latestTime = new Date(latest.created_at).getTime();
+    const receiptTime = new Date(receipt.created_at).getTime();
+    if (
+      receiptTime > latestTime ||
+      (receiptTime === latestTime && receipt.id > latest.id)
+    ) {
+      return receipt;
+    }
+    return latest;
+  }, null);
+};
+
 const resolveArchiveEligibility = ({
   order,
   outstanding,
@@ -1800,8 +1822,7 @@ export function PurchaseOrdersPanel({
     const nonconformingLineSummaries = order.items
       .map((line) => {
         const lineReceipts = receiptsByLine.get(line.id) ?? [];
-        const latestReceipt =
-          lineReceipts.length > 0 ? lineReceipts[lineReceipts.length - 1] : null;
+        const latestReceipt = resolveLatestReceipt(lineReceipts);
         if (latestReceipt?.conformity_status !== "non_conforme") {
           return null;
         }
@@ -1933,8 +1954,7 @@ export function PurchaseOrdersPanel({
         {order.items.map((line) => {
           const itemId = resolveItemId(line);
           const receipts = receiptsByLine.get(line.id) ?? [];
-          const latestReceipt =
-            receipts.length > 0 ? receipts[receipts.length - 1] : null;
+          const latestReceipt = resolveLatestReceipt(receipts);
           const lineNonconformity = (order.nonconformities ?? []).find(
             (nonconformity) =>
               nonconformity.purchase_order_line_id === line.id &&
