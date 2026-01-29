@@ -31,6 +31,19 @@ def _create_item(*, name: str, sku: str) -> int:
         return cur.lastrowid
 
 
+def _create_collaborator(*, full_name: str) -> int:
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO collaborators (full_name)
+            VALUES (?)
+            """,
+            (full_name,),
+        )
+        conn.commit()
+        return cur.lastrowid
+
+
 def test_archive_requires_received_status() -> None:
     services.ensure_database_ready()
     with db.get_stock_connection() as conn:
@@ -262,6 +275,163 @@ def test_archive_allows_closed_replacement_with_conformity_and_assignment() -> N
             WHERE id = ?
             """,
             (order_id,),
+        )
+        conn.commit()
+
+    archived = services.archive_purchase_order(order_id, archived_by=1)
+    assert archived.is_archived is True
+
+
+def test_archive_allows_closed_replacement_with_validated_assignment_and_stale_status() -> None:
+    services.ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM pending_clothing_assignments")
+        conn.execute("DELETE FROM purchase_order_nonconformities")
+        conn.execute("DELETE FROM purchase_order_receipts")
+        conn.execute("DELETE FROM purchase_order_items")
+        conn.execute("DELETE FROM purchase_orders")
+        conn.execute("DELETE FROM collaborators")
+        conn.execute("DELETE FROM items")
+        conn.commit()
+        item_id = _create_item(name="Parka", sku="HAB-ARCH-3")
+        collaborator_id = _create_collaborator(full_name="Alex Pilot")
+        order_id = _create_purchase_order(status="PARTIALLY_RECEIVED")
+        line_cur = conn.execute(
+            """
+            INSERT INTO purchase_order_items (
+                purchase_order_id,
+                item_id,
+                quantity_ordered,
+                quantity_received,
+                return_status
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (order_id, item_id, 1, 1, "none"),
+        )
+        line_id = line_cur.lastrowid
+        non_conforme_cur = conn.execute(
+            """
+            INSERT INTO purchase_order_receipts (
+                site_key,
+                purchase_order_id,
+                purchase_order_line_id,
+                module,
+                received_qty,
+                conformity_status,
+                nonconformity_reason,
+                created_by,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, '2024-01-01 08:00:00')
+            """,
+            (
+                db.get_current_site_key(),
+                order_id,
+                line_id,
+                "clothing",
+                1,
+                "non_conforme",
+                "Défaut",
+                "tester",
+            ),
+        )
+        non_conforme_id = non_conforme_cur.lastrowid
+        conforme_cur = conn.execute(
+            """
+            INSERT INTO purchase_order_receipts (
+                site_key,
+                purchase_order_id,
+                purchase_order_line_id,
+                module,
+                received_qty,
+                conformity_status,
+                created_by,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, '2024-01-02 10:00:00')
+            """,
+            (
+                db.get_current_site_key(),
+                order_id,
+                line_id,
+                "clothing",
+                1,
+                "conforme",
+                "tester",
+            ),
+        )
+        conforme_id = conforme_cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO purchase_order_nonconformities (
+                site_key,
+                module,
+                purchase_order_id,
+                purchase_order_line_id,
+                receipt_id,
+                status,
+                reason,
+                requested_replacement
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, 1)
+            """,
+            (
+                db.get_current_site_key(),
+                "clothing",
+                order_id,
+                line_id,
+                non_conforme_id,
+                "closed",
+                "Défaut",
+            ),
+        )
+        conn.execute(
+            """
+            UPDATE purchase_orders
+            SET replacement_closed_at = '2024-01-02 11:00:00',
+                replacement_closed_by = 'tester'
+            WHERE id = ?
+            """,
+            (order_id,),
+        )
+        conn.execute(
+            """
+            INSERT INTO pending_clothing_assignments (
+                site_key,
+                purchase_order_id,
+                purchase_order_line_id,
+                receipt_id,
+                employee_id,
+                new_item_id,
+                new_item_sku,
+                new_item_size,
+                qty,
+                return_employee_item_id,
+                target_dotation_id,
+                return_reason,
+                status,
+                validated_at,
+                validated_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            """,
+            (
+                db.get_current_site_key(),
+                order_id,
+                line_id,
+                conforme_id,
+                collaborator_id,
+                item_id,
+                "HAB-ARCH-3",
+                "T",
+                1,
+                None,
+                None,
+                None,
+                "validated",
+                "tester",
+            ),
         )
         conn.commit()
 

@@ -699,6 +699,14 @@ def _assert_purchase_order_archivable(status: str) -> None:
         raise ValueError("Seuls les bons de commande reçus peuvent être archivés")
 
 
+def _are_purchase_order_lines_received(order: models.PurchaseOrderDetail) -> bool:
+    if not order.items:
+        return False
+    return all(
+        item.quantity_received >= item.quantity_ordered for item in order.items
+    )
+
+
 def _has_latest_nonconforming_receipt(order: models.PurchaseOrderDetail) -> bool:
     latest_by_line: dict[int, models.PurchaseOrderReceipt] = {}
     for receipt in order.receipts:
@@ -733,7 +741,8 @@ def _has_blocking_supplier_return(order: models.PurchaseOrderDetail) -> bool:
 def _assert_purchase_order_archivable_detail(
     order: models.PurchaseOrderDetail,
 ) -> None:
-    _assert_purchase_order_archivable(order.status)
+    if order.status != "RECEIVED" and not _are_purchase_order_lines_received(order):
+        raise ValueError("Seuls les bons de commande reçus peuvent être archivés")
     pending_assignments = [
         assignment
         for assignment in order.pending_assignments
