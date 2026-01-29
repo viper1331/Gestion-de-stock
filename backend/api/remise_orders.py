@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import io
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.api.admin import require_admin
@@ -41,12 +41,15 @@ async def list_orders(
 async def create_order(
     payload: models.RemisePurchaseOrderCreate,
     user: models.User = Depends(get_current_user),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> models.RemisePurchaseOrderDetail:
     _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
-        return services.create_remise_purchase_order(payload)
+        return services.create_remise_purchase_order(
+            payload, idempotency_key=idempotency_key
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

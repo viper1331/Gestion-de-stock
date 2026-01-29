@@ -4182,6 +4182,7 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 note TEXT,
                 auto_created INTEGER NOT NULL DEFAULT 0,
+                idempotency_key TEXT,
                 is_archived INTEGER NOT NULL DEFAULT 0,
                 archived_at TIMESTAMP,
                 archived_by INTEGER
@@ -4205,6 +4206,12 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE remise_purchase_orders ADD COLUMN archived_at TIMESTAMP")
         if "archived_by" not in remise_po_columns:
             execute("ALTER TABLE remise_purchase_orders ADD COLUMN archived_by INTEGER")
+        if "idempotency_key" not in remise_po_columns:
+            execute("ALTER TABLE remise_purchase_orders ADD COLUMN idempotency_key TEXT")
+        execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_remise_purchase_orders_idempotency_key "
+            "ON remise_purchase_orders(idempotency_key)"
+        )
 
         remise_poi_info = execute("PRAGMA table_info(remise_purchase_order_items)").fetchall()
         remise_poi_columns = {row["name"] for row in remise_poi_info}
@@ -13350,6 +13357,8 @@ def unarchive_remise_purchase_order(
 
 def create_remise_purchase_order(
     payload: models.RemisePurchaseOrderCreate,
+    *,
+    idempotency_key: str | None = None,
 ) -> models.RemisePurchaseOrderDetail:
     ensure_database_ready()
     status = _normalize_purchase_order_status(payload.status)
@@ -13367,14 +13376,51 @@ def create_remise_purchase_order(
             )
             if supplier_cur.fetchone() is None:
                 raise ValueError("Fournisseur introuvable")
-        try:
-            cur = conn.execute(
+        has_idempotency_key = _table_has_column(
+            conn, "remise_purchase_orders", "idempotency_key"
+        )
+        effective_idempotency_key = idempotency_key if has_idempotency_key else None
+        if effective_idempotency_key:
+            existing = conn.execute(
                 """
-                INSERT INTO remise_purchase_orders (supplier_id, status, note, auto_created)
-                VALUES (?, ?, ?, 0)
+                SELECT id
+                FROM remise_purchase_orders
+                WHERE idempotency_key = ?
+                ORDER BY id DESC
+                LIMIT 1
                 """,
-                (payload.supplier_id, status, payload.note),
-            )
+                (effective_idempotency_key,),
+            ).fetchone()
+            if existing is not None:
+                logger.info(
+                    "[Remise PO] duplicate create detected idempotency_key=%s order_id=%s",
+                    effective_idempotency_key,
+                    existing["id"],
+                )
+                return get_remise_purchase_order(existing["id"])
+        try:
+            if has_idempotency_key:
+                cur = conn.execute(
+                    """
+                    INSERT INTO remise_purchase_orders (
+                        supplier_id,
+                        status,
+                        note,
+                        auto_created,
+                        idempotency_key
+                    )
+                    VALUES (?, ?, ?, 0, ?)
+                    """,
+                    (payload.supplier_id, status, payload.note, effective_idempotency_key),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO remise_purchase_orders (supplier_id, status, note, auto_created)
+                    VALUES (?, ?, ?, 0)
+                    """,
+                    (payload.supplier_id, status, payload.note),
+                )
             order_id = cur.lastrowid
             has_line_sku = _table_has_column(conn, "remise_purchase_order_items", "sku")
             has_line_unit = _table_has_column(conn, "remise_purchase_order_items", "unit")
@@ -13402,6 +13448,28 @@ def create_remise_purchase_order(
                     values,
                 )
             conn.commit()
+        except sqlite3.IntegrityError:
+            if has_idempotency_key and effective_idempotency_key:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM remise_purchase_orders
+                    WHERE idempotency_key = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (effective_idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    conn.rollback()
+                    logger.info(
+                        "[Remise PO] idempotency conflict resolved idempotency_key=%s order_id=%s",
+                        effective_idempotency_key,
+                        existing["id"],
+                    )
+                    return get_remise_purchase_order(existing["id"])
+            conn.rollback()
+            raise
         except Exception:
             conn.rollback()
             raise
