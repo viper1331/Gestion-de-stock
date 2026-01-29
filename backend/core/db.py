@@ -230,6 +230,7 @@ def init_databases() -> None:
                     sender_role TEXT NOT NULL,
                     category TEXT NOT NULL,
                     content TEXT NOT NULL,
+                    idempotency_key TEXT,
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS password_reset_tokens (
@@ -262,7 +263,8 @@ def init_databases() -> None:
                     is_read INTEGER NOT NULL DEFAULT 0,
                     is_archived INTEGER NOT NULL DEFAULT 0,
                     read_at TIMESTAMP,
-                    archived_at TIMESTAMP
+                    archived_at TIMESTAMP,
+                    deleted_at TIMESTAMP
                 );
                 CREATE TABLE IF NOT EXISTS message_rate_limits (
                     sender_username TEXT PRIMARY KEY,
@@ -271,8 +273,12 @@ def init_databases() -> None:
                 );
                 CREATE INDEX IF NOT EXISTS idx_messages_created_at
                 ON messages(created_at);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_idempotency
+                ON messages(sender_username, idempotency_key);
                 CREATE INDEX IF NOT EXISTS idx_message_recipients_recipient
                 ON message_recipients(recipient_username, is_archived);
+                CREATE INDEX IF NOT EXISTS idx_message_recipients_active
+                ON message_recipients(recipient_username, deleted_at, is_archived);
                 CREATE INDEX IF NOT EXISTS idx_message_recipients_message
                 ON message_recipients(message_id);
                 CREATE TABLE IF NOT EXISTS module_permissions (
@@ -335,6 +341,8 @@ def init_databases() -> None:
             _ensure_two_factor_challenge_columns(conn)
             _ensure_user_page_layouts_schema(conn)
             _ensure_user_table_prefs_schema(conn)
+            _ensure_message_columns(conn)
+            _ensure_message_recipient_columns(conn)
         _init_core_database()
         _sync_user_site_preferences()
         for site_key in SITE_KEYS:
@@ -712,6 +720,46 @@ def _ensure_two_factor_challenge_columns(conn: sqlite3.Connection) -> None:
         )
     if "secret_enc" not in columns:
         conn.execute("ALTER TABLE two_factor_challenges ADD COLUMN secret_enc TEXT")
+
+
+def _ensure_message_columns(conn: sqlite3.Connection) -> None:
+    try:
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
+    except sqlite3.OperationalError:
+        return
+    if "idempotency_key" not in columns:
+        logger.info("[DB] Ajout de la colonne messages.idempotency_key")
+        conn.execute("ALTER TABLE messages ADD COLUMN idempotency_key TEXT")
+    conn.execute(
+        """
+        CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_idempotency
+        ON messages(sender_username, idempotency_key)
+        """
+    )
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_messages_created_at
+        ON messages(created_at)
+        """
+    )
+
+
+def _ensure_message_recipient_columns(conn: sqlite3.Connection) -> None:
+    try:
+        columns = {
+            row["name"] for row in conn.execute("PRAGMA table_info(message_recipients)").fetchall()
+        }
+    except sqlite3.OperationalError:
+        return
+    if "deleted_at" not in columns:
+        logger.info("[DB] Ajout de la colonne message_recipients.deleted_at")
+        conn.execute("ALTER TABLE message_recipients ADD COLUMN deleted_at TIMESTAMP")
+    conn.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_message_recipients_active
+        ON message_recipients(recipient_username, deleted_at, is_archived)
+        """
+    )
 
 
 def _ensure_user_table_prefs_schema(conn: sqlite3.Connection) -> None:
