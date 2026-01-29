@@ -96,6 +96,7 @@ export function PurchaseOrdersPage() {
     <EditablePageLayout
       pageKey="module:clothing:purchase-orders"
       blocks={blocks}
+      className="w-full max-w-none"
       renderHeader={({ editButton, actionButtons, isEditing }) => (
         <header className="space-y-1">
           <h2 className="text-2xl font-semibold text-white">Bons de commande</h2>
