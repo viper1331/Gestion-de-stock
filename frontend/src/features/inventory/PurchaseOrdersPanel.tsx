@@ -2366,9 +2366,7 @@ export function PurchaseOrdersPanel({
           </div>
           <div className="hidden md:block">
             <div className="w-full overflow-x-auto rounded-lg border border-slate-800">
-              <table className="w-full table-auto divide-y divide-slate-800">
-                <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
-          <div className="overflow-hidden rounded-lg border border-slate-800">
+              <div className="overflow-hidden rounded-lg border border-slate-800">
             <table className="min-w-full divide-y divide-slate-800">
               <thead className="bg-slate-900/60 text-xs uppercase tracking-wide text-slate-400">
                 <tr>
@@ -3047,12 +3045,13 @@ export function PurchaseOrdersPanel({
                     <th className="min-w-[420px] px-4 py-3 text-left">Lignes</th>
                     <th className="w-[220px] px-4 py-3 text-right">Actions</th>
                   </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
-                  {orderViews.map((view) => view.row)}
-                  {visibleOrders.length === 0 && !loadingOrders ? (
-                    <tr>
-                      <td className="px-4 py-4 text-sm text-slate-400" colSpan={5}>
+                ) : null}
+              </tbody>
+              <tbody className="divide-y divide-slate-900 bg-slate-950/60 text-sm text-slate-100">
+                {orderViews.map((view) => view.row)}
+                {visibleOrders.length === 0 && !loadingOrders ? (
+                  <tr>
+                    <td className="px-4 py-4 text-sm text-slate-400" colSpan={5}>
                         {showArchived
                           ? "Aucun bon de commande archivé."
                           : "Aucun bon de commande pour le moment."}
