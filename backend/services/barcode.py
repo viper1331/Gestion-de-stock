@@ -78,8 +78,15 @@ PDF_PAGE_HEIGHT_CM = 29.7
 PDF_DPI = 300
 PDF_COLUMNS = 3
 PDF_ROWS = 8
-PDF_MARGIN_CM = 0.8
-PDF_CELL_PADDING_CM = 0.3
+PDF_MARGIN_CM = 1.0
+PDF_CELL_PADDING_CM = 0.4
+PDF_MIN_CELL_WIDTH_CM = 7.0
+PDF_MIN_CELL_HEIGHT_CM = 3.5
+PDF_QUIET_ZONE_CM = 0.25
+PDF_TEXT_GAP_CM = 0.2
+PDF_TITLE_FONT_SIZE_PT = 10
+PDF_LABEL_FONT_SIZE_PT = 9
+PDF_META_FONT_SIZE_PT = 8
 
 
 @dataclass(frozen=True)
@@ -90,6 +97,115 @@ class BarcodeAsset:
     filename: str
     path: Path
     modified_at: datetime
+    name: str | None = None
+    category: str | None = None
+    variant: str | None = None
+    size: str | None = None
+
+
+def _resolve_barcode_font_sizes(config: PdfConfig | None) -> tuple[int, int, int]:
+    if not config:
+        return PDF_TITLE_FONT_SIZE_PT, PDF_LABEL_FONT_SIZE_PT, PDF_META_FONT_SIZE_PT
+    advanced = config.advanced
+    title_size = max(PDF_TITLE_FONT_SIZE_PT, int(advanced.barcode_title_font_size))
+    label_size = max(PDF_LABEL_FONT_SIZE_PT, int(advanced.barcode_label_font_size))
+    meta_size = max(PDF_META_FONT_SIZE_PT, int(advanced.barcode_meta_font_size))
+    return title_size, label_size, meta_size
+
+
+def _pt_to_px(value: float) -> int:
+    return int(round(value * PDF_DPI / 72))
+
+
+def _load_font(font_names: list[str], size_px: int) -> ImageFont.ImageFont:
+    for font_name in font_names:
+        try:
+            return ImageFont.truetype(font_name, size=size_px)
+        except OSError:
+            continue
+    return ImageFont.load_default()
+
+
+def _font_line_height(font: ImageFont.ImageFont) -> int:
+    bbox = font.getbbox("Ag")
+    return max(1, bbox[3] - bbox[1])
+
+
+def _truncate_with_ellipsis(
+    text: str, draw: ImageDraw.ImageDraw, font: ImageFont.ImageFont, max_width: int
+) -> str:
+    ellipsis = "…"
+    if draw.textlength(text, font=font) <= max_width:
+        return text
+    trimmed = text
+    while trimmed and draw.textlength(f"{trimmed}{ellipsis}", font=font) > max_width:
+        trimmed = trimmed[:-1]
+    return f"{trimmed}{ellipsis}" if trimmed else ellipsis
+
+
+def _wrap_text(
+    text: str,
+    draw: ImageDraw.ImageDraw,
+    font: ImageFont.ImageFont,
+    max_width: int,
+    *,
+    max_lines: int | None = None,
+    ellipsis: bool = False,
+) -> list[str]:
+    words = text.split()
+    if not words:
+        return []
+
+    lines: list[str] = []
+    current = ""
+    truncated = False
+
+    for index, word in enumerate(words):
+        candidate = word if not current else f"{current} {word}"
+        if draw.textlength(candidate, font=font) <= max_width:
+            current = candidate
+            continue
+
+        if current:
+            lines.append(current)
+            current = word
+        else:
+            for char in word:
+                next_piece = f"{current}{char}"
+                if draw.textlength(next_piece, font=font) <= max_width:
+                    current = next_piece
+                else:
+                    lines.append(current)
+                    current = char
+
+        if max_lines and len(lines) >= max_lines:
+            truncated = True
+            current = ""
+            break
+
+        if index == len(words) - 1 and current:
+            lines.append(current)
+            current = ""
+
+    if current and (not max_lines or len(lines) < max_lines):
+        lines.append(current)
+
+    if max_lines and len(lines) > max_lines:
+        lines = lines[:max_lines]
+        truncated = True
+
+    if truncated and ellipsis and lines:
+        lines[-1] = _truncate_with_ellipsis(lines[-1], draw, font, max_width)
+
+    return lines
+
+
+def _build_label_text(asset: BarcodeAsset) -> tuple[str, str, str | None]:
+    name = (asset.name or "").strip() or asset.sku
+    sku = asset.sku
+    extras = [value for value in [asset.category, asset.variant, asset.size] if value]
+    extra_line = " / ".join(extras) if extras else None
+    return name, sku, extra_line
 
 
 def _legacy_assets_dir() -> Path:
@@ -377,7 +493,15 @@ def generate_barcode_pdf(
 
     if config:
         width_cm, height_cm = _resolve_page_size_cm(config)
-        margin_cm = max(config.format.margins.left_mm, config.format.margins.right_mm) / 10
+        margin_cm = (
+            max(
+                config.format.margins.left_mm,
+                config.format.margins.right_mm,
+                config.format.margins.top_mm,
+                config.format.margins.bottom_mm,
+            )
+            / 10
+        )
     else:
         width_cm, height_cm = PDF_PAGE_WIDTH_CM, PDF_PAGE_HEIGHT_CM
         margin_cm = PDF_MARGIN_CM
@@ -393,16 +517,40 @@ def generate_barcode_pdf(
     if usable_width <= 0 or usable_height <= 0:
         return None
 
-    cell_width = usable_width // PDF_COLUMNS
-    cell_height = usable_height // PDF_ROWS
+    min_cell_width_px = int(round(PDF_MIN_CELL_WIDTH_CM * px_per_cm))
+    min_cell_height_px = int(round(PDF_MIN_CELL_HEIGHT_CM * px_per_cm))
+    columns = PDF_COLUMNS if usable_width // PDF_COLUMNS >= min_cell_width_px else 2
+    rows = max(1, usable_height // max(1, min_cell_height_px))
+
+    cell_width = usable_width // columns
+    cell_height = usable_height // rows
     if cell_width <= 0 or cell_height <= 0:
         return None
 
-    cells_per_page = PDF_COLUMNS * PDF_ROWS
+    quiet_zone_px = int(round(PDF_QUIET_ZONE_CM * px_per_cm))
+    text_gap_px = int(round(PDF_TEXT_GAP_CM * px_per_cm))
+    title_size_pt, label_size_pt, meta_size_pt = _resolve_barcode_font_sizes(config)
+    title_font_px = _pt_to_px(title_size_pt)
+    label_font_px = _pt_to_px(label_size_pt)
+    meta_font_px = _pt_to_px(meta_size_pt)
+
+    title_font = _load_font(["DejaVuSans-Bold.ttf", "DejaVuSans.ttf"], title_font_px)
+    label_font = _load_font(["DejaVuSansMono.ttf", "DejaVuSans.ttf"], label_font_px)
+    meta_font = _load_font(["DejaVuSans.ttf", "DejaVuSansMono.ttf"], meta_font_px)
+
+    title_line_height = _font_line_height(title_font)
+    label_line_height = _font_line_height(label_font)
+    meta_line_height = _font_line_height(meta_font)
+    title_gap = max(2, int(title_line_height * 0.2))
+    label_gap = max(2, int(label_line_height * 0.2))
+    meta_gap = max(2, int(meta_line_height * 0.2))
+
+    cells_per_page = columns * rows
     pages: list[Image.Image] = []
 
     for start in range(0, len(assets_list), cells_per_page):
         page = Image.new("RGB", (page_width_px, page_height_px), color="white")
+        page_draw = ImageDraw.Draw(page)
         chunk = assets_list[start : start + cells_per_page]
 
         for index, asset in enumerate(chunk):
@@ -412,21 +560,101 @@ def generate_barcode_pdf(
             except Exception:
                 continue
 
-            row = index // PDF_COLUMNS
-            column = index % PDF_COLUMNS
+            row = index // columns
+            column = index % columns
 
             x0 = margin_px + column * cell_width
             y0 = margin_px + row * cell_height
             available_width = max(1, cell_width - 2 * cell_padding_px)
             available_height = max(1, cell_height - 2 * cell_padding_px)
 
-            resized = ImageOps.contain(barcode_image, (available_width, available_height))
+            name_text, sku_text, extra_text = _build_label_text(asset)
+            max_text_width = max(1, available_width - 2 * quiet_zone_px)
+            name_lines = _wrap_text(
+                name_text,
+                page_draw,
+                title_font,
+                max_text_width,
+                max_lines=2,
+                ellipsis=True,
+            )
+            sku_lines = _wrap_text(
+                sku_text,
+                page_draw,
+                label_font,
+                max_text_width,
+                max_lines=None,
+            )
+            extra_lines = (
+                _wrap_text(
+                    extra_text,
+                    page_draw,
+                    meta_font,
+                    max_text_width,
+                    max_lines=1,
+                    ellipsis=True,
+                )
+                if extra_text
+                else []
+            )
+
+            text_height = 0
+            if name_lines:
+                text_height += len(name_lines) * title_line_height + (len(name_lines) - 1) * title_gap
+            if sku_lines:
+                text_height += len(sku_lines) * label_line_height + (len(sku_lines) - 1) * label_gap
+                if name_lines:
+                    text_height += label_gap
+            if extra_lines:
+                text_height += len(extra_lines) * meta_line_height + (len(extra_lines) - 1) * meta_gap
+                if name_lines or sku_lines:
+                    text_height += meta_gap
+
+            barcode_area_height = max(1, available_height - text_height - text_gap_px)
+            barcode_area_width = max(1, available_width - 2 * quiet_zone_px)
+
+            resized = ImageOps.contain(
+                barcode_image,
+                (barcode_area_width, max(1, barcode_area_height - 2 * quiet_zone_px)),
+            )
             barcode_image.close()
-            paste_x = x0 + (cell_width - resized.width) // 2
-            paste_y = y0 + (cell_height - resized.height) // 2
+            paste_x = x0 + cell_padding_px + quiet_zone_px + (barcode_area_width - resized.width) // 2
+            paste_y = (
+                y0
+                + cell_padding_px
+                + quiet_zone_px
+                + (barcode_area_height - 2 * quiet_zone_px - resized.height) // 2
+            )
 
             page.paste(resized, (paste_x, paste_y))
             resized.close()
+
+            text_start_y = y0 + cell_padding_px + barcode_area_height + text_gap_px
+            current_y = text_start_y
+
+            for line in name_lines:
+                text_width = page_draw.textlength(line, font=title_font)
+                text_x = x0 + (cell_width - text_width) // 2
+                page_draw.text((text_x, current_y), line, fill="black", font=title_font)
+                current_y += title_line_height + title_gap
+
+            if name_lines and sku_lines:
+                current_y += label_gap
+
+            for line in sku_lines:
+                text_width = page_draw.textlength(line, font=label_font)
+                text_x = x0 + (cell_width - text_width) // 2
+                page_draw.text((text_x, current_y), line, fill="black", font=label_font)
+                current_y += label_line_height + label_gap
+
+            if (name_lines or sku_lines) and extra_lines:
+                current_y += meta_gap
+
+            for line in extra_lines:
+                text_width = page_draw.textlength(line, font=meta_font)
+                text_x = x0 + (cell_width - text_width) // 2
+                page_draw.text((text_x, current_y), line, fill="black", font=meta_font)
+                current_y += meta_line_height + meta_gap
 
         pages.append(page)
 

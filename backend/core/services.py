@@ -17,7 +17,7 @@ import time
 import unicodedata
 from collections import defaultdict
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import sqlite3
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -15900,6 +15900,78 @@ def _resolve_generated_barcode_metadata(
     return resolved
 
 
+def _barcode_inventory_module_for_key(module_key: str) -> str | None:
+    mapping = {
+        "clothing": "default",
+        "pharmacy": "pharmacy",
+        "inventory_remise": "inventory_remise",
+        "vehicle_inventory": "vehicle_inventory",
+    }
+    return mapping.get(module_key)
+
+
+def _resolve_barcode_label_metadata(
+    conn: sqlite3.Connection,
+    skus: Iterable[str],
+    sources: list[tuple[str, str, str, str]],
+) -> dict[str, tuple[str, str | None, str | None]]:
+    normalized_skus = {
+        sku.strip().casefold(): sku.strip()
+        for sku in skus
+        if sku and sku.strip()
+    }
+    if not normalized_skus or not sources:
+        return {}
+
+    lower_skus = list(normalized_skus.keys())
+    placeholders = ",".join(["?"] * len(lower_skus))
+    resolved: dict[str, tuple[str, str | None, str | None]] = {}
+
+    for module_key, table, sku_column, name_column in sources:
+        size_column = "size_format" if module_key == "pharmacy" else "size"
+        size_select = (
+            f"i.{size_column} AS size"
+            if _table_has_column(conn, table, size_column)
+            else "NULL AS size"
+        )
+        category_join = ""
+        category_select = "NULL AS category"
+        if _table_has_column(conn, table, "category_id"):
+            inventory_module = _barcode_inventory_module_for_key(module_key)
+            if inventory_module:
+                category_table = _get_inventory_config(inventory_module).tables.categories
+                category_join = f"LEFT JOIN {category_table} AS c ON c.id = i.category_id"
+                category_select = "c.name AS category"
+
+        query = f"""
+            SELECT i.{sku_column} AS sku,
+                   i.{name_column} AS name,
+                   {size_select},
+                   {category_select}
+            FROM {table} AS i
+            {category_join}
+            WHERE LOWER(i.{sku_column}) IN ({placeholders})
+        """
+        rows = conn.execute(query, lower_skus).fetchall()
+        for row in rows:
+            sku_value = (row["sku"] or "").strip()
+            if not sku_value:
+                continue
+            key = sku_value.casefold()
+            if key in resolved:
+                continue
+            name_value = (row["name"] or "").strip() or sku_value
+            category_value = (row["category"] or "").strip() if "category" in row.keys() else ""
+            size_value = (row["size"] or "").strip() if "size" in row.keys() else ""
+            resolved[key] = (
+                name_value,
+                category_value or None,
+                size_value or None,
+            )
+
+    return resolved
+
+
 def list_generated_barcodes(
     user: models.User, module: str | None = None, q: str | None = None
 ) -> list[models.BarcodeGeneratedEntry]:
@@ -16037,6 +16109,45 @@ def list_accessible_barcode_assets(user: models.User) -> list[barcode_service.Ba
                 pass
 
     return filtered_assets
+
+
+def enrich_barcode_assets_with_metadata(
+    user: models.User,
+    assets: Iterable[barcode_service.BarcodeAsset],
+) -> list[barcode_service.BarcodeAsset]:
+    assets_list = list(assets)
+    if not assets_list:
+        return []
+
+    sources = [
+        source
+        for source in _BARCODE_CATALOG_SOURCES
+        if user.role == "admin" or has_module_access(user, source[0], action="view")
+    ]
+    if not sources:
+        return assets_list
+
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        resolved = _resolve_barcode_label_metadata(conn, (asset.sku for asset in assets_list), sources)
+
+    enriched: list[barcode_service.BarcodeAsset] = []
+    for asset in assets_list:
+        resolved_key = asset.sku.strip().casefold()
+        meta = resolved.get(resolved_key)
+        if meta:
+            name_value, category_value, size_value = meta
+            enriched.append(
+                replace(
+                    asset,
+                    name=name_value,
+                    category=category_value,
+                    size=size_value,
+                )
+            )
+        else:
+            enriched.append(asset)
+    return enriched
 
 
 def get_pharmacy_item(item_id: int) -> models.PharmacyItem:

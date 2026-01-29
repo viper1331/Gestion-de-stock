@@ -90,6 +90,9 @@ class PdfAdvancedConfig(BaseModel):
     table_header_bg_color: str = "#1f2937"
     table_header_text_color: str = "#f8fafc"
     row_alt_bg_color: str = "#0f172a"
+    barcode_title_font_size: int = 10
+    barcode_label_font_size: int = 9
+    barcode_meta_font_size: int = 8
 
 
 class PdfThemeConfig(BaseModel):

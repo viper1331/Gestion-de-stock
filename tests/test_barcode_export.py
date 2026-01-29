@@ -1,5 +1,8 @@
 from datetime import datetime, timezone
 
+from pathlib import Path
+
+from backend.core.pdf_config_models import PdfConfig
 from backend.services import barcode as barcode_service
 
 
@@ -36,3 +39,34 @@ def test_generate_barcode_pdf_returns_none_with_no_accessible_assets(monkeypatch
     monkeypatch.setattr(barcode_service, "list_barcode_assets", lambda: [])
 
     assert barcode_service.generate_barcode_pdf(assets=[]) is None
+
+
+def test_build_label_text_uses_name_and_sku():
+    asset = barcode_service.BarcodeAsset(
+        sku="SKU-001",
+        filename="sku-001.png",
+        path=Path("sku-001.png"),
+        modified_at=datetime.now(timezone.utc),
+        name="Nom article",
+        category="Catégorie",
+        size="XL",
+    )
+
+    name, sku, extra = barcode_service._build_label_text(asset)
+
+    assert name == "Nom article"
+    assert sku == "SKU-001"
+    assert extra == "Catégorie / XL"
+
+
+def test_barcode_font_sizes_respect_minimums():
+    config = PdfConfig()
+    config.advanced.barcode_title_font_size = 6
+    config.advanced.barcode_label_font_size = 6
+    config.advanced.barcode_meta_font_size = 4
+
+    title_size, label_size, meta_size = barcode_service._resolve_barcode_font_sizes(config)
+
+    assert title_size >= 10
+    assert label_size >= 9
+    assert meta_size >= 8
