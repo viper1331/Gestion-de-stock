@@ -1238,6 +1238,10 @@ class PurchaseOrderDetail(PurchaseOrder):
     supplier_email_resolved: str | None = None
     supplier_has_email: bool = False
     supplier_missing_reason: str | None = None
+    replacement_flow_status: Literal["none", "open", "closed"] = "none"
+    replacement_flow_open: bool = False
+    replacement_lock_reception: bool = False
+    replacement_assignment_completed: bool = False
     items: list[PurchaseOrderItem] = Field(default_factory=list)
     receipts: list[PurchaseOrderReceipt] = Field(default_factory=list)
     nonconformities: list[PurchaseOrderNonconformity] = Field(default_factory=list)

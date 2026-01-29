@@ -9372,6 +9372,10 @@ class NonConformeReceiptRequiredError(ValueError):
     pass
 
 
+class ReplacementReceptionLockedError(ValueError):
+    pass
+
+
 def resolve_supplier(site_key: str | int, supplier_id: int) -> models.Supplier:
     ensure_database_ready()
     normalized_site_key = sites.normalize_site_key(str(site_key)) if site_key is not None else None
@@ -9803,6 +9807,27 @@ def _build_purchase_order_detail(
             )
             for row in return_rows
         ]
+    has_nonconforming_receipt = any(
+        summary.get("non_conforme", 0) > 0 for summary in receipt_summaries.values()
+    )
+    requested_replacements = [
+        nonconformity
+        for nonconformity in nonconformities
+        if nonconformity.requested_replacement
+    ]
+    replacement_flow_status = "none"
+    if requested_replacements:
+        replacement_flow_status = (
+            "open"
+            if any(nonconformity.status != "closed" for nonconformity in requested_replacements)
+            else "closed"
+        )
+    replacement_flow_open = replacement_flow_status == "open"
+    replacement_lock_reception = has_nonconforming_receipt and replacement_flow_open
+    replacement_assignment_completed = (
+        replacement_flow_status == "closed"
+        and not any(assignment.status == "pending" for assignment in pending_assignments)
+    )
     return models.PurchaseOrderDetail(
         id=order_row["id"],
         supplier_id=supplier_id,
@@ -9814,6 +9839,10 @@ def _build_purchase_order_detail(
         supplier_email_resolved=resolved_email,
         supplier_has_email=supplier_has_email,
         supplier_missing_reason=supplier_missing_reason,
+        replacement_flow_status=replacement_flow_status,
+        replacement_flow_open=replacement_flow_open,
+        replacement_lock_reception=replacement_lock_reception,
+        replacement_assignment_completed=replacement_assignment_completed,
         status=order_row["status"],
         created_at=order_row["created_at"],
         note=order_row["note"],
@@ -11484,6 +11513,47 @@ def generate_remise_inventory_pdf() -> bytes:
     )
 
 
+def _is_replacement_reception_locked(
+    conn: sqlite3.Connection,
+    order_id: int,
+    *,
+    site_key: str | None = None,
+) -> bool:
+    normalized_site_key = site_key or db.get_current_site_key()
+    if not _table_exists(conn, "purchase_order_receipts"):
+        return False
+    if not _table_exists(conn, "purchase_order_nonconformities"):
+        return False
+    nonconforme_row = conn.execute(
+        """
+        SELECT 1
+        FROM purchase_order_receipts
+        WHERE purchase_order_id = ?
+          AND site_key = ?
+          AND conformity_status = 'non_conforme'
+        LIMIT 1
+        """,
+        (order_id, normalized_site_key),
+    ).fetchone()
+    if nonconforme_row is None:
+        return False
+    if not _table_has_column(conn, "purchase_order_nonconformities", "requested_replacement"):
+        return False
+    replacement_open = conn.execute(
+        """
+        SELECT 1
+        FROM purchase_order_nonconformities
+        WHERE purchase_order_id = ?
+          AND site_key = ?
+          AND requested_replacement = 1
+          AND status != 'closed'
+        LIMIT 1
+        """,
+        (order_id, normalized_site_key),
+    ).fetchone()
+    return replacement_open is not None
+
+
 def receive_purchase_order(
     order_id: int, payload: models.PurchaseOrderReceivePayload
 ) -> models.PurchaseOrderDetail:
@@ -11509,6 +11579,10 @@ def receive_purchase_order(
             raise ValueError("Bon de commande introuvable")
         if order_row["status"] == "CANCELLED":
             raise ValueError("Bon de commande annulé")
+        if _is_replacement_reception_locked(conn, order_id):
+            raise ReplacementReceptionLockedError(
+                "Réception verrouillée : remplacement non clôturé"
+            )
         try:
             if line_increments:
                 for line_id, increment in line_increments.items():
@@ -11615,6 +11689,12 @@ def receive_purchase_order_line(
             raise ValueError("Bon de commande introuvable")
         if order_row["status"] == "CANCELLED":
             raise ValueError("Bon de commande annulé")
+        if payload.conformity_status == "conforme" and _is_replacement_reception_locked(
+            conn, order_id
+        ):
+            raise ReplacementReceptionLockedError(
+                "Réception verrouillée : remplacement non clôturé"
+            )
         line = conn.execute(
             """
             SELECT *

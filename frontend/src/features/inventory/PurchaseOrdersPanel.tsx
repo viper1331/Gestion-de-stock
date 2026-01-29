@@ -163,6 +163,10 @@ interface PurchaseOrderDetail {
   supplier_email: string | null;
   supplier_missing?: boolean;
   supplier_missing_reason?: string | null;
+  replacement_flow_status?: "none" | "open" | "closed";
+  replacement_flow_open?: boolean;
+  replacement_lock_reception?: boolean;
+  replacement_assignment_completed?: boolean;
   parent_id?: number | null;
   replacement_for_line_id?: number | null;
   kind?: "standard" | "replacement_request";
@@ -1637,7 +1641,11 @@ export function PurchaseOrdersPanel({
                       };
                     })
                     .filter((line): line is { line_id: number; qty: number } => line !== null);
-                  const canReceive = outstanding.length > 0 && !isReadOnly;
+                  const isReplacementReceptionLocked = Boolean(order.replacement_lock_reception);
+                  const replacementLockTooltip =
+                    "Réception verrouillée : demande de remplacement en cours.";
+                  const canReceive =
+                    outstanding.length > 0 && !isReadOnly && !isReplacementReceptionLocked;
                   const receiptsByLine = new Map<number, PurchaseOrderReceipt[]>();
                   (order.receipts ?? []).forEach((receipt) => {
                     const existing = receiptsByLine.get(receipt.purchase_order_line_id) ?? [];
@@ -1697,13 +1705,21 @@ export function PurchaseOrdersPanel({
                   const canFinalizeNonconformity =
                     enableReplacementFlow &&
                     hasNonConformingLatestReceipt &&
-                    sentReplacementOrders.length > 0;
+                    sentReplacementOrders.length > 0 &&
+                    !isReplacementReceptionLocked;
                   const canArchive =
                     canManageOrders &&
                     order.status === "RECEIVED" &&
                     outstanding.length === 0 &&
                     !hasNonConformingLatestReceipt &&
                     pendingAssignments.length === 0;
+                  const replacementAssignmentCompleted = Boolean(
+                    order.replacement_assignment_completed
+                  );
+                  const replacementFlowStatus = order.replacement_flow_status ?? "none";
+                  const showReplacementCompleteMessage =
+                    replacementFlowStatus === "closed" && replacementAssignmentCompleted;
+                  const showReplacementLockMessage = isReplacementReceptionLocked;
                   let primaryStatus: PrimaryOrderStatus = "CONFORME";
                   if (isArchived) {
                     primaryStatus = "ARCHIVE";
@@ -1764,6 +1780,11 @@ export function PurchaseOrdersPanel({
                             tone={primaryBadge.tone}
                             tooltip={primaryBadge.tooltip}
                           />
+                          {replacementFlowStatus === "open" ? (
+                            <span className="w-fit rounded-full bg-sky-500/20 px-2 py-0.5 text-[10px] uppercase tracking-wide text-sky-200">
+                              Remplacement en cours
+                            </span>
+                          ) : null}
                           {isArchived ? (
                             <span>{resolveOrderStatusLabel(order.status)}</span>
                           ) : (
@@ -1976,7 +1997,11 @@ export function PurchaseOrdersPanel({
                               </li>
                             );
                           })}
-                          {hasNonConformingLatestReceipt ? (
+                          {showReplacementCompleteMessage ? (
+                            <li className="pt-2 text-[11px] text-emerald-200">
+                              Réception conforme : attribution validée.
+                            </li>
+                          ) : showReplacementLockMessage || hasNonConformingLatestReceipt ? (
                             <li className="pt-2 text-[11px] text-rose-300">
                               Réception non conforme : aucune attribution possible.
                             </li>
@@ -2140,9 +2165,11 @@ export function PurchaseOrdersPanel({
                                   "rounded border border-emerald-500/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
                                 )}
                                 title={
-                                  canReceive
-                                    ? "Enregistrer la réception des quantités restantes"
-                                    : "Toutes les quantités ont été réceptionnées"
+                                  isReplacementReceptionLocked
+                                    ? replacementLockTooltip
+                                    : canReceive
+                                      ? "Enregistrer la réception des quantités restantes"
+                                      : "Toutes les quantités ont été réceptionnées"
                                 }
                               >
                                 {receiveAllLabel}
@@ -2156,6 +2183,7 @@ export function PurchaseOrdersPanel({
                                   "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60",
                                   "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                                 )}
+                                title={isReplacementReceptionLocked ? replacementLockTooltip : undefined}
                               >
                                 Réception partielle
                               </button>
