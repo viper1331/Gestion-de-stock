@@ -364,13 +364,77 @@ interface DraftLine {
   returnQty?: number;
 }
 
-const hasBlockingReturnInProgress = (order: PurchaseOrderDetail) =>
-  order.items.some((item) =>
-    BLOCKING_RETURN_STATUSES.has(item.return_status ?? "none")
-  ) ||
-  (order.supplier_returns ?? []).some((supplierReturn) =>
-    BLOCKING_SUPPLIER_RETURN_STATUSES.has(supplierReturn.status)
+const mapSupplierReturnStatus = (status: string) =>
+  status === "prepared" ? "to_prepare" : status;
+
+const resolveLatestSupplierReturns = (
+  supplierReturns: ClothingSupplierReturn[]
+) => {
+  const latestByLine = new Map<number, ClothingSupplierReturn>();
+  const unlinked: ClothingSupplierReturn[] = [];
+  supplierReturns.forEach((supplierReturn) => {
+    if (!supplierReturn.purchase_order_line_id) {
+      unlinked.push(supplierReturn);
+      return;
+    }
+    const lineId = supplierReturn.purchase_order_line_id;
+    const existing = latestByLine.get(lineId);
+    if (!existing) {
+      latestByLine.set(lineId, supplierReturn);
+      return;
+    }
+    const existingTime = new Date(existing.created_at).getTime();
+    const returnTime = new Date(supplierReturn.created_at).getTime();
+    if (
+      returnTime > existingTime ||
+      (returnTime === existingTime && supplierReturn.id > existing.id)
+    ) {
+      latestByLine.set(lineId, supplierReturn);
+    }
+  });
+  return { latestByLine, unlinked };
+};
+
+const resolveReturnStatusForLine = (
+  line: PurchaseOrderItem,
+  latestByLine: Map<number, ClothingSupplierReturn>
+) => {
+  const latestSupplierReturn = latestByLine.get(line.id);
+  if (latestSupplierReturn) {
+    const mappedStatus = mapSupplierReturnStatus(latestSupplierReturn.status);
+    return mappedStatus === "none" ? null : mappedStatus;
+  }
+  return line.return_status && line.return_status !== "none"
+    ? line.return_status
+    : null;
+};
+
+const resolveSupplierReturnState = (order: PurchaseOrderDetail) => {
+  const { latestByLine, unlinked } = resolveLatestSupplierReturns(
+    order.supplier_returns ?? []
   );
+  const blockingSupplierReturn = [...latestByLine.values(), ...unlinked].find(
+    (supplierReturn) =>
+      BLOCKING_SUPPLIER_RETURN_STATUSES.has(supplierReturn.status)
+  );
+  const blockingLineReturn = order.items.find(
+    (item) =>
+      !latestByLine.has(item.id) &&
+      BLOCKING_RETURN_STATUSES.has(item.return_status ?? "none")
+  );
+  const hasBlockingReturn = Boolean(blockingSupplierReturn || blockingLineReturn);
+  let reason: string | undefined;
+  if (blockingSupplierReturn?.status === "prepared") {
+    reason = "Retour fournisseur à préparer";
+  } else if (blockingSupplierReturn?.status === "shipped") {
+    reason = "Retour fournisseur expédié en attente de réception";
+  } else if (blockingLineReturn?.return_status === "to_prepare") {
+    reason = "Retour fournisseur à préparer";
+  } else if (blockingLineReturn?.return_status === "shipped") {
+    reason = "Retour fournisseur expédié en attente de réception";
+  }
+  return { hasBlockingReturn, reason, latestByLine };
+};
 
 const hasNonConformityHistory = (order: PurchaseOrderDetail) =>
   (order.receipts ?? []).some(
@@ -404,13 +468,15 @@ const resolveArchiveEligibility = ({
   outstanding,
   pendingAssignments,
   canManageOrders,
-  hasNonConformingLatestReceipt
+  hasNonConformingLatestReceipt,
+  supplierReturnState
 }: {
   order: PurchaseOrderDetail;
   outstanding: Array<{ line_id: number; qty: number }>;
   pendingAssignments: PendingClothingAssignment[];
   canManageOrders: boolean;
   hasNonConformingLatestReceipt: boolean;
+  supplierReturnState: ReturnType<typeof resolveSupplierReturnState>;
 }) => {
   const replacementClosed = order.replacement_flow_status === "closed";
   const replacementAssignmentCompleted = Boolean(order.replacement_assignment_completed);
@@ -419,7 +485,7 @@ const resolveArchiveEligibility = ({
     (replacementClosed &&
       replacementAssignmentCompleted &&
       !hasNonConformingLatestReceipt);
-  const hasBlockingReturn = hasBlockingReturnInProgress(order);
+  const hasBlockingReturn = supplierReturnState.hasBlockingReturn;
   const isOrderReceived = order.status === "RECEIVED";
   const readyForArchive = isOrderReceived && outstanding.length === 0;
   const showArchiveButton = canManageOrders && isOrderReceived;
@@ -436,7 +502,7 @@ const resolveArchiveEligibility = ({
     } else if (pendingAssignments.length > 0 || !replacementAssignmentCompleted) {
       tooltip = "Attribution en attente : validez avant archivage.";
     } else if (hasBlockingReturn) {
-      tooltip = "Retour fournisseur en cours";
+      tooltip = supplierReturnState.reason ?? "Retour fournisseur en cours";
     } else if (!nonConformityResolved) {
       tooltip = "Remplacement en cours / clôturer la demande avant archivage";
     }
@@ -1911,12 +1977,14 @@ export function PurchaseOrdersPanel({
       hasNonConformingLatestReceipt &&
       sentReplacementOrders.length > 0 &&
       !isReplacementReceptionLocked;
+    const supplierReturnState = resolveSupplierReturnState(order);
     const archiveEligibility = resolveArchiveEligibility({
       order,
       outstanding,
       pendingAssignments,
       canManageOrders,
-      hasNonConformingLatestReceipt
+      hasNonConformingLatestReceipt,
+      supplierReturnState
     });
     let primaryStatus: PrimaryOrderStatus = "CONFORME";
     if (isArchived) {
@@ -1997,6 +2065,10 @@ export function PurchaseOrdersPanel({
             latestReceipt?.conformity_status === "non_conforme" ||
             latestReceipt?.is_non_conforming === true ||
             latestReceipt?.non_conforming === true;
+          const resolvedReturnStatus = resolveReturnStatusForLine(
+            line,
+            supplierReturnState.latestByLine
+          );
           const replacementOrder = replacementOrdersForLines.get(line.id);
           const replacementRequested =
             Boolean(replacementOrder) ||
@@ -2045,7 +2117,7 @@ export function PurchaseOrdersPanel({
                   Retour attendu:{" "}
                   {line.return_expected ? "Oui" : "Non"}
                   {line.return_reason ? ` · ${line.return_reason}` : ""}
-                  {line.return_status ? ` · ${line.return_status}` : ""}
+                  {resolvedReturnStatus ? ` · ${resolvedReturnStatus}` : ""}
                 </p>
               ) : null}
               {latestIsNonConforming ? (
