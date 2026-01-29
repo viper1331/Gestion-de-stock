@@ -558,34 +558,6 @@ export function PurchaseOrdersPanel({
 }: PurchaseOrdersPanelProps) {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
-  const { data: qolSettings } = useQuery({
-    queryKey: ["qol-settings"],
-    queryFn: fetchQolSettings,
-    enabled: Boolean(user)
-  });
-  const { data: siteContext } = useQuery<SiteContext>({
-    queryKey: ["site-context", user?.username],
-    queryFn: fetchSiteContext,
-    enabled: Boolean(user)
-  });
-  const notePreviewLength = qolSettings?.note_preview_length ?? DEFAULT_QOL_SETTINGS.note_preview_length;
-  const siteKey = useMemo(() => {
-    if (!user) {
-      return "JLL";
-    }
-    if (user.role === "admin") {
-      return siteContext?.override_site_key ?? user.site_key ?? "JLL";
-    }
-    return user.site_key ?? "JLL";
-  }, [siteContext?.override_site_key, user]);
-  const canSendEmail = useMemo(
-    () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess("clothing", "edit"))),
-    [modulePermissions, user]
-  );
-  const canManageOrders = useMemo(
-    () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess(moduleKey, "edit"))),
-    [moduleKey, modulePermissions, user]
-  );
   const queryClient = useQueryClient();
   const nextDraftLineId = useRef(0);
   const createDraftLine = (overrides: Partial<DraftLine> = {}): DraftLine => ({
@@ -637,250 +609,35 @@ export function PurchaseOrdersPanel({
   >({});
   const [pendingValidationError, setPendingValidationError] = useState<string | null>(null);
   const createIdempotencyKeyRef = useRef<string | null>(null);
-  const selectedDraftSupplier = useMemo(
-    () => suppliers.find((supplier) => supplier.id === draftSupplier),
-    [draftSupplier, suppliers]
-  );
-  const selectedEditSupplier = useMemo(
-    () => suppliers.find((supplier) => supplier.id === editSupplier),
-    [editSupplier, suppliers]
-  );
-  const createFormId = `purchase-order-create-${itemIdField}`;
-  const canRefresh =
-    user?.role === "admin" || modulePermissions.canAccess(moduleKey, "edit");
-  const isRefreshing = enableAutoRefresh ? refreshAutoOrders.isPending : isFetchingOrders;
-  const showArchived = archiveFilter === "archived";
-  const ordersCacheKey = useMemo(
-    () => [
-      ...(Array.isArray(ordersQueryKey) ? ordersQueryKey : [ordersQueryKey]),
-      { module: moduleKey, site: siteKey }
-    ],
-    [moduleKey, ordersQueryKey, siteKey]
-  );
-  const resolvedOrdersQueryKey = useMemo(
-    () => [...ordersCacheKey, showArchived ? "archived" : "active"],
-    [ordersCacheKey, showArchived]
-  );
 
-  useEffect(() => {
-    setReplacementAccess(enableReplacementFlow);
-  }, [enableReplacementFlow]);
-
-  useEffect(() => {
-    if (replacementAccess) {
-      return;
-    }
-    setDraftLines((prev) =>
-      prev.map((line) => ({
-        ...line,
-        lineType: "standard",
-        returnExpected: false,
-        beneficiaryId: "",
-        returnReason: "",
-        targetDotationId: "",
-        returnQty: 0
-      }))
-    );
-  }, [replacementAccess]);
-
-  const handleDotationsForbidden = (requestError: unknown) => {
-    const status = (requestError as AxiosError)?.response?.status;
-    if (status === 403) {
-      setReplacementAccess(false);
-    }
-  };
-
-  const renderSupplierDetails = (supplier?: Supplier) => {
-    if (!supplier) {
-      return null;
-    }
-    return (
-      <div className="grid gap-3 sm:grid-cols-2">
-        <div className="space-y-1">
-          <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-email-display">
-            Email
-          </label>
-          <AppTextInput
-            id="supplier-email-display"
-            value={supplier.email ?? ""}
-            placeholder="Non renseigné"
-            readOnly
-            disabled
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-          />
-        </div>
-        <div className="space-y-1 sm:col-span-2">
-          <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-address-display">
-            Adresse
-          </label>
-          <AppTextArea
-            id="supplier-address-display"
-            value={supplier.address ?? ""}
-            placeholder="Non renseignée"
-            rows={2}
-            readOnly
-            disabled
-            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
-          />
-        </div>
-      </div>
-    );
-  };
-
-  const resolveItemId = (item: PurchaseOrderItem) => {
-    const candidate = item[itemIdField];
-    if (typeof candidate === "number") {
-      return candidate;
-    }
-    return item.item_id ?? null;
-  };
-
-  const handleAddItemLine = (match: BarcodeLookupItem) => {
-    setDraftLines((prev) => {
-      const existingIndex = prev.findIndex((line) => line.itemId === match.id);
-      if (existingIndex >= 0) {
-        const next = [...prev];
-        next[existingIndex] = {
-          ...next[existingIndex],
-          quantity: next[existingIndex].quantity + 1
-        };
-        return next;
-      }
-      return [
-        ...prev,
-        createDraftLine({ itemId: match.id })
-      ];
-    });
-  };
-
-  const barcodeModule = itemIdField === "remise_item_id" ? "remise" : "clothing";
-  const {
-    barcodeInput,
-    setBarcodeInput,
-    inputRef,
-    conflictMatches,
-    isResolving: isResolvingBarcode,
-    handleKeyDown: handleBarcodeKeyDown,
-    submitBarcode,
-    selectConflictMatch,
-    clearConflictMatches
-  } = usePurchaseOrderBarcodeScan({
-    module: barcodeModule,
-    onAddItem: handleAddItemLine
+  const { data: qolSettings } = useQuery({
+    queryKey: ["qol-settings"],
+    queryFn: fetchQolSettings,
+    enabled: Boolean(user)
   });
-
-  const formatItemLabel = (item: ItemOption) => {
-    const supplierName = item.supplier_id ? suppliersById.get(item.supplier_id) : undefined;
-    return formatPurchaseOrderItemLabel(item as PurchaseOrderItemLabelData, supplierName);
-  };
-
-  const resolveCollaboratorName = (collaboratorId: number | null | undefined) => {
-    if (!collaboratorId) {
-      return "-";
+  const { data: siteContext } = useQuery<SiteContext>({
+    queryKey: ["site-context", user?.username],
+    queryFn: fetchSiteContext,
+    enabled: Boolean(user)
+  });
+  const notePreviewLength = qolSettings?.note_preview_length ?? DEFAULT_QOL_SETTINGS.note_preview_length;
+  const siteKey = (() => {
+    if (!user) {
+      return "JLL";
     }
-    return collaboratorsById.get(collaboratorId) ?? `#${collaboratorId}`;
-  };
-
-  const resolveItemLabel = (itemId: number | null | undefined) => {
-    if (!itemId) {
-      return "-";
+    if (user.role === "admin") {
+      return siteContext?.override_site_key ?? user.site_key ?? "JLL";
     }
-    const item = itemsById.get(itemId);
-    if (!item) {
-      return `#${itemId}`;
-    }
-    const size = item.size ? ` · ${item.size}` : "";
-    const sku = item.sku ? ` (${item.sku})` : "";
-    return `${item.name}${sku}${size}`;
-  };
-
-  const resolveAssignedItemLabel = (assignedItem: DotationAssigneeItem) => {
-    const sku = assignedItem.sku ? ` (${assignedItem.sku})` : "";
-    const size = assignedItem.size_variant ? assignedItem.size_variant : "—";
-    const statusLabel = assignedItem.is_lost
-      ? assignedItem.is_degraded
-        ? "PERTE/DÉGRADATION"
-        : "PERTE"
-      : assignedItem.is_degraded
-        ? "DÉGRADATION"
-        : "RAS";
-    return `${assignedItem.name}${sku} — ${size} — ${statusLabel} — x${assignedItem.qty}`;
-  };
-
-  const formatConflictLabel = (match: BarcodeLookupItem) => {
-    const item = items.find((candidate) => candidate.id === match.id);
-    return item ? formatItemLabel(item) : match.name;
-  };
-
-  const getSupplierSendState = (order: PurchaseOrderDetail) => {
-    const missingReason = order.supplier_missing_reason;
-    const isMissingSupplier =
-      order.supplier_missing ||
-      missingReason === "SUPPLIER_NOT_FOUND" ||
-      missingReason === "SUPPLIER_MISSING" ||
-      missingReason === "SUPPLIER_INACTIVE";
-    if (isMissingSupplier) {
-      return {
-        canSend: false,
-        tooltip:
-          missingReason === "SUPPLIER_MISSING"
-            ? "Bon de commande non associé à un fournisseur"
-            : "Fournisseur introuvable (supprimé ?)"
-      };
-    }
-    if (
-      missingReason === "SUPPLIER_EMAIL_MISSING" ||
-      missingReason === "SUPPLIER_EMAIL_INVALID" ||
-      !order.supplier_email
-    ) {
-      return {
-        canSend: false,
-        tooltip: "Ajoutez un email fournisseur pour activer l'envoi"
-      };
-    }
-    return {
-      canSend: true,
-      tooltip: "Envoyer le bon de commande au fournisseur"
-    };
-  };
-
-  const resolveOrderStatusLabel = (status: string) => {
-    const match = ORDER_STATUSES.find((option) => option.value === status);
-    return match ? match.label : status;
-  };
-
-  const resolveReplacementStatusLabel = (status: string) => {
-    if (status === "PENDING") {
-      return "À préparer";
-    }
-    return resolveOrderStatusLabel(status);
-  };
-
-  const buildOrderSignature = (order: PurchaseOrderDetail) => {
-    const supplierKey = order.supplier_id ?? "none";
-    const createdAt = order.created_at ?? "";
-    const lineParts = order.items
-      .map((line) => {
-        const lineItemId =
-          typeof line[itemIdField] === "number" ? line[itemIdField] : line.item_id;
-        return [
-          lineItemId,
-          line.quantity_ordered,
-          line.line_type ?? "standard",
-          line.beneficiary_employee_id ?? "",
-          line.return_expected ? 1 : 0,
-          line.return_reason ?? "",
-          line.return_employee_item_id ?? "",
-          line.target_dotation_id ?? "",
-          line.return_qty ?? ""
-        ].join(":");
-      })
-      .sort();
-    return `${supplierKey}|${createdAt}|${lineParts.join(",")}`;
-  };
-
+    return user.site_key ?? "JLL";
+  })();
+  const showArchived = archiveFilter === "archived";
+  const ordersCacheKey = [
+    ...(Array.isArray(ordersQueryKey) ? ordersQueryKey : [ordersQueryKey]),
+    { module: moduleKey, site: siteKey }
+  ];
+  const resolvedOrdersQueryKey = [...ordersCacheKey, showArchived ? "archived" : "active"];
   const {
-    data: orders = [],
+    data: ordersData = [],
     isLoading: loadingOrders,
     isFetching: isFetchingOrders,
     refetch: refetchOrders
@@ -920,64 +677,6 @@ export function PurchaseOrdersPanel({
     keepPreviousData: true
   });
 
-  const dedupedOrders = useMemo(() => {
-    const byId = new Map<number, PurchaseOrderDetail>();
-    orders.forEach((order) => {
-      if (byId.has(order.id)) {
-        console.warn("[purchase-orders] duplicate id detected", order.id);
-      }
-      byId.set(order.id, order);
-    });
-
-    const signatureMap = new Map<string, PurchaseOrderDetail>();
-    const deduped: PurchaseOrderDetail[] = [];
-
-    byId.forEach((order) => {
-      const signature = buildOrderSignature(order);
-      const existing = signatureMap.get(signature);
-      if (existing) {
-        console.warn("[purchase-orders] duplicate signature detected", {
-          existingId: existing.id,
-          duplicateId: order.id,
-          signature
-        });
-        return;
-      }
-      signatureMap.set(signature, order);
-      deduped.push(order);
-    });
-
-    return deduped;
-  }, [orders, itemIdField]);
-
-  const replacementOrdersByParent = useMemo(() => {
-    const map = new Map<number, Map<number, PurchaseOrderDetail>>();
-    dedupedOrders.forEach((order) => {
-      if (order.kind !== "replacement_request" || !order.parent_id) {
-        return;
-      }
-      const lineId = order.replacement_for_line_id;
-      if (!lineId) {
-        return;
-      }
-      const existing = map.get(order.parent_id) ?? new Map<number, PurchaseOrderDetail>();
-      existing.set(lineId, order);
-      map.set(order.parent_id, existing);
-    });
-    return map;
-  }, [dedupedOrders]);
-
-  const visibleOrders = useMemo(
-    () =>
-      dedupedOrders.filter(
-        (order) =>
-          order.kind !== "replacement_request" &&
-          (showArchived ? order.is_archived : !order.is_archived)
-      ),
-    [dedupedOrders, showArchived]
-  );
-  const ordersToRender = useMemo(() => dedupeById(visibleOrders), [visibleOrders]);
-
   const { data: items = [] } = useQuery({
     queryKey: ["purchase-order-items-options", purchaseOrdersPath],
     queryFn: async () => {
@@ -1004,10 +703,68 @@ export function PurchaseOrdersPanel({
       return response.data.assignees;
     },
     enabled: replacementAccess,
-    onError: handleDotationsForbidden
+    onError: (requestError) => {
+      const status = (requestError as AxiosError)?.response?.status;
+      if (status === 403) {
+        setReplacementAccess(false);
+      }
+    }
   });
 
-  const assignedItemEmployeeIds = useMemo(() => {
+  const buildOrderSignature = (order: PurchaseOrderDetail) => {
+    const supplierKey = order.supplier_id ?? "none";
+    const createdAt = order.created_at ?? "";
+    const lineParts = order.items
+      .map((line) => {
+        const lineItemId =
+          typeof line[itemIdField] === "number" ? line[itemIdField] : line.item_id;
+        return [
+          lineItemId,
+          line.quantity_ordered,
+          line.line_type ?? "standard",
+          line.beneficiary_employee_id ?? "",
+          line.return_expected ? 1 : 0,
+          line.return_reason ?? "",
+          line.return_employee_item_id ?? "",
+          line.target_dotation_id ?? "",
+          line.return_qty ?? ""
+        ].join(":");
+      })
+      .sort();
+    return `${supplierKey}|${createdAt}|${lineParts.join(",")}`;
+  };
+
+  const dedupedOrders = (() => {
+    const byId = new Map<number, PurchaseOrderDetail>();
+    ordersData.forEach((order) => {
+      if (byId.has(order.id)) {
+        console.warn("[purchase-orders] duplicate id detected", order.id);
+      }
+      byId.set(order.id, order);
+    });
+
+    const signatureMap = new Map<string, PurchaseOrderDetail>();
+    const deduped: PurchaseOrderDetail[] = [];
+
+    byId.forEach((order) => {
+      const signature = buildOrderSignature(order);
+      const existing = signatureMap.get(signature);
+      if (existing) {
+        console.warn("[purchase-orders] duplicate signature detected", {
+          existingId: existing.id,
+          duplicateId: order.id,
+          signature
+        });
+        return;
+      }
+      signatureMap.set(signature, order);
+      deduped.push(order);
+    });
+
+    return deduped;
+  })();
+
+  const assignedItemEmployeeIds = (() => {
     const ids = new Set<number>();
     draftLines.forEach((line) => {
       if (line.lineType === "replacement" && typeof line.beneficiaryId === "number") {
@@ -1025,49 +782,29 @@ export function PurchaseOrdersPanel({
       });
     });
     return Array.from(ids);
-  }, [draftLines, dedupedOrders]);
+  })();
 
-  const assignedItemQueries = useMemo(
-    () =>
-      assignedItemEmployeeIds.map((beneficiaryId) => ({
-        queryKey: ["clothing-assigned-items", beneficiaryId],
-        queryFn: async () => {
-          const response = await api.get<DotationAssigneeItemsResponse>(
-            `/dotations/assignees/${beneficiaryId}/items`,
-            {
-              params: { module: "clothing" }
-            }
-          );
-          return response.data.items;
-        },
-        enabled: replacementAccess,
-        onError: handleDotationsForbidden
-      })),
-    [assignedItemEmployeeIds, replacementAccess]
-  );
+  const assignedItemQueries = assignedItemEmployeeIds.map((beneficiaryId) => ({
+    queryKey: ["clothing-assigned-items", beneficiaryId],
+    queryFn: async () => {
+      const response = await api.get<DotationAssigneeItemsResponse>(
+        `/dotations/assignees/${beneficiaryId}/items`,
+        {
+          params: { module: "clothing" }
+        }
+      );
+      return response.data.items;
+    },
+    enabled: replacementAccess,
+    onError: (requestError: unknown) => {
+      const status = (requestError as AxiosError)?.response?.status;
+      if (status === 403) {
+        setReplacementAccess(false);
+      }
+    }
+  }));
 
   const assignedItemsQueries = useQueries({ queries: assignedItemQueries });
-
-  const assignedItemsByBeneficiary = useMemo(() => {
-    const map = new Map<number, DotationAssigneeItem[]>();
-    assignedItemsQueries.forEach((query, index) => {
-      const beneficiaryId = assignedItemEmployeeIds[index];
-      if (beneficiaryId) {
-        map.set(beneficiaryId, query.data ?? []);
-      }
-    });
-    return map;
-  }, [assignedItemEmployeeIds, assignedItemsQueries]);
-
-  const suppliersById = useMemo(() => {
-    return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
-  }, [suppliers]);
-  const itemsById = useMemo(() => {
-    return new Map(items.map((item) => [item.id, item]));
-  }, [items]);
-  const collaboratorsById = useMemo(() => {
-    return new Map(collaborators.map((collaborator) => [collaborator.id, collaborator.full_name]));
-  }, [collaborators]);
 
   const createOrder = useMutation({
     mutationFn: async (payload: CreateOrderPayload) => {
@@ -1426,6 +1163,258 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const selectedDraftSupplier = useMemo(
+    () => suppliers.find((supplier) => supplier.id === draftSupplier),
+    [draftSupplier, suppliers]
+  );
+  const selectedEditSupplier = useMemo(
+    () => suppliers.find((supplier) => supplier.id === editSupplier),
+    [editSupplier, suppliers]
+  );
+  const createFormId = `purchase-order-create-${itemIdField}`;
+  const canRefresh =
+    user?.role === "admin" || modulePermissions.canAccess(moduleKey, "edit");
+  const isRefreshing = enableAutoRefresh ? refreshAutoOrders.isPending : isFetchingOrders;
+  const canSendEmail = useMemo(
+    () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess("clothing", "edit"))),
+    [modulePermissions, user]
+  );
+  const canManageOrders = useMemo(
+    () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess(moduleKey, "edit"))),
+    [moduleKey, modulePermissions, user]
+  );
+  const suppliersById = useMemo(() => {
+    return new Map(suppliers.map((supplier) => [supplier.id, supplier.name]));
+  }, [suppliers]);
+  const itemsById = useMemo(() => {
+    return new Map(items.map((item) => [item.id, item]));
+  }, [items]);
+  const collaboratorsById = useMemo(() => {
+    return new Map(collaborators.map((collaborator) => [collaborator.id, collaborator.full_name]));
+  }, [collaborators]);
+  const assignedItemsByBeneficiary = useMemo(() => {
+    const map = new Map<number, DotationAssigneeItem[]>();
+    assignedItemsQueries.forEach((query, index) => {
+      const beneficiaryId = assignedItemEmployeeIds[index];
+      if (beneficiaryId) {
+        map.set(beneficiaryId, query.data ?? []);
+      }
+    });
+    return map;
+  }, [assignedItemEmployeeIds, assignedItemsQueries]);
+  const replacementOrdersByParent = useMemo(() => {
+    const map = new Map<number, Map<number, PurchaseOrderDetail>>();
+    dedupedOrders.forEach((order) => {
+      if (order.kind !== "replacement_request" || !order.parent_id) {
+        return;
+      }
+      const lineId = order.replacement_for_line_id;
+      if (!lineId) {
+        return;
+      }
+      const existing = map.get(order.parent_id) ?? new Map<number, PurchaseOrderDetail>();
+      existing.set(lineId, order);
+      map.set(order.parent_id, existing);
+    });
+    return map;
+  }, [dedupedOrders]);
+  const visibleOrders = useMemo(
+    () =>
+      dedupedOrders.filter(
+        (order) =>
+          order.kind !== "replacement_request" &&
+          (showArchived ? order.is_archived : !order.is_archived)
+      ),
+    [dedupedOrders, showArchived]
+  );
+  const ordersToRender = useMemo(() => dedupeById(visibleOrders), [visibleOrders]);
+
+  useEffect(() => {
+    setReplacementAccess(enableReplacementFlow);
+  }, [enableReplacementFlow]);
+
+  useEffect(() => {
+    if (replacementAccess) {
+      return;
+    }
+    setDraftLines((prev) =>
+      prev.map((line) => ({
+        ...line,
+        lineType: "standard",
+        returnExpected: false,
+        beneficiaryId: "",
+        returnReason: "",
+        targetDotationId: "",
+        returnQty: 0
+      }))
+    );
+  }, [replacementAccess]);
+
+  const renderSupplierDetails = (supplier?: Supplier) => {
+    if (!supplier) {
+      return null;
+    }
+    return (
+      <div className="grid gap-3 sm:grid-cols-2">
+        <div className="space-y-1">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-email-display">
+            Email
+          </label>
+          <AppTextInput
+            id="supplier-email-display"
+            value={supplier.email ?? ""}
+            placeholder="Non renseigné"
+            readOnly
+            disabled
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          />
+        </div>
+        <div className="space-y-1 sm:col-span-2">
+          <label className="text-xs font-semibold text-slate-300" htmlFor="supplier-address-display">
+            Adresse
+          </label>
+          <AppTextArea
+            id="supplier-address-display"
+            value={supplier.address ?? ""}
+            placeholder="Non renseignée"
+            rows={2}
+            readOnly
+            disabled
+            className="w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          />
+        </div>
+      </div>
+    );
+  };
+
+  const resolveItemId = (item: PurchaseOrderItem) => {
+    const candidate = item[itemIdField];
+    if (typeof candidate === "number") {
+      return candidate;
+    }
+    return item.item_id ?? null;
+  };
+
+  const handleAddItemLine = (match: BarcodeLookupItem) => {
+    setDraftLines((prev) => {
+      const existingIndex = prev.findIndex((line) => line.itemId === match.id);
+      if (existingIndex >= 0) {
+        const next = [...prev];
+        next[existingIndex] = {
+          ...next[existingIndex],
+          quantity: next[existingIndex].quantity + 1
+        };
+        return next;
+      }
+      return [
+        ...prev,
+        createDraftLine({ itemId: match.id })
+      ];
+    });
+  };
+
+  const barcodeModule = itemIdField === "remise_item_id" ? "remise" : "clothing";
+  const {
+    barcodeInput,
+    setBarcodeInput,
+    inputRef,
+    conflictMatches,
+    isResolving: isResolvingBarcode,
+    handleKeyDown: handleBarcodeKeyDown,
+    submitBarcode,
+    selectConflictMatch,
+    clearConflictMatches
+  } = usePurchaseOrderBarcodeScan({
+    module: barcodeModule,
+    onAddItem: handleAddItemLine
+  });
+
+  const formatItemLabel = (item: ItemOption) => {
+    const supplierName = item.supplier_id ? suppliersById.get(item.supplier_id) : undefined;
+    return formatPurchaseOrderItemLabel(item as PurchaseOrderItemLabelData, supplierName);
+  };
+
+  const resolveCollaboratorName = (collaboratorId: number | null | undefined) => {
+    if (!collaboratorId) {
+      return "-";
+    }
+    return collaboratorsById.get(collaboratorId) ?? `#${collaboratorId}`;
+  };
+
+  const resolveItemLabel = (itemId: number | null | undefined) => {
+    if (!itemId) {
+      return "-";
+    }
+    const item = itemsById.get(itemId);
+    if (!item) {
+      return `#${itemId}`;
+    }
+    const size = item.size ? ` · ${item.size}` : "";
+    const sku = item.sku ? ` (${item.sku})` : "";
+    return `${item.name}${sku}${size}`;
+  };
+
+  const resolveAssignedItemLabel = (assignedItem: DotationAssigneeItem) => {
+    const sku = assignedItem.sku ? ` (${assignedItem.sku})` : "";
+    const size = assignedItem.size_variant ? assignedItem.size_variant : "—";
+    const statusLabel = assignedItem.is_lost
+      ? assignedItem.is_degraded
+        ? "PERTE/DÉGRADATION"
+        : "PERTE"
+      : assignedItem.is_degraded
+        ? "DÉGRADATION"
+        : "RAS";
+    return `${assignedItem.name}${sku} — ${size} — ${statusLabel} — x${assignedItem.qty}`;
+  };
+
+  const formatConflictLabel = (match: BarcodeLookupItem) => {
+    const item = items.find((candidate) => candidate.id === match.id);
+    return item ? formatItemLabel(item) : match.name;
+  };
+
+  const getSupplierSendState = (order: PurchaseOrderDetail) => {
+    const missingReason = order.supplier_missing_reason;
+    const isMissingSupplier =
+      order.supplier_missing ||
+      missingReason === "SUPPLIER_NOT_FOUND" ||
+      missingReason === "SUPPLIER_MISSING" ||
+      missingReason === "SUPPLIER_INACTIVE";
+    if (isMissingSupplier) {
+      return {
+        canSend: false,
+        tooltip:
+          missingReason === "SUPPLIER_MISSING"
+            ? "Bon de commande non associé à un fournisseur"
+            : "Fournisseur introuvable (supprimé ?)"
+      };
+    }
+    if (
+      missingReason === "SUPPLIER_EMAIL_MISSING" ||
+      missingReason === "SUPPLIER_EMAIL_INVALID" ||
+      !order.supplier_email
+    ) {
+      return {
+        canSend: false,
+        tooltip: "Ajoutez un email fournisseur pour activer l'envoi"
+      };
+    }
+    return {
+      canSend: true,
+      tooltip: "Envoyer le bon de commande au fournisseur"
+    };
+  };
+
+  const resolveOrderStatusLabel = (status: string) => {
+    const match = ORDER_STATUSES.find((option) => option.value === status);
+    return match ? match.label : status;
+  };
+
+  const resolveReplacementStatusLabel = (status: string) => {
+    if (status === "PENDING") {
+      return "À préparer";
+    }
+    return resolveOrderStatusLabel(status);
+  };
   const handleRefresh = async () => {
     setError(null);
     setListError(null);
