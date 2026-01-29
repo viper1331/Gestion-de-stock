@@ -632,6 +632,65 @@ def test_validate_pending_repairs_dotation_without_creating_new_card() -> None:
         assert line_row["return_status"] == "shipped"
 
 
+def test_supplier_return_received_updates_return_status_in_detail() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Veste", sku="HAB-050")
+        collaborator_id = _create_collaborator(conn, full_name="Maya Durand")
+        supplier_id = _create_supplier(conn, name="Supplier-Veste")
+        conn.execute("UPDATE items SET quantity = 1 WHERE id = ?", (item_id,))
+        dotation_id = _create_dotation(
+            conn,
+            collaborator_id=collaborator_id,
+            item_id=item_id,
+            quantity=1,
+            degraded_qty=1,
+        )
+        conn.commit()
+    order = services.create_purchase_order(
+        models.PurchaseOrderCreate(
+            supplier_id=supplier_id,
+            status="ORDERED",
+            note=None,
+            items=[
+                models.PurchaseOrderItemInput(
+                    item_id=item_id,
+                    quantity_ordered=1,
+                    line_type="replacement",
+                    beneficiary_employee_id=collaborator_id,
+                    return_expected=True,
+                    return_reason="Dégradation",
+                    target_dotation_id=dotation_id,
+                    return_qty=1,
+                )
+            ],
+        )
+    )
+    services.receive_purchase_order_line(
+        order.id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=order.items[0].id,
+            received_qty=1,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
+    order = services.get_purchase_order(order.id)
+    pending_id = order.pending_assignments[0].id
+    services.validate_pending_assignment(order.id, pending_id, validated_by="tester")
+    services.register_clothing_supplier_return(
+        order.id,
+        models.RegisterClothingSupplierReturnPayload(
+            purchase_order_line_id=order.items[0].id,
+            item_id=item_id,
+            qty=1,
+            status="supplier_received",
+        ),
+    )
+    refreshed = services.get_purchase_order(order.id)
+    assert refreshed.items[0].return_status == "supplier_received"
+
+
 def test_validate_pending_repairs_single_unit_in_aggregated_dotation() -> None:
     _reset_stock_tables()
     with db.get_stock_connection() as conn:

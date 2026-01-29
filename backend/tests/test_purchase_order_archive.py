@@ -282,6 +282,78 @@ def test_archive_allows_closed_replacement_with_conformity_and_assignment() -> N
     assert archived.is_archived is True
 
 
+def test_archive_allows_received_supplier_return_after_shipped_history() -> None:
+    services.ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        conn.execute("DELETE FROM clothing_supplier_returns")
+        conn.execute("DELETE FROM purchase_order_items")
+        conn.execute("DELETE FROM purchase_orders")
+        conn.execute("DELETE FROM items")
+        conn.commit()
+        item_id = _create_item(name="Pantalon", sku="HAB-ARCH-4")
+        order_id = _create_purchase_order(status="RECEIVED")
+        line_cur = conn.execute(
+            """
+            INSERT INTO purchase_order_items (
+                purchase_order_id,
+                item_id,
+                quantity_ordered,
+                quantity_received,
+                return_status
+            )
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (order_id, item_id, 1, 1, "shipped"),
+        )
+        line_id = line_cur.lastrowid
+        conn.execute(
+            """
+            INSERT INTO clothing_supplier_returns (
+                site_key,
+                purchase_order_id,
+                purchase_order_line_id,
+                qty,
+                status,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                db.get_current_site_key(),
+                order_id,
+                line_id,
+                1,
+                "shipped",
+                "2024-01-01 10:00:00",
+            ),
+        )
+        conn.execute(
+            """
+            INSERT INTO clothing_supplier_returns (
+                site_key,
+                purchase_order_id,
+                purchase_order_line_id,
+                qty,
+                status,
+                created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?)
+            """,
+            (
+                db.get_current_site_key(),
+                order_id,
+                line_id,
+                1,
+                "supplier_received",
+                "2024-01-02 10:00:00",
+            ),
+        )
+        conn.commit()
+
+    archived = services.archive_purchase_order(order_id, archived_by=1)
+    assert archived.is_archived is True
+
+
 def test_archive_allows_closed_replacement_with_validated_assignment_and_stale_status() -> None:
     services.ensure_database_ready()
     with db.get_stock_connection() as conn:

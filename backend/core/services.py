@@ -728,16 +728,55 @@ def _has_latest_nonconforming_receipt(order: models.PurchaseOrderDetail) -> bool
     )
 
 
+def _resolve_latest_supplier_returns(
+    supplier_returns: Iterable[models.ClothingSupplierReturn],
+) -> tuple[dict[int, models.ClothingSupplierReturn], list[models.ClothingSupplierReturn]]:
+    latest_by_line: dict[int, models.ClothingSupplierReturn] = {}
+    unlinked: list[models.ClothingSupplierReturn] = []
+    for supplier_return in supplier_returns:
+        line_id = supplier_return.purchase_order_line_id
+        if line_id is None:
+            unlinked.append(supplier_return)
+            continue
+        existing = latest_by_line.get(line_id)
+        if existing is None:
+            latest_by_line[line_id] = supplier_return
+            continue
+        existing_time = _coerce_datetime(existing.created_at)
+        return_time = _coerce_datetime(supplier_return.created_at)
+        if return_time > existing_time or (
+            return_time == existing_time and supplier_return.id > existing.id
+        ):
+            latest_by_line[line_id] = supplier_return
+    return latest_by_line, unlinked
+
+
+def _map_supplier_return_status(status: str) -> str:
+    if status == "prepared":
+        return "to_prepare"
+    if status in {"shipped", "supplier_received"}:
+        return status
+    return "none"
+
+
 def _has_blocking_supplier_return(order: models.PurchaseOrderDetail) -> bool:
     blocking_statuses = {"to_prepare", "shipped"}
+    latest_by_line, unlinked_returns = _resolve_latest_supplier_returns(order.supplier_returns)
     if any(
-        (item.return_status or "none") in blocking_statuses for item in order.items
+        supplier_return.status in {"prepared", "shipped"}
+        for supplier_return in latest_by_line.values()
     ):
         return True
-    return any(
-        supplier_return.status in {"prepared", "shipped"}
-        for supplier_return in order.supplier_returns
-    )
+    if any(
+        supplier_return.status in {"prepared", "shipped"} for supplier_return in unlinked_returns
+    ):
+        return True
+    for item in order.items:
+        if item.id in latest_by_line:
+            continue
+        if (item.return_status or "none") in blocking_statuses:
+            return True
+    return False
 
 
 def _assert_purchase_order_archivable_detail(
@@ -10278,6 +10317,12 @@ def _build_purchase_order_detail(
             )
             for row in return_rows
         ]
+    latest_returns_by_line, _ = _resolve_latest_supplier_returns(supplier_returns)
+    if latest_returns_by_line:
+        for item in items:
+            latest_return = latest_returns_by_line.get(item.id)
+            if latest_return is not None:
+                item.return_status = _map_supplier_return_status(latest_return.status)
     has_nonconforming_receipt = any(
         summary.get("non_conforme", 0) > 0 for summary in receipt_summaries.values()
     )
