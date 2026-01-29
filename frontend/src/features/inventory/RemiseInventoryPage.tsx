@@ -23,6 +23,7 @@ const REMISE_INVENTORY_CONFIG: InventoryModuleConfig = {
   purchaseOrdersQueryKey: ["remise-purchase-orders"],
   purchaseOrdersItemsQueryKey: ["items"],
   purchaseOrdersModuleKey: "inventory_remise",
+  purchaseOrdersAutoRefresh: false,
   purchaseOrdersTitle: "Bons de commande remises",
   purchaseOrdersDescription:
     "Suivez les commandes fournisseurs pour les remises et mettez à jour les stocks lors des réceptions.",

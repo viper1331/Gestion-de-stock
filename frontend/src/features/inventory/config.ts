@@ -22,6 +22,7 @@ export interface InventoryModuleConfig {
   purchaseOrdersQueryKey?: readonly unknown[];
   purchaseOrdersItemsQueryKey?: readonly unknown[];
   purchaseOrdersModuleKey?: string;
+  purchaseOrdersAutoRefresh?: boolean;
   purchaseOrdersTitle?: string;
   purchaseOrdersDescription?: string;
   purchaseOrdersDownloadPrefix?: string;

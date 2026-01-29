@@ -17,7 +17,8 @@ vi.mock("../../lib/api", () => ({
     post: vi.fn(),
     put: vi.fn(),
     delete: vi.fn()
-  }
+  },
+  setAdminSiteOverride: vi.fn()
 }));
 
 vi.mock("../auth/useAuth", () => ({
