@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { QueryKey, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
@@ -516,6 +516,7 @@ export function PurchaseOrdersPanel({
     >
   >({});
   const [pendingValidationError, setPendingValidationError] = useState<string | null>(null);
+  const createIdempotencyKeyRef = useRef<string | null>(null);
   const selectedDraftSupplier = useMemo(
     () => suppliers.find((supplier) => supplier.id === draftSupplier),
     [draftSupplier, suppliers]
@@ -755,9 +756,20 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const dedupedOrders = useMemo(() => {
+    const seen = new Set<number>();
+    return orders.filter((order) => {
+      if (seen.has(order.id)) {
+        return false;
+      }
+      seen.add(order.id);
+      return true;
+    });
+  }, [orders]);
+
   const replacementOrdersByParent = useMemo(() => {
     const map = new Map<number, Map<number, PurchaseOrderDetail>>();
-    orders.forEach((order) => {
+    dedupedOrders.forEach((order) => {
       if (order.kind !== "replacement_request" || !order.parent_id) {
         return;
       }
@@ -770,16 +782,16 @@ export function PurchaseOrdersPanel({
       map.set(order.parent_id, existing);
     });
     return map;
-  }, [orders]);
+  }, [dedupedOrders]);
 
   const visibleOrders = useMemo(
     () =>
-      orders.filter(
+      dedupedOrders.filter(
         (order) =>
           order.kind !== "replacement_request" &&
           (showArchived ? order.is_archived : !order.is_archived)
       ),
-    [orders, showArchived]
+    [dedupedOrders, showArchived]
   );
 
   const { data: items = [] } = useQuery({
@@ -818,7 +830,7 @@ export function PurchaseOrdersPanel({
         ids.add(line.beneficiaryId);
       }
     });
-    orders.forEach((order) => {
+    dedupedOrders.forEach((order) => {
       (order.pending_assignments ?? []).forEach((assignment) => {
         if (
           (assignment.target_dotation_id || assignment.return_employee_item_id) &&
@@ -829,7 +841,7 @@ export function PurchaseOrdersPanel({
       });
     });
     return Array.from(ids);
-  }, [draftLines, orders]);
+  }, [draftLines, dedupedOrders]);
 
   const assignedItemQueries = useMemo(
     () =>
@@ -875,7 +887,16 @@ export function PurchaseOrdersPanel({
 
   const createOrder = useMutation({
     mutationFn: async (payload: CreateOrderPayload) => {
-      await api.post(`${purchaseOrdersPath}/`, payload);
+      console.info("[purchase-orders] create request", {
+        payload,
+        idempotencyKey: createIdempotencyKeyRef.current
+      });
+      console.trace("[purchase-orders] create request trace");
+      await api.post(`${purchaseOrdersPath}/`, payload, {
+        headers: createIdempotencyKeyRef.current
+          ? { "Idempotency-Key": createIdempotencyKeyRef.current }
+          : undefined
+      });
     },
     onSuccess: async () => {
       setMessage("Bon de commande créé.");
@@ -884,6 +905,7 @@ export function PurchaseOrdersPanel({
       setDraftSupplier("");
       setDraftStatus("ORDERED");
       setDraftNote("");
+      createIdempotencyKeyRef.current = null;
       await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
       await queryClient.invalidateQueries({ queryKey: itemsQueryKey });
     },
@@ -1238,15 +1260,20 @@ export function PurchaseOrdersPanel({
 
   const handleOpenCreateModal = () => {
     setError(null);
+    createIdempotencyKeyRef.current = crypto.randomUUID();
     setIsCreateModalOpen(true);
   };
 
   const handleCloseCreateModal = () => {
     setIsCreateModalOpen(false);
+    createIdempotencyKeyRef.current = null;
   };
 
   const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (createOrder.isPending) {
+      return;
+    }
     setError(null);
     const normalizedLines = draftLines
       .filter((line) => line.itemId !== "" && line.quantity > 0)

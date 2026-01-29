@@ -905,6 +905,7 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                     note TEXT,
                     auto_created INTEGER NOT NULL DEFAULT 0,
+                    idempotency_key TEXT,
                     last_sent_at TEXT,
                     last_sent_to TEXT,
                     last_sent_by TEXT,
@@ -952,6 +953,8 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                 ON purchase_order_receipts(purchase_order_id);
                 CREATE INDEX IF NOT EXISTS idx_purchase_order_receipts_line
                 ON purchase_order_receipts(purchase_order_line_id);
+                CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_orders_idempotency_key
+                ON purchase_orders(idempotency_key);
                 CREATE TABLE IF NOT EXISTS purchase_order_nonconformities (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
                     site_key TEXT NOT NULL,
