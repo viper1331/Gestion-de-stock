@@ -151,6 +151,30 @@ def get_stock_db_path(site_key: str | None = None) -> Path:
     return get_site_db_path(resolved_key)
 
 
+def _has_table(conn: sqlite3.Connection, table: str) -> bool:
+    row = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
+        (table,),
+    ).fetchone()
+    return row is not None
+
+
+def _has_column(conn: sqlite3.Connection, table: str, column: str) -> bool:
+    try:
+        columns = conn.execute(f"PRAGMA table_info({table})").fetchall()
+    except sqlite3.OperationalError:
+        return False
+    return any(row["name"] == column for row in columns)
+
+
+def _ensure_column(conn: sqlite3.Connection, table: str, column: str, ddl: str) -> None:
+    if _has_column(conn, table, column):
+        return
+    if not _has_table(conn, table):
+        return
+    conn.execute(f"ALTER TABLE {table} ADD COLUMN {ddl}")
+
+
 def list_site_keys() -> list[str]:
     try:
         with get_core_connection() as conn:
@@ -171,6 +195,7 @@ def list_site_db_paths() -> dict[str, Path]:
 def init_databases() -> None:
     with _db_lock:
         with get_users_connection() as conn:
+            _ensure_column(conn, "messages", "idempotency_key", "idempotency_key TEXT")
             conn.executescript(
                 """
                 CREATE TABLE IF NOT EXISTS users (
@@ -723,13 +748,11 @@ def _ensure_two_factor_challenge_columns(conn: sqlite3.Connection) -> None:
 
 
 def _ensure_message_columns(conn: sqlite3.Connection) -> None:
-    try:
-        columns = {row["name"] for row in conn.execute("PRAGMA table_info(messages)").fetchall()}
-    except sqlite3.OperationalError:
+    if not _has_table(conn, "messages"):
         return
-    if "idempotency_key" not in columns:
+    if not _has_column(conn, "messages", "idempotency_key"):
         logger.info("[DB] Ajout de la colonne messages.idempotency_key")
-        conn.execute("ALTER TABLE messages ADD COLUMN idempotency_key TEXT")
+        _ensure_column(conn, "messages", "idempotency_key", "idempotency_key TEXT")
     conn.execute(
         """
         CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_idempotency
@@ -899,12 +922,8 @@ def _sync_user_site_preferences() -> None:
 
 
 def _init_stock_schema(conn: sqlite3.Connection) -> None:
-    purchase_order_columns = {
-        row["name"] for row in conn.execute("PRAGMA table_info(purchase_orders)").fetchall()
-    }
-    if purchase_order_columns:
-        if "idempotency_key" not in purchase_order_columns:
-            conn.execute("ALTER TABLE purchase_orders ADD COLUMN idempotency_key TEXT")
+    if _has_table(conn, "purchase_orders"):
+        _ensure_column(conn, "purchase_orders", "idempotency_key", "idempotency_key TEXT")
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_orders_idempotency_key "
             "ON purchase_orders(idempotency_key)"
