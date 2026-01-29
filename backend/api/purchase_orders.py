@@ -214,6 +214,8 @@ async def receive_order(
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
         return services.receive_purchase_order(order_id, payload)
+    except services.ReplacementReceptionLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         message = str(exc)
         status = 404 if "introuvable" in message.lower() else 400
@@ -235,6 +237,8 @@ async def receive_order_line(
             payload,
             created_by=user.email or user.username,
         )
+    except services.ReplacementReceptionLockedError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
     except ValueError as exc:
         message = str(exc)
         status = 404 if "introuvable" in message.lower() else 400
