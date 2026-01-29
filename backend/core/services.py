@@ -14197,7 +14197,8 @@ def _format_dotation_replacement_line(
     safe_reason = (reason or "—").strip() or "—"
     timestamp = occurred_at.strftime("%d/%m %H:%M")
     line = (
-        f"BC#{order_id} | {safe_name} {safe_sku} {safe_size} | x{quantity} | {safe_reason} | {timestamp}"
+        f"Remplacement BC#{order_id} | {safe_name} {safe_sku} {safe_size} | x{quantity} |"
+        f" {safe_reason} | {timestamp} | Remplacé via BC"
     )
     return clamp_note(line, DOTATION_NOTE_MAX_LENGTH)
 
