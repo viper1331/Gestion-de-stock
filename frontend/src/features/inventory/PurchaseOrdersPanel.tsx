@@ -793,6 +793,29 @@ export function PurchaseOrdersPanel({
     return resolveOrderStatusLabel(status);
   };
 
+  const buildOrderSignature = (order: PurchaseOrderDetail) => {
+    const supplierKey = order.supplier_id ?? "none";
+    const createdAt = order.created_at ?? "";
+    const lineParts = order.items
+      .map((line) => {
+        const lineItemId =
+          typeof line[itemIdField] === "number" ? line[itemIdField] : line.item_id;
+        return [
+          lineItemId,
+          line.quantity_ordered,
+          line.line_type ?? "standard",
+          line.beneficiary_employee_id ?? "",
+          line.return_expected ? 1 : 0,
+          line.return_reason ?? "",
+          line.return_employee_item_id ?? "",
+          line.target_dotation_id ?? "",
+          line.return_qty ?? ""
+        ].join(":");
+      })
+      .sort();
+    return `${supplierKey}|${createdAt}|${lineParts.join(",")}`;
+  };
+
   const { data: orders = [], isLoading: loadingOrders } = useQuery({
     queryKey: resolvedOrdersQueryKey,
     queryFn: async () => {
@@ -818,15 +841,34 @@ export function PurchaseOrdersPanel({
   });
 
   const dedupedOrders = useMemo(() => {
-    const seen = new Set<number>();
-    return orders.filter((order) => {
-      if (seen.has(order.id)) {
-        return false;
+    const byId = new Map<number, PurchaseOrderDetail>();
+    orders.forEach((order) => {
+      if (byId.has(order.id)) {
+        console.warn("[purchase-orders] duplicate id detected", order.id);
       }
-      seen.add(order.id);
-      return true;
+      byId.set(order.id, order);
     });
-  }, [orders]);
+
+    const signatureMap = new Map<string, PurchaseOrderDetail>();
+    const deduped: PurchaseOrderDetail[] = [];
+
+    byId.forEach((order) => {
+      const signature = buildOrderSignature(order);
+      const existing = signatureMap.get(signature);
+      if (existing) {
+        console.warn("[purchase-orders] duplicate signature detected", {
+          existingId: existing.id,
+          duplicateId: order.id,
+          signature
+        });
+        return;
+      }
+      signatureMap.set(signature, order);
+      deduped.push(order);
+    });
+
+    return deduped;
+  }, [orders, itemIdField]);
 
   const replacementOrdersByParent = useMemo(() => {
     const map = new Map<number, Map<number, PurchaseOrderDetail>>();

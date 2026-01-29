@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 
 interface DraggableModalProps {
   open: boolean;
@@ -106,7 +107,7 @@ export function DraggableModal({
     return null;
   }
 
-  return (
+  const content = (
     <div
       className="fixed inset-0 z-50 flex items-center justify-center overflow-x-hidden bg-slate-950/80 px-4"
       onClick={(event) => {
@@ -155,4 +156,10 @@ export function DraggableModal({
       </div>
     </div>
   );
+
+  if (typeof document === "undefined" || !document.body) {
+    return content;
+  }
+
+  return createPortal(content, document.body);
 }
