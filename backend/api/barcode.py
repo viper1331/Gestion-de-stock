@@ -97,6 +97,7 @@ async def get_barcode_asset(
 async def export_barcode_pdf(user: models.User = Depends(get_current_user)) -> StreamingResponse:
     _require_permission(user, action="view")
     assets = services.list_accessible_barcode_assets(user)
+    assets = services.enrich_barcode_assets_with_metadata(user, assets)
     site_key = db.get_current_site_key()
     try:
         resolved = resolve_pdf_config(MODULE_KEY)
