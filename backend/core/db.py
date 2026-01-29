@@ -851,6 +851,16 @@ def _sync_user_site_preferences() -> None:
 
 
 def _init_stock_schema(conn: sqlite3.Connection) -> None:
+    purchase_order_columns = {
+        row["name"] for row in conn.execute("PRAGMA table_info(purchase_orders)").fetchall()
+    }
+    if purchase_order_columns:
+        if "idempotency_key" not in purchase_order_columns:
+            conn.execute("ALTER TABLE purchase_orders ADD COLUMN idempotency_key TEXT")
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_orders_idempotency_key "
+            "ON purchase_orders(idempotency_key)"
+        )
     conn.executescript(
         """
                 CREATE TABLE IF NOT EXISTS categories (
