@@ -908,6 +908,9 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                     last_sent_at TEXT,
                     last_sent_to TEXT,
                     last_sent_by TEXT,
+                    replacement_sent_at TEXT,
+                    replacement_closed_at TEXT,
+                    replacement_closed_by TEXT,
                     is_archived INTEGER NOT NULL DEFAULT 0,
                     archived_at TIMESTAMP,
                     archived_by INTEGER

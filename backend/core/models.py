@@ -1069,6 +1069,9 @@ class PurchaseOrder(BaseModel):
     last_sent_at: datetime | None = None
     last_sent_to: str | None = None
     last_sent_by: str | None = None
+    replacement_sent_at: datetime | None = None
+    replacement_closed_at: datetime | None = None
+    replacement_closed_by: str | None = None
     is_archived: bool = False
     archived_at: datetime | None = None
     archived_by: int | None = None

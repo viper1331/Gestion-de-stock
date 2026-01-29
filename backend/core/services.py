@@ -3633,6 +3633,12 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             execute("ALTER TABLE purchase_orders ADD COLUMN last_sent_to TEXT")
         if "last_sent_by" not in po_columns:
             execute("ALTER TABLE purchase_orders ADD COLUMN last_sent_by TEXT")
+        if "replacement_sent_at" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN replacement_sent_at TEXT")
+        if "replacement_closed_at" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN replacement_closed_at TEXT")
+        if "replacement_closed_by" not in po_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN replacement_closed_by TEXT")
         if "parent_id" not in po_columns:
             execute("ALTER TABLE purchase_orders ADD COLUMN parent_id INTEGER")
         if "replacement_for_line_id" not in po_columns:
@@ -9810,6 +9816,21 @@ def _build_purchase_order_detail(
     has_nonconforming_receipt = any(
         summary.get("non_conforme", 0) > 0 for summary in receipt_summaries.values()
     )
+    latest_nonconforming_receipt_at: datetime | None = None
+    for receipt in receipts:
+        if receipt.conformity_status != "non_conforme":
+            continue
+        receipt_time = _coerce_datetime(receipt.created_at)
+        if latest_nonconforming_receipt_at is None or receipt_time > latest_nonconforming_receipt_at:
+            latest_nonconforming_receipt_at = receipt_time
+    replacement_sent_at = _row_get(order_row, "replacement_sent_at")
+    replacement_closed_at = _row_get(order_row, "replacement_closed_at")
+    replacement_closed_by = _row_get(order_row, "replacement_closed_by")
+    replacement_closed_effective = False
+    if replacement_closed_at:
+        closed_at_dt = _coerce_datetime(replacement_closed_at)
+        if latest_nonconforming_receipt_at is None or closed_at_dt >= latest_nonconforming_receipt_at:
+            replacement_closed_effective = True
     requested_replacements = [
         nonconformity
         for nonconformity in nonconformities
@@ -9817,13 +9838,9 @@ def _build_purchase_order_detail(
     ]
     replacement_flow_status = "none"
     if requested_replacements:
-        replacement_flow_status = (
-            "open"
-            if any(nonconformity.status != "closed" for nonconformity in requested_replacements)
-            else "closed"
-        )
+        replacement_flow_status = "closed" if replacement_closed_effective else "open"
     replacement_flow_open = replacement_flow_status == "open"
-    replacement_lock_reception = has_nonconforming_receipt and replacement_flow_open
+    replacement_lock_reception = has_nonconforming_receipt and not replacement_closed_effective
     replacement_assignment_completed = (
         replacement_flow_status == "closed"
         and not any(assignment.status == "pending" for assignment in pending_assignments)
@@ -9843,6 +9860,9 @@ def _build_purchase_order_detail(
         replacement_flow_open=replacement_flow_open,
         replacement_lock_reception=replacement_lock_reception,
         replacement_assignment_completed=replacement_assignment_completed,
+        replacement_sent_at=replacement_sent_at,
+        replacement_closed_at=replacement_closed_at,
+        replacement_closed_by=replacement_closed_by,
         status=order_row["status"],
         created_at=order_row["created_at"],
         note=order_row["note"],
@@ -10930,6 +10950,17 @@ def send_purchase_order_to_supplier(
                 order.id,
             ),
         )
+        if order.kind == "replacement_request" and order.parent_id:
+            conn.execute(
+                """
+                UPDATE purchase_orders
+                SET replacement_sent_at = ?,
+                    replacement_closed_at = NULL,
+                    replacement_closed_by = NULL
+                WHERE id = ?
+                """,
+                (sent_at, order.parent_id),
+            )
         conn.commit()
 
     return models.PurchaseOrderSendResponse(
@@ -11537,6 +11568,31 @@ def _is_replacement_reception_locked(
     ).fetchone()
     if nonconforme_row is None:
         return False
+    if _table_has_column(conn, "purchase_orders", "replacement_closed_at"):
+        order_row = conn.execute(
+            "SELECT replacement_closed_at FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        replacement_closed_at = _row_get(order_row, "replacement_closed_at") if order_row else None
+        latest_nonconforming_row = conn.execute(
+            """
+            SELECT created_at
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ?
+              AND site_key = ?
+              AND conformity_status = 'non_conforme'
+            ORDER BY created_at DESC, id DESC
+            LIMIT 1
+            """,
+            (order_id, normalized_site_key),
+        ).fetchone()
+        if latest_nonconforming_row is None:
+            return False
+        if not replacement_closed_at:
+            return True
+        closed_at_dt = _coerce_datetime(replacement_closed_at)
+        latest_nonconforming_at = _coerce_datetime(latest_nonconforming_row["created_at"])
+        return closed_at_dt < latest_nonconforming_at
     if not _table_has_column(conn, "purchase_order_nonconformities", "requested_replacement"):
         return False
     replacement_open = conn.execute(
@@ -12139,6 +12195,97 @@ def request_purchase_order_replacement_order(
             replacement_order_status="PENDING",
             can_send_to_supplier=can_send,
         )
+
+
+def close_purchase_order_replacement(
+    order_id: int,
+    *,
+    closed_by: str | None,
+) -> models.PurchaseOrderDetail:
+    ensure_database_ready()
+    normalized_site_key = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        order_row = conn.execute(
+            "SELECT id, replacement_sent_at FROM purchase_orders WHERE id = ?",
+            (order_id,),
+        ).fetchone()
+        if order_row is None:
+            raise ValueError("Bon de commande introuvable")
+        nonconforme_row = conn.execute(
+            """
+            SELECT 1
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ?
+              AND site_key = ?
+              AND conformity_status = 'non_conforme'
+            LIMIT 1
+            """,
+            (order_id, normalized_site_key),
+        ).fetchone()
+        if nonconforme_row is None:
+            raise ValueError("Aucune non-conformité en cours")
+        has_replacement_request = False
+        if _table_exists(conn, "purchase_order_nonconformities") and _table_has_column(
+            conn, "purchase_order_nonconformities", "requested_replacement"
+        ):
+            requested_row = conn.execute(
+                """
+                SELECT 1
+                FROM purchase_order_nonconformities
+                WHERE purchase_order_id = ?
+                  AND site_key = ?
+                  AND requested_replacement = 1
+                LIMIT 1
+                """,
+                (order_id, normalized_site_key),
+            ).fetchone()
+            has_replacement_request = requested_row is not None
+        replacement_order_row = conn.execute(
+            """
+            SELECT 1
+            FROM purchase_orders
+            WHERE parent_id = ? AND kind = 'replacement_request'
+            LIMIT 1
+            """,
+            (order_id,),
+        ).fetchone()
+        has_replacement_request = has_replacement_request or replacement_order_row is not None
+        if not has_replacement_request:
+            raise ValueError("Aucune demande de remplacement en cours")
+        replacement_sent_at = _row_get(order_row, "replacement_sent_at")
+        if not replacement_sent_at:
+            sent_row = conn.execute(
+                """
+                SELECT last_sent_at
+                FROM purchase_orders
+                WHERE parent_id = ?
+                  AND kind = 'replacement_request'
+                  AND last_sent_at IS NOT NULL
+                ORDER BY last_sent_at DESC, id DESC
+                LIMIT 1
+                """,
+                (order_id,),
+            ).fetchone()
+            if sent_row is None:
+                raise ValueError(
+                    "La demande de remplacement doit être envoyée avant de pouvoir la clôturer"
+                )
+            replacement_sent_at = sent_row["last_sent_at"]
+            conn.execute(
+                "UPDATE purchase_orders SET replacement_sent_at = ? WHERE id = ?",
+                (replacement_sent_at, order_id),
+            )
+        conn.execute(
+            """
+            UPDATE purchase_orders
+            SET replacement_closed_at = CURRENT_TIMESTAMP,
+                replacement_closed_by = ?
+            WHERE id = ?
+            """,
+            (closed_by, order_id),
+        )
+        conn.commit()
+    return get_purchase_order(order_id)
 
 
 def finalize_purchase_order_nonconformity(
