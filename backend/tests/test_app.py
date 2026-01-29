@@ -4364,7 +4364,7 @@ def test_message_read_idempotent() -> None:
 
 
 def test_message_broadcast_read_counts() -> None:
-    _create_user("broadcast_sender", "password123")
+    _create_user("broadcast_sender", "password123", role="admin")
     _create_user("broadcast_recipient", "password123")
     headers = _login_headers("broadcast_sender", "password123")
 
@@ -4405,6 +4405,120 @@ def test_message_broadcast_read_counts() -> None:
     assert sent_entry["recipients_total"] == expected_total
     assert sent_entry["recipients_read"] == 1
 
+
+def test_message_send_idempotency_key() -> None:
+    _create_user("idempotent_sender", "password123")
+    _create_user("idempotent_recipient", "password123")
+    headers = _login_headers("idempotent_sender", "password123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    payload = {
+        "category": "Info",
+        "content": "Message idempotent",
+        "recipients": ["idempotent_recipient"],
+        "broadcast": False,
+        "idempotency_key": "send-123",
+    }
+
+    first_response = client.post("/messages/send", json=payload, headers=headers)
+    assert first_response.status_code == 201, first_response.text
+    second_response = client.post("/messages/send", json=payload, headers=headers)
+    assert second_response.status_code == 201, second_response.text
+    assert first_response.json()["message_id"] == second_response.json()["message_id"]
+
+    with db.get_users_connection() as conn:
+        total_row = conn.execute(
+            "SELECT COUNT(*) AS total FROM messages WHERE sender_username = ?",
+            ("idempotent_sender",),
+        ).fetchone()
+    assert total_row is not None
+    assert int(total_row["total"]) == 1
+
+
+def test_message_archive_unarchive_flow() -> None:
+    _create_user("archive_sender", "password123")
+    _create_user("archive_recipient", "password123")
+    headers = _login_headers("archive_sender", "password123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    response = client.post(
+        "/messages/send",
+        json={
+            "category": "Info",
+            "content": "Archive test",
+            "recipients": ["archive_recipient"],
+            "broadcast": False,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    message_id = response.json()["message_id"]
+
+    recipient_headers = _login_headers("archive_recipient", "password123")
+    archive_response = client.post(f"/messages/{message_id}/archive", headers=recipient_headers)
+    assert archive_response.status_code == 200, archive_response.text
+
+    inbox_response = client.get("/messages/inbox", headers=recipient_headers)
+    assert inbox_response.status_code == 200, inbox_response.text
+    assert all(entry["id"] != message_id for entry in inbox_response.json())
+
+    archived_response = client.get(
+        "/messages/inbox",
+        params={"include_archived": True},
+        headers=recipient_headers,
+    )
+    assert archived_response.status_code == 200, archived_response.text
+    assert any(entry["id"] == message_id for entry in archived_response.json())
+
+    unarchive_response = client.post(f"/messages/{message_id}/unarchive", headers=recipient_headers)
+    assert unarchive_response.status_code == 200, unarchive_response.text
+
+    refreshed_inbox = client.get("/messages/inbox", headers=recipient_headers)
+    assert refreshed_inbox.status_code == 200, refreshed_inbox.text
+    assert any(entry["id"] == message_id for entry in refreshed_inbox.json())
+
+
+def test_message_delete_soft() -> None:
+    _create_user("delete_sender", "password123")
+    _create_user("delete_recipient", "password123")
+    headers = _login_headers("delete_sender", "password123")
+
+    with db.get_users_connection() as conn:
+        conn.execute("DELETE FROM message_rate_limits")
+        conn.execute("DELETE FROM message_recipients")
+        conn.execute("DELETE FROM messages")
+        conn.commit()
+
+    response = client.post(
+        "/messages/send",
+        json={
+            "category": "Info",
+            "content": "Delete test",
+            "recipients": ["delete_recipient"],
+            "broadcast": False,
+        },
+        headers=headers,
+    )
+    assert response.status_code == 201, response.text
+    message_id = response.json()["message_id"]
+
+    recipient_headers = _login_headers("delete_recipient", "password123")
+    delete_response = client.delete(f"/messages/{message_id}", headers=recipient_headers)
+    assert delete_response.status_code == 200, delete_response.text
+
+    inbox_response = client.get("/messages/inbox", headers=recipient_headers)
+    assert inbox_response.status_code == 200, inbox_response.text
+    assert all(entry["id"] != message_id for entry in inbox_response.json())
 
 def test_message_rate_limit_429() -> None:
     _create_user("recipient_user", "password123")

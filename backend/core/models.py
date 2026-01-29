@@ -129,6 +129,7 @@ class MessageSendRequest(BaseModel):
     content: str
     recipients: list[str] = Field(default_factory=list)
     broadcast: bool = False
+    idempotency_key: str | None = Field(default=None, max_length=128)
 
 
 class MessageSendResponse(BaseModel):

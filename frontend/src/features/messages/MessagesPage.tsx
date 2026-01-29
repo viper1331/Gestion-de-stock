@@ -1,7 +1,8 @@
-import { FormEvent, useMemo, useRef, useState } from "react";
+import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Link } from "react-router-dom";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
+import { toast } from "sonner";
 
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -11,7 +12,16 @@ import { AppTextArea } from "components/AppTextArea";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
-const CATEGORY_OPTIONS = ["Info", "Alerte", "Maintenance", "Divers"] as const;
+const CATEGORY_OPTIONS = ["Info", "Alerte", "Important", "Opérations", "Maintenance", "Divers"] as const;
+const MESSAGE_MAX_LENGTH = 2000;
+
+const SORT_OPTIONS = [
+  { value: "newest", label: "Date (récentes)" },
+  { value: "oldest", label: "Date (anciennes)" },
+  { value: "unread", label: "Non lus d'abord" }
+] as const;
+
+const SENT_SORT_OPTIONS = SORT_OPTIONS.filter((option) => option.value !== "unread");
 
 type UserRole = "admin" | "user";
 
@@ -51,6 +61,14 @@ interface SendMessagePayload {
   content: string;
   recipients: string[];
   broadcast: boolean;
+  idempotency_key?: string | null;
+}
+
+type ActiveTab = "inbox" | "sent" | "archived";
+
+interface PreviewMessage {
+  type: "inbox" | "sent";
+  id: number;
 }
 
 export function MessagesPage() {
@@ -61,13 +79,23 @@ export function MessagesPage() {
   const [content, setContent] = useState<string>("");
   const [recipients, setRecipients] = useState<string[]>([]);
   const [broadcast, setBroadcast] = useState<boolean>(false);
-  const [includeArchived, setIncludeArchived] = useState<boolean>(false);
+  const [recipientSearch, setRecipientSearch] = useState<string>("");
+  const [searchTerm, setSearchTerm] = useState<string>("");
+  const [categoryFilter, setCategoryFilter] = useState<string>("");
+  const [sortOrder, setSortOrder] = useState<(typeof SORT_OPTIONS)[number]["value"]>("newest");
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [activeTab, setActiveTab] = useState<"inbox" | "sent">("inbox");
+  const [activeTab, setActiveTab] = useState<ActiveTab>("inbox");
+  const [previewMessage, setPreviewMessage] = useState<PreviewMessage | null>(null);
+  const [isBroadcastConfirmOpen, setIsBroadcastConfirmOpen] = useState<boolean>(false);
+  const [inboxLimit, setInboxLimit] = useState<number>(50);
+  const [sentLimit, setSentLimit] = useState<number>(50);
   const contentRef = useRef<HTMLTextAreaElement | null>(null);
+  const composeRef = useRef<HTMLDivElement | null>(null);
+  const lastIdempotencyKey = useRef<string | null>(null);
   const canView = user?.role === "admin" || modulePermissions.canAccess("messages");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("messages", "edit");
+  const isAdmin = user?.role === "admin";
 
   const { data: availableRecipients = [], isFetching: isFetchingRecipients } = useQuery({
     queryKey: ["messages", "recipients"],
@@ -80,30 +108,39 @@ export function MessagesPage() {
 
   const {
     data: inboxMessages = [],
-    isFetching: isFetchingInbox
+    isFetching: isFetchingInbox,
+    isError: inboxIsError,
+    refetch: refetchInbox
   } = useQuery({
-    queryKey: ["messages", "inbox", includeArchived],
+    queryKey: ["messages", "inbox", inboxLimit, searchTerm, categoryFilter, activeTab],
     queryFn: async () => {
       const response = await api.get<MessageInboxEntry[]>("/messages/inbox", {
         params: {
-          limit: 50,
-          include_archived: includeArchived
+          limit: inboxLimit,
+          include_archived: activeTab === "archived",
+          archived_only: activeTab === "archived",
+          q: searchTerm || undefined,
+          category: categoryFilter || undefined
         }
       });
       return response.data;
     },
-    enabled: Boolean(user) && canView
+    enabled: Boolean(user) && canView && (activeTab === "inbox" || activeTab === "archived")
   });
 
   const {
     data: sentMessages = [],
-    isFetching: isFetchingSent
+    isFetching: isFetchingSent,
+    isError: sentIsError,
+    refetch: refetchSent
   } = useQuery({
-    queryKey: ["messages", "sent"],
+    queryKey: ["messages", "sent", sentLimit, searchTerm, categoryFilter],
     queryFn: async () => {
       const response = await api.get<SentMessageEntry[]>("/messages/sent", {
         params: {
-          limit: 50
+          limit: sentLimit,
+          q: searchTerm || undefined,
+          category: categoryFilter || undefined
         }
       });
       return response.data;
@@ -111,6 +148,16 @@ export function MessagesPage() {
     enabled: Boolean(user) && canView && activeTab === "sent",
     refetchInterval: activeTab === "sent" ? 12000 : false
   });
+
+  useEffect(() => {
+    setPreviewMessage(null);
+  }, [activeTab, searchTerm, categoryFilter]);
+
+  useEffect(() => {
+    if (activeTab === "sent" && sortOrder === "unread") {
+      setSortOrder("newest");
+    }
+  }, [activeTab, sortOrder]);
 
   const clearFeedbackLater = () => {
     window.setTimeout(() => {
@@ -125,11 +172,13 @@ export function MessagesPage() {
       return response.data as { message_id: number; recipients_count: number };
     },
     onSuccess: async () => {
+      toast.success("Message envoyé.");
       setMessage("Message envoyé.");
       setError(null);
       setContent("");
       setRecipients([]);
       setBroadcast(false);
+      lastIdempotencyKey.current = null;
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] }),
         queryClient.invalidateQueries({ queryKey: ["messages", "sent"] })
@@ -144,8 +193,11 @@ export function MessagesPage() {
         const detail = (err.response?.data as { detail?: string } | undefined)?.detail;
         if (status === 429 && detail) {
           errorMessage = detail;
+        } else if (detail) {
+          errorMessage = detail;
         }
       }
+      toast.error(errorMessage);
       setError(errorMessage);
       clearFeedbackLater();
     }
@@ -163,6 +215,18 @@ export function MessagesPage() {
     }
   });
 
+  const markUnread = useMutation({
+    mutationFn: async (messageId: number) => {
+      await api.post(`/messages/${messageId}/unread`);
+    },
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] }),
+        queryClient.invalidateQueries({ queryKey: ["messages", "sent"] })
+      ]);
+    }
+  });
+
   const archiveMessage = useMutation({
     mutationFn: async (messageId: number) => {
       await api.post(`/messages/${messageId}/archive`);
@@ -171,6 +235,39 @@ export function MessagesPage() {
       await queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] });
     }
   });
+
+  const unarchiveMessage = useMutation({
+    mutationFn: async (messageId: number) => {
+      await api.post(`/messages/${messageId}/unarchive`);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] });
+    }
+  });
+
+  const deleteMessage = useMutation({
+    mutationFn: async (messageId: number) => {
+      await api.delete(`/messages/${messageId}`);
+    },
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["messages", "inbox"] });
+      setPreviewMessage(null);
+      toast.success("Message supprimé.");
+    },
+    onError: () => {
+      toast.error("Impossible de supprimer le message.");
+    }
+  });
+
+  const filteredRecipients = useMemo(() => {
+    if (!recipientSearch.trim()) {
+      return availableRecipients;
+    }
+    const search = recipientSearch.trim().toLowerCase();
+    return availableRecipients.filter((recipient) =>
+      recipient.username.toLowerCase().includes(search)
+    );
+  }, [availableRecipients, recipientSearch]);
 
   const selectedRecipients = useMemo(() => new Set(recipients), [recipients]);
   const trimmedContent = content.trim();
@@ -193,8 +290,21 @@ export function MessagesPage() {
       clearFeedbackLater();
       return;
     }
+    if (broadcast && !isAdmin) {
+      const errorMessage = "La diffusion à tous est réservée aux administrateurs.";
+      setError(errorMessage);
+      toast.error(errorMessage);
+      clearFeedbackLater();
+      return;
+    }
     if (!trimmedContent) {
       setError("Veuillez saisir un message.");
+      clearFeedbackLater();
+      return;
+    }
+
+    if (trimmedContent.length > MESSAGE_MAX_LENGTH) {
+      setError(`Le message dépasse la limite de ${MESSAGE_MAX_LENGTH} caractères.`);
       clearFeedbackLater();
       return;
     }
@@ -213,11 +323,17 @@ export function MessagesPage() {
 
     setMessage(null);
     setError(null);
+    if (!lastIdempotencyKey.current) {
+      lastIdempotencyKey.current = typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(16).slice(2)}`;
+    }
     await sendMessage.mutateAsync({
       category,
       content: trimmedContent,
       recipients,
-      broadcast
+      broadcast,
+      idempotency_key: lastIdempotencyKey.current
     });
   };
 
@@ -230,8 +346,123 @@ export function MessagesPage() {
     });
   };
 
-  const inboxIsEmpty = inboxMessages.length === 0 && !isFetchingInbox;
-  const sentIsEmpty = sentMessages.length === 0 && !isFetchingSent;
+  const handleSelectAllRecipients = () => {
+    const nextRecipients = filteredRecipients.map((recipient) => recipient.username);
+    setRecipients(nextRecipients);
+  };
+
+  const handleDeselectAllRecipients = () => {
+    setRecipients([]);
+  };
+
+  const handleBroadcastToggle = (nextValue: boolean) => {
+    if (nextValue) {
+      if (!isAdmin) {
+        const errorMessage = "La diffusion à tous est réservée aux administrateurs.";
+        setError(errorMessage);
+        toast.error(errorMessage);
+        clearFeedbackLater();
+        return;
+      }
+      setIsBroadcastConfirmOpen(true);
+      return;
+    }
+    setBroadcast(false);
+  };
+
+  const confirmBroadcast = () => {
+    setBroadcast(true);
+    setRecipients([]);
+    setIsBroadcastConfirmOpen(false);
+  };
+
+  const cancelBroadcast = () => {
+    setIsBroadcastConfirmOpen(false);
+  };
+
+  const sortedInboxMessages = useMemo(() => {
+    const items = [...inboxMessages];
+    if (sortOrder === "unread") {
+      return items.sort((a, b) => {
+        if (a.is_read === b.is_read) {
+          return new Date(b.created_at).getTime() - new Date(a.created_at).getTime();
+        }
+        return a.is_read ? 1 : -1;
+      });
+    }
+    if (sortOrder === "oldest") {
+      return items.sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+    }
+    return items.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  }, [inboxMessages, sortOrder]);
+
+  const sortedSentMessages = useMemo(() => {
+    const items = [...sentMessages];
+    if (sortOrder === "oldest") {
+      return items.sort(
+        (a, b) => new Date(a.created_at).getTime() - new Date(b.created_at).getTime()
+      );
+    }
+    return items.sort(
+      (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+    );
+  }, [sentMessages, sortOrder]);
+
+  const inboxIsEmpty = sortedInboxMessages.length === 0 && !isFetchingInbox;
+  const sentIsEmpty = sortedSentMessages.length === 0 && !isFetchingSent;
+
+  const activePreviewMessage = useMemo(() => {
+    if (!previewMessage) {
+      return null;
+    }
+    if (previewMessage.type === "inbox") {
+      return {
+        type: "inbox" as const,
+        entry: inboxMessages.find((item) => item.id === previewMessage.id) ?? null
+      };
+    }
+    return {
+      type: "sent" as const,
+      entry: sentMessages.find((item) => item.id === previewMessage.id) ?? null
+    };
+  }, [previewMessage, inboxMessages, sentMessages]);
+
+  useEffect(() => {
+    if (previewMessage && !activePreviewMessage?.entry) {
+      setPreviewMessage(null);
+    }
+  }, [previewMessage, activePreviewMessage]);
+
+  const selectPreview = (type: "inbox" | "sent", id: number) => {
+    setPreviewMessage({ type, id });
+  };
+
+  const scrollToComposer = () => {
+    composeRef.current?.scrollIntoView({ behavior: "smooth", block: "start" });
+    contentRef.current?.focus();
+  };
+
+  const handleReply = (entry: MessageInboxEntry) => {
+    setBroadcast(false);
+    setRecipients([entry.sender_username]);
+    setCategory(entry.category);
+    setContent(
+      `\n\n---\nRéponse à ${entry.sender_username} (${formatDateTime(entry.created_at)}):\n${entry.content}`
+    );
+    scrollToComposer();
+  };
+
+  const handleForward = (categoryValue: string, contentValue: string) => {
+    setBroadcast(false);
+    setRecipients([]);
+    setCategory(categoryValue);
+    setContent(`\n\n---\nMessage transféré :\n${contentValue}`);
+    scrollToComposer();
+  };
 
   if (modulePermissions.isLoading && user?.role !== "admin") {
     return (
@@ -265,8 +496,11 @@ export function MessagesPage() {
         </p>
       </header>
 
-      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
-        <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
+      <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.4fr)]">
+        <section
+          ref={composeRef}
+          className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm"
+        >
           <h3 className="text-base font-semibold text-white">Composer / Envoyer</h3>
           <form className="mt-4 space-y-4" onSubmit={handleSend}>
             <label className="flex flex-col gap-2 text-sm text-slate-200">
@@ -285,52 +519,99 @@ export function MessagesPage() {
               </select>
             </label>
 
-            <label className="flex flex-col gap-2 text-sm text-slate-200">
-              Message
+            <div className="space-y-2">
+              <div className="flex items-center justify-between text-sm text-slate-200">
+                <span>Message</span>
+                <span className="text-xs text-slate-400">
+                  {content.length}/{MESSAGE_MAX_LENGTH}
+                </span>
+              </div>
               <AppTextArea
-                className="min-h-[120px] rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                className="min-h-[140px] rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
                 value={content}
                 onChange={(event) => setContent(event.target.value)}
                 placeholder="Écrivez votre message..."
                 ref={contentRef}
                 disabled={!canEdit}
+                maxLength={MESSAGE_MAX_LENGTH}
               />
-            </label>
-
-            <label className="flex items-center gap-2 text-sm text-slate-200">
-              <AppTextInput
-                type="checkbox"
-                className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
-                checked={broadcast}
-                onChange={(event) => setBroadcast(event.target.checked)}
-                disabled={!canEdit}
-              />
-              Envoyer à tous
-            </label>
+              <p className="text-xs text-slate-500">
+                Le message est limité à {MESSAGE_MAX_LENGTH} caractères. Multiligne et
+                redimensionnable.
+              </p>
+            </div>
 
             <div className="space-y-2">
-              <p className="text-sm font-medium text-slate-200">Destinataires</p>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <p className="text-sm font-medium text-slate-200">Destinataires</p>
+                <span className="text-xs text-slate-400">
+                  {recipients.length} sélectionné(s)
+                </span>
+              </div>
+              <div className="flex flex-wrap gap-2">
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleSelectAllRecipients}
+                  disabled={broadcast || !canEdit || filteredRecipients.length === 0}
+                >
+                  Tout sélectionner
+                </button>
+                <button
+                  type="button"
+                  className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                  onClick={handleDeselectAllRecipients}
+                  disabled={!canEdit}
+                >
+                  Tout désélectionner
+                </button>
+                <label className="flex items-center gap-2 text-xs text-red-300">
+                  <AppTextInput
+                    type="checkbox"
+                    className="h-4 w-4 rounded border-red-500/40 bg-slate-950 text-red-400 focus:ring-red-400"
+                    checked={broadcast}
+                    onChange={(event) => handleBroadcastToggle(event.target.checked)}
+                    disabled={!canEdit}
+                  />
+                  Envoyer à tous
+                </label>
+              </div>
+              <AppTextInput
+                type="text"
+                value={recipientSearch}
+                onChange={(event) => setRecipientSearch(event.target.value)}
+                placeholder="Rechercher un utilisateur…"
+                className="w-full rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                disabled={!canEdit}
+              />
               {isFetchingRecipients ? (
                 <p className="text-xs text-slate-500">Chargement des utilisateurs...</p>
               ) : availableRecipients.length === 0 ? (
                 <p className="text-xs text-slate-500">Aucun destinataire disponible.</p>
               ) : (
-                <div className="max-h-48 space-y-2 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/60 p-3">
-                  {availableRecipients.map((recipient) => (
-                    <label key={recipient.username} className="flex items-center gap-2 text-xs text-slate-200">
-                      <AppTextInput
-                        type="checkbox"
-                        className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
-                        checked={selectedRecipients.has(recipient.username)}
-                        onChange={() => toggleRecipient(recipient.username)}
-                        disabled={broadcast || !canEdit}
-                      />
-                      <span className="font-semibold text-white">{recipient.username}</span>
-                      <span className={recipient.role === "admin" ? "text-red-400" : "text-indigo-300"}>
-                        {recipient.role}
-                      </span>
-                    </label>
-                  ))}
+                <div className="max-h-52 space-y-2 overflow-y-auto rounded-md border border-slate-800 bg-slate-950/60 p-3">
+                  {filteredRecipients.length === 0 ? (
+                    <p className="text-xs text-slate-500">Aucun utilisateur ne correspond.</p>
+                  ) : (
+                    filteredRecipients.map((recipient) => (
+                      <label
+                        key={recipient.username}
+                        className="flex items-center gap-2 text-xs text-slate-200"
+                      >
+                        <AppTextInput
+                          type="checkbox"
+                          className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
+                          checked={selectedRecipients.has(recipient.username)}
+                          onChange={() => toggleRecipient(recipient.username)}
+                          disabled={broadcast || !canEdit}
+                        />
+                        <span className="font-semibold text-white">{recipient.username}</span>
+                        <span className={recipient.role === "admin" ? "text-red-400" : "text-indigo-300"}>
+                          {recipient.role}
+                        </span>
+                      </label>
+                    ))
+                  )}
                 </div>
               )}
               {broadcast ? (
@@ -344,175 +625,432 @@ export function MessagesPage() {
 
             <button
               type="submit"
-              className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-flex items-center justify-center gap-2 rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
               disabled={!canSend}
             >
-              {sendMessage.isPending ? "Envoi en cours..." : "Envoyer"}
+              {sendMessage.isPending ? (
+                <span className="flex items-center gap-2">
+                  <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/30 border-t-white" />
+                  Envoi en cours...
+                </span>
+              ) : (
+                "Envoyer"
+              )}
             </button>
           </form>
         </section>
 
         <section className="rounded-lg border border-slate-800 bg-slate-900/70 p-4 shadow-sm">
-          <header className="flex flex-wrap items-center justify-between gap-2">
+          <header className="flex flex-wrap items-center justify-between gap-3">
             <div>
               <h3 className="text-base font-semibold text-white">Messagerie</h3>
-              <p className="text-xs text-slate-400">Vos 50 derniers messages.</p>
+              <p className="text-xs text-slate-400">Vos derniers messages.</p>
             </div>
-            <div className="flex items-center gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => setActiveTab("inbox")}
-                className={`rounded-md border px-3 py-1 font-semibold ${
-                  activeTab === "inbox"
-                    ? "border-indigo-400 bg-indigo-500/20 text-white"
-                    : "border-slate-700 text-slate-300 hover:border-indigo-400 hover:text-white"
-                }`}
-              >
-                Réception
-              </button>
-              <button
-                type="button"
-                onClick={() => setActiveTab("sent")}
-                className={`rounded-md border px-3 py-1 font-semibold ${
-                  activeTab === "sent"
-                    ? "border-indigo-400 bg-indigo-500/20 text-white"
-                    : "border-slate-700 text-slate-300 hover:border-indigo-400 hover:text-white"
-                }`}
-              >
-                Envoyés
-              </button>
+            <div className="flex flex-wrap items-center gap-2 text-xs">
+              {(["inbox", "sent", "archived"] as const).map((tab) => (
+                <button
+                  key={tab}
+                  type="button"
+                  onClick={() => setActiveTab(tab)}
+                  className={`rounded-md border px-3 py-1 font-semibold ${
+                    activeTab === tab
+                      ? "border-indigo-400 bg-indigo-500/20 text-white"
+                      : "border-slate-700 text-slate-300 hover:border-indigo-400 hover:text-white"
+                  }`}
+                >
+                  {tab === "inbox" ? "Réception" : tab === "sent" ? "Envoyés" : "Archives"}
+                </button>
+              ))}
             </div>
           </header>
 
-          {activeTab === "inbox" ? (
-            <>
-              <div className="mt-3 flex items-center justify-end">
-                <label className="flex items-center gap-2 text-xs text-slate-300">
-                  <AppTextInput
-                    type="checkbox"
-                    className="h-4 w-4 rounded border-slate-600 bg-slate-950 text-indigo-500 focus:ring-indigo-400"
-                    checked={includeArchived}
-                    onChange={(event) => setIncludeArchived(event.target.checked)}
-                  />
-                  Afficher archives
-                </label>
-              </div>
-              {isFetchingInbox ? (
-                <p className="mt-4 text-sm text-slate-400">Chargement des messages...</p>
-              ) : inboxIsEmpty ? (
-                <p className="mt-4 text-sm text-slate-400">Aucun message pour le moment.</p>
-              ) : (
-                <div className="mt-4 space-y-3">
-                  {inboxMessages.map((entry) => (
-                    <article
-                      key={entry.id}
-                      className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 shadow-sm"
+          <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,0.7fr)_minmax(0,0.7fr)]">
+            <label className="flex flex-col gap-2 text-xs text-slate-300">
+              Rechercher
+              <input
+                type="text"
+                value={searchTerm}
+                onChange={(event) => setSearchTerm(event.target.value)}
+                placeholder="Objet, contenu, expéditeur..."
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+              />
+            </label>
+            <label className="flex flex-col gap-2 text-xs text-slate-300">
+              Catégorie
+              <select
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                value={categoryFilter}
+                onChange={(event) => setCategoryFilter(event.target.value)}
+              >
+                <option value="">Toutes</option>
+                {CATEGORY_OPTIONS.map((option) => (
+                  <option key={option} value={option}>
+                    {option}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <label className="flex flex-col gap-2 text-xs text-slate-300">
+              Trier
+              <select
+                className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                value={sortOrder}
+                onChange={(event) =>
+                  setSortOrder(event.target.value as (typeof SORT_OPTIONS)[number]["value"])
+                }
+              >
+                {(activeTab === "sent" ? SENT_SORT_OPTIONS : SORT_OPTIONS).map((option) => (
+                  <option key={option.value} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+          </div>
+
+          {activeTab === "sent" ? (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="space-y-3">
+                {isFetchingSent ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 4 }).map((_, idx) => (
+                      <div
+                        key={`sent-skeleton-${idx}`}
+                        className="h-20 animate-pulse rounded-lg border border-slate-800 bg-slate-950/50"
+                      />
+                    ))}
+                  </div>
+                ) : sentIsError ? (
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+                    <p>Impossible de charger les messages envoyés.</p>
+                    <button
+                      type="button"
+                      onClick={() => refetchSent()}
+                      className="mt-3 rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
                     >
-                      <header className="flex flex-wrap items-center justify-between gap-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <span
-                            className={`rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${
-                              entry.sender_role === "admin"
-                                ? "bg-red-500/20 text-red-200"
-                                : "bg-indigo-500/20 text-indigo-200"
-                            }`}
-                          >
-                            {entry.sender_username}
-                          </span>
-                          <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
-                            {entry.category}
-                          </span>
-                          {!entry.is_read ? (
-                            <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
-                              Non lu
-                            </span>
-                          ) : null}
-                          {entry.is_archived ? (
-                            <span className="rounded border border-slate-600 px-2 py-0.5 text-[10px] text-slate-300">
-                              Archivé
-                            </span>
-                          ) : null}
-                        </div>
-                        <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
-                      </header>
-                      <p className="mt-3 text-sm text-slate-200">{entry.content}</p>
-                      <div className="mt-3 flex flex-wrap gap-2">
+                      Réessayer
+                    </button>
+                  </div>
+                ) : sentIsEmpty ? (
+                  <div className="rounded-lg border border-dashed border-slate-800 p-4 text-sm text-slate-400">
+                    Aucun message envoyé pour le moment.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {sortedSentMessages.map((entry) => (
+                      <article
+                        key={entry.id}
+                        className={`rounded-lg border p-3 shadow-sm transition ${
+                          previewMessage?.id === entry.id && previewMessage.type === "sent"
+                            ? "border-indigo-400 bg-indigo-500/10"
+                            : "border-slate-800 bg-slate-950/60"
+                        }`}
+                      >
                         <button
                           type="button"
-                          className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
-                          onClick={() => markRead.mutate(entry.id)}
-                          disabled={!canEdit || entry.is_read || markRead.isPending}
+                          onClick={() => selectPreview("sent", entry.id)}
+                          className="flex w-full flex-col gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                          aria-label={`Afficher le message envoyé ${entry.category}`}
                         >
-                          Marquer comme lu
+                          <header className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
+                                {entry.category}
+                              </span>
+                              <span className="rounded border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">
+                                Lu {entry.recipients_read}/{entry.recipients_total}
+                              </span>
+                            </div>
+                            <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
+                          </header>
+                          <p className="text-sm text-slate-200 line-clamp-2 break-words">
+                            {entry.content}
+                          </p>
                         </button>
-                        <button
-                          type="button"
-                          className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-red-400 hover:text-red-200 disabled:cursor-not-allowed disabled:opacity-60"
-                          onClick={() => archiveMessage.mutate(entry.id)}
-                          disabled={!canEdit || entry.is_archived || archiveMessage.isPending}
-                        >
-                          Archiver
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                </div>
-              )}
-            </>
-          ) : isFetchingSent ? (
-            <p className="mt-4 text-sm text-slate-400">Chargement des messages...</p>
-          ) : sentIsEmpty ? (
-            <p className="mt-4 text-sm text-slate-400">Aucun message envoyé pour le moment.</p>
-          ) : (
-            <div className="mt-4 space-y-3">
-              {sentMessages.map((entry) => (
-                <article
-                  key={entry.id}
-                  className="rounded-lg border border-slate-800 bg-slate-950/60 p-3 shadow-sm"
-                >
-                  <header className="flex flex-wrap items-center justify-between gap-2">
-                    <div className="flex flex-wrap items-center gap-2">
+                      </article>
+                    ))}
+                    {sortedSentMessages.length >= sentLimit ? (
+                      <button
+                        type="button"
+                        className="w-full rounded-md border border-slate-700 py-2 text-xs font-semibold text-slate-200 hover:border-indigo-400 hover:text-white"
+                        onClick={() => setSentLimit((prev) => prev + 50)}
+                      >
+                        Charger plus
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-4">
+                {activePreviewMessage?.type === "sent" && activePreviewMessage.entry ? (
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-semibold text-white">Message envoyé</h4>
+                      <p className="text-xs text-slate-400">{formatDateTime(activePreviewMessage.entry.created_at)}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
                       <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
-                        {entry.category}
+                        {activePreviewMessage.entry.category}
                       </span>
                       <span className="rounded border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">
-                        Lu {entry.recipients_read}/{entry.recipients_total}
+                        Lu {activePreviewMessage.entry.recipients_read}/{activePreviewMessage.entry.recipients_total}
                       </span>
                     </div>
-                    <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
-                  </header>
-                  <p className="mt-3 text-sm text-slate-200">{entry.content}</p>
-                  {entry.recipients?.length ? (
-                    <details className="mt-3 rounded-md border border-slate-800 bg-slate-900/40 px-3 py-2 text-xs text-slate-300">
-                      <summary className="cursor-pointer text-xs font-semibold text-slate-200">
-                        Détails des destinataires
-                      </summary>
-                      <ul className="mt-2 space-y-1">
-                        {entry.recipients.map((recipient) => (
-                          <li key={`${entry.id}-${recipient.username}`} className="flex flex-wrap gap-2">
-                            <span className="font-semibold text-white">{recipient.username}</span>
-                            <span className="text-slate-400">
-                              {recipient.read_at ? `Lu le ${formatDateTime(recipient.read_at)}` : "Non lu"}
-                            </span>
-                          </li>
-                        ))}
-                      </ul>
-                    </details>
-                  ) : null}
-                </article>
-              ))}
+                    <p className="text-sm text-slate-200 whitespace-pre-wrap break-words">
+                      {activePreviewMessage.entry.content}
+                    </p>
+                    <div>
+                      <p className="text-xs font-semibold text-slate-300">Destinataires</p>
+                      {activePreviewMessage.entry.recipients?.length ? (
+                        <ul className="mt-2 space-y-1 text-xs text-slate-300">
+                          {activePreviewMessage.entry.recipients.map((recipient) => (
+                            <li key={`${activePreviewMessage.entry?.id}-${recipient.username}`} className="flex flex-wrap gap-2">
+                              <span className="font-semibold text-white">{recipient.username}</span>
+                              <span className="text-slate-400">
+                                {recipient.read_at ? `Lu le ${formatDateTime(recipient.read_at)}` : "Non lu"}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p className="mt-1 text-xs text-slate-500">Aucun destinataire listé.</p>
+                      )}
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
+                        onClick={() => handleForward(activePreviewMessage.entry.category, activePreviewMessage.entry.content)}
+                      >
+                        Transférer
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-400">Sélectionnez un message pour le lire.</div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="mt-4 grid gap-4 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="space-y-3">
+                {isFetchingInbox ? (
+                  <div className="space-y-3">
+                    {Array.from({ length: 4 }).map((_, idx) => (
+                      <div
+                        key={`inbox-skeleton-${idx}`}
+                        className="h-20 animate-pulse rounded-lg border border-slate-800 bg-slate-950/50"
+                      />
+                    ))}
+                  </div>
+                ) : inboxIsError ? (
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/60 p-4 text-sm text-slate-300">
+                    <p>Impossible de charger vos messages.</p>
+                    <button
+                      type="button"
+                      onClick={() => refetchInbox()}
+                      className="mt-3 rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
+                    >
+                      Réessayer
+                    </button>
+                  </div>
+                ) : inboxIsEmpty ? (
+                  <div className="rounded-lg border border-dashed border-slate-800 p-4 text-sm text-slate-400">
+                    Aucun message pour le moment.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {sortedInboxMessages.map((entry) => (
+                      <article
+                        key={entry.id}
+                        className={`rounded-lg border p-3 shadow-sm transition ${
+                          previewMessage?.id === entry.id && previewMessage.type === "inbox"
+                            ? "border-indigo-400 bg-indigo-500/10"
+                            : "border-slate-800 bg-slate-950/60"
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => selectPreview("inbox", entry.id)}
+                          className="flex w-full flex-col gap-2 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-400"
+                          aria-label={`Afficher le message de ${entry.sender_username}`}
+                        >
+                          <header className="flex flex-wrap items-center justify-between gap-2">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${
+                                  entry.sender_role === "admin"
+                                    ? "bg-red-500/20 text-red-200"
+                                    : "bg-indigo-500/20 text-indigo-200"
+                                }`}
+                              >
+                                {entry.sender_username}
+                              </span>
+                              <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
+                                {entry.category}
+                              </span>
+                              {!entry.is_read ? (
+                                <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+                                  Non lu
+                                </span>
+                              ) : null}
+                              {entry.is_archived ? (
+                                <span className="rounded border border-slate-600 px-2 py-0.5 text-[10px] text-slate-300">
+                                  Archivé
+                                </span>
+                              ) : null}
+                            </div>
+                            <span className="text-xs text-slate-500">{formatDateTime(entry.created_at)}</span>
+                          </header>
+                          <p className="text-sm text-slate-200 line-clamp-2 break-words">{entry.content}</p>
+                        </button>
+                      </article>
+                    ))}
+                    {sortedInboxMessages.length >= inboxLimit ? (
+                      <button
+                        type="button"
+                        className="w-full rounded-md border border-slate-700 py-2 text-xs font-semibold text-slate-200 hover:border-indigo-400 hover:text-white"
+                        onClick={() => setInboxLimit((prev) => prev + 50)}
+                      >
+                        Charger plus
+                      </button>
+                    ) : null}
+                  </div>
+                )}
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-4">
+                {activePreviewMessage?.type === "inbox" && activePreviewMessage.entry ? (
+                  <div className="space-y-4">
+                    <div className="space-y-1">
+                      <h4 className="text-sm font-semibold text-white">Message reçu</h4>
+                      <p className="text-xs text-slate-400">{formatDateTime(activePreviewMessage.entry.created_at)}</p>
+                    </div>
+                    <div className="flex flex-wrap gap-2">
+                      <span
+                        className={`rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${
+                          activePreviewMessage.entry.sender_role === "admin"
+                            ? "bg-red-500/20 text-red-200"
+                            : "bg-indigo-500/20 text-indigo-200"
+                        }`}
+                      >
+                        {activePreviewMessage.entry.sender_username}
+                      </span>
+                      <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
+                        {activePreviewMessage.entry.category}
+                      </span>
+                      {!activePreviewMessage.entry.is_read ? (
+                        <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
+                          Non lu
+                        </span>
+                      ) : null}
+                      {activePreviewMessage.entry.is_archived ? (
+                        <span className="rounded border border-slate-600 px-2 py-0.5 text-[10px] text-slate-300">
+                          Archivé
+                        </span>
+                      ) : null}
+                    </div>
+                    <p className="text-sm text-slate-200 whitespace-pre-wrap break-words">
+                      {activePreviewMessage.entry.content}
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
+                        onClick={() => handleReply(activePreviewMessage.entry)}
+                      >
+                        Répondre
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
+                        onClick={() =>
+                          handleForward(activePreviewMessage.entry.category, activePreviewMessage.entry.content)
+                        }
+                      >
+                        Transférer
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() =>
+                          activePreviewMessage.entry?.is_read
+                            ? markUnread.mutate(activePreviewMessage.entry.id)
+                            : markRead.mutate(activePreviewMessage.entry.id)
+                        }
+                        disabled={!canEdit || markRead.isPending || markUnread.isPending}
+                      >
+                        {activePreviewMessage.entry.is_read ? "Marquer non lu" : "Marquer lu"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() =>
+                          activePreviewMessage.entry?.is_archived
+                            ? unarchiveMessage.mutate(activePreviewMessage.entry.id)
+                            : archiveMessage.mutate(activePreviewMessage.entry.id)
+                        }
+                        disabled={!canEdit || archiveMessage.isPending || unarchiveMessage.isPending}
+                      >
+                        {activePreviewMessage.entry.is_archived ? "Désarchiver" : "Archiver"}
+                      </button>
+                      <button
+                        type="button"
+                        className="rounded-md border border-red-500/40 px-3 py-1 text-xs font-semibold text-red-200 hover:border-red-400 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-60"
+                        onClick={() => {
+                          if (!activePreviewMessage.entry) {
+                            return;
+                          }
+                          if (window.confirm("Supprimer ce message de votre boîte de réception ?")) {
+                            deleteMessage.mutate(activePreviewMessage.entry.id);
+                          }
+                        }}
+                        disabled={!canEdit || deleteMessage.isPending}
+                      >
+                        Supprimer
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="text-sm text-slate-400">Sélectionnez un message pour le lire.</div>
+                )}
+              </div>
             </div>
           )}
           <div className="mt-4 text-right">
-            <Link
-              to="/"
-              className="text-xs text-slate-500 hover:text-indigo-200"
-            >
+            <Link to="/" className="text-xs text-slate-500 hover:text-indigo-200">
               Retour à l'accueil
             </Link>
           </div>
         </section>
       </div>
+
+      {isBroadcastConfirmOpen ? (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 px-4">
+          <div className="w-full max-w-md rounded-lg border border-red-500/40 bg-slate-950 p-4 shadow-lg">
+            <h4 className="text-base font-semibold text-white">Confirmer l'envoi à tous</h4>
+            <p className="mt-2 text-sm text-slate-300">
+              Cette action enverra le message à tous les utilisateurs actifs. Souhaitez-vous
+              continuer ?
+            </p>
+            <div className="mt-4 flex justify-end gap-2">
+              <button
+                type="button"
+                className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-slate-500"
+                onClick={cancelBroadcast}
+              >
+                Annuler
+              </button>
+              <button
+                type="button"
+                className="rounded-md bg-red-500 px-3 py-1 text-xs font-semibold text-white hover:bg-red-400"
+                onClick={confirmBroadcast}
+              >
+                Confirmer
+              </button>
+            </div>
+          </div>
+        </div>
+      ) : null}
     </section>
   );
 
@@ -529,17 +1067,11 @@ export function MessagesPage() {
         xs: { x: 0, y: 0, w: 4, h: 24 }
       },
       variant: "plain",
-      render: () => (
-        <EditableBlock id="messages-main">
-          {pageContent}
-        </EditableBlock>
-      )
+      render: () => <EditableBlock id="messages-main">{pageContent}</EditableBlock>
     }
   ];
 
-  return (
-    <EditablePageLayout pageKey="system:messages" blocks={blocks} className="space-y-6" />
-  );
+  return <EditablePageLayout pageKey="system:messages" blocks={blocks} className="space-y-6" />;
 }
 
 function formatDateTime(value: string): string {

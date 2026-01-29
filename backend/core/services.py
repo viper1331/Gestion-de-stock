@@ -80,6 +80,8 @@ MESSAGE_ARCHIVE_ROOT = db.DATA_DIR / "message_archive"
 
 _MESSAGE_RATE_LIMIT_DEFAULT_COUNT = 5
 _MESSAGE_RATE_LIMIT_DEFAULT_WINDOW_SECONDS = 60
+_MESSAGE_CONTENT_MAX_LENGTH = 2000
+_MESSAGE_IDEMPOTENCY_MAX_LENGTH = 128
 _PASSWORD_RESET_RATE_LIMIT_COUNT = 5
 _PASSWORD_RESET_RATE_LIMIT_WINDOW_SECONDS = 3600
 _PASSWORD_RESET_MIN_LENGTH = 10
@@ -6889,6 +6891,26 @@ def _get_message_rate_limit_settings() -> tuple[int, int]:
     return max_count, window_seconds
 
 
+def _get_message_content_limit() -> int:
+    raw_limit = os.getenv("MESSAGE_MAX_LENGTH")
+    try:
+        limit = int(raw_limit) if raw_limit else _MESSAGE_CONTENT_MAX_LENGTH
+    except ValueError:
+        limit = _MESSAGE_CONTENT_MAX_LENGTH
+    return max(1, limit)
+
+
+def _normalize_idempotency_key(raw_value: str | None) -> str | None:
+    if not raw_value:
+        return None
+    trimmed = raw_value.strip()
+    if not trimmed:
+        return None
+    if len(trimmed) > _MESSAGE_IDEMPOTENCY_MAX_LENGTH:
+        raise ValueError("Clé d'idempotence trop longue")
+    return trimmed
+
+
 def _enforce_message_rate_limit(conn: sqlite3.Connection, sender_username: str) -> None:
     max_count, window_seconds = _get_message_rate_limit_settings()
     now_ts = int(time.time())
@@ -6935,12 +6957,42 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
     ensure_database_ready()
     content = payload.content.strip()
     category = payload.category.strip()
+    idempotency_key = _normalize_idempotency_key(payload.idempotency_key)
+    max_length = _get_message_content_limit()
     if not content:
         raise ValueError("Le contenu du message est requis")
+    if len(content) > max_length:
+        raise ValueError(f"Le message dépasse la limite de {max_length} caractères")
     if not category:
         raise ValueError("La catégorie est requise")
+    if payload.broadcast and sender.role != "admin":
+        raise PermissionError("Diffusion réservée aux administrateurs")
 
     with db.get_users_connection() as conn:
+        if idempotency_key:
+            existing_row = conn.execute(
+                """
+                SELECT id
+                FROM messages
+                WHERE sender_username = ? AND idempotency_key = ?
+                """,
+                (sender.username, idempotency_key),
+            ).fetchone()
+            if existing_row:
+                message_id = int(existing_row["id"])
+                recipients_count = conn.execute(
+                    """
+                    SELECT COUNT(*) AS total
+                    FROM message_recipients
+                    WHERE message_id = ?
+                    """,
+                    (message_id,),
+                ).fetchone()
+                return models.MessageSendResponse(
+                    message_id=message_id,
+                    recipients_count=int(recipients_count["total"] if recipients_count else 0),
+                )
+
         if payload.broadcast:
             cur = conn.execute(
                 """
@@ -6978,14 +7030,40 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
 
         _enforce_message_rate_limit(conn, sender.username)
 
-        cur = conn.execute(
-            """
-            INSERT INTO messages (sender_username, sender_role, category, content)
-            VALUES (?, ?, ?, ?)
-            """,
-            (sender.username, sender.role, category, content),
-        )
-        message_id = int(cur.lastrowid)
+        try:
+            cur = conn.execute(
+                """
+                INSERT INTO messages (sender_username, sender_role, category, content, idempotency_key)
+                VALUES (?, ?, ?, ?, ?)
+                """,
+                (sender.username, sender.role, category, content, idempotency_key),
+            )
+            message_id = int(cur.lastrowid)
+        except sqlite3.IntegrityError:
+            if idempotency_key:
+                existing_row = conn.execute(
+                    """
+                    SELECT id
+                    FROM messages
+                    WHERE sender_username = ? AND idempotency_key = ?
+                    """,
+                    (sender.username, idempotency_key),
+                ).fetchone()
+                if existing_row:
+                    message_id = int(existing_row["id"])
+                    recipients_count = conn.execute(
+                        """
+                        SELECT COUNT(*) AS total
+                        FROM message_recipients
+                        WHERE message_id = ?
+                        """,
+                        (message_id,),
+                    ).fetchone()
+                    return models.MessageSendResponse(
+                        message_id=message_id,
+                        recipients_count=int(recipients_count["total"] if recipients_count else 0),
+                    )
+            raise
         conn.executemany(
             """
             INSERT INTO message_recipients (message_id, recipient_username)
@@ -7039,14 +7117,34 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
 
 
 def list_inbox_messages(
-    user: models.User, *, limit: int = 50, include_archived: bool = False
+    user: models.User,
+    *,
+    limit: int = 50,
+    include_archived: bool = False,
+    archived_only: bool = False,
+    query: str | None = None,
+    category: str | None = None,
+    cursor: int | None = None,
 ) -> list[models.InboxMessage]:
     ensure_database_ready()
     limit_value = max(1, min(limit, 200))
     params: list[object] = [user.username]
-    archive_clause = ""
-    if not include_archived:
-        archive_clause = "AND mr.is_archived = 0"
+    clauses = ["mr.recipient_username = ?", "mr.deleted_at IS NULL"]
+    if archived_only:
+        clauses.append("mr.is_archived = 1")
+    elif not include_archived:
+        clauses.append("mr.is_archived = 0")
+    if query:
+        like_value = f"%{query.strip()}%"
+        if like_value.strip("%"):
+            clauses.append("(m.content LIKE ? OR m.sender_username LIKE ?)")
+            params.extend([like_value, like_value])
+    if category:
+        clauses.append("m.category = ?")
+        params.append(category.strip())
+    if cursor:
+        clauses.append("m.id < ?")
+        params.append(cursor)
     params.append(limit_value)
 
     with db.get_users_connection() as conn:
@@ -7063,9 +7161,8 @@ def list_inbox_messages(
                 mr.is_archived
             FROM message_recipients mr
             JOIN messages m ON m.id = mr.message_id
-            WHERE mr.recipient_username = ?
-            {archive_clause}
-            ORDER BY m.created_at DESC
+            WHERE {" AND ".join(clauses)}
+            ORDER BY m.created_at DESC, m.id DESC
             LIMIT ?
             """,
             params,
@@ -7087,13 +7184,34 @@ def list_inbox_messages(
     ]
 
 
-def list_sent_messages(user: models.User, *, limit: int = 50) -> list[models.SentMessage]:
+def list_sent_messages(
+    user: models.User,
+    *,
+    limit: int = 50,
+    query: str | None = None,
+    category: str | None = None,
+    cursor: int | None = None,
+) -> list[models.SentMessage]:
     ensure_database_ready()
     limit_value = max(1, min(limit, 200))
+    params: list[object] = [user.username]
+    clauses = ["m.sender_username = ?"]
+    if query:
+        like_value = f"%{query.strip()}%"
+        if like_value.strip("%"):
+            clauses.append("m.content LIKE ?")
+            params.append(like_value)
+    if category:
+        clauses.append("m.category = ?")
+        params.append(category.strip())
+    if cursor:
+        clauses.append("m.id < ?")
+        params.append(cursor)
+    params.append(limit_value)
 
     with db.get_users_connection() as conn:
         rows = conn.execute(
-            """
+            f"""
             SELECT
                 m.id,
                 m.category,
@@ -7103,12 +7221,12 @@ def list_sent_messages(user: models.User, *, limit: int = 50) -> list[models.Sen
                 SUM(CASE WHEN mr.read_at IS NOT NULL THEN 1 ELSE 0 END) AS recipients_read
             FROM messages m
             JOIN message_recipients mr ON mr.message_id = m.id
-            WHERE m.sender_username = ?
+            WHERE {" AND ".join(clauses)}
             GROUP BY m.id
-            ORDER BY m.created_at DESC
+            ORDER BY m.created_at DESC, m.id DESC
             LIMIT ?
             """,
-            (user.username, limit_value),
+            params,
         ).fetchall()
 
         if not rows:
@@ -7174,6 +7292,31 @@ def mark_message_read(message_id: int, user: models.User) -> None:
             conn.commit()
 
 
+def mark_message_unread(message_id: int, user: models.User) -> None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, is_read
+            FROM message_recipients
+            WHERE message_id = ? AND recipient_username = ?
+            """,
+            (message_id, user.username),
+        ).fetchone()
+        if not row:
+            raise PermissionError("Accès interdit")
+        if row["is_read"]:
+            conn.execute(
+                """
+                UPDATE message_recipients
+                SET is_read = 0, read_at = NULL
+                WHERE id = ?
+                """,
+                (row["id"],),
+            )
+            conn.commit()
+
+
 def archive_message(message_id: int, user: models.User) -> None:
     ensure_database_ready()
     with db.get_users_connection() as conn:
@@ -7198,6 +7341,58 @@ def archive_message(message_id: int, user: models.User) -> None:
             )
             conn.commit()
             logger.info("[MESSAGE] archive id=%s by=%s", message_id, user.username)
+
+
+def unarchive_message(message_id: int, user: models.User) -> None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, is_archived
+            FROM message_recipients
+            WHERE message_id = ? AND recipient_username = ?
+            """,
+            (message_id, user.username),
+        ).fetchone()
+        if not row:
+            raise PermissionError("Accès interdit")
+        if row["is_archived"]:
+            conn.execute(
+                """
+                UPDATE message_recipients
+                SET is_archived = 0, archived_at = NULL
+                WHERE id = ?
+                """,
+                (row["id"],),
+            )
+            conn.commit()
+            logger.info("[MESSAGE] unarchive id=%s by=%s", message_id, user.username)
+
+
+def delete_message(message_id: int, user: models.User) -> None:
+    ensure_database_ready()
+    with db.get_users_connection() as conn:
+        row = conn.execute(
+            """
+            SELECT id, deleted_at
+            FROM message_recipients
+            WHERE message_id = ? AND recipient_username = ?
+            """,
+            (message_id, user.username),
+        ).fetchone()
+        if not row:
+            raise PermissionError("Accès interdit")
+        if not row["deleted_at"]:
+            conn.execute(
+                """
+                UPDATE message_recipients
+                SET deleted_at = CURRENT_TIMESTAMP
+                WHERE id = ?
+                """,
+                (row["id"],),
+            )
+            conn.commit()
+            logger.info("[MESSAGE] delete id=%s by=%s", message_id, user.username)
 
 
 def _format_archive_timestamp(value: str | None) -> tuple[str, datetime]:
