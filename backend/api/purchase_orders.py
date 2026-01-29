@@ -2,8 +2,9 @@
 from __future__ import annotations
 
 import io
+import logging
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from backend.api.admin import require_admin
@@ -13,6 +14,7 @@ from backend.services.email_sender import EmailSendError
 from backend.services.pdf_config import render_filename, resolve_pdf_config
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 MODULE_KEY = "purchase_orders"
 
@@ -55,12 +57,28 @@ async def refresh_auto_orders(
 async def create_order(
     payload: models.PurchaseOrderCreate,
     user: models.User = Depends(get_current_user),
+    request_id: str | None = Header(None, alias="X-Request-Id"),
+    idempotency_key: str | None = Header(None, alias="Idempotency-Key"),
 ) -> models.PurchaseOrderDetail:
     _require_permission(user, action="edit")
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
     try:
-        return services.create_purchase_order(payload)
+        payload_hash = services.build_purchase_order_payload_hash(
+            payload,
+            created_by=user.id,
+        )
+        logger.info(
+            "[PO] create request request_id=%s user_id=%s payload_hash=%s",
+            request_id,
+            user.id,
+            payload_hash,
+        )
+        return services.create_purchase_order(
+            payload,
+            idempotency_key=idempotency_key,
+            created_by=user.id,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

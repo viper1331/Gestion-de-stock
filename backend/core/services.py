@@ -3473,7 +3473,8 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 status TEXT NOT NULL DEFAULT 'PENDING',
                 created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
                 note TEXT,
-                auto_created INTEGER NOT NULL DEFAULT 0
+                auto_created INTEGER NOT NULL DEFAULT 0,
+                idempotency_key TEXT
             );
             CREATE TABLE IF NOT EXISTS purchase_order_items (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -3486,6 +3487,8 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             );
             CREATE INDEX IF NOT EXISTS idx_purchase_order_items_item ON purchase_order_items(item_id);
             CREATE INDEX IF NOT EXISTS idx_purchase_orders_status ON purchase_orders(status);
+            CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_orders_idempotency_key
+            ON purchase_orders(idempotency_key);
             CREATE TABLE IF NOT EXISTS purchase_suggestions (
                 id INTEGER PRIMARY KEY AUTOINCREMENT,
                 site_key TEXT NOT NULL,
@@ -3517,7 +3520,15 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
             ON purchase_suggestions(site_key, module_key, supplier_id, status);
             CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_suggestion_lines_item
             ON purchase_suggestion_lines(suggestion_id, item_id);
-        """
+            """
+        )
+
+        purchase_order_info = execute("PRAGMA table_info(purchase_orders)").fetchall()
+        purchase_order_columns = {row["name"] for row in purchase_order_info}
+        if "idempotency_key" not in purchase_order_columns:
+            execute("ALTER TABLE purchase_orders ADD COLUMN idempotency_key TEXT")
+        execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_purchase_orders_idempotency_key ON purchase_orders(idempotency_key)"
         )
         execute(
             """
@@ -9981,7 +9992,99 @@ def unarchive_purchase_order(
     return get_purchase_order(order_id)
 
 
-def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.PurchaseOrderDetail:
+def _normalize_purchase_order_payload(
+    payload: models.PurchaseOrderCreate,
+    *,
+    status: str,
+    created_by: int | None,
+    date_bucket: str,
+) -> dict[str, object]:
+    normalized_lines = []
+    for line in payload.items:
+        line_type = (line.line_type or "standard").strip().lower()
+        normalized_lines.append(
+            {
+                "item_id": line.item_id,
+                "quantity_ordered": line.quantity_ordered,
+                "line_type": line_type,
+                "beneficiary_employee_id": line.beneficiary_employee_id,
+                "return_expected": bool(line.return_expected),
+                "return_reason": line.return_reason.strip() if line.return_reason else None,
+                "return_employee_item_id": line.return_employee_item_id,
+                "target_dotation_id": line.target_dotation_id,
+                "return_qty": line.return_qty,
+            }
+        )
+    normalized_lines.sort(
+        key=lambda item: (
+            item["item_id"],
+            item["quantity_ordered"],
+            item["line_type"],
+            item["beneficiary_employee_id"] or 0,
+            item["return_expected"],
+            item["return_reason"] or "",
+            item["return_employee_item_id"] or 0,
+            item["target_dotation_id"] or 0,
+            item["return_qty"] or 0,
+        )
+    )
+    return {
+        "site_key": db.get_current_site_key(),
+        "supplier_id": payload.supplier_id,
+        "status": status,
+        "created_by": created_by,
+        "date_bucket": date_bucket,
+        "items": normalized_lines,
+    }
+
+
+def build_purchase_order_payload_hash(
+    payload: models.PurchaseOrderCreate,
+    *,
+    created_by: int | None,
+    date_bucket: str | None = None,
+    status: str | None = None,
+) -> str:
+    normalized_status = _normalize_purchase_order_status(status or payload.status)
+    bucket = date_bucket or datetime.now(timezone.utc).date().isoformat()
+    normalized = _normalize_purchase_order_payload(
+        payload,
+        status=normalized_status,
+        created_by=created_by,
+        date_bucket=bucket,
+    )
+    serialized = json.dumps(normalized, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def build_purchase_order_idempotency_key(
+    payload: models.PurchaseOrderCreate,
+    *,
+    created_by: int | None,
+    idempotency_key: str | None = None,
+    date_bucket: str | None = None,
+    status: str | None = None,
+) -> str | None:
+    if idempotency_key:
+        return idempotency_key
+    if created_by is None:
+        return None
+    if payload.supplier_id is None:
+        return None
+    return build_purchase_order_payload_hash(
+        payload,
+        created_by=created_by,
+        date_bucket=date_bucket,
+        status=status,
+    )
+
+
+def create_purchase_order(
+    payload: models.PurchaseOrderCreate,
+    *,
+    idempotency_key: str | None = None,
+    created_by: int | None = None,
+) -> models.PurchaseOrderDetail:
     ensure_database_ready()
     status = _normalize_purchase_order_status(payload.status)
     if not payload.items:
@@ -9995,14 +10098,57 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
             )
             if supplier_cur.fetchone() is None:
                 raise ValueError("Fournisseur introuvable")
-        try:
-            cur = conn.execute(
-                """
-                INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
-                VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
-                """,
-                (payload.supplier_id, status, payload.note),
+        has_idempotency_key = _table_has_column(conn, "purchase_orders", "idempotency_key")
+        effective_idempotency_key = None
+        if has_idempotency_key:
+            effective_idempotency_key = build_purchase_order_idempotency_key(
+                payload,
+                created_by=created_by,
+                idempotency_key=idempotency_key,
+                status=status,
             )
+            if effective_idempotency_key:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM purchase_orders
+                    WHERE idempotency_key = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (effective_idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    logger.info(
+                        "[PO] duplicate create detected idempotency_key=%s order_id=%s",
+                        effective_idempotency_key,
+                        existing["id"],
+                    )
+                    return get_purchase_order(existing["id"])
+        try:
+            if has_idempotency_key:
+                cur = conn.execute(
+                    """
+                    INSERT INTO purchase_orders (
+                        supplier_id,
+                        status,
+                        note,
+                        auto_created,
+                        created_at,
+                        idempotency_key
+                    )
+                    VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP, ?)
+                    """,
+                    (payload.supplier_id, status, payload.note, effective_idempotency_key),
+                )
+            else:
+                cur = conn.execute(
+                    """
+                    INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+                    VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
+                    """,
+                    (payload.supplier_id, status, payload.note),
+                )
             order_id = cur.lastrowid
             has_line_sku = _table_has_column(conn, "purchase_order_items", "sku")
             has_line_unit = _table_has_column(conn, "purchase_order_items", "unit")
@@ -10131,6 +10277,28 @@ def create_purchase_order(payload: models.PurchaseOrderCreate) -> models.Purchas
                     values,
                 )
             conn.commit()
+        except sqlite3.IntegrityError as exc:
+            if has_idempotency_key and effective_idempotency_key:
+                existing = conn.execute(
+                    """
+                    SELECT id
+                    FROM purchase_orders
+                    WHERE idempotency_key = ?
+                    ORDER BY id DESC
+                    LIMIT 1
+                    """,
+                    (effective_idempotency_key,),
+                ).fetchone()
+                if existing is not None:
+                    conn.rollback()
+                    logger.info(
+                        "[PO] idempotency conflict resolved idempotency_key=%s order_id=%s",
+                        effective_idempotency_key,
+                        existing["id"],
+                    )
+                    return get_purchase_order(existing["id"])
+            conn.rollback()
+            raise
         except Exception:
             conn.rollback()
             raise
