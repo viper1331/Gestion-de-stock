@@ -699,6 +699,62 @@ def _assert_purchase_order_archivable(status: str) -> None:
         raise ValueError("Seuls les bons de commande reçus peuvent être archivés")
 
 
+def _has_latest_nonconforming_receipt(order: models.PurchaseOrderDetail) -> bool:
+    latest_by_line: dict[int, models.PurchaseOrderReceipt] = {}
+    for receipt in order.receipts:
+        existing = latest_by_line.get(receipt.purchase_order_line_id)
+        if existing is None:
+            latest_by_line[receipt.purchase_order_line_id] = receipt
+            continue
+        existing_time = _coerce_datetime(existing.created_at)
+        receipt_time = _coerce_datetime(receipt.created_at)
+        if receipt_time > existing_time or (
+            receipt_time == existing_time and receipt.id > existing.id
+        ):
+            latest_by_line[receipt.purchase_order_line_id] = receipt
+    return any(
+        receipt.conformity_status == "non_conforme"
+        for receipt in latest_by_line.values()
+    )
+
+
+def _has_blocking_supplier_return(order: models.PurchaseOrderDetail) -> bool:
+    blocking_statuses = {"to_prepare", "shipped"}
+    if any(
+        (item.return_status or "none") in blocking_statuses for item in order.items
+    ):
+        return True
+    return any(
+        supplier_return.status in {"prepared", "shipped"}
+        for supplier_return in order.supplier_returns
+    )
+
+
+def _assert_purchase_order_archivable_detail(
+    order: models.PurchaseOrderDetail,
+) -> None:
+    _assert_purchase_order_archivable(order.status)
+    pending_assignments = [
+        assignment
+        for assignment in order.pending_assignments
+        if assignment.status == "pending"
+    ]
+    if pending_assignments:
+        raise ValueError("Des attributions sont encore en attente de validation")
+    if _has_blocking_supplier_return(order):
+        raise ValueError("Un retour fournisseur est encore en cours")
+    has_nonconformity_history = any(
+        receipt.conformity_status == "non_conforme" for receipt in order.receipts
+    ) or bool(order.nonconformities)
+    if has_nonconformity_history:
+        if order.replacement_flow_status != "closed":
+            raise ValueError("La demande de remplacement doit être clôturée avant archivage")
+        if not order.replacement_assignment_completed:
+            raise ValueError("L'attribution doit être validée avant archivage")
+        if _has_latest_nonconforming_receipt(order):
+            raise ValueError("La réception conforme finale est attendue avant archivage")
+
+
 def _get_purchase_suggestions_safety_buffer() -> int:
     config = system_config.get_config()
     raw = config.extra.get("purchase_suggestions_safety_buffer", 0)
@@ -9945,16 +10001,11 @@ def archive_purchase_order(
     archived_by: int | None = None,
 ) -> models.PurchaseOrderDetail:
     ensure_database_ready()
+    order = get_purchase_order(order_id)
+    if order.is_archived:
+        return order
+    _assert_purchase_order_archivable_detail(order)
     with db.get_stock_connection() as conn:
-        row = conn.execute(
-            "SELECT status, is_archived FROM purchase_orders WHERE id = ?",
-            (order_id,),
-        ).fetchone()
-        if row is None:
-            raise ValueError("Bon de commande introuvable")
-        if _row_get(row, "is_archived"):
-            return get_purchase_order(order_id)
-        _assert_purchase_order_archivable(row["status"])
         conn.execute(
             """
             UPDATE purchase_orders

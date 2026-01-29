@@ -335,6 +335,9 @@ const STATUS_BADGE_LABELS: Record<PrimaryOrderStatus, { label: string; tone: "su
   }
 };
 
+const BLOCKING_RETURN_STATUSES = new Set(["to_prepare", "shipped"]);
+const BLOCKING_SUPPLIER_RETURN_STATUSES = new Set(["prepared", "shipped"]);
+
 
 interface DraftLine {
   itemId: number | "";
@@ -347,6 +350,64 @@ interface DraftLine {
   targetDotationId?: number | "";
   returnQty?: number;
 }
+
+const hasBlockingReturnInProgress = (order: PurchaseOrderDetail) =>
+  order.items.some((item) =>
+    BLOCKING_RETURN_STATUSES.has(item.return_status ?? "none")
+  ) ||
+  (order.supplier_returns ?? []).some((supplierReturn) =>
+    BLOCKING_SUPPLIER_RETURN_STATUSES.has(supplierReturn.status)
+  );
+
+const hasNonConformityHistory = (order: PurchaseOrderDetail) =>
+  (order.receipts ?? []).some(
+    (receipt) => receipt.conformity_status === "non_conforme"
+  ) || (order.nonconformities ?? []).length > 0;
+
+const resolveArchiveEligibility = ({
+  order,
+  outstanding,
+  pendingAssignments,
+  canManageOrders,
+  hasNonConformingLatestReceipt
+}: {
+  order: PurchaseOrderDetail;
+  outstanding: Array<{ line_id: number; qty: number }>;
+  pendingAssignments: PendingClothingAssignment[];
+  canManageOrders: boolean;
+  hasNonConformingLatestReceipt: boolean;
+}) => {
+  const replacementClosed = order.replacement_flow_status === "closed";
+  const replacementAssignmentCompleted = Boolean(order.replacement_assignment_completed);
+  const nonConformityResolved =
+    !hasNonConformityHistory(order) ||
+    (replacementClosed &&
+      replacementAssignmentCompleted &&
+      !hasNonConformingLatestReceipt);
+  const hasBlockingReturn = hasBlockingReturnInProgress(order);
+  const isOrderReceived = order.status === "RECEIVED";
+  const readyForArchive = isOrderReceived && outstanding.length === 0;
+  const showArchiveButton = canManageOrders && isOrderReceived;
+  const canArchive =
+    canManageOrders &&
+    readyForArchive &&
+    pendingAssignments.length === 0 &&
+    nonConformityResolved &&
+    !hasBlockingReturn;
+  let tooltip: string | undefined;
+  if (showArchiveButton && !canArchive) {
+    if (!readyForArchive) {
+      tooltip = "Réception en attente : réceptionnez toutes les quantités avant archivage.";
+    } else if (pendingAssignments.length > 0 || !replacementAssignmentCompleted) {
+      tooltip = "Attribution en attente : validez avant archivage.";
+    } else if (hasBlockingReturn) {
+      tooltip = "Retour fournisseur en cours";
+    } else if (!nonConformityResolved) {
+      tooltip = "Remplacement en cours / clôturer la demande avant archivage";
+    }
+  }
+  return { canArchive, showArchiveButton, tooltip };
+};
 
 const buildPurchaseOrderTimeline = (order: PurchaseOrderDetail): TimelineEvent[] => {
   const events: TimelineEvent[] = [];
@@ -1724,12 +1785,13 @@ export function PurchaseOrdersPanel({
       hasNonConformingLatestReceipt &&
       sentReplacementOrders.length > 0 &&
       !isReplacementReceptionLocked;
-    const canArchive =
-      canManageOrders &&
-      order.status === "RECEIVED" &&
-      outstanding.length === 0 &&
-      !hasNonConformingLatestReceipt &&
-      pendingAssignments.length === 0;
+    const archiveEligibility = resolveArchiveEligibility({
+      order,
+      outstanding,
+      pendingAssignments,
+      canManageOrders,
+      hasNonConformingLatestReceipt
+    });
     let primaryStatus: PrimaryOrderStatus = "CONFORME";
     if (isArchived) {
       primaryStatus = "ARCHIVE";
@@ -1759,7 +1821,7 @@ export function PurchaseOrdersPanel({
       primaryActionKey = "receive_all";
     } else if (canSendEmail && order.status !== "RECEIVED") {
       primaryActionKey = "send_supplier";
-    } else if (canArchive) {
+    } else if (archiveEligibility.canArchive) {
       primaryActionKey = "archive";
     }
     const receiveAllLabel = canFinalizeNonconformity ? "Valider conforme" : "Réceptionner tout";
@@ -2276,14 +2338,16 @@ export function PurchaseOrdersPanel({
                     );
                   })()
                 : null}
-              {canArchive ? (
+              {archiveEligibility.showArchiveButton ? (
                 <button
                   type="button"
                   onClick={() => handleOpenArchiveModal(order)}
+                  disabled={!archiveEligibility.canArchive}
+                  title={archiveEligibility.tooltip}
                   className={resolveActionClass(
                     "archive",
                     "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400",
-                    "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
+                    "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
                   )}
                 >
                   Archiver
@@ -2588,12 +2652,13 @@ export function PurchaseOrdersPanel({
                     hasNonConformingLatestReceipt &&
                     sentReplacementOrders.length > 0 &&
                     !isReplacementReceptionLocked;
-                  const canArchive =
-                    canManageOrders &&
-                    order.status === "RECEIVED" &&
-                    outstanding.length === 0 &&
-                    !hasNonConformingLatestReceipt &&
-                    pendingAssignments.length === 0;
+                  const archiveEligibility = resolveArchiveEligibility({
+                    order,
+                    outstanding,
+                    pendingAssignments,
+                    canManageOrders,
+                    hasNonConformingLatestReceipt
+                  });
                   const replacementAssignmentCompleted = Boolean(
                     order.replacement_assignment_completed
                   );
@@ -2637,7 +2702,7 @@ export function PurchaseOrdersPanel({
                     primaryActionKey = "receive_all";
                   } else if (canSendEmail && order.status !== "RECEIVED") {
                     primaryActionKey = "send_supplier";
-                  } else if (canArchive) {
+                  } else if (archiveEligibility.canArchive) {
                     primaryActionKey = "archive";
                   }
                   const resolveActionClass = (key: string, primary: string, secondary: string) =>
@@ -3177,18 +3242,20 @@ export function PurchaseOrdersPanel({
                                     );
                                   })()
                                 : null}
-                              {canArchive ? (
-                                <button
-                                  type="button"
-                                  onClick={() => handleOpenArchiveModal(order)}
-                                  className={resolveActionClass(
-                                    "archive",
-                                    "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400",
-                                    "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10"
-                                  )}
-                                >
-                                  Archiver
-                                </button>
+              {archiveEligibility.showArchiveButton ? (
+                <button
+                  type="button"
+                  onClick={() => handleOpenArchiveModal(order)}
+                  disabled={!archiveEligibility.canArchive}
+                  title={archiveEligibility.tooltip}
+                  className={resolveActionClass(
+                    "archive",
+                    "rounded bg-amber-500 px-3 py-1 text-xs font-semibold text-white hover:bg-amber-400",
+                    "rounded border border-amber-400/60 px-3 py-1 text-xs font-semibold text-amber-200 hover:bg-amber-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  )}
+                >
+                  Archiver
+                </button>
                               ) : null}
                               {user?.role === "admin" ? (
                                 <button
