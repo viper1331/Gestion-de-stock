@@ -6965,9 +6965,6 @@ def send_message(payload: models.MessageSendRequest, sender: models.User) -> mod
         raise ValueError(f"Le message dépasse la limite de {max_length} caractères")
     if not category:
         raise ValueError("La catégorie est requise")
-    if payload.broadcast and sender.role != "admin":
-        raise PermissionError("Diffusion réservée aux administrateurs")
-
     with db.get_users_connection() as conn:
         if idempotency_key:
             existing_row = conn.execute(
