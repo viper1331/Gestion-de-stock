@@ -418,10 +418,134 @@ def test_receipt_summaries_include_conforme_and_non_conforme() -> None:
         ),
         created_by="tester",
     )
+
+
+def test_close_replacement_requires_sent_request() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Veste", sku="HAB-016")
+        order_cur = conn.execute(
+            """
+            INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+            VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
+            """,
+            (None, "ORDERED", None),
+        )
+        conn.execute(
+            """
+            INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered, quantity_received)
+            VALUES (?, ?, ?, 0)
+            """,
+            (order_cur.lastrowid, item_id, 1),
+        )
+        conn.commit()
+        order_id = int(order_cur.lastrowid)
+        line_id = conn.execute(
+            "SELECT id FROM purchase_order_items WHERE purchase_order_id = ?",
+            (order_id,),
+        ).fetchone()["id"]
+    services.receive_purchase_order_line(
+        order_id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=line_id,
+            received_qty=1,
+            conformity_status="non_conforme",
+            nonconformity_reason="Abîmé",
+        ),
+        created_by="tester",
+    )
+    with db.get_stock_connection() as conn:
+        receipt_row = conn.execute(
+            """
+            SELECT id
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ? AND purchase_order_line_id = ?
+            """,
+            (order_id, line_id),
+        ).fetchone()
+        assert receipt_row is not None
+        receipt_id = int(receipt_row["id"])
+    services.request_purchase_order_replacement(
+        order_id,
+        models.PurchaseOrderReplacementRequest(line_id=line_id, receipt_id=receipt_id),
+        requested_by="tester",
+    )
+    with pytest.raises(ValueError, match="doit être envoyée"):
+        services.close_purchase_order_replacement(order_id, closed_by="tester")
+
+
+def test_close_replacement_unlocks_reception() -> None:
+    _reset_stock_tables()
+    with db.get_stock_connection() as conn:
+        item_id = _create_item(conn, name="Chaussure", sku="HAB-017")
+        order_cur = conn.execute(
+            """
+            INSERT INTO purchase_orders (supplier_id, status, note, auto_created, created_at)
+            VALUES (?, ?, ?, 0, CURRENT_TIMESTAMP)
+            """,
+            (None, "ORDERED", None),
+        )
+        conn.execute(
+            """
+            INSERT INTO purchase_order_items (purchase_order_id, item_id, quantity_ordered, quantity_received)
+            VALUES (?, ?, ?, 0)
+            """,
+            (order_cur.lastrowid, item_id, 1),
+        )
+        conn.commit()
+        order_id = int(order_cur.lastrowid)
+        line_id = conn.execute(
+            "SELECT id FROM purchase_order_items WHERE purchase_order_id = ?",
+            (order_id,),
+        ).fetchone()["id"]
+    services.receive_purchase_order_line(
+        order_id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=line_id,
+            received_qty=1,
+            conformity_status="non_conforme",
+            nonconformity_reason="Défaut",
+        ),
+        created_by="tester",
+    )
+    with db.get_stock_connection() as conn:
+        receipt_row = conn.execute(
+            """
+            SELECT id
+            FROM purchase_order_receipts
+            WHERE purchase_order_id = ? AND purchase_order_line_id = ?
+            """,
+            (order_id, line_id),
+        ).fetchone()
+        assert receipt_row is not None
+        receipt_id = int(receipt_row["id"])
+    services.request_purchase_order_replacement(
+        order_id,
+        models.PurchaseOrderReplacementRequest(line_id=line_id, receipt_id=receipt_id),
+        requested_by="tester",
+    )
+    with db.get_stock_connection() as conn:
+        conn.execute(
+            "UPDATE purchase_orders SET replacement_sent_at = CURRENT_TIMESTAMP WHERE id = ?",
+            (order_id,),
+        )
+        conn.commit()
+    order = services.close_purchase_order_replacement(order_id, closed_by="tester")
+    assert order.replacement_closed_at is not None
+    assert order.replacement_closed_by == "tester"
+    services.receive_purchase_order_line(
+        order_id,
+        models.PurchaseOrderReceiveLinePayload(
+            purchase_order_line_id=line_id,
+            received_qty=1,
+            conformity_status="conforme",
+        ),
+        created_by="tester",
+    )
     order = services.get_purchase_order(order_id)
     assert order.items
     line = order.items[0]
-    assert line.received_conforme_qty == 2
+    assert line.received_conforme_qty == 1
     assert line.received_non_conforme_qty == 1
 
 

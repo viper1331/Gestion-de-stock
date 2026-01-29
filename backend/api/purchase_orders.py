@@ -298,6 +298,28 @@ async def request_replacement_order(
 
 
 @router.post(
+    "/{order_id}/replacement/close",
+    response_model=models.PurchaseOrderDetail,
+)
+async def close_replacement(
+    order_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.PurchaseOrderDetail:
+    _require_permission(user, action="edit")
+    if user.role != "admin":
+        raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+    try:
+        return services.close_purchase_order_replacement(
+            order_id,
+            closed_by=user.email or user.username,
+        )
+    except ValueError as exc:
+        message = str(exc)
+        status = 404 if "introuvable" in message.lower() else 400
+        raise HTTPException(status_code=status, detail=message) from exc
+
+
+@router.post(
     "/{order_id}/pending-assignments/{pending_id}/validate",
     response_model=models.PendingClothingAssignment,
 )

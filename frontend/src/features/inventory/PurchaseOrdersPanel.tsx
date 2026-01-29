@@ -167,6 +167,9 @@ interface PurchaseOrderDetail {
   replacement_flow_open?: boolean;
   replacement_lock_reception?: boolean;
   replacement_assignment_completed?: boolean;
+  replacement_sent_at?: string | null;
+  replacement_closed_at?: string | null;
+  replacement_closed_by?: string | null;
   parent_id?: number | null;
   replacement_for_line_id?: number | null;
   kind?: "standard" | "replacement_request";
@@ -395,6 +398,16 @@ const buildPurchaseOrderTimeline = (order: PurchaseOrderDetail): TimelineEvent[]
     });
   });
 
+  if (order.replacement_closed_at) {
+    events.push({
+      id: `replacement-closed-${order.id}-${order.replacement_closed_at}`,
+      type: "REMPLACEMENT_CLOTURE",
+      date: order.replacement_closed_at,
+      user: order.replacement_closed_by,
+      message: "Demande de remplacement clôturée."
+    });
+  }
+
   if (order.kind === "replacement_request" && order.status === "RECEIVED") {
     events.push({
       id: `replacement-received-${order.id}`,
@@ -484,6 +497,8 @@ export function PurchaseOrdersPanel({
   const [receiveModalOrder, setReceiveModalOrder] = useState<PurchaseOrderDetail | null>(null);
   const [finalizeModalData, setFinalizeModalData] =
     useState<FinalizeNonconformityModalData | null>(null);
+  const [closeReplacementOrder, setCloseReplacementOrder] =
+    useState<PurchaseOrderDetail | null>(null);
   const [archiveModalOrder, setArchiveModalOrder] = useState<PurchaseOrderDetail | null>(null);
   const [archiveFilter, setArchiveFilter] = useState<"active" | "archived">("active");
   const [receiveQuantities, setReceiveQuantities] = useState<Record<number, number>>({});
@@ -1051,6 +1066,31 @@ export function PurchaseOrdersPanel({
     }
   });
 
+  const closeReplacement = useMutation<
+    PurchaseOrderDetail,
+    AxiosError<ApiErrorResponse>,
+    { orderId: number }
+  >({
+    mutationFn: async ({ orderId }) => {
+      const response = await api.post<PurchaseOrderDetail>(
+        `${purchaseOrdersPath}/${orderId}/replacement/close`
+      );
+      return response.data;
+    },
+    onSuccess: async () => {
+      setMessage("Demande de remplacement clôturée.");
+      setCloseReplacementOrder(null);
+      await queryClient.invalidateQueries({ queryKey: ordersCacheKey });
+    },
+    onError: (mutationError) => {
+      const detail = mutationError.response?.data?.detail;
+      setError(detail ?? "Impossible de clôturer la demande de remplacement.");
+    },
+    onSettled: () => {
+      window.setTimeout(() => setMessage(null), 4000);
+    }
+  });
+
   const finalizeNonconformity = useMutation<
     PurchaseOrderDetail,
     AxiosError<ApiErrorResponse>,
@@ -1532,6 +1572,15 @@ export function PurchaseOrdersPanel({
     setArchiveModalOrder(null);
   };
 
+  const handleOpenCloseReplacement = (order: PurchaseOrderDetail) => {
+    setError(null);
+    setCloseReplacementOrder(order);
+  };
+
+  const handleCloseReplacementModal = () => {
+    setCloseReplacementOrder(null);
+  };
+
   const handleConfirmArchive = () => {
     if (!archiveModalOrder) {
       return;
@@ -1578,7 +1627,10 @@ export function PurchaseOrdersPanel({
         };
       })
       .filter((line): line is { line_id: number; qty: number } => line !== null);
-    const canReceive = outstanding.length > 0 && !isReadOnly;
+    const isReplacementReceptionLocked = Boolean(order.replacement_lock_reception);
+    const replacementLockTooltip =
+      "Réception verrouillée : demande de remplacement en cours.";
+    const canReceive = outstanding.length > 0 && !isReadOnly && !isReplacementReceptionLocked;
     const receiptsByLine = new Map<number, PurchaseOrderReceipt[]>();
     (order.receipts ?? []).forEach((receipt) => {
       const existing = receiptsByLine.get(receipt.purchase_order_line_id) ?? [];
@@ -1635,10 +1687,16 @@ export function PurchaseOrdersPanel({
           .map((line) => line.reason)
           .join(", ")}`
       : "Motif non-conformité : non renseigné";
+    const replacementFlowStatus = order.replacement_flow_status ?? "none";
+    const replacementClosed = replacementFlowStatus === "closed";
+    const replacementSent =
+      Boolean(order.replacement_sent_at) || sentReplacementOrders.length > 0;
+    const showCloseReplacement = hasNonConformingLatestReceipt && replacementSent && !replacementClosed;
     const canFinalizeNonconformity =
       enableReplacementFlow &&
       hasNonConformingLatestReceipt &&
-      sentReplacementOrders.length > 0;
+      sentReplacementOrders.length > 0 &&
+      !isReplacementReceptionLocked;
     const canArchive =
       canManageOrders &&
       order.status === "RECEIVED" &&
@@ -1838,11 +1896,13 @@ export function PurchaseOrdersPanel({
                               const canSendReplacement =
                                 replacementOrder.status === "PENDING" ||
                                 replacementOrder.status === "ORDERED";
+                              const wasSent = Boolean(replacementOrder.last_sent_at);
                               const supplierState =
                                 getSupplierSendState(replacementOrder);
                               if (
                                 !canManageOrders ||
                                 !canSendReplacement ||
+                                wasSent ||
                                 !supplierState.canSend ||
                                 isReadOnly
                               ) {
@@ -1868,6 +1928,18 @@ export function PurchaseOrdersPanel({
                                 </button>
                               );
                             })()}
+                            {canManageOrders && showCloseReplacement && !isReadOnly ? (
+                              <button
+                                type="button"
+                                onClick={() => handleOpenCloseReplacement(order)}
+                                disabled={closeReplacement.isPending}
+                                className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                              >
+                                {closeReplacement.isPending
+                                  ? "Clôture..."
+                                  : "Clôturer la demande de remplacement"}
+                              </button>
+                            ) : null}
                           </div>
                         </div>
                       ) : null}
@@ -1893,8 +1965,14 @@ export function PurchaseOrdersPanel({
           );
         })}
         {hasNonConformingLatestReceipt ? (
-          <li className="pt-2 text-[11px] text-rose-300">
-            Réception non conforme : aucune attribution possible.
+          <li
+            className={`pt-2 text-[11px] ${
+              replacementClosed ? "text-emerald-200" : "text-rose-300"
+            }`}
+          >
+            {replacementClosed
+              ? "Remplacement clôturé — vous pouvez réceptionner en conforme pour valider l’attribution."
+              : "Réception non conforme : aucune attribution possible."}
           </li>
         ) : conformingPendingAssignments.length > 0 ? (
           <li className="space-y-2 pt-2">
@@ -2066,7 +2144,9 @@ export function PurchaseOrdersPanel({
                   "rounded border border-emerald-500/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
                 )}
                 title={
-                  canReceive
+                  isReplacementReceptionLocked
+                    ? replacementLockTooltip
+                    : canReceive
                     ? "Enregistrer la réception des quantités restantes"
                     : "Toutes les quantités ont été réceptionnées"
                 }
@@ -2082,6 +2162,7 @@ export function PurchaseOrdersPanel({
                   "rounded bg-slate-700 px-3 py-1 text-xs font-semibold text-white hover:bg-slate-600 disabled:cursor-not-allowed disabled:opacity-60",
                   "rounded border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
                 )}
+                title={isReplacementReceptionLocked ? replacementLockTooltip : undefined}
               >
                 Réception partielle
               </button>
@@ -2097,7 +2178,10 @@ export function PurchaseOrdersPanel({
               >
                 Modifier
               </button>
-              {canManageOrders && hasNonConformingLatestReceipt && replacementToSend
+              {canManageOrders &&
+              hasNonConformingLatestReceipt &&
+              replacementToSend &&
+              !showCloseReplacement
                 ? (() => {
                     const supplierState =
                       getSupplierSendState(replacementToSend);
@@ -2128,6 +2212,23 @@ export function PurchaseOrdersPanel({
                     );
                   })()
                 : null}
+              {canManageOrders && showCloseReplacement && !isReadOnly ? (
+                <button
+                  type="button"
+                  onClick={() => handleOpenCloseReplacement(order)}
+                  disabled={closeReplacement.isPending}
+                  className={resolveActionClass(
+                    "close_replacement",
+                    "rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60",
+                    "rounded border border-emerald-400/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                  )}
+                  title="Clôturer la demande de remplacement"
+                >
+                  {closeReplacement.isPending
+                    ? "Clôture..."
+                    : "Clôturer la demande de remplacement"}
+                </button>
+              ) : null}
               {canSendEmail && order.status !== "RECEIVED"
                 ? (() => {
                     const supplierState = getSupplierSendState(order);
@@ -2470,8 +2571,15 @@ export function PurchaseOrdersPanel({
                     order.replacement_assignment_completed
                   );
                   const replacementFlowStatus = order.replacement_flow_status ?? "none";
+                  const replacementClosed = replacementFlowStatus === "closed";
+                  const replacementSent =
+                    Boolean(order.replacement_sent_at) || sentReplacementOrders.length > 0;
+                  const showCloseReplacement =
+                    hasNonConformingLatestReceipt && replacementSent && !replacementClosed;
                   const showReplacementCompleteMessage =
                     replacementFlowStatus === "closed" && replacementAssignmentCompleted;
+                  const showReplacementClosedMessage =
+                    replacementFlowStatus === "closed" && hasNonConformingLatestReceipt;
                   const showReplacementLockMessage = isReplacementReceptionLocked;
                   let primaryStatus: PrimaryOrderStatus = "CONFORME";
                   if (isArchived) {
@@ -2692,11 +2800,13 @@ export function PurchaseOrdersPanel({
                                             const canSendReplacement =
                                               replacementOrder.status === "PENDING" ||
                                               replacementOrder.status === "ORDERED";
+                                            const wasSent = Boolean(replacementOrder.last_sent_at);
                                             const supplierState =
                                               getSupplierSendState(replacementOrder);
                                             if (
                                               !canManageOrders ||
                                               !canSendReplacement ||
+                                              wasSent ||
                                               !supplierState.canSend ||
                                               isReadOnly
                                             ) {
@@ -2722,6 +2832,18 @@ export function PurchaseOrdersPanel({
                                               </button>
                                             );
                                           })()}
+                                          {canManageOrders && showCloseReplacement && !isReadOnly ? (
+                                            <button
+                                              type="button"
+                                              onClick={() => handleOpenCloseReplacement(order)}
+                                              disabled={closeReplacement.isPending}
+                                              className="rounded bg-emerald-500 px-2 py-1 text-[11px] font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
+                                            >
+                                              {closeReplacement.isPending
+                                                ? "Clôture..."
+                                                : "Clôturer la demande de remplacement"}
+                                            </button>
+                                          ) : null}
                                         </div>
                                       </div>
                                         ) : null}
@@ -2753,6 +2875,11 @@ export function PurchaseOrdersPanel({
                           {showReplacementCompleteMessage ? (
                             <li className="pt-2 text-[11px] text-emerald-200">
                               Réception conforme : attribution validée.
+                            </li>
+                          ) : showReplacementClosedMessage ? (
+                            <li className="pt-2 text-[11px] text-emerald-200">
+                              Remplacement clôturé — vous pouvez réceptionner en conforme pour
+                              valider l’attribution.
                             </li>
                           ) : showReplacementLockMessage || hasNonConformingLatestReceipt ? (
                             <li className="pt-2 text-[11px] text-rose-300">
@@ -2952,7 +3079,10 @@ export function PurchaseOrdersPanel({
                               >
                                 Modifier
                               </button>
-                              {canManageOrders && hasNonConformingLatestReceipt && replacementToSend
+                              {canManageOrders &&
+                              hasNonConformingLatestReceipt &&
+                              replacementToSend &&
+                              !showCloseReplacement
                                 ? (() => {
                                     const supplierState =
                                       getSupplierSendState(replacementToSend);
@@ -2983,6 +3113,23 @@ export function PurchaseOrdersPanel({
                                     );
                                   })()
                                 : null}
+                              {canManageOrders && showCloseReplacement && !isReadOnly ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOpenCloseReplacement(order)}
+                                  disabled={closeReplacement.isPending}
+                                  className={resolveActionClass(
+                                    "close_replacement",
+                                    "rounded bg-emerald-500 px-3 py-1 text-xs font-semibold text-white hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60",
+                                    "rounded border border-emerald-400/60 px-3 py-1 text-xs font-semibold text-emerald-200 hover:bg-emerald-500/10 disabled:cursor-not-allowed disabled:opacity-60"
+                                  )}
+                                  title="Clôturer la demande de remplacement"
+                                >
+                                  {closeReplacement.isPending
+                                    ? "Clôture..."
+                                    : "Clôturer la demande de remplacement"}
+                                </button>
+                              ) : null}
                               {canSendEmail && order.status !== "RECEIVED"
                                 ? (() => {
                                     const supplierState = getSupplierSendState(order);
@@ -3568,6 +3715,44 @@ export function PurchaseOrdersPanel({
               className="rounded-md bg-amber-500 px-3 py-2 text-xs font-semibold text-white hover:bg-amber-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {archiveOrder.isPending ? "Archivage..." : "Archiver"}
+            </button>
+          </div>
+        </div>
+      </DraggableModal>
+
+      <DraggableModal
+        open={Boolean(closeReplacementOrder)}
+        title={
+          closeReplacementOrder
+            ? `Clôturer la demande de remplacement · BC #${closeReplacementOrder.id}`
+            : "Clôturer la demande de remplacement"
+        }
+        onClose={handleCloseReplacementModal}
+      >
+        <div className="space-y-4 text-sm text-slate-200">
+          <p>
+            Confirmer la clôture ? Vous pourrez ensuite finaliser la réception conforme et
+            l’attribution.
+          </p>
+          <div className="flex justify-end gap-2">
+            <button
+              type="button"
+              onClick={handleCloseReplacementModal}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              Annuler
+            </button>
+            <button
+              type="button"
+              onClick={() =>
+                closeReplacementOrder
+                  ? closeReplacement.mutate({ orderId: closeReplacementOrder.id })
+                  : null
+              }
+              disabled={!closeReplacementOrder || closeReplacement.isPending}
+              className="rounded-md bg-emerald-600 px-3 py-2 text-xs font-semibold text-white hover:bg-emerald-500 disabled:cursor-not-allowed disabled:opacity-60"
+            >
+              {closeReplacement.isPending ? "Clôture..." : "Clôturer"}
             </button>
           </div>
         </div>

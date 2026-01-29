@@ -5,6 +5,7 @@ export type TimelineEventType =
   | "RECEPTION_CONFORME"
   | "NON_CONFORME"
   | "REMPLACEMENT_DEMANDE"
+  | "REMPLACEMENT_CLOTURE"
   | "ENVOI_FOURNISSEUR"
   | "RECEPTION_REMPLACEMENT"
   | "ARCHIVAGE";
@@ -40,6 +41,11 @@ const EVENT_META: Record<
     label: "Remplacement demandé",
     icon: "🛠️",
     className: "border-amber-500/40 bg-amber-500/10 text-amber-100"
+  },
+  REMPLACEMENT_CLOTURE: {
+    label: "Remplacement clôturé",
+    icon: "✅",
+    className: "border-emerald-500/40 bg-emerald-500/10 text-emerald-100"
   },
   ENVOI_FOURNISSEUR: {
     label: "Envoi fournisseur",
