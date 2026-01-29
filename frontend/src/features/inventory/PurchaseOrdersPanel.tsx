@@ -19,6 +19,7 @@ import { Timeline, type TimelineEvent } from "components/Timeline";
 import { StatusBadge } from "components/StatusBadge";
 import { TruncatedText } from "components/TruncatedText";
 import { fetchQolSettings, DEFAULT_QOL_SETTINGS } from "../../lib/qolSettings";
+import { fetchSiteContext, type SiteContext } from "../../lib/sites";
 
 interface Supplier {
   id: number;
@@ -511,6 +512,7 @@ interface PurchaseOrdersPanelProps {
   ordersQueryKey?: QueryKey;
   itemsQueryKey?: QueryKey;
   moduleKey?: string;
+  enableAutoRefresh?: boolean;
   title?: string;
   description?: string;
   downloadPrefix?: string;
@@ -525,6 +527,7 @@ export function PurchaseOrdersPanel({
   ordersQueryKey = ["purchase-orders"],
   itemsQueryKey = ["items"],
   moduleKey = "purchase_orders",
+  enableAutoRefresh = true,
   title = "Bons de commande",
   description = "Suivez les commandes fournisseurs et marquez les réceptions pour mettre à jour les stocks.",
   downloadPrefix = "bon_commande",
@@ -538,7 +541,21 @@ export function PurchaseOrdersPanel({
     queryFn: fetchQolSettings,
     enabled: Boolean(user)
   });
+  const { data: siteContext } = useQuery<SiteContext>({
+    queryKey: ["site-context", user?.username],
+    queryFn: fetchSiteContext,
+    enabled: Boolean(user)
+  });
   const notePreviewLength = qolSettings?.note_preview_length ?? DEFAULT_QOL_SETTINGS.note_preview_length;
+  const siteKey = useMemo(() => {
+    if (!user) {
+      return "JLL";
+    }
+    if (user.role === "admin") {
+      return siteContext?.override_site_key ?? user.site_key ?? "JLL";
+    }
+    return user.site_key ?? "JLL";
+  }, [siteContext?.override_site_key, user]);
   const canSendEmail = useMemo(
     () => Boolean(user && (user.role === "admin" || modulePermissions.canAccess("clothing", "edit"))),
     [modulePermissions, user]
@@ -564,6 +581,7 @@ export function PurchaseOrdersPanel({
   const [replacementAccess, setReplacementAccess] = useState(enableReplacementFlow);
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [listError, setListError] = useState<string | null>(null);
   const [refreshSummary, setRefreshSummary] = useState<string | null>(null);
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingOrder, setEditingOrder] = useState<PurchaseOrderDetail | null>(null);
@@ -608,10 +626,14 @@ export function PurchaseOrdersPanel({
   const createFormId = `purchase-order-create-${itemIdField}`;
   const canRefresh =
     user?.role === "admin" || modulePermissions.canAccess(moduleKey, "edit");
+  const isRefreshing = enableAutoRefresh ? refreshAutoOrders.isPending : isFetchingOrders;
   const showArchived = archiveFilter === "archived";
   const ordersCacheKey = useMemo(
-    () => (Array.isArray(ordersQueryKey) ? ordersQueryKey : [ordersQueryKey]),
-    [ordersQueryKey]
+    () => [
+      ...(Array.isArray(ordersQueryKey) ? ordersQueryKey : [ordersQueryKey]),
+      { module: moduleKey, site: siteKey }
+    ],
+    [moduleKey, ordersQueryKey, siteKey]
   );
   const resolvedOrdersQueryKey = useMemo(
     () => [...ordersCacheKey, showArchived ? "archived" : "active"],
@@ -835,28 +857,45 @@ export function PurchaseOrdersPanel({
     return `${supplierKey}|${createdAt}|${lineParts.join(",")}`;
   };
 
-  const { data: orders = [], isLoading: loadingOrders } = useQuery({
+  const {
+    data: orders = [],
+    isLoading: loadingOrders,
+    isFetching: isFetchingOrders,
+    refetch: refetchOrders
+  } = useQuery({
     queryKey: resolvedOrdersQueryKey,
     queryFn: async () => {
-      const response = await api.get<PurchaseOrderDetail[]>(`${purchaseOrdersPath}/`, {
-        params: showArchived ? { include_archived: true } : undefined
-      });
-      return response.data.map((order) => ({
-        ...order,
-        kind: order.kind ?? "standard",
-        items: order.items.map((item) => {
-          const candidate = item[itemIdField];
-          const normalizedId = typeof candidate === "number" ? candidate : item.item_id;
-          return {
-            ...item,
-            item_id: normalizedId
-          } satisfies PurchaseOrderItem;
-        }),
-        receipts: order.receipts ?? [],
-        pending_assignments: order.pending_assignments ?? [],
-        supplier_returns: order.supplier_returns ?? []
-      }));
-    }
+      try {
+        const response = await api.get<PurchaseOrderDetail[]>(`${purchaseOrdersPath}/`, {
+          params: showArchived ? { include_archived: true } : undefined
+        });
+        setListError(null);
+        return response.data.map((order) => ({
+          ...order,
+          kind: order.kind ?? "standard",
+          items: order.items.map((item) => {
+            const candidate = item[itemIdField];
+            const normalizedId = typeof candidate === "number" ? candidate : item.item_id;
+            return {
+              ...item,
+              item_id: normalizedId
+            } satisfies PurchaseOrderItem;
+          }),
+          receipts: order.receipts ?? [],
+          pending_assignments: order.pending_assignments ?? [],
+          supplier_returns: order.supplier_returns ?? []
+        }));
+      } catch (requestError) {
+        const status = (requestError as AxiosError<ApiErrorResponse>)?.response?.status;
+        if (status === 404) {
+          setListError("Impossible de charger les bons de commande pour ce module.");
+          return [] as PurchaseOrderDetail[];
+        }
+        setListError("Impossible de charger les bons de commande.");
+        return [] as PurchaseOrderDetail[];
+      }
+    },
+    keepPreviousData: true
   });
 
   const dedupedOrders = useMemo(() => {
@@ -1365,9 +1404,14 @@ export function PurchaseOrdersPanel({
     }
   });
 
-  const handleRefresh = () => {
+  const handleRefresh = async () => {
     setError(null);
-    refreshAutoOrders.mutate();
+    setListError(null);
+    if (enableAutoRefresh) {
+      refreshAutoOrders.mutate();
+      return;
+    }
+    await refetchOrders();
   };
 
   const handleAddLine = () => {
@@ -2525,10 +2569,10 @@ export function PurchaseOrdersPanel({
             <button
               type="button"
               onClick={handleRefresh}
-              disabled={refreshAutoOrders.isPending}
+              disabled={isRefreshing}
               className="inline-flex items-center gap-2 rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-60"
             >
-              {refreshAutoOrders.isPending ? (
+              {isRefreshing ? (
                 <span className="h-4 w-4 animate-spin rounded-full border-2 border-slate-400 border-t-transparent" />
               ) : null}
               Rafraîchir
@@ -2547,6 +2591,7 @@ export function PurchaseOrdersPanel({
       {message ? <p className="text-sm text-emerald-300">{message}</p> : null}
       {refreshSummary ? <p className="text-xs text-slate-400">{refreshSummary}</p> : null}
       {error ? <p className="text-sm text-red-400">{error}</p> : null}
+      {listError ? <p className="text-sm text-red-400">{listError}</p> : null}
       {pendingValidationError ? (
         <p className="text-sm text-red-400">{pendingValidationError}</p>
       ) : null}

@@ -1570,6 +1570,7 @@ export function InventoryModuleDashboard({
       ordersQueryKey={config.purchaseOrdersQueryKey}
       itemsQueryKey={config.purchaseOrdersItemsQueryKey}
       moduleKey={config.purchaseOrdersModuleKey}
+      enableAutoRefresh={config.purchaseOrdersAutoRefresh}
       title={config.purchaseOrdersTitle}
       description={config.purchaseOrdersDescription}
       downloadPrefix={config.purchaseOrdersDownloadPrefix}
