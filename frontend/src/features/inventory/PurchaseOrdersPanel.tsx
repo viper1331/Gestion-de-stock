@@ -1,4 +1,4 @@
-import { FormEvent, useEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
 import { QueryKey, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
@@ -1367,6 +1367,12 @@ export function PurchaseOrdersPanel({
     setIsCreateModalOpen(true);
   };
 
+  const stopActionClick = (event: MouseEvent<HTMLButtonElement>, action: () => void) => {
+    event.preventDefault();
+    event.stopPropagation();
+    action();
+  };
+
   const handleCloseCreateModal = () => {
     setIsCreateModalOpen(false);
     createIdempotencyKeyRef.current = null;
@@ -2286,7 +2292,7 @@ export function PurchaseOrdersPanel({
               </button>
               <button
                 type="button"
-                onClick={() => handleOpenReceiveModal(order)}
+                onClick={(event) => stopActionClick(event, () => handleOpenReceiveModal(order))}
                 disabled={!canReceive}
                 className={resolveActionClass(
                   "receive_partial",
@@ -2299,7 +2305,7 @@ export function PurchaseOrdersPanel({
               </button>
               <button
                 type="button"
-                onClick={() => handleEditOrder(order)}
+                onClick={(event) => stopActionClick(event, () => handleEditOrder(order))}
                 disabled={!canManageOrders || isReadOnly}
                 className={resolveActionClass(
                   "edit",
@@ -2551,7 +2557,7 @@ export function PurchaseOrdersPanel({
           ) : null}
           <button
             type="button"
-            onClick={handleOpenCreateModal}
+            onClick={(event) => stopActionClick(event, handleOpenCreateModal)}
             className="rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
           >
             Créer un bon de commande

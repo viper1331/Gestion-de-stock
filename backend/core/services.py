@@ -4347,6 +4347,101 @@ def _resolve_first_non_empty(row: sqlite3.Row, columns: Iterable[str]) -> str | 
     return None
 
 
+def _auto_po_date_bucket() -> str:
+    return datetime.now(timezone.utc).date().isoformat()
+
+
+def _build_auto_purchase_order_idempotency_key(
+    module: str, supplier_id: int, *, item_id: int | None = None
+) -> str:
+    key = f"auto:{module}:{db.get_current_site_key()}:{supplier_id}:{_auto_po_date_bucket()}"
+    if item_id is None:
+        return key
+    return f"{key}:{item_id}"
+
+
+def _list_open_auto_orders_by_supplier(
+    conn: sqlite3.Connection, spec: _AutoPurchaseOrderSpec, supplier_id: int
+) -> list[sqlite3.Row]:
+    return conn.execute(
+        f"""
+        SELECT id, supplier_id, created_at
+        FROM {spec.orders_table}
+        WHERE auto_created = 1
+          AND supplier_id = ?
+          AND UPPER(status) NOT IN ({", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)})
+        ORDER BY created_at DESC, id DESC
+        """,
+        (supplier_id, *[status for status in _AUTO_PO_CLOSED_STATUSES]),
+    ).fetchall()
+
+
+def _merge_duplicate_auto_orders(
+    conn: sqlite3.Connection,
+    spec: _AutoPurchaseOrderSpec,
+    primary_id: int,
+    duplicate_ids: Iterable[int],
+) -> None:
+    has_sku = _table_has_column(conn, spec.order_items_table, "sku")
+    has_unit = _table_has_column(conn, spec.order_items_table, "unit")
+    sku_select = ", sku" if has_sku else ""
+    unit_select = ", unit" if has_unit else ""
+    for duplicate_id in duplicate_ids:
+        lines = conn.execute(
+            f"""
+            SELECT {spec.item_id_column} AS item_id,
+                   quantity_ordered,
+                   quantity_received{sku_select}{unit_select}
+            FROM {spec.order_items_table}
+            WHERE purchase_order_id = ?
+            """,
+            (duplicate_id,),
+        ).fetchall()
+        for line in lines:
+            existing = conn.execute(
+                f"""
+                SELECT id, quantity_ordered, quantity_received
+                FROM {spec.order_items_table}
+                WHERE purchase_order_id = ?
+                  AND {spec.item_id_column} = ?
+                """,
+                (primary_id, line["item_id"]),
+            ).fetchone()
+            if existing:
+                target_qty = max(existing["quantity_ordered"], line["quantity_ordered"])
+                if target_qty != existing["quantity_ordered"]:
+                    conn.execute(
+                        f"UPDATE {spec.order_items_table} SET quantity_ordered = ? WHERE id = ?",
+                        (target_qty, existing["id"]),
+                    )
+                continue
+            columns = ["purchase_order_id", spec.item_id_column, "quantity_ordered", "quantity_received"]
+            values: list[object] = [
+                primary_id,
+                line["item_id"],
+                line["quantity_ordered"],
+                line["quantity_received"],
+            ]
+            if has_sku:
+                columns.append("sku")
+                values.append(line["sku"])
+            if has_unit:
+                columns.append("unit")
+                values.append(line["unit"])
+            conn.execute(
+                f"INSERT INTO {spec.order_items_table} ({', '.join(columns)}) VALUES ({', '.join('?' for _ in columns)})",
+                values,
+            )
+        conn.execute(
+            f"DELETE FROM {spec.order_items_table} WHERE purchase_order_id = ?",
+            (duplicate_id,),
+        )
+        conn.execute(
+            f"DELETE FROM {spec.orders_table} WHERE id = ?",
+            (duplicate_id,),
+        )
+
+
 def _fetch_auto_po_item(
     conn: sqlite3.Connection, module: str, item_id: int
 ) -> tuple[sqlite3.Row, dict[str, Any], _AutoPurchaseOrderSpec] | None:
@@ -4407,7 +4502,7 @@ def _maybe_create_auto_purchase_order(
         WHERE poi.{spec.item_id_column} = ?
           AND po.auto_created = 1
           AND UPPER(po.status) NOT IN ({", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)})
-        ORDER BY po.created_at DESC
+        ORDER BY po.created_at DESC, po.id DESC
         LIMIT 1
         """,
         (item_id, *[status for status in _AUTO_PO_CLOSED_STATUSES]),
@@ -4424,14 +4519,52 @@ def _maybe_create_auto_purchase_order(
         return
 
     note = f"Commande automatique - {item['name']}"
-    po_cur = conn.execute(
-        f"""
-        INSERT INTO {spec.orders_table} (supplier_id, status, note, auto_created, created_at)
-        VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP)
-        """,
-        (supplier_id, note),
-    )
-    order_id = po_cur.lastrowid
+    idempotency_key = None
+    if _table_has_column(conn, spec.orders_table, "idempotency_key"):
+        idempotency_key = _build_auto_purchase_order_idempotency_key(
+            module, supplier_id, item_id=item_id
+        )
+        existing_order = conn.execute(
+            f"""
+            SELECT id
+            FROM {spec.orders_table}
+            WHERE idempotency_key = ?
+            ORDER BY id DESC
+            LIMIT 1
+            """,
+            (idempotency_key,),
+        ).fetchone()
+        if existing_order is not None:
+            return
+    try:
+        if idempotency_key:
+            po_cur = conn.execute(
+                f"""
+                INSERT INTO {spec.orders_table} (
+                    supplier_id,
+                    status,
+                    note,
+                    auto_created,
+                    created_at,
+                    idempotency_key
+                )
+                VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP, ?)
+                """,
+                (supplier_id, note, idempotency_key),
+            )
+        else:
+            po_cur = conn.execute(
+                f"""
+                INSERT INTO {spec.orders_table} (supplier_id, status, note, auto_created, created_at)
+                VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP)
+                """,
+                (supplier_id, note),
+            )
+    except sqlite3.IntegrityError:
+        if idempotency_key:
+            return
+        raise
+    order_id = int(po_cur.lastrowid)
     has_sku = _table_has_column(conn, spec.order_items_table, "sku")
     has_unit = _table_has_column(conn, spec.order_items_table, "unit")
     columns = ["purchase_order_id", spec.item_id_column, "quantity_ordered"]
@@ -4499,22 +4632,40 @@ def refresh_auto_purchase_orders(module_key: str) -> models.PurchaseOrderAutoRef
 
         has_sku = _table_has_column(conn, spec.order_items_table, "sku")
         has_unit = _table_has_column(conn, spec.order_items_table, "unit")
+        has_order_idempotency = _table_has_column(conn, spec.orders_table, "idempotency_key")
         open_orders = conn.execute(
             f"""
             SELECT id, supplier_id, created_at
             FROM {spec.orders_table}
             WHERE auto_created = 1
               AND UPPER(status) NOT IN ({", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)})
-            ORDER BY created_at DESC
+            ORDER BY created_at DESC, id DESC
             """,
             _AUTO_PO_CLOSED_STATUSES,
         ).fetchall()
 
         existing_orders: dict[int | None, int] = {}
-        for row in open_orders:
-            supplier_id = row["supplier_id"]
+        merged_duplicate_ids: set[int] = set()
+        for supplier_id in {row["supplier_id"] for row in open_orders}:
+            if supplier_id is None:
+                continue
+            supplier_orders = _list_open_auto_orders_by_supplier(
+                conn, spec, supplier_id
+            )
+            if not supplier_orders:
+                continue
+            primary_id = supplier_orders[0]["id"]
+            duplicate_ids = [row["id"] for row in supplier_orders[1:]]
+            if duplicate_ids:
+                _merge_duplicate_auto_orders(
+                    conn,
+                    spec,
+                    primary_id=primary_id,
+                    duplicate_ids=duplicate_ids,
+                )
+                merged_duplicate_ids.update(duplicate_ids)
             if supplier_id not in existing_orders:
-                existing_orders[supplier_id] = row["id"]
+                existing_orders[supplier_id] = primary_id
 
         created = 0
         updated = 0
@@ -4523,15 +4674,52 @@ def refresh_auto_purchase_orders(module_key: str) -> models.PurchaseOrderAutoRef
             order_id = existing_orders.get(supplier_id)
             if order_id is None:
                 note = "Commande automatique - Stock sous seuil"
-                cur = conn.execute(
-                    f"""
-                    INSERT INTO {spec.orders_table} (supplier_id, status, note, auto_created, created_at)
-                    VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP)
-                    """,
-                    (supplier_id, note),
-                )
-                order_id = int(cur.lastrowid)
-                created += 1
+                idempotency_key = None
+                if has_order_idempotency:
+                    idempotency_key = _build_auto_purchase_order_idempotency_key(
+                        resolved_module, supplier_id
+                    )
+                    existing_by_key = conn.execute(
+                        f"""
+                        SELECT id
+                        FROM {spec.orders_table}
+                        WHERE idempotency_key = ?
+                          AND UPPER(status) NOT IN ({", ".join("?" for _ in _AUTO_PO_CLOSED_STATUSES)})
+                        ORDER BY id DESC
+                        LIMIT 1
+                        """,
+                        (idempotency_key, *[status for status in _AUTO_PO_CLOSED_STATUSES]),
+                    ).fetchone()
+                    if existing_by_key is not None:
+                        order_id = existing_by_key["id"]
+                if order_id is None:
+                    if has_order_idempotency:
+                        cur = conn.execute(
+                            f"""
+                            INSERT INTO {spec.orders_table} (
+                                supplier_id,
+                                status,
+                                note,
+                                auto_created,
+                                created_at,
+                                idempotency_key
+                            )
+                            VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP, ?)
+                            """,
+                            (supplier_id, note, idempotency_key),
+                        )
+                    else:
+                        cur = conn.execute(
+                            f"""
+                            INSERT INTO {spec.orders_table} (supplier_id, status, note, auto_created, created_at)
+                            VALUES (?, 'PENDING', ?, 1, CURRENT_TIMESTAMP)
+                            """,
+                            (supplier_id, note),
+                        )
+                    order_id = int(cur.lastrowid)
+                    created += 1
+                else:
+                    updated += 1
             else:
                 updated += 1
             touched_orders.add(order_id)
@@ -4578,6 +4766,8 @@ def refresh_auto_purchase_orders(module_key: str) -> models.PurchaseOrderAutoRef
 
         for row in open_orders:
             order_id = row["id"]
+            if order_id in merged_duplicate_ids:
+                continue
             if order_id in touched_orders:
                 continue
             supplier_id = row["supplier_id"]
