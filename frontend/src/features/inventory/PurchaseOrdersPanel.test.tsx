@@ -1,9 +1,10 @@
 import { fireEvent, render, screen } from "@testing-library/react";
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import "@testing-library/jest-dom";
 
 import { PurchaseOrdersPanel } from "./PurchaseOrdersPanel";
+import { SpellcheckSettingsProvider } from "../../app/spellcheckSettings";
 
 vi.mock("../../lib/api", () => ({
   api: {
@@ -34,20 +35,30 @@ vi.mock("../permissions/useModulePermissions", () => ({
 }));
 
 describe("PurchaseOrdersPanel", () => {
-  it("opens the create modal without navigating to Not Found", async () => {
-    if (!globalThis.crypto?.randomUUID) {
-      Object.defineProperty(globalThis, "crypto", {
-        value: { randomUUID: () => "test-uuid" }
-      });
+  beforeEach(() => {
+    class ResizeObserverMock {
+      observe() {}
+      unobserve() {}
+      disconnect() {}
     }
 
+    vi.stubGlobal("ResizeObserver", ResizeObserverMock);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+  });
+
+  it("opens the create modal without navigating to Not Found", async () => {
     const queryClient = new QueryClient({
       defaultOptions: { queries: { retry: false } }
     });
 
     render(
       <QueryClientProvider client={queryClient}>
-        <PurchaseOrdersPanel suppliers={[]} />
+        <SpellcheckSettingsProvider>
+          <PurchaseOrdersPanel suppliers={[]} />
+        </SpellcheckSettingsProvider>
       </QueryClientProvider>
     );
 
@@ -57,5 +68,27 @@ describe("PurchaseOrdersPanel", () => {
 
     expect(screen.getByLabelText(/fournisseur/i)).toBeInTheDocument();
     expect(screen.queryByText(/not found/i)).not.toBeInTheDocument();
+  });
+
+  it("opens the create modal when crypto.randomUUID is unavailable", async () => {
+    vi.stubGlobal("crypto", undefined);
+
+    const queryClient = new QueryClient({
+      defaultOptions: { queries: { retry: false } }
+    });
+
+    render(
+      <QueryClientProvider client={queryClient}>
+        <SpellcheckSettingsProvider>
+          <PurchaseOrdersPanel suppliers={[]} />
+        </SpellcheckSettingsProvider>
+      </QueryClientProvider>
+    );
+
+    fireEvent.click(
+      await screen.findByRole("button", { name: /créer un bon de commande/i })
+    );
+
+    expect(screen.getByLabelText(/fournisseur/i)).toBeInTheDocument();
   });
 });

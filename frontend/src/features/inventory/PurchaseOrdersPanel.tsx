@@ -1361,9 +1361,16 @@ export function PurchaseOrdersPanel({
     setDraftLines((prev) => prev.filter((_, idx) => idx !== index));
   };
 
+  const generateIdempotencyKey = () => {
+    if (typeof crypto !== "undefined" && typeof crypto.randomUUID === "function") {
+      return crypto.randomUUID();
+    }
+    return `po-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  };
+
   const handleOpenCreateModal = () => {
     setError(null);
-    createIdempotencyKeyRef.current = crypto.randomUUID();
+    createIdempotencyKeyRef.current = generateIdempotencyKey();
     setIsCreateModalOpen(true);
   };
 
