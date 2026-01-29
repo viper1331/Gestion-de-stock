@@ -296,14 +296,8 @@ def init_databases() -> None:
                     window_start_ts INTEGER NOT NULL,
                     count INTEGER NOT NULL
                 );
-                CREATE INDEX IF NOT EXISTS idx_messages_created_at
-                ON messages(created_at);
-                CREATE UNIQUE INDEX IF NOT EXISTS idx_messages_idempotency
-                ON messages(sender_username, idempotency_key);
                 CREATE INDEX IF NOT EXISTS idx_message_recipients_recipient
                 ON message_recipients(recipient_username, is_archived);
-                CREATE INDEX IF NOT EXISTS idx_message_recipients_active
-                ON message_recipients(recipient_username, deleted_at, is_archived);
                 CREATE INDEX IF NOT EXISTS idx_message_recipients_message
                 ON message_recipients(message_id);
                 CREATE TABLE IF NOT EXISTS module_permissions (
