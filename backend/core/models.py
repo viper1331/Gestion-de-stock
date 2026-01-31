@@ -613,6 +613,7 @@ class RemiseLot(RemiseLotBase):
     id: int
     created_at: datetime
     image_url: str | None = None
+    cover_image_url: str | None = None
     item_count: int = 0
     total_quantity: int = 0
     extra: dict[str, object] = Field(default_factory=dict)
@@ -660,6 +661,7 @@ class PharmacyLot(PharmacyLotBase):
     id: int
     created_at: datetime
     image_url: str | None = None
+    cover_image_url: str | None = None
     item_count: int = 0
     total_quantity: int = 0
     extra: dict[str, object] = Field(default_factory=dict)

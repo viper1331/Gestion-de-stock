@@ -117,6 +117,7 @@ interface RemiseLot {
   description: string | null;
   created_at: string;
   image_url: string | null;
+  cover_image_url: string | null;
   item_count: number;
   total_quantity: number;
 }
@@ -142,6 +143,7 @@ interface PharmacyLot {
   description: string | null;
   created_at: string;
   image_url: string | null;
+  cover_image_url: string | null;
   item_count: number;
   total_quantity: number;
 }
@@ -178,12 +180,44 @@ interface LibraryLot {
   name: string;
   description: string | null;
   image_url: string | null;
+  cover_image_url: string | null;
   item_count: number;
   total_quantity: number;
   sku?: string | null;
   code?: string | null;
   items: LibraryLotItem[];
   source: LibraryLotSource;
+}
+
+export function LibraryLotCardImage({
+  lot,
+  showCatalogBadge = false
+}: {
+  lot: Pick<LibraryLot, "name" | "image_url" | "cover_image_url">;
+  showCatalogBadge?: boolean;
+}) {
+  const resolvedImageUrl = resolveMediaUrl(lot.cover_image_url ?? lot.image_url);
+  const shouldShowBadge = showCatalogBadge && Boolean(lot.cover_image_url);
+
+  return (
+    <div className="relative h-16 w-16 overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-900">
+      {resolvedImageUrl ? (
+        <img src={resolvedImageUrl} alt={`Illustration du lot ${lot.name}`} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400 dark:text-slate-500">
+          Aucune image
+        </div>
+      )}
+      {shouldShowBadge ? (
+        <span
+          className="absolute left-1 top-1 rounded bg-slate-900/80 px-1.5 py-0.5 text-[9px] font-semibold text-white"
+          title="Image catalogue du lot"
+        >
+          Catalogue
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 interface VehiclePhoto {
@@ -1917,6 +1951,7 @@ export function VehicleInventoryPage() {
         name: lot.name,
         description: lot.description,
         image_url: lot.image_url,
+        cover_image_url: lot.cover_image_url,
         item_count: lot.item_count,
         total_quantity: lot.total_quantity,
         source: "remise",
@@ -1952,6 +1987,7 @@ export function VehicleInventoryPage() {
         name: lot.name,
         description: lot.description,
         image_url: lot.image_url,
+        cover_image_url: lot.cover_image_url,
         item_count: lot.item_count,
         total_quantity: lot.total_quantity,
         source: "pharmacy",
@@ -4784,7 +4820,6 @@ function DroppableLibrary({
                     lot.items.length > 0
                       ? lot.items.map((entry) => `${entry.quantity} × ${entry.name}`).join("\n")
                       : "Ce lot est encore vide.";
-                  const lotImageUrl = resolveMediaUrl(lot.image_url);
                   return (
                     <div
                       key={lot.id}
@@ -4802,15 +4837,7 @@ function DroppableLibrary({
                       className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
                     >
                       <div className="flex items-start gap-3">
-                        <div className="h-16 w-16 overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-900">
-                          {lotImageUrl ? (
-                            <img src={lotImageUrl} alt={`Illustration du lot ${lot.name}`} className="h-full w-full object-cover" />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400 dark:text-slate-500">
-                              Aucune image
-                            </div>
-                          )}
-                        </div>
+                        <LibraryLotCardImage lot={lot} showCatalogBadge={import.meta.env.DEV} />
                         <div className="flex-1 space-y-1">
                           <div className="flex items-start gap-2">
                             <div>

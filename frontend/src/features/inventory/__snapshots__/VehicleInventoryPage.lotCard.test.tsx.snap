@@ -1,0 +1,15 @@
+// Vitest Snapshot v1, https://vitest.dev/guide/snapshot.html
+
+exports[`VehicleInventoryPage LibraryLotCardImage > affiche le placeholder sans image 1`] = `
+<div>
+  <div
+    class="relative h-16 w-16 overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-900"
+  >
+    <div
+      class="flex h-full w-full items-center justify-center text-[10px] text-slate-400 dark:text-slate-500"
+    >
+      Aucune image
+    </div>
+  </div>
+</div>
+`;
