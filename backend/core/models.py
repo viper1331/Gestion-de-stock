@@ -398,6 +398,16 @@ class VehicleViewConfig(BaseModel):
     hide_edit_buttons: bool = False
 
 
+class VehiclePinnedSubviewsUpdate(BaseModel):
+    pinned: list[str]
+
+
+class VehiclePinnedSubviews(BaseModel):
+    vehicle_id: int
+    view_id: str
+    pinned: list[str]
+
+
 class Category(BaseModel):
     id: int
     name: str

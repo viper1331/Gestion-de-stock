@@ -3,6 +3,8 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   buildDropRequestPayload,
+  filterPinnedSubviews,
+  upsertPinnedSubview,
   resolveTargetView
 } from "./VehicleInventoryPage";
 import { useThrottledHoverState } from "./useThrottledHoverState";
@@ -92,5 +94,22 @@ describe("Vehicle inventory interactions", () => {
       pharmacyItemId: null,
       targetView: "VUE PRINCIPALE"
     });
+  });
+
+  it("pins a subview when dropped and preserves order", () => {
+    const pinned = ["CABINE - CASIER 2"];
+    const nextPinned = upsertPinnedSubview(pinned, "Cabine - Casier 1", "Cabine - Casier 2");
+
+    expect(nextPinned).toEqual(["CABINE - CASIER 1", "CABINE - CASIER 2"]);
+  });
+
+  it("filters pinned subviews based on available views", () => {
+    const filtered = filterPinnedSubviews({
+      pinned: ["CABINE - CASIER 1", "COFFRE - B", "CABINE - CASIER 1"],
+      availableSubViews: ["CABINE - CASIER 1", "CABINE - CASIER 2"],
+      parentView: "Cabine"
+    });
+
+    expect(filtered).toEqual(["CABINE - CASIER 1"]);
   });
 });

@@ -3203,6 +3203,48 @@ def _ensure_vehicle_view_settings_columns(
         )
 
 
+def _ensure_vehicle_view_pinned_subviews_table(
+    conn: sqlite3.Connection,
+    *,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+    executescript: Callable[[str], None] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    if executescript is None:
+        executescript = conn.executescript
+    executescript(
+        """
+        CREATE TABLE IF NOT EXISTS vehicle_view_pinned_subviews (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicle_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+            view_id TEXT NOT NULL COLLATE NOCASE,
+            site_id TEXT NOT NULL,
+            pinned_order_json TEXT NOT NULL DEFAULT '[]',
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(vehicle_id, view_id, site_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_vehicle_view_pinned_subviews_vehicle
+        ON vehicle_view_pinned_subviews(vehicle_id);
+        """
+    )
+    columns = {
+        row["name"] for row in execute("PRAGMA table_info(vehicle_view_pinned_subviews)").fetchall()
+    }
+    if "site_id" not in columns:
+        execute(
+            "ALTER TABLE vehicle_view_pinned_subviews ADD COLUMN site_id TEXT NOT NULL DEFAULT 'JLL'"
+        )
+    if "pinned_order_json" not in columns:
+        execute(
+            "ALTER TABLE vehicle_view_pinned_subviews ADD COLUMN pinned_order_json TEXT NOT NULL DEFAULT '[]'"
+        )
+    if "updated_at" not in columns:
+        execute(
+            "ALTER TABLE vehicle_view_pinned_subviews ADD COLUMN updated_at TIMESTAMP"
+        )
+
+
 def _ensure_remise_item_columns(
     conn: sqlite3.Connection,
     execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
@@ -4285,6 +4327,9 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         _ensure_pharmacy_lot_item_columns(conn, execute=execute, executescript=executescript)
         _ensure_vehicle_category_columns(conn, execute=execute)
         _ensure_vehicle_view_settings_columns(conn, execute=execute)
+        _ensure_vehicle_view_pinned_subviews_table(
+            conn, execute=execute, executescript=executescript
+        )
         _ensure_vehicle_applied_lot_table(conn, executescript=executescript)
         _ensure_vehicle_item_columns(conn, execute=execute)
         _ensure_vehicle_item_qr_tokens(conn, execute=execute)
@@ -8684,6 +8729,120 @@ def _get_vehicle_view_config(
         pointer_mode_enabled=bool(row["pointer_mode_enabled"]),
         hide_edit_buttons=bool(row["hide_edit_buttons"]),
     )
+
+
+def _filter_pinned_subviews(
+    pinned: Iterable[str],
+    *,
+    available_views: set[str],
+    parent_view: str,
+) -> list[str]:
+    normalized_parent = _normalize_view_name(parent_view)
+    prefix = f"{normalized_parent} - "
+    result: list[str] = []
+    seen: set[str] = set()
+    for entry in pinned:
+        if not isinstance(entry, str):
+            continue
+        trimmed = entry.strip()
+        if not trimmed:
+            continue
+        normalized = _normalize_view_name(trimmed)
+        if not normalized.startswith(prefix):
+            continue
+        if normalized not in available_views:
+            continue
+        if normalized in seen:
+            continue
+        seen.add(normalized)
+        result.append(normalized)
+    return result
+
+
+def list_vehicle_view_pinned_subviews(
+    vehicle_id: int, view_id: str
+) -> list[str]:
+    ensure_database_ready()
+    vehicle = get_vehicle_category(vehicle_id)
+    if vehicle is None:
+        raise ValueError("Véhicule introuvable")
+    normalized_view = _normalize_view_name(view_id)
+    available_views = set(vehicle.sizes or [DEFAULT_VEHICLE_VIEW_NAME])
+    if normalized_view not in available_views:
+        raise ValueError("Vue introuvable")
+    site_id = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_pinned_subviews_table(conn)
+        row = conn.execute(
+            """
+            SELECT pinned_order_json
+            FROM vehicle_view_pinned_subviews
+            WHERE vehicle_id = ? AND view_id = ? AND site_id = ?
+            """,
+            (vehicle_id, normalized_view, site_id),
+        ).fetchone()
+        if row and row["pinned_order_json"]:
+            try:
+                stored = json.loads(row["pinned_order_json"])
+            except json.JSONDecodeError:
+                stored = []
+        else:
+            stored = []
+        filtered = _filter_pinned_subviews(
+            stored,
+            available_views=available_views,
+            parent_view=normalized_view,
+        )
+        if filtered != stored:
+            conn.execute(
+                """
+                INSERT INTO vehicle_view_pinned_subviews (
+                    vehicle_id, view_id, site_id, pinned_order_json, updated_at
+                )
+                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(vehicle_id, view_id, site_id)
+                DO UPDATE SET pinned_order_json = excluded.pinned_order_json,
+                              updated_at = excluded.updated_at
+                """,
+                (vehicle_id, normalized_view, site_id, json.dumps(filtered)),
+            )
+            _persist_after_commit(conn, "vehicle_inventory")
+    return filtered
+
+
+def update_vehicle_view_pinned_subviews(
+    vehicle_id: int, view_id: str, pinned: Iterable[str]
+) -> list[str]:
+    ensure_database_ready()
+    vehicle = get_vehicle_category(vehicle_id)
+    if vehicle is None:
+        raise ValueError("Véhicule introuvable")
+    normalized_view = _normalize_view_name(view_id)
+    available_views = set(vehicle.sizes or [DEFAULT_VEHICLE_VIEW_NAME])
+    if normalized_view not in available_views:
+        raise ValueError("Vue introuvable")
+    filtered = _filter_pinned_subviews(
+        pinned,
+        available_views=available_views,
+        parent_view=normalized_view,
+    )
+    site_id = db.get_current_site_key()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_pinned_subviews_table(conn)
+        conn.execute(
+            """
+            INSERT INTO vehicle_view_pinned_subviews (
+                vehicle_id, view_id, site_id, pinned_order_json, updated_at
+            )
+            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(vehicle_id, view_id, site_id)
+            DO UPDATE SET pinned_order_json = excluded.pinned_order_json,
+                          updated_at = excluded.updated_at
+            """,
+            (vehicle_id, normalized_view, site_id, json.dumps(filtered)),
+        )
+        _persist_after_commit(conn, "vehicle_inventory")
+    return filtered
 
 
 def list_low_stock(threshold: int) -> list[models.LowStockReport]:
