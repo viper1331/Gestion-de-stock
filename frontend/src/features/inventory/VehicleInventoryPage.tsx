@@ -697,6 +697,14 @@ export function VehicleInventoryPage() {
       selectedView
     });
   }
+  const selectedHierarchy = useMemo(() => splitViewHierarchy(selectedView), [selectedView]);
+  const prefs = useMemo(
+    () => ({
+      pinnedViewName: normalizeViewName(selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL)
+    }),
+    [selectedHierarchy.parent]
+  );
+  const pinnedViewName = prefs?.pinnedViewName ?? null;
 
   const {
     data: vehicles = [],
@@ -792,6 +800,14 @@ export function VehicleInventoryPage() {
   );
 
   const selectedVehicleType = selectedVehicle?.vehicle_type ?? null;
+  const normalizedVehicleViews = useMemo(
+    () => getVehicleViews(selectedVehicle),
+    [selectedVehicle]
+  );
+  const pinnedView = useMemo(
+    () => resolvePinnedView(normalizedVehicleViews, pinnedViewName),
+    [normalizedVehicleViews, pinnedViewName]
+  );
 
   useEffect(() => {
     logDebug("SELECTED VEHICLE TYPE", {
@@ -868,10 +884,12 @@ export function VehicleInventoryPage() {
 
   const { data: pinnedSubviews } = useQuery({
     queryKey: ["vehicle-pinned-subviews", selectedVehicle?.id, pinnedViewName],
-    enabled: VEHICLE_SUBVIEW_CARDS_ENABLED && Boolean(selectedVehicle?.id && pinnedViewName),
+    enabled:
+      VEHICLE_SUBVIEW_CARDS_ENABLED &&
+      Boolean(selectedVehicle?.id && pinnedViewName && pinnedView),
     queryFn: async () => {
-      if (!selectedVehicle?.id) {
-        return { vehicle_id: 0, view_id: pinnedViewName, pinned: [] };
+      if (!selectedVehicle?.id || !pinnedViewName) {
+        return { vehicle_id: 0, view_id: pinnedViewName ?? "", pinned: [] };
       }
       const response = await api.get<VehiclePinnedSubviews>(
         `/vehicles/${selectedVehicle.id}/views/${encodeURIComponent(pinnedViewName)}/pinned-subviews`
@@ -983,7 +1001,7 @@ export function VehicleInventoryPage() {
 
   const updatePinnedSubviews = useMutation({
     mutationFn: async (nextPinned: string[]) => {
-      if (!selectedVehicle?.id) {
+      if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
         return;
       }
       await api.put(
@@ -992,7 +1010,7 @@ export function VehicleInventoryPage() {
       );
     },
     onMutate: async (nextPinned) => {
-      if (!selectedVehicle?.id) {
+      if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
         return undefined;
       }
       const queryKey = ["vehicle-pinned-subviews", selectedVehicle.id, pinnedViewName];
@@ -1577,16 +1595,6 @@ export function VehicleInventoryPage() {
     setIsExportLocked(Boolean(isActive));
   }, [exportJob]);
 
-  const normalizedVehicleViews = useMemo(
-    () => getVehicleViews(selectedVehicle),
-    [selectedVehicle]
-  );
-  const selectedHierarchy = useMemo(() => splitViewHierarchy(selectedView), [selectedView]);
-  const pinnedViewName = useMemo(
-    () => normalizeViewName(selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL),
-    [selectedHierarchy.parent]
-  );
-
   const triggerExportJob = useCallback(async () => {
     if (exportLockRef.current || isExportLocked) {
       return;
@@ -1977,6 +1985,9 @@ export function VehicleInventoryPage() {
   );
 
   const availableSubViews = useMemo(() => {
+    if (!pinnedViewName || !pinnedView) {
+      return [];
+    }
     const parentView = selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL;
     return normalizedVehicleViews.filter((view) => {
       const { parent, subView } = splitViewHierarchy(view);
@@ -1985,20 +1996,36 @@ export function VehicleInventoryPage() {
       }
       return normalizeViewName(parent) === normalizeViewName(parentView);
     });
-  }, [normalizedVehicleViews, selectedHierarchy.parent]);
+  }, [normalizedVehicleViews, pinnedView, pinnedViewName, selectedHierarchy.parent]);
 
   const filteredPinnedSubviews = useMemo(
-    () =>
-      filterPinnedSubviews({
+    () => {
+      if (!pinnedViewName || !pinnedView) {
+        return [];
+      }
+      return filterPinnedSubviews({
         pinned: pinnedSubviews?.pinned ?? [],
         availableSubViews,
         parentView: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
-      }),
-    [availableSubViews, pinnedSubviews?.pinned, selectedHierarchy.parent]
+      });
+    },
+    [
+      availableSubViews,
+      pinnedSubviews?.pinned,
+      pinnedView,
+      pinnedViewName,
+      selectedHierarchy.parent
+    ]
   );
 
   useEffect(() => {
-    if (!pinnedSubviews || !selectedVehicle?.id || !VEHICLE_SUBVIEW_CARDS_ENABLED) {
+    if (
+      !pinnedSubviews ||
+      !selectedVehicle?.id ||
+      !VEHICLE_SUBVIEW_CARDS_ENABLED ||
+      !pinnedViewName ||
+      !pinnedView
+    ) {
       return;
     }
     const sameLength = pinnedSubviews.pinned.length === filteredPinnedSubviews.length;
@@ -2036,7 +2063,7 @@ export function VehicleInventoryPage() {
 
   const commitPinnedSubviews = useCallback(
     (nextPinned: string[]) => {
-      if (!selectedVehicle?.id) {
+      if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
         return;
       }
       const filtered = filterPinnedSubviews({
@@ -2046,7 +2073,14 @@ export function VehicleInventoryPage() {
       });
       updatePinnedSubviews.mutate(filtered);
     },
-    [availableSubViews, selectedHierarchy.parent, selectedVehicle?.id, updatePinnedSubviews]
+    [
+      availableSubViews,
+      pinnedView,
+      pinnedViewName,
+      selectedHierarchy.parent,
+      selectedVehicle?.id,
+      updatePinnedSubviews
+    ]
   );
 
   const handlePinSubview = useCallback(
@@ -3017,92 +3051,100 @@ export function VehicleInventoryPage() {
                   </button>
                 </form>
               ) : null}
-              {VEHICLE_SUBVIEW_CARDS_ENABLED && subviewCards.length > 0 ? (
-                <div className="mt-5 space-y-4">
-                  <SousVuesCardsGrid
-                    title="Sous-vues disponibles"
-                    subtitle="Glissez une carte pour l'épingler ou cliquez pour l'ouvrir."
-                    subviews={subviewCards}
-                    onOpen={handleOpenSubview}
-                    onPin={(subviewId) => handlePinSubview(subviewId)}
-                    onDragStart={handleSubviewDragStart}
-                    showPinAction
-                  />
-                  <div className="space-y-2">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        Sous-vues affichées dans cette vue
-                      </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Réorganisez par glisser-déposer ou retirez une sous-vue si besoin.
-                      </p>
-                    </div>
-                    <div
-                      className="flex min-h-[120px] gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900"
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        event.dataTransfer.dropEffect = "move";
-                      }}
-                      onDrop={(event) => handlePinnedDrop(event)}
-                    >
-                      {filteredPinnedSubviews.length === 0 ? (
-                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                          Glissez une sous-vue ici pour l'épingler.
+              {VEHICLE_SUBVIEW_CARDS_ENABLED ? (
+                pinnedView ? (
+                  subviewCards.length > 0 ? (
+                    <div className="mt-5 space-y-4">
+                      <SousVuesCardsGrid
+                        title="Sous-vues disponibles"
+                        subtitle="Glissez une carte pour l'épingler ou cliquez pour l'ouvrir."
+                        subviews={subviewCards}
+                        onOpen={handleOpenSubview}
+                        onPin={(subviewId) => handlePinSubview(subviewId)}
+                        onDragStart={handleSubviewDragStart}
+                        showPinAction
+                      />
+                      <div className="space-y-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                            Sous-vues affichées dans cette vue
+                          </p>
+                          <p className="text-xs text-slate-500 dark:text-slate-400">
+                            Réorganisez par glisser-déposer ou retirez une sous-vue si besoin.
+                          </p>
                         </div>
-                      ) : null}
-                      {filteredPinnedSubviews.map((subviewId) => (
                         <div
-                          key={subviewId}
-                          className="min-w-[220px] flex-1"
+                          className="flex min-h-[120px] gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900"
                           onDragOver={(event) => {
                             event.preventDefault();
                             event.dataTransfer.dropEffect = "move";
                           }}
-                          onDrop={(event) => handlePinnedDrop(event, subviewId)}
+                          onDrop={(event) => handlePinnedDrop(event)}
                         >
-                          <button
-                            type="button"
-                            onClick={() => handleOpenSubview(subviewId)}
-                            draggable
-                            onDragStart={(event) => handleSubviewDragStart(event, subviewId)}
-                            className="flex w-full flex-col gap-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 text-left text-sm shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-500/40 dark:bg-indigo-950/50"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="font-semibold text-slate-900 dark:text-slate-100">
-                                {formatSubViewLabel(
-                                  subviewId,
-                                  selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
-                                )}
-                              </p>
-                              <span aria-hidden>📌</span>
+                          {filteredPinnedSubviews.length === 0 ? (
+                            <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                              Glissez une sous-vue ici pour l'épingler.
                             </div>
-                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-                              <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-500 dark:bg-slate-900 dark:text-slate-300">
-                                Épinglée
-                              </span>
-                              <span className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-600 dark:text-slate-300">
-                                Ouvrir
-                              </span>
-                            </div>
-                          </button>
-                          <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                            <span>
-                              {viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0} équipement
-                              {(viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0) > 1 ? "s" : ""}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleUnpinSubview(subviewId)}
-                              className="text-rose-600 hover:text-rose-700 dark:text-rose-300"
+                          ) : null}
+                          {filteredPinnedSubviews.map((subviewId) => (
+                            <div
+                              key={subviewId}
+                              className="min-w-[220px] flex-1"
+                              onDragOver={(event) => {
+                                event.preventDefault();
+                                event.dataTransfer.dropEffect = "move";
+                              }}
+                              onDrop={(event) => handlePinnedDrop(event, subviewId)}
                             >
-                              Retirer
-                            </button>
-                          </div>
+                              <button
+                                type="button"
+                                onClick={() => handleOpenSubview(subviewId)}
+                                draggable
+                                onDragStart={(event) => handleSubviewDragStart(event, subviewId)}
+                                className="flex w-full flex-col gap-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 text-left text-sm shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-500/40 dark:bg-indigo-950/50"
+                              >
+                                <div className="flex items-start justify-between gap-2">
+                                  <p className="font-semibold text-slate-900 dark:text-slate-100">
+                                    {formatSubViewLabel(
+                                      subviewId,
+                                      selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
+                                    )}
+                                  </p>
+                                  <span aria-hidden>📌</span>
+                                </div>
+                                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
+                                  <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-500 dark:bg-slate-900 dark:text-slate-300">
+                                    Épinglée
+                                  </span>
+                                  <span className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-600 dark:text-slate-300">
+                                    Ouvrir
+                                  </span>
+                                </div>
+                              </button>
+                              <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                                <span>
+                                  {viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0} équipement
+                                  {(viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0) > 1 ? "s" : ""}
+                                </span>
+                                <button
+                                  type="button"
+                                  onClick={() => handleUnpinSubview(subviewId)}
+                                  className="text-rose-600 hover:text-rose-700 dark:text-rose-300"
+                                >
+                                  Retirer
+                                </button>
+                              </div>
+                            </div>
+                          ))}
                         </div>
-                      ))}
+                      </div>
                     </div>
+                  ) : null
+                ) : (
+                  <div className="mt-5 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                    Aucune vue épinglable n'est disponible pour le moment.
                   </div>
-                </div>
+                )
               ) : null}
             </div>
           ) : null}
@@ -6088,6 +6130,19 @@ export function getVehicleViews(vehicle: VehicleCategory | null): string[] {
     .filter((entry, index, array) => array.indexOf(entry) === index);
 
   return sanitized.length > 0 ? sanitized : [DEFAULT_VIEW_LABEL];
+}
+
+export function resolvePinnedView(
+  views: string[],
+  pinnedViewName: string | null
+): string | null {
+  if (!pinnedViewName) {
+    return null;
+  }
+  const normalizedPinned = normalizeViewName(pinnedViewName);
+  return (
+    views.find((view) => normalizeViewName(view) === normalizedPinned) ?? null
+  );
 }
 
 export function filterPinnedSubviews(params: {
