@@ -729,6 +729,7 @@ export function VehicleInventoryPage() {
   const [isBackgroundPanelVisible, setIsBackgroundPanelVisible] = useState(true);
   const [isAddingSubView, setIsAddingSubView] = useState(false);
   const [newSubViewName, setNewSubViewName] = useState("");
+  const [localPinnedSubviewIds, setLocalPinnedSubviewIds] = useState<string[]>([]);
   const renderCountRef = useRef(0);
   renderCountRef.current += 1;
   if (import.meta.env.DEV) {
@@ -938,6 +939,10 @@ export function VehicleInventoryPage() {
       return response.data;
     }
   });
+
+  useEffect(() => {
+    setLocalPinnedSubviewIds([]);
+  }, [pinnedViewName, selectedVehicle?.id]);
 
   const buildUpdatePayload = ({
     categoryId,
@@ -2095,20 +2100,32 @@ export function VehicleInventoryPage() {
     });
   }, [normalizedVehicleViews, pinnedView, pinnedViewName, selectedHierarchy.parent]);
 
+  const effectivePinnedSubviewIds = useMemo(() => {
+    const combined: string[] = [];
+    const addUnique = (entry: string) => {
+      if (!combined.some((existing) => normalizeViewName(existing) === normalizeViewName(entry))) {
+        combined.push(entry);
+      }
+    };
+    (pinnedSubviews?.pinned ?? []).forEach((entry) => addUnique(entry));
+    localPinnedSubviewIds.forEach((entry) => addUnique(entry));
+    return combined;
+  }, [localPinnedSubviewIds, pinnedSubviews?.pinned]);
+
   const filteredPinnedSubviews = useMemo(
     () => {
       if (!pinnedViewName || !pinnedView) {
         return [];
       }
       return filterPinnedSubviews({
-        pinned: pinnedSubviews?.pinned ?? [],
+        pinned: effectivePinnedSubviewIds,
         availableSubViews,
         parentView: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
       });
     },
     [
       availableSubViews,
-      pinnedSubviews?.pinned,
+      effectivePinnedSubviewIds,
       pinnedView,
       pinnedViewName,
       selectedHierarchy.parent
@@ -2148,8 +2165,21 @@ export function VehicleInventoryPage() {
     [filteredPinnedSubviews, selectedHierarchy.parent, viewItemCountMap]
   );
 
+  useEffect(() => {
+    console.log("[SubViewsUI] render", {
+      vehicleId: selectedVehicle?.id ?? null,
+      viewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+      subviewsCount: availableSubViews.length
+    });
+  }, [availableSubViews.length, selectedHierarchy.parent, selectedVehicle?.id]);
+
+  useEffect(() => {
+    console.log("[SubViewsUI] pinned", filteredPinnedSubviews);
+  }, [filteredPinnedSubviews]);
+
   const handlePinSubview = useCallback(
     (subviewId: string) => {
+      setLocalPinnedSubviewIds((previous) => upsertPinnedSubview(previous, subviewId));
       if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
         return;
       }
@@ -2175,6 +2205,11 @@ export function VehicleInventoryPage() {
 
   const handleUnpinSubview = useCallback(
     (subviewId: string) => {
+      setLocalPinnedSubviewIds((previous) =>
+        previous.filter(
+          (entry) => normalizeViewName(entry) !== normalizeViewName(subviewId)
+        )
+      );
       if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
         return;
       }
@@ -3118,6 +3153,50 @@ export function VehicleInventoryPage() {
                     {isAddingSubView ? "Fermer" : "Ajouter une sous-vue"}
                   </button>
                 </div>
+                <div className="mt-4 space-y-4">
+                  <PinnedSubViewsDropZone
+                    parentViewId={selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL}
+                    pinnedSubviews={pinnedSubviewCards}
+                    onOpenSubview={handleOpenSubview}
+                    onRemovePinnedSubview={handleUnpinSubview}
+                  />
+                  <section className="space-y-3">
+                    <div>
+                      <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                        Sous-vues disponibles
+                      </p>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        Glissez une sous-vue vers la zone d'épinglage pour l'afficher dans la vue principale.
+                      </p>
+                    </div>
+                    {!pinnedView ? (
+                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                        Aucune vue épinglable n'est disponible pour le moment.
+                      </div>
+                    ) : availableSubviewCards.length > 0 ? (
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {availableSubviewCards.map((subview) => (
+                          <SubViewCard
+                            key={subview.id}
+                            subview={subview}
+                            mode="draggable"
+                            dragData={{
+                              kind: "SUBVIEW",
+                              subviewId: subview.id,
+                              parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+                              vehicleId: selectedVehicle.id
+                            }}
+                            onOpen={handleOpenSubview}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                        Aucune sous-vue disponible pour l'instant.
+                      </div>
+                    )}
+                  </section>
+                </div>
                 {isAddingSubView ? (
                   <form className="mt-3 space-y-2 sm:flex sm:items-end sm:gap-3" onSubmit={createSubviewForSelectedView}>
                     <label className="flex-1 space-y-1" htmlFor="sub-view-name">
@@ -3144,47 +3223,6 @@ export function VehicleInventoryPage() {
                   </form>
                 ) : null}
               </div>
-            ) : null}
-
-            {selectedVehicle && VEHICLE_SUBVIEW_CARDS_ENABLED ? (
-              pinnedView ? (
-                <section className="mt-4 space-y-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Sous-vues disponibles
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Glissez une sous-vue vers la zone d'épinglage pour l'afficher dans la vue principale.
-                    </p>
-                  </div>
-                  {availableSubviewCards.length > 0 ? (
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                      {availableSubviewCards.map((subview) => (
-                        <SubViewCard
-                          key={subview.id}
-                          subview={subview}
-                          mode="draggable"
-                          dragData={{
-                            kind: "SUBVIEW",
-                            subviewId: subview.id,
-                            parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
-                            vehicleId: selectedVehicle.id
-                          }}
-                          onOpen={handleOpenSubview}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                      Aucune sous-vue disponible pour l'instant.
-                    </div>
-                  )}
-                </section>
-              ) : (
-                <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                  Aucune vue épinglable n'est disponible pour le moment.
-                </div>
-              )
             ) : null}
 
             <div className="grid min-w-0 gap-6 lg:grid-cols-[2fr,1fr]">
