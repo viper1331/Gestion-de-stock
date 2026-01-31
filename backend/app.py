@@ -29,6 +29,7 @@ from backend.api import (
     permissions,
     updates,
     users,
+    vehicles as vehicles_api,
     vehicle_inventory,
     remise_inventory,
     about,
@@ -136,6 +137,7 @@ app.include_router(purchase_suggestions.router, tags=["purchase-suggestions"])
 app.include_router(remise_orders.router, prefix="/remise-inventory/orders", tags=["remise-purchase-orders"])
 app.include_router(pharmacy_orders.router, prefix="/pharmacy/orders", tags=["pharmacy-purchase-orders"])
 app.include_router(vehicle_inventory.router, prefix="/vehicle-inventory", tags=["vehicle-inventory"])
+app.include_router(vehicles_api.router, tags=["vehicles"])
 app.include_router(item_links.router, tags=["item-links"])
 app.include_router(link_categories.router, prefix="/link-categories", tags=["link-categories"])
 app.include_router(remise_inventory.router, prefix="/remise-inventory", tags=["remise-inventory"])
