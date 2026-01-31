@@ -3275,6 +3275,127 @@ def test_pharmacy_lots_available_in_vehicle_library() -> None:
     }
 
 
+def test_vehicle_library_lots_include_catalog_cover_image() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    lot_name = f"Lot catalogue-{uuid4().hex[:6]}"
+    remise_lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": lot_name},
+        headers=admin_headers,
+    )
+    assert remise_lot_resp.status_code == 201, remise_lot_resp.text
+    remise_lot_id = remise_lot_resp.json()["id"]
+
+    image_resp = client.post(
+        f"/remise-inventory/lots/{remise_lot_id}/image",
+        files={"file": ("catalog.png", _TRANSPARENT_PIXEL, "image/png")},
+        headers=admin_headers,
+    )
+    assert image_resp.status_code == 200, image_resp.text
+    expected_cover_url = image_resp.json()["image_url"]
+    assert expected_cover_url, "L'image catalogue devrait être retournée."
+
+    pharmacy_lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": lot_name, "description": "Lot véhicule"},
+        headers=admin_headers,
+    )
+    assert pharmacy_lot_resp.status_code == 201, pharmacy_lot_resp.text
+    lot_id = pharmacy_lot_resp.json()["id"]
+
+    library_resp = client.get(
+        "/vehicle-inventory/library/lots",
+        params={"vehicle_type": "secours_a_personne"},
+        headers=admin_headers,
+    )
+    assert library_resp.status_code == 200, library_resp.text
+    lot_entry = next(
+        (entry for entry in library_resp.json() if entry["id"] == lot_id),
+        None,
+    )
+    assert lot_entry is not None
+    assert lot_entry["cover_image_url"] == expected_cover_url
+
+
+def test_vehicle_library_lots_cover_image_missing_returns_null() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    lot_name = f"Lot sans image-{uuid4().hex[:6]}"
+    remise_lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": lot_name},
+        headers=admin_headers,
+    )
+    assert remise_lot_resp.status_code == 201, remise_lot_resp.text
+
+    pharmacy_lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": lot_name, "description": "Lot véhicule"},
+        headers=admin_headers,
+    )
+    assert pharmacy_lot_resp.status_code == 201, pharmacy_lot_resp.text
+    lot_id = pharmacy_lot_resp.json()["id"]
+
+    library_resp = client.get(
+        "/vehicle-inventory/library/lots",
+        params={"vehicle_type": "secours_a_personne"},
+        headers=admin_headers,
+    )
+    assert library_resp.status_code == 200, library_resp.text
+    lot_entry = next(
+        (entry for entry in library_resp.json() if entry["id"] == lot_id),
+        None,
+    )
+    assert lot_entry is not None
+    assert lot_entry["cover_image_url"] is None
+
+
+def test_vehicle_library_lot_cover_image_is_site_scoped() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    lot_name = f"Lot site-{uuid4().hex[:6]}"
+    pharmacy_lot_resp = client.post(
+        "/pharmacy/lots/",
+        json={"name": lot_name, "description": "Lot véhicule"},
+        headers=admin_headers,
+    )
+    assert pharmacy_lot_resp.status_code == 201, pharmacy_lot_resp.text
+    lot_id = pharmacy_lot_resp.json()["id"]
+
+    site_headers = {**admin_headers, "X-Site-Key": "GSM"}
+    remise_lot_resp = client.post(
+        "/remise-inventory/lots/",
+        json={"name": lot_name},
+        headers=site_headers,
+    )
+    assert remise_lot_resp.status_code == 201, remise_lot_resp.text
+    remise_lot_id = remise_lot_resp.json()["id"]
+
+    image_resp = client.post(
+        f"/remise-inventory/lots/{remise_lot_id}/image",
+        files={"file": ("catalog.png", _TRANSPARENT_PIXEL, "image/png")},
+        headers=site_headers,
+    )
+    assert image_resp.status_code == 200, image_resp.text
+
+    library_resp = client.get(
+        "/vehicle-inventory/library/lots",
+        params={"vehicle_type": "secours_a_personne"},
+        headers=admin_headers,
+    )
+    assert library_resp.status_code == 200, library_resp.text
+    lot_entry = next(
+        (entry for entry in library_resp.json() if entry["id"] == lot_id),
+        None,
+    )
+    assert lot_entry is not None
+    assert lot_entry["cover_image_url"] is None
+
+
 def test_apply_pharmacy_lot_to_vehicle() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")

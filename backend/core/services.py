@@ -9035,12 +9035,18 @@ def fetch_remise_movements(item_id: int) -> list[models.Movement]:
 
 
 def _build_remise_lot(row: sqlite3.Row) -> models.RemiseLot:
+    cover_image_path = None
+    if "cover_image_path" in row.keys():
+        cover_image_path = row["cover_image_path"]
+    else:
+        cover_image_path = row["image_path"]
     return models.RemiseLot(
         id=row["id"],
         name=row["name"],
         description=row["description"],
         created_at=_coerce_datetime(row["created_at"]),
         image_url=_build_media_url(row["image_path"]),
+        cover_image_url=_build_media_url(cover_image_path),
         item_count=row["item_count"],
         total_quantity=row["total_quantity"],
         extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
@@ -9408,12 +9414,14 @@ def remove_remise_lot_item(lot_id: int, lot_item_id: int) -> None:
 
 
 def _build_pharmacy_lot(row: sqlite3.Row) -> models.PharmacyLot:
+    cover_image_path = row["cover_image_path"] if "cover_image_path" in row.keys() else None
     return models.PharmacyLot(
         id=row["id"],
         name=row["name"],
         description=row["description"],
         created_at=row["created_at"],
         image_url=_build_media_url(row["image_path"]),
+        cover_image_url=_build_media_url(cover_image_path),
         item_count=row["item_count"],
         total_quantity=row["total_quantity"],
         extra=_parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None),
@@ -9432,8 +9440,15 @@ def list_pharmacy_lots() -> list[models.PharmacyLot]:
         rows = conn.execute(
             """
             SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at, pl.extra_json,
+                   rl.cover_image_path AS cover_image_path,
                    COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
             FROM pharmacy_lots AS pl
+            LEFT JOIN (
+                SELECT LOWER(name) AS normalized_name,
+                       MAX(image_path) AS cover_image_path
+                FROM remise_lots
+                GROUP BY LOWER(name)
+            ) AS rl ON rl.normalized_name = LOWER(pl.name)
             LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
             GROUP BY pl.id
             ORDER BY pl.created_at DESC
@@ -9448,8 +9463,15 @@ def get_pharmacy_lot(lot_id: int) -> models.PharmacyLot:
         row = conn.execute(
             """
             SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at, pl.extra_json,
+                   rl.cover_image_path AS cover_image_path,
                    COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
             FROM pharmacy_lots AS pl
+            LEFT JOIN (
+                SELECT LOWER(name) AS normalized_name,
+                       MAX(image_path) AS cover_image_path
+                FROM remise_lots
+                GROUP BY LOWER(name)
+            ) AS rl ON rl.normalized_name = LOWER(pl.name)
             LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
             WHERE pl.id = ?
             GROUP BY pl.id
@@ -9471,8 +9493,15 @@ def list_pharmacy_lots_with_items(
         params: list[object] = []
         query = """
             SELECT pl.id, pl.name, pl.description, pl.image_path, pl.created_at, pl.extra_json,
+                   rl.cover_image_path AS cover_image_path,
                    COUNT(pli.id) AS item_count, COALESCE(SUM(pli.quantity), 0) AS total_quantity
             FROM pharmacy_lots AS pl
+            LEFT JOIN (
+                SELECT LOWER(name) AS normalized_name,
+                       MAX(image_path) AS cover_image_path
+                FROM remise_lots
+                GROUP BY LOWER(name)
+            ) AS rl ON rl.normalized_name = LOWER(pl.name)
             LEFT JOIN pharmacy_lot_items AS pli ON pli.lot_id = pl.id
             """
         if exclude_applied_vehicle_id is not None:
