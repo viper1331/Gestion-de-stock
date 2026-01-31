@@ -28,7 +28,7 @@ import { useThrottledHoverState } from "./useThrottledHoverState";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
-import { SousVuesCardsGrid, type SubviewCardData } from "./SousVuesCardsGrid";
+import { SousVuesCardsGrid, SubViewCardDraggable, type SubviewCardData } from "./SousVuesCardsGrid";
 
 interface VehicleViewConfig {
   name: string;
@@ -2095,6 +2095,17 @@ export function VehicleInventoryPage() {
     viewItemCountMap
   ]);
 
+  const pinnedSubviewCards = useMemo<SubviewCardData[]>(
+    () =>
+      filteredPinnedSubviews.map((subviewId) => ({
+        id: subviewId,
+        label: formatSubViewLabel(subviewId, selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL),
+        itemCount: viewItemCountMap.get(normalizeViewName(subviewId)),
+        isPinned: true
+      })),
+    [filteredPinnedSubviews, selectedHierarchy.parent, viewItemCountMap]
+  );
+
   const commitPinnedSubviews = useCallback(
     (nextPinned: string[]) => {
       if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
@@ -2141,7 +2152,7 @@ export function VehicleInventoryPage() {
   );
 
   const handleSubviewDragStart = useCallback(
-    (event: DragEvent<HTMLButtonElement>, subviewId: string) => {
+    (event: DragEvent<HTMLElement>, subviewId: string) => {
       const rect = event.currentTarget.getBoundingClientRect();
       writeDraggedItemData(event, {
         kind: "vehicle_subview",
@@ -3093,87 +3104,13 @@ export function VehicleInventoryPage() {
                     <div className="mt-5 space-y-4">
                       <SousVuesCardsGrid
                         title="Sous-vues disponibles"
-                        subtitle="Glissez une carte pour l'épingler ou cliquez pour l'ouvrir."
+                        subtitle="Glissez une carte pour l'épingler dans la vue principale ou cliquez pour l'ouvrir."
                         subviews={subviewCards}
                         onOpen={handleOpenSubview}
                         onPin={(subviewId) => handlePinSubview(subviewId)}
                         onDragStart={handleSubviewDragStart}
                         showPinAction
                       />
-                      <div className="space-y-2">
-                        <div>
-                          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                            Sous-vues affichées dans cette vue
-                          </p>
-                          <p className="text-xs text-slate-500 dark:text-slate-400">
-                            Réorganisez par glisser-déposer ou retirez une sous-vue si besoin.
-                          </p>
-                        </div>
-                        <div
-                          className="flex min-h-[120px] gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900"
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = "move";
-                          }}
-                          onDrop={(event) => handlePinnedDrop(event)}
-                        >
-                          {filteredPinnedSubviews.length === 0 ? (
-                            <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                              Glissez une sous-vue ici pour l'épingler.
-                            </div>
-                          ) : null}
-                          {filteredPinnedSubviews.map((subviewId) => (
-                            <div
-                              key={subviewId}
-                              className="min-w-[220px] flex-1"
-                              onDragOver={(event) => {
-                                event.preventDefault();
-                                event.dataTransfer.dropEffect = "move";
-                              }}
-                              onDrop={(event) => handlePinnedDrop(event, subviewId)}
-                            >
-                              <button
-                                type="button"
-                                onClick={() => handleOpenSubview(subviewId)}
-                                draggable
-                                onDragStart={(event) => handleSubviewDragStart(event, subviewId)}
-                                className="flex w-full flex-col gap-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 text-left text-sm shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-500/40 dark:bg-indigo-950/50"
-                              >
-                                <div className="flex items-start justify-between gap-2">
-                                  <p className="font-semibold text-slate-900 dark:text-slate-100">
-                                    {formatSubViewLabel(
-                                      subviewId,
-                                      selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
-                                    )}
-                                  </p>
-                                  <span aria-hidden>📌</span>
-                                </div>
-                                <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-                                  <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-500 dark:bg-slate-900 dark:text-slate-300">
-                                    Épinglée
-                                  </span>
-                                  <span className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-600 dark:text-slate-300">
-                                    Ouvrir
-                                  </span>
-                                </div>
-                              </button>
-                              <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                                <span>
-                                  {viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0} équipement
-                                  {(viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0) > 1 ? "s" : ""}
-                                </span>
-                                <button
-                                  type="button"
-                                  onClick={() => handleUnpinSubview(subviewId)}
-                                  className="text-rose-600 hover:text-rose-700 dark:text-rose-300"
-                                >
-                                  Retirer
-                                </button>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
                     </div>
                   ) : null
                 ) : (
@@ -3194,6 +3131,7 @@ export function VehicleInventoryPage() {
                 allItems={items}
                 appliedLots={appliedLots}
                 appliedLotItemsByAssignment={appliedLotItemsByAssignment}
+                pinnedSubviews={VEHICLE_SUBVIEW_CARDS_ENABLED ? pinnedSubviewCards : undefined}
                 categoryId={selectedVehicle.id}
                 viewConfig={selectedViewConfig}
                 availablePhotos={vehiclePhotos}
@@ -3320,6 +3258,10 @@ export function VehicleInventoryPage() {
               onDropSubview={(subviewId) => {
                 handlePinSubview(subviewId);
               }}
+              onPinnedDrop={handlePinnedDrop}
+              onOpenSubview={handleOpenSubview}
+              onRemovePinnedSubview={handleUnpinSubview}
+              onSubviewDragStart={handleSubviewDragStart}
               onRemoveAppliedLot={removeAppliedLot.mutate}
               isRemovingAppliedLot={removeAppliedLot.isPending}
               onUpdateItemQuantity={(itemId, quantity) => {
@@ -3759,6 +3701,7 @@ interface VehicleCompartmentProps {
   allItems: VehicleItem[];
   appliedLots?: VehicleAppliedLot[];
   appliedLotItemsByAssignment?: Map<number, VehicleItem[]>;
+  pinnedSubviews?: SubviewCardData[];
   categoryId: number;
   viewConfig: VehicleViewConfig | null;
   availablePhotos: VehiclePhoto[];
@@ -3774,6 +3717,10 @@ interface VehicleCompartmentProps {
   onDropAppliedLot?: (assignmentId: number, position: { x: number; y: number }) => void;
   onUpdateItemQuantity?: (itemId: number, quantity: number) => void;
   onDropSubview?: (subviewId: string) => void;
+  onPinnedDrop?: (event: DragEvent<HTMLElement>, targetSubviewId?: string) => void;
+  onOpenSubview?: (subviewId: string) => void;
+  onRemovePinnedSubview?: (subviewId: string) => void;
+  onSubviewDragStart?: (event: DragEvent<HTMLElement>, subviewId: string) => void;
   onDragStartCapture: () => void;
   onRemoveAppliedLot?: (assignmentId: number) => void;
   isRemovingAppliedLot?: boolean;
@@ -3786,6 +3733,7 @@ function VehicleCompartment({
   allItems,
   appliedLots = [],
   appliedLotItemsByAssignment = new Map(),
+  pinnedSubviews,
   categoryId,
   viewConfig,
   availablePhotos,
@@ -3801,6 +3749,10 @@ function VehicleCompartment({
   onDropAppliedLot,
   onUpdateItemQuantity,
   onDropSubview,
+  onPinnedDrop,
+  onOpenSubview,
+  onRemovePinnedSubview,
+  onSubviewDragStart,
   onDragStartCapture,
   onRemoveAppliedLot,
   isRemovingAppliedLot
@@ -4267,13 +4219,75 @@ function VehicleCompartment({
                     : "Importez une photo de l'intérieur du véhicule pour définir un fond personnalisé."}
                 </span>
               </>
-            ) : (
-              <div className="rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[11px] text-slate-500 dark:border-slate-600 dark:text-slate-400">
-                Cette section est masquée. Cliquez sur « Afficher » pour la rouvrir.
-              </div>
-            )}
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[11px] text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                  Cette section est masquée. Cliquez sur « Afficher » pour la rouvrir.
+                </div>
+              )}
           </div>
         </div>
+
+        {pinnedSubviews ? (
+          <div className="space-y-3">
+            <div>
+              <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                Sous-vues intégrées
+              </p>
+              <p className="text-xs text-slate-500 dark:text-slate-400">
+                Glissez une sous-vue ici pour l'afficher dans cette vue principale.
+              </p>
+            </div>
+            <div
+              className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3"
+              onDragOver={(event) => {
+                if (!onPinnedDrop) {
+                  return;
+                }
+                event.preventDefault();
+                event.dataTransfer.dropEffect = "move";
+              }}
+              onDrop={(event) => onPinnedDrop?.(event)}
+            >
+              {pinnedSubviews.length === 0 ? (
+                <div className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  Glissez une sous-vue ici pour l'épingler.
+                </div>
+              ) : null}
+              {pinnedSubviews.map((subview) => (
+                <div
+                  key={subview.id}
+                  className="space-y-2"
+                  onDragOver={(event) => {
+                    if (!onPinnedDrop) {
+                      return;
+                    }
+                    event.preventDefault();
+                    event.dataTransfer.dropEffect = "move";
+                  }}
+                  onDrop={(event) => onPinnedDrop?.(event, subview.id)}
+                >
+                  <SubViewCardDraggable
+                    subview={subview}
+                    onOpen={(subviewId) => onOpenSubview?.(subviewId)}
+                    onDragStart={onSubviewDragStart}
+                  />
+                  <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
+                    <span>
+                      {subview.itemCount ?? 0} équipement{subview.itemCount === 1 ? "" : "s"}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onRemovePinnedSubview?.(subview.id)}
+                      className="text-rose-600 hover:text-rose-700 dark:text-rose-300"
+                    >
+                      Retirer
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         <div
           ref={boardRef}
