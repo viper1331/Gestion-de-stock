@@ -64,22 +64,41 @@ def test_vehicle_pinned_subviews_permission_denied() -> None:
     _grant_module_permission(user_id, "vehicle_inventory", can_view=True, can_edit=False)
     user_headers = login_headers(client, "pinned_user", "password123")
 
-    denied = client.put(
+    denied = client.post(
         f"/vehicles/{vehicle_id}/views/CABINE/pinned-subviews",
-        json={"pinned": ["Cabine - Casier 1"]},
+        json={"subview_id": "Cabine - Casier 1"},
         headers=user_headers,
     )
     assert denied.status_code == 403, denied.text
 
 
-def test_vehicle_pinned_subviews_invalid_ids_ignored() -> None:
+def test_vehicle_pinned_subviews_invalid_id_rejected() -> None:
     services.ensure_database_ready()
     admin_headers = login_headers(client, "admin", "admin123")
     vehicle_id = _create_vehicle(admin_headers)
 
-    response = client.put(
+    response = client.post(
         f"/vehicles/{vehicle_id}/views/CABINE/pinned-subviews",
-        json={"pinned": ["Cabine - Casier 1", "Coffre - B"]},
+        json={"subview_id": "Coffre - B"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 400, response.text
+
+
+def test_vehicle_pinned_subviews_idempotent_add() -> None:
+    services.ensure_database_ready()
+    admin_headers = login_headers(client, "admin", "admin123")
+    vehicle_id = _create_vehicle(admin_headers)
+
+    response = client.post(
+        f"/vehicles/{vehicle_id}/views/CABINE/pinned-subviews",
+        json={"subview_id": "Cabine - Casier 1"},
+        headers=admin_headers,
+    )
+    assert response.status_code == 200, response.text
+    response = client.post(
+        f"/vehicles/{vehicle_id}/views/CABINE/pinned-subviews",
+        json={"subview_id": "Cabine - Casier 1"},
         headers=admin_headers,
     )
     assert response.status_code == 200, response.text

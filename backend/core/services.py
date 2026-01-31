@@ -3213,36 +3213,67 @@ def _ensure_vehicle_view_pinned_subviews_table(
         execute = conn.execute
     if executescript is None:
         executescript = conn.executescript
-    executescript(
-        """
-        CREATE TABLE IF NOT EXISTS vehicle_view_pinned_subviews (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            vehicle_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
-            view_id TEXT NOT NULL COLLATE NOCASE,
-            site_id TEXT NOT NULL,
-            pinned_order_json TEXT NOT NULL DEFAULT '[]',
-            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-            UNIQUE(vehicle_id, view_id, site_id)
-        );
-        CREATE INDEX IF NOT EXISTS idx_vehicle_view_pinned_subviews_vehicle
-        ON vehicle_view_pinned_subviews(vehicle_id);
-        """
-    )
     columns = {
         row["name"] for row in execute("PRAGMA table_info(vehicle_view_pinned_subviews)").fetchall()
     }
-    if "site_id" not in columns:
-        execute(
-            "ALTER TABLE vehicle_view_pinned_subviews ADD COLUMN site_id TEXT NOT NULL DEFAULT 'JLL'"
+    if not columns:
+        executescript(
+            """
+            CREATE TABLE IF NOT EXISTS vehicle_view_pinned_subviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+                parent_view_id TEXT NOT NULL COLLATE NOCASE,
+                subview_id TEXT NOT NULL COLLATE NOCASE,
+                position INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(vehicle_id, parent_view_id, subview_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_vehicle_view_pinned_subviews_vehicle
+            ON vehicle_view_pinned_subviews(vehicle_id);
+            """
         )
-    if "pinned_order_json" not in columns:
-        execute(
-            "ALTER TABLE vehicle_view_pinned_subviews ADD COLUMN pinned_order_json TEXT NOT NULL DEFAULT '[]'"
+        return
+
+    legacy_columns = {"view_id", "pinned_order_json"}
+    if legacy_columns.intersection(columns) and "subview_id" not in columns:
+        executescript(
+            """
+            ALTER TABLE vehicle_view_pinned_subviews RENAME TO vehicle_view_pinned_subviews_legacy;
+            CREATE TABLE vehicle_view_pinned_subviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                vehicle_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+                parent_view_id TEXT NOT NULL COLLATE NOCASE,
+                subview_id TEXT NOT NULL COLLATE NOCASE,
+                position INTEGER,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+                UNIQUE(vehicle_id, parent_view_id, subview_id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_vehicle_view_pinned_subviews_vehicle
+            ON vehicle_view_pinned_subviews(vehicle_id);
+            """
         )
-    if "updated_at" not in columns:
-        execute(
-            "ALTER TABLE vehicle_view_pinned_subviews ADD COLUMN updated_at TIMESTAMP"
-        )
+        rows = execute(
+            "SELECT vehicle_id, view_id, pinned_order_json FROM vehicle_view_pinned_subviews_legacy"
+        ).fetchall()
+        for row in rows:
+            raw = row["pinned_order_json"] or "[]"
+            try:
+                stored = json.loads(raw)
+            except json.JSONDecodeError:
+                stored = []
+            for position, subview_id in enumerate(stored):
+                if not isinstance(subview_id, str) or not subview_id.strip():
+                    continue
+                execute(
+                    """
+                    INSERT OR IGNORE INTO vehicle_view_pinned_subviews (
+                        vehicle_id, parent_view_id, subview_id, position
+                    )
+                    VALUES (?, ?, ?, ?)
+                    """,
+                    (row["vehicle_id"], row["view_id"], subview_id, position),
+                )
+        execute("DROP TABLE vehicle_view_pinned_subviews_legacy")
 
 
 def _ensure_remise_item_columns(
@@ -8770,48 +8801,40 @@ def list_vehicle_view_pinned_subviews(
     available_views = set(vehicle.sizes or [DEFAULT_VEHICLE_VIEW_NAME])
     if normalized_view not in available_views:
         raise ValueError("Vue introuvable")
-    site_id = db.get_current_site_key()
     with db.get_stock_connection() as conn:
         _ensure_vehicle_view_pinned_subviews_table(conn)
-        row = conn.execute(
+        rows = conn.execute(
             """
-            SELECT pinned_order_json
+            SELECT subview_id
             FROM vehicle_view_pinned_subviews
-            WHERE vehicle_id = ? AND view_id = ? AND site_id = ?
+            WHERE vehicle_id = ? AND parent_view_id = ?
+            ORDER BY position IS NULL, position, created_at
             """,
-            (vehicle_id, normalized_view, site_id),
-        ).fetchone()
-        if row and row["pinned_order_json"]:
-            try:
-                stored = json.loads(row["pinned_order_json"])
-            except json.JSONDecodeError:
-                stored = []
-        else:
-            stored = []
+            (vehicle_id, normalized_view),
+        ).fetchall()
+        stored = [row["subview_id"] for row in rows]
         filtered = _filter_pinned_subviews(
             stored,
             available_views=available_views,
             parent_view=normalized_view,
         )
         if filtered != stored:
-            conn.execute(
-                """
-                INSERT INTO vehicle_view_pinned_subviews (
-                    vehicle_id, view_id, site_id, pinned_order_json, updated_at
+            invalid = {entry for entry in stored if entry not in filtered}
+            if invalid:
+                conn.execute(
+                    f"""
+                    DELETE FROM vehicle_view_pinned_subviews
+                    WHERE vehicle_id = ? AND parent_view_id = ?
+                      AND subview_id IN ({",".join("?" for _ in invalid)})
+                    """,
+                    (vehicle_id, normalized_view, *invalid),
                 )
-                VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-                ON CONFLICT(vehicle_id, view_id, site_id)
-                DO UPDATE SET pinned_order_json = excluded.pinned_order_json,
-                              updated_at = excluded.updated_at
-                """,
-                (vehicle_id, normalized_view, site_id, json.dumps(filtered)),
-            )
             _persist_after_commit(conn, "vehicle_inventory")
     return filtered
 
 
-def update_vehicle_view_pinned_subviews(
-    vehicle_id: int, view_id: str, pinned: Iterable[str]
+def add_vehicle_view_pinned_subview(
+    vehicle_id: int, view_id: str, subview_id: str
 ) -> list[str]:
     ensure_database_ready()
     vehicle = get_vehicle_category(vehicle_id)
@@ -8822,27 +8845,69 @@ def update_vehicle_view_pinned_subviews(
     if normalized_view not in available_views:
         raise ValueError("Vue introuvable")
     filtered = _filter_pinned_subviews(
-        pinned,
+        [subview_id],
         available_views=available_views,
         parent_view=normalized_view,
     )
-    site_id = db.get_current_site_key()
+    if not filtered:
+        raise ValueError("Sous-vue introuvable")
+    normalized_subview = filtered[0]
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_pinned_subviews_table(conn)
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM vehicle_view_pinned_subviews
+            WHERE vehicle_id = ? AND parent_view_id = ? AND subview_id = ?
+            """,
+            (vehicle_id, normalized_view, normalized_subview),
+        ).fetchone()
+        if existing is None:
+            row = conn.execute(
+                """
+                SELECT COALESCE(MAX(position), 0) AS max_position
+                FROM vehicle_view_pinned_subviews
+                WHERE vehicle_id = ? AND parent_view_id = ?
+                """,
+                (vehicle_id, normalized_view),
+            ).fetchone()
+            next_position = int(row["max_position"] or 0) + 1
+            conn.execute(
+                """
+                INSERT INTO vehicle_view_pinned_subviews (
+                    vehicle_id, parent_view_id, subview_id, position
+                )
+                VALUES (?, ?, ?, ?)
+                """,
+                (vehicle_id, normalized_view, normalized_subview, next_position),
+            )
+            _persist_after_commit(conn, "vehicle_inventory")
+    return list_vehicle_view_pinned_subviews(vehicle_id, normalized_view)
+
+
+def delete_vehicle_view_pinned_subview(
+    vehicle_id: int, view_id: str, subview_id: str
+) -> list[str]:
+    ensure_database_ready()
+    vehicle = get_vehicle_category(vehicle_id)
+    if vehicle is None:
+        raise ValueError("Véhicule introuvable")
+    normalized_view = _normalize_view_name(view_id)
+    available_views = set(vehicle.sizes or [DEFAULT_VEHICLE_VIEW_NAME])
+    if normalized_view not in available_views:
+        raise ValueError("Vue introuvable")
+    normalized_subview = _normalize_view_name(subview_id)
     with db.get_stock_connection() as conn:
         _ensure_vehicle_view_pinned_subviews_table(conn)
         conn.execute(
             """
-            INSERT INTO vehicle_view_pinned_subviews (
-                vehicle_id, view_id, site_id, pinned_order_json, updated_at
-            )
-            VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
-            ON CONFLICT(vehicle_id, view_id, site_id)
-            DO UPDATE SET pinned_order_json = excluded.pinned_order_json,
-                          updated_at = excluded.updated_at
+            DELETE FROM vehicle_view_pinned_subviews
+            WHERE vehicle_id = ? AND parent_view_id = ? AND subview_id = ?
             """,
-            (vehicle_id, normalized_view, site_id, json.dumps(filtered)),
+            (vehicle_id, normalized_view, normalized_subview),
         )
         _persist_after_commit(conn, "vehicle_inventory")
-    return filtered
+    return list_vehicle_view_pinned_subviews(vehicle_id, normalized_view)
 
 
 def list_low_stock(threshold: int) -> list[models.LowStockReport]:

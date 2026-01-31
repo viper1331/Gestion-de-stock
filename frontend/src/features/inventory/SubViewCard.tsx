@@ -7,29 +7,31 @@ export type SubviewCardData = {
   id: string;
   label: string;
   itemCount?: number;
-  isPinned?: boolean;
 };
 
 type SubviewDragData = {
-  kind: "SUBVIEW_CARD";
+  kind: "SUBVIEW";
   subviewId: string;
   parentViewId: string;
   vehicleId: number;
 };
 
-interface SubViewDraggableCardProps {
+interface SubViewCardProps {
   subview: SubviewCardData;
-  onOpen: (subviewId: string) => void;
+  mode: "draggable" | "pinned";
   dragData?: SubviewDragData;
-  draggable?: boolean;
+  onOpen?: (subviewId: string) => void;
+  onRemove?: (subviewId: string) => void;
 }
 
-export function SubViewDraggableCard({
+export function SubViewCard({
   subview,
-  onOpen,
+  mode,
   dragData,
-  draggable = false
-}: SubViewDraggableCardProps) {
+  onOpen,
+  onRemove
+}: SubViewCardProps) {
+  const isDraggable = mode === "draggable";
   const {
     attributes,
     listeners,
@@ -38,9 +40,9 @@ export function SubViewDraggableCard({
     transform,
     isDragging
   } = useDraggable({
-    id: `subview-card-${subview.id}`,
+    id: `subview:${subview.id}`,
     data: dragData,
-    disabled: !draggable
+    disabled: !isDraggable
   });
   const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
   const itemCountLabel =
@@ -49,6 +51,9 @@ export function SubViewDraggableCard({
       : null;
 
   const handleKeyDown = (event: KeyboardEvent<HTMLDivElement>) => {
+    if (!onOpen) {
+      return;
+    }
     if (event.key === "Enter" || event.key === " ") {
       event.preventDefault();
       onOpen(subview.id);
@@ -59,17 +64,22 @@ export function SubViewDraggableCard({
     event.stopPropagation();
   };
 
+  const handleRemove = (event: MouseEvent<HTMLButtonElement>) => {
+    event.stopPropagation();
+    onRemove?.(subview.id);
+  };
+
   return (
     <div
       ref={setNodeRef}
-      role="button"
-      tabIndex={0}
-      onClick={() => onOpen(subview.id)}
+      role={onOpen ? "button" : undefined}
+      tabIndex={onOpen ? 0 : -1}
+      onClick={onOpen ? () => onOpen(subview.id) : undefined}
       onKeyDown={handleKeyDown}
       style={style}
       className={clsx(
         "group flex min-w-0 flex-col gap-3 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-md focus:outline-none focus:ring-2 focus:ring-blue-500 dark:border-slate-700 dark:bg-slate-900 dark:hover:border-slate-600",
-        subview.isPinned &&
+        mode === "pinned" &&
           "border-indigo-200 bg-indigo-50/40 dark:border-indigo-500/40 dark:bg-indigo-950/40",
         isDragging && "opacity-70"
       )}
@@ -83,7 +93,7 @@ export function SubViewDraggableCard({
             <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{itemCountLabel}</p>
           ) : null}
         </div>
-        {draggable ? (
+        {isDraggable ? (
           <button
             type="button"
             ref={setActivatorNodeRef}
@@ -96,18 +106,24 @@ export function SubViewDraggableCard({
             <span aria-hidden>⠿</span>
           </button>
         ) : (
-          <span className="text-lg" aria-hidden>
-            📌
-          </span>
+          <button
+            type="button"
+            onClick={handleRemove}
+            className="rounded-md border border-rose-200 px-2 py-1 text-[11px] font-semibold text-rose-600 transition hover:border-rose-300 hover:text-rose-700 dark:border-rose-500/40 dark:text-rose-200 dark:hover:border-rose-400"
+          >
+            Retirer
+          </button>
         )}
       </div>
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-200">
-          {subview.isPinned ? "Épinglée" : "Sous-vue"}
+          {mode === "pinned" ? "Épinglée" : "Sous-vue"}
         </span>
-        <span className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 transition group-hover:border-slate-300 group-hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:group-hover:border-slate-500 dark:group-hover:text-white">
-          Ouvrir
-        </span>
+        {onOpen ? (
+          <span className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 transition group-hover:border-slate-300 group-hover:text-slate-800 dark:border-slate-600 dark:text-slate-300 dark:group-hover:border-slate-500 dark:group-hover:text-white">
+            Ouvrir
+          </span>
+        ) : null}
       </div>
     </div>
   );
