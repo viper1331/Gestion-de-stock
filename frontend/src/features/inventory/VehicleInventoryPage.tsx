@@ -180,6 +180,8 @@ interface LibraryLot {
   image_url: string | null;
   item_count: number;
   total_quantity: number;
+  sku?: string | null;
+  code?: string | null;
   items: LibraryLotItem[];
   source: LibraryLotSource;
 }
@@ -4557,6 +4559,7 @@ function DroppableLibrary({
   onUpdateExtra
 }: DroppableLibraryProps) {
   const hover = useThrottledHoverState();
+  const [libraryQuery, setLibraryQuery] = useState("");
   const [isCollapsed, setIsCollapsed] = usePersistentBoolean(
     "vehicleInventory:library",
     false
@@ -4571,6 +4574,33 @@ function DroppableLibrary({
   );
 
   const isHovering = hover.hoverRef.current;
+  const normalizeSearchValue = (value?: string | null) =>
+    value?.toLowerCase().normalize("NFD").replace(/\p{Diacritic}/gu, "") ?? "";
+  const matchesLibraryQuery = (
+    query: string,
+    ...fields: Array<string | null | undefined>
+  ) => {
+    const normalizedQuery = normalizeSearchValue(query).trim();
+    if (!normalizedQuery) {
+      return true;
+    }
+    const terms = normalizedQuery.split(/\s+/).filter(Boolean);
+    if (terms.length === 0) {
+      return true;
+    }
+    const haystack = fields.map((field) => normalizeSearchValue(field)).join(" ");
+    return terms.every((term) => haystack.includes(term));
+  };
+
+  const filteredLots = lots.filter((lot) => {
+    const lotItemSkus = lot.items?.map((item) => item.sku).filter(Boolean).join(" ");
+    return matchesLibraryQuery(libraryQuery, lot.name, lot.sku, lot.code, lotItemSkus);
+  });
+  const filteredItems = items.filter((item) =>
+    matchesLibraryQuery(libraryQuery, item.name, item.sku)
+  );
+  const lotCountLabel = `${filteredLots.length} lot${filteredLots.length > 1 ? "s" : ""}`;
+  const itemCountLabel = `${filteredItems.length} article${filteredItems.length > 1 ? "s" : ""}`;
 
   return (
     <div
@@ -4674,6 +4704,36 @@ function DroppableLibrary({
         </p>
       ) : (
         <div className="mt-4 space-y-3">
+          <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-2 text-[11px] text-slate-600 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            <div className="flex flex-1 items-center gap-2">
+              <label htmlFor="library-search" className="sr-only">
+                Recherche
+              </label>
+              <div className="relative w-full">
+                <input
+                  id="library-search"
+                  type="text"
+                  value={libraryQuery}
+                  onChange={(event) => setLibraryQuery(event.target.value)}
+                  placeholder="Rechercher (nom ou SKU)…"
+                  className="w-full rounded-full border border-slate-200 bg-white px-3 py-2 pr-8 text-xs text-slate-700 shadow-sm outline-none transition placeholder:text-slate-400 focus:border-blue-400 focus:ring-2 focus:ring-blue-200 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-200 dark:placeholder:text-slate-500 dark:focus:border-blue-400 dark:focus:ring-blue-500/30"
+                />
+                {libraryQuery ? (
+                  <button
+                    type="button"
+                    onClick={() => setLibraryQuery("")}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-[12px] font-semibold text-slate-400 transition hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300"
+                    aria-label="Effacer la recherche"
+                  >
+                    ✕
+                  </button>
+                ) : null}
+              </div>
+            </div>
+            <span className="shrink-0 text-[11px] font-medium text-slate-500 dark:text-slate-400">
+              {lotCountLabel} / {itemCountLabel} affichés
+            </span>
+          </div>
           <div className="space-y-2">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
@@ -4710,12 +4770,16 @@ function DroppableLibrary({
               <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                 Aucun lot complet en stock n'est disponible actuellement.
               </p>
+            ) : filteredLots.length === 0 ? (
+              <p className="rounded-lg border border-dashed border-slate-300 bg-white p-3 text-[11px] text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                Aucun lot ne correspond à la recherche.
+              </p>
             ) : (
               <div
                 className="grid grid-cols-1 gap-2 overflow-y-auto pr-1 md:grid-cols-2"
                 style={{ maxHeight: "calc(2 * 18rem)" }}
               >
-                {lots.map((lot) => {
+                {filteredLots.map((lot) => {
                   const lotTooltip =
                     lot.items.length > 0
                       ? lot.items.map((entry) => `${entry.quantity} × ${entry.name}`).join("\n")
@@ -4815,7 +4879,7 @@ function DroppableLibrary({
               className="space-y-3 overflow-y-auto pr-1"
               style={{ maxHeight: "calc(8 * 5rem)" }}
             >
-              {items.map((item) => (
+              {filteredItems.map((item) => (
                 <ItemCard
                   key={item.id}
                   item={item}
@@ -4833,6 +4897,11 @@ function DroppableLibrary({
                     : vehicleType === "secours_a_personne"
                       ? "Aucun matériel disponible. Gérez vos articles depuis l'inventaire pharmacie pour les rendre disponibles ici."
                       : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
+                </p>
+              )}
+              {items.length > 0 && filteredItems.length === 0 && (
+                <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+                  Aucun matériel ne correspond à la recherche.
                 </p>
               )}
             </div>
