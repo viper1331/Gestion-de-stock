@@ -28,6 +28,7 @@ import { PdfStudioPage } from "../features/pdf-config/PdfStudioPage";
 import { PharmacyLinksPage } from "../features/operations/PharmacyLinksPage";
 import { LinkCategoriesPage } from "../features/operations/LinkCategoriesPage";
 import { PurchaseSuggestionsPage } from "../features/purchasing/PurchaseSuggestionsPage";
+import { RouteErrorBoundary } from "../components/RouteErrorBoundary";
 
 export const router = createBrowserRouter([
   {
@@ -45,7 +46,11 @@ export const router = createBrowserRouter([
     children: [
       { path: "", element: <HomePage /> },
       { path: "inventory", element: <Dashboard /> },
-      { path: "vehicle-inventory", element: <VehicleInventoryPage /> },
+      {
+        path: "vehicle-inventory",
+        element: <VehicleInventoryPage />,
+        errorElement: <RouteErrorBoundary />
+      },
       { path: "vehicle-inventory/qr-codes", element: <VehicleQrManagerPage /> },
       { path: "operations/vehicle-qr", element: <VehicleQrManagerPage /> },
       { path: "operations/pharmacy-links", element: <PharmacyLinksPage /> },

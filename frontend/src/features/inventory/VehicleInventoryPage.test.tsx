@@ -4,7 +4,8 @@ import {
   DEFAULT_VIEW_LABEL,
   getVehicleViews,
   normalizeVehicleViewsInput,
-  normalizeViewName
+  normalizeViewName,
+  resolvePinnedView
 } from "./VehicleInventoryPage";
 
 describe("VehicleInventoryPage helpers", () => {
@@ -40,5 +41,13 @@ describe("VehicleInventoryPage helpers", () => {
 
   it("retourne la vue par défaut quand aucun véhicule n'est sélectionné", () => {
     expect(getVehicleViews(null)).toEqual([DEFAULT_VIEW_LABEL]);
+  });
+
+  it("retourne null si aucune vue épinglée n'est définie", () => {
+    expect(resolvePinnedView(["CABINE", "COFFRE"], null)).toBeNull();
+  });
+
+  it("retourne null si la vue épinglée n'existe plus", () => {
+    expect(resolvePinnedView(["CABINE", "COFFRE"], "SOUTE")).toBeNull();
   });
 });
