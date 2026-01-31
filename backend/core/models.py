@@ -398,8 +398,8 @@ class VehicleViewConfig(BaseModel):
     hide_edit_buttons: bool = False
 
 
-class VehiclePinnedSubviewsUpdate(BaseModel):
-    pinned: list[str]
+class VehiclePinnedSubviewCreate(BaseModel):
+    subview_id: str
 
 
 class VehiclePinnedSubviews(BaseModel):

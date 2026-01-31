@@ -41,20 +41,44 @@ async def get_vehicle_view_pinned_subviews(
     )
 
 
-@router.put(
+@router.post(
     "/vehicles/{vehicle_id}/views/{view_id}/pinned-subviews",
     response_model=models.VehiclePinnedSubviews,
 )
-async def update_vehicle_view_pinned_subviews(
+async def add_vehicle_view_pinned_subview(
     vehicle_id: int,
     view_id: str,
-    payload: models.VehiclePinnedSubviewsUpdate,
+    payload: models.VehiclePinnedSubviewCreate,
     user: models.User = Depends(get_current_user),
 ) -> models.VehiclePinnedSubviews:
     _require_vehicle_permission(user, action="edit")
     try:
-        pinned = services.update_vehicle_view_pinned_subviews(
-            vehicle_id, view_id, payload.pinned
+        pinned = services.add_vehicle_view_pinned_subview(
+            vehicle_id, view_id, payload.subview_id
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    return models.VehiclePinnedSubviews(
+        vehicle_id=vehicle_id, view_id=services._normalize_view_name(view_id), pinned=pinned
+    )
+
+
+@router.delete(
+    "/vehicles/{vehicle_id}/views/{view_id}/pinned-subviews/{subview_id}",
+    response_model=models.VehiclePinnedSubviews,
+)
+async def remove_vehicle_view_pinned_subview(
+    vehicle_id: int,
+    view_id: str,
+    subview_id: str,
+    user: models.User = Depends(get_current_user),
+) -> models.VehiclePinnedSubviews:
+    _require_vehicle_permission(user, action="edit")
+    try:
+        pinned = services.delete_vehicle_view_pinned_subview(
+            vehicle_id, view_id, subview_id
         )
     except ValueError as exc:
         detail = str(exc)

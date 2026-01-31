@@ -17,7 +17,6 @@ import {
   DragEndEvent,
   DragStartEvent,
   PointerSensor,
-  useDroppable,
   useSensor,
   useSensors
 } from "@dnd-kit/core";
@@ -37,7 +36,8 @@ import { useThrottledHoverState } from "./useThrottledHoverState";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
-import { SubViewDraggableCard, type SubviewCardData } from "./SubViewDraggableCard";
+import { SubViewCard, type SubviewCardData } from "./SubViewCard";
+import { PinnedSubViewsDropZone } from "./PinnedSubViewsDropZone";
 
 interface VehicleViewConfig {
   name: string;
@@ -1040,17 +1040,22 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const updatePinnedSubviews = useMutation({
-    mutationFn: async (nextPinned: string[]) => {
-      if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
-        return;
-      }
-      await api.put(
-        `/vehicles/${selectedVehicle.id}/views/${encodeURIComponent(pinnedViewName)}/pinned-subviews`,
-        { pinned: nextPinned }
+  const addPinnedSubview = useMutation({
+    mutationFn: async ({
+      subviewId,
+      parentViewId,
+      vehicleId
+    }: {
+      subviewId: string;
+      parentViewId: string;
+      vehicleId: number;
+    }) => {
+      await api.post(
+        `/vehicles/${vehicleId}/views/${encodeURIComponent(parentViewId)}/pinned-subviews`,
+        { subview_id: subviewId }
       );
     },
-    onMutate: async (nextPinned) => {
+    onMutate: async ({ subviewId }) => {
       if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
         return undefined;
       }
@@ -1058,6 +1063,57 @@ export function VehicleInventoryPage() {
       await queryClient.cancelQueries({ queryKey });
       const previous =
         queryClient.getQueryData<VehiclePinnedSubviews>(queryKey) ?? null;
+      const nextPinned = upsertPinnedSubview(previous?.pinned ?? [], subviewId);
+      queryClient.setQueryData<VehiclePinnedSubviews>(queryKey, {
+        vehicle_id: selectedVehicle.id,
+        view_id: pinnedViewName,
+        pinned: nextPinned
+      });
+      return { previous, queryKey };
+    },
+    onError: (_error, _variables, context) => {
+      if (!context?.queryKey) {
+        return;
+      }
+      if (context.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous);
+      }
+    },
+    onSettled: (_data, _error, _variables, context) => {
+      if (context?.queryKey) {
+        queryClient.invalidateQueries({ queryKey: context.queryKey });
+      }
+    }
+  });
+
+  const removePinnedSubview = useMutation({
+    mutationFn: async ({
+      subviewId,
+      parentViewId,
+      vehicleId
+    }: {
+      subviewId: string;
+      parentViewId: string;
+      vehicleId: number;
+    }) => {
+      await api.delete(
+        `/vehicles/${vehicleId}/views/${encodeURIComponent(parentViewId)}/pinned-subviews/${encodeURIComponent(
+          subviewId
+        )}`
+      );
+    },
+    onMutate: async ({ subviewId }) => {
+      if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
+        return undefined;
+      }
+      const queryKey = ["vehicle-pinned-subviews", selectedVehicle.id, pinnedViewName];
+      await queryClient.cancelQueries({ queryKey });
+      const previous =
+        queryClient.getQueryData<VehiclePinnedSubviews>(queryKey) ?? null;
+      const normalized = normalizeViewName(subviewId);
+      const nextPinned = (previous?.pinned ?? []).filter(
+        (entry) => normalizeViewName(entry) !== normalized
+      );
       queryClient.setQueryData<VehiclePinnedSubviews>(queryKey, {
         vehicle_id: selectedVehicle.id,
         view_id: pinnedViewName,
@@ -2059,32 +2115,6 @@ export function VehicleInventoryPage() {
     ]
   );
 
-  useEffect(() => {
-    if (
-      !pinnedSubviews ||
-      !selectedVehicle?.id ||
-      !VEHICLE_SUBVIEW_CARDS_ENABLED ||
-      !pinnedViewName ||
-      !pinnedView
-    ) {
-      return;
-    }
-    const sameLength = pinnedSubviews.pinned.length === filteredPinnedSubviews.length;
-    const sameEntries = sameLength
-      ? pinnedSubviews.pinned.every((entry, index) => entry === filteredPinnedSubviews[index])
-      : false;
-    if (sameEntries) {
-      return;
-    }
-    updatePinnedSubviews.mutate(filteredPinnedSubviews);
-  }, [
-    filteredPinnedSubviews,
-    pinnedSubviews,
-    selectedVehicle?.id,
-    updatePinnedSubviews,
-    VEHICLE_SUBVIEW_CARDS_ENABLED
-  ]);
-
   const subviewCards = useMemo<SubviewCardData[]>(() => {
     if (availableSubViews.length === 0) {
       return [];
@@ -2092,19 +2122,20 @@ export function VehicleInventoryPage() {
     return availableSubViews.map((subView) => ({
       id: subView,
       label: formatSubViewLabel(subView, selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL),
-      itemCount: viewItemCountMap.get(normalizeViewName(subView)),
-      isPinned: filteredPinnedSubviews.includes(normalizeViewName(subView))
+      itemCount: viewItemCountMap.get(normalizeViewName(subView))
     }));
   }, [
     availableSubViews,
-    filteredPinnedSubviews,
     selectedHierarchy.parent,
     viewItemCountMap
   ]);
 
   const availableSubviewCards = useMemo(
-    () => subviewCards.filter((subview) => !subview.isPinned),
-    [subviewCards]
+    () =>
+      subviewCards.filter(
+        (subview) => !filteredPinnedSubviews.includes(normalizeViewName(subview.id))
+      ),
+    [filteredPinnedSubviews, subviewCards]
   );
 
   const pinnedSubviewCards = useMemo<SubviewCardData[]>(
@@ -2112,55 +2143,54 @@ export function VehicleInventoryPage() {
       filteredPinnedSubviews.map((subviewId) => ({
         id: subviewId,
         label: formatSubViewLabel(subviewId, selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL),
-        itemCount: viewItemCountMap.get(normalizeViewName(subviewId)),
-        isPinned: true
+        itemCount: viewItemCountMap.get(normalizeViewName(subviewId))
       })),
     [filteredPinnedSubviews, selectedHierarchy.parent, viewItemCountMap]
   );
 
-  const commitPinnedSubviews = useCallback(
-    (nextPinned: string[]) => {
+  const handlePinSubview = useCallback(
+    (subviewId: string) => {
       if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
         return;
       }
-      const filtered = filterPinnedSubviews({
-        pinned: nextPinned,
-        availableSubViews,
-        parentView: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
+      const normalized = normalizeViewName(subviewId);
+      if (filteredPinnedSubviews.some((entry) => normalizeViewName(entry) === normalized)) {
+        return;
+      }
+      addPinnedSubview.mutate({
+        subviewId,
+        parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+        vehicleId: selectedVehicle.id
       });
-      updatePinnedSubviews.mutate(filtered);
     },
     [
-      availableSubViews,
+      addPinnedSubview,
+      filteredPinnedSubviews,
       pinnedView,
       pinnedViewName,
       selectedHierarchy.parent,
-      selectedVehicle?.id,
-      updatePinnedSubviews
+      selectedVehicle?.id
     ]
-  );
-
-  const handlePinSubview = useCallback(
-    (subviewId: string, targetSubviewId?: string) => {
-      const nextPinned = upsertPinnedSubview(
-        filteredPinnedSubviews,
-        subviewId,
-        targetSubviewId
-      );
-      commitPinnedSubviews(nextPinned);
-    },
-    [commitPinnedSubviews, filteredPinnedSubviews]
   );
 
   const handleUnpinSubview = useCallback(
     (subviewId: string) => {
-      const normalized = normalizeViewName(subviewId);
-      const nextPinned = filteredPinnedSubviews.filter(
-        (entry) => normalizeViewName(entry) !== normalized
-      );
-      commitPinnedSubviews(nextPinned);
+      if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
+        return;
+      }
+      removePinnedSubview.mutate({
+        subviewId,
+        parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+        vehicleId: selectedVehicle.id
+      });
     },
-    [commitPinnedSubviews, filteredPinnedSubviews]
+    [
+      pinnedView,
+      pinnedViewName,
+      removePinnedSubview,
+      selectedHierarchy.parent,
+      selectedVehicle?.id
+    ]
   );
 
   const handleOpenSubview = useCallback(
@@ -2183,12 +2213,12 @@ export function VehicleInventoryPage() {
   const handleSubviewDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
-      console.log("dragEnd", { active, over });
-      if (over?.id !== "PINNED_SUBVIEWS") {
+      console.log("dragEnd", { active: active.data.current, over: over?.id });
+      if (typeof over?.id !== "string" || !over.id.startsWith("PINNED_SUBVIEWS:")) {
         return;
       }
       const data = active.data.current;
-      if (data?.kind !== "SUBVIEW_CARD" || typeof data.subviewId !== "string") {
+      if (data?.kind !== "SUBVIEW" || typeof data.subviewId !== "string") {
         return;
       }
       handlePinSubview(data.subviewId);
@@ -3069,47 +3099,6 @@ export function VehicleInventoryPage() {
               onSelect={requestViewChange}
             />
 
-            {selectedVehicle && VEHICLE_SUBVIEW_CARDS_ENABLED ? (
-              pinnedView ? (
-                <section className="mt-4 space-y-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                      Sous-vues disponibles
-                    </p>
-                    <p className="text-xs text-slate-500 dark:text-slate-400">
-                      Glissez une carte pour l'épingler dans la vue principale.
-                    </p>
-                  </div>
-                  {availableSubviewCards.length > 0 ? (
-                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-                      {availableSubviewCards.map((subview) => (
-                        <SubViewDraggableCard
-                          key={subview.id}
-                          subview={subview}
-                          draggable
-                          dragData={{
-                            kind: "SUBVIEW_CARD",
-                            subviewId: subview.id,
-                            parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
-                            vehicleId: selectedVehicle.id
-                          }}
-                          onOpen={handleOpenSubview}
-                        />
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                      Aucune sous-vue disponible pour l'instant.
-                    </div>
-                  )}
-                </section>
-              ) : (
-                <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                  Aucune vue épinglable n'est disponible pour le moment.
-                </div>
-              )
-            ) : null}
-
             {selectedVehicle ? (
               <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
@@ -3157,6 +3146,47 @@ export function VehicleInventoryPage() {
               </div>
             ) : null}
 
+            {selectedVehicle && VEHICLE_SUBVIEW_CARDS_ENABLED ? (
+              pinnedView ? (
+                <section className="mt-4 space-y-3">
+                  <div>
+                    <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+                      Sous-vues disponibles
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Glissez une sous-vue vers la zone d'épinglage pour l'afficher dans la vue principale.
+                    </p>
+                  </div>
+                  {availableSubviewCards.length > 0 ? (
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {availableSubviewCards.map((subview) => (
+                        <SubViewCard
+                          key={subview.id}
+                          subview={subview}
+                          mode="draggable"
+                          dragData={{
+                            kind: "SUBVIEW",
+                            subviewId: subview.id,
+                            parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+                            vehicleId: selectedVehicle.id
+                          }}
+                          onOpen={handleOpenSubview}
+                        />
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                      Aucune sous-vue disponible pour l'instant.
+                    </div>
+                  )}
+                </section>
+              ) : (
+                <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                  Aucune vue épinglable n'est disponible pour le moment.
+                </div>
+              )
+            ) : null}
+
             <div className="grid min-w-0 gap-6 lg:grid-cols-[2fr,1fr]">
               <div className="min-w-0">
                 <VehicleCompartment
@@ -3167,6 +3197,7 @@ export function VehicleInventoryPage() {
                   appliedLots={appliedLots}
                   appliedLotItemsByAssignment={appliedLotItemsByAssignment}
                   pinnedSubviews={VEHICLE_SUBVIEW_CARDS_ENABLED ? pinnedSubviewCards : undefined}
+                  parentViewId={selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL}
                   categoryId={selectedVehicle.id}
                   viewConfig={selectedViewConfig}
                   availablePhotos={vehiclePhotos}
@@ -3725,72 +3756,6 @@ function formatSubViewLabel(subView: string, parent: string) {
   return subView;
 }
 
-interface PinnedSubViewsDropZoneProps {
-  pinnedSubviews: SubviewCardData[];
-  onOpenSubview?: (subviewId: string) => void;
-  onRemovePinnedSubview?: (subviewId: string) => void;
-}
-
-function PinnedSubViewsDropZone({
-  pinnedSubviews,
-  onOpenSubview,
-  onRemovePinnedSubview
-}: PinnedSubViewsDropZoneProps) {
-  const { isOver, setNodeRef, active } = useDroppable({
-    id: "PINNED_SUBVIEWS",
-    data: { accepts: ["SUBVIEW_CARD"] }
-  });
-  const isSubviewDragging = active?.data.current?.kind === "SUBVIEW_CARD";
-
-  return (
-    <div className="space-y-3">
-      <div>
-        <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-          Sous-vues épinglées
-        </p>
-        <p className="text-xs text-slate-500 dark:text-slate-400">
-          Glissez une sous-vue ici pour l'afficher dans cette vue principale.
-        </p>
-      </div>
-      <div
-        ref={setNodeRef}
-        className={clsx(
-          "grid gap-3 rounded-2xl border border-dashed border-slate-200 bg-white/80 p-4 transition dark:border-slate-700 dark:bg-slate-900/50 sm:grid-cols-2 xl:grid-cols-3",
-          isOver && isSubviewDragging
-            ? "border-blue-400 bg-blue-50/60 dark:border-blue-500 dark:bg-blue-950/40"
-            : "border-slate-200"
-        )}
-      >
-        {pinnedSubviews.length === 0 ? (
-          <div className="col-span-full rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 shadow-sm dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            Glissez une sous-vue ici pour l'épingler.
-          </div>
-        ) : null}
-        {pinnedSubviews.map((subview) => (
-          <div key={subview.id} className="space-y-2">
-            <SubViewDraggableCard
-              subview={subview}
-              onOpen={(subviewId) => onOpenSubview?.(subviewId)}
-            />
-            <div className="flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-              <span>
-                {subview.itemCount ?? 0} équipement{subview.itemCount === 1 ? "" : "s"}
-              </span>
-              <button
-                type="button"
-                onClick={() => onRemovePinnedSubview?.(subview.id)}
-                className="text-rose-600 hover:text-rose-700 dark:text-rose-300"
-              >
-                Retirer
-              </button>
-            </div>
-          </div>
-        ))}
-      </div>
-    </div>
-  );
-}
-
 interface VehicleCompartmentProps {
   title: string;
   description: string;
@@ -3799,6 +3764,7 @@ interface VehicleCompartmentProps {
   appliedLots?: VehicleAppliedLot[];
   appliedLotItemsByAssignment?: Map<number, VehicleItem[]>;
   pinnedSubviews?: SubviewCardData[];
+  parentViewId: string;
   categoryId: number;
   viewConfig: VehicleViewConfig | null;
   availablePhotos: VehiclePhoto[];
@@ -3828,6 +3794,7 @@ function VehicleCompartment({
   appliedLots = [],
   appliedLotItemsByAssignment = new Map(),
   pinnedSubviews,
+  parentViewId,
   categoryId,
   viewConfig,
   availablePhotos,
@@ -4309,6 +4276,7 @@ function VehicleCompartment({
 
         {pinnedSubviews ? (
           <PinnedSubViewsDropZone
+            parentViewId={parentViewId}
             pinnedSubviews={pinnedSubviews}
             onOpenSubview={onOpenSubview}
             onRemovePinnedSubview={onRemovePinnedSubview}
