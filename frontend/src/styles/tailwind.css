@@ -93,6 +93,16 @@ body {
   font-family: "Inter", system-ui, sans-serif;
 }
 
+.vehicle-view-photo {
+  position: relative;
+  z-index: 1;
+}
+
+.side-panels {
+  position: relative;
+  z-index: 0;
+}
+
 /* Light theme overrides for components that default to dark styles */
 html:not(.dark) .bg-slate-950 {
   background-color: var(--panel-2);
