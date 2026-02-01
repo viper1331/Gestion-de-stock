@@ -3,6 +3,7 @@ import { createBrowserRouter } from "react-router-dom";
 import { AuthLayout } from "../features/auth/AuthLayout";
 import { Login } from "../features/auth/Login";
 import { AppLayout } from "../components/AppLayout";
+import { RouteErrorBoundary } from "../components/RouteErrorBoundary";
 import { HomePage } from "../features/home/HomePage";
 import { Dashboard } from "../features/inventory/Dashboard";
 import { BarcodePage } from "../features/barcode/BarcodePage";

@@ -17,10 +17,12 @@ export function RouteErrorBoundary() {
       </div>
       <button
         type="button"
-        onClick={() => window.location.reload()}
+        onClick={() => {
+          window.location.href = "/";
+        }}
         className="inline-flex items-center rounded-md bg-indigo-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-indigo-400"
       >
-        Recharger
+        Retour à l’accueil
       </button>
     </div>
   );
