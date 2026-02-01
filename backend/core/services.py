@@ -33,7 +33,7 @@ from reportlab.lib.utils import ImageReader
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfgen import canvas
 
-from backend.core import db, menu_registry, models, security, sites, system_config
+from backend.core import db, menu_registry, models, models_ari, security, sites, system_config
 from backend.services.purchase_order_pdf import render_purchase_order_pdf
 from backend.core.storage import (
     MEDIA_ROOT,
@@ -162,6 +162,13 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[_ModuleDefinitionMeta, ...] = (
         category="Habillement",
         is_admin_only=False,
         sort_order=60,
+    ),
+    _ModuleDefinitionMeta(
+        key="ari",
+        label="ARI",
+        category="Habillement",
+        is_admin_only=False,
+        sort_order=65,
     ),
     _ModuleDefinitionMeta(
         key="dotations",
@@ -17638,3 +17645,416 @@ def has_module_access(user: models.User, module: str, *, action: str = "view") -
         elif not permission.can_view:
             return False
     return True
+
+
+def _ari_connection(site_slug: str) -> ContextManager[sqlite3.Connection]:
+    @contextmanager
+    def _ctx() -> Iterator[sqlite3.Connection]:
+        conn = db.get_ari_connection(site_slug)
+        try:
+            yield conn
+            conn.commit()
+        except Exception:
+            if conn.in_transaction:
+                conn.rollback()
+            raise
+        finally:
+            conn.close()
+
+    return _ctx()
+
+
+def _ari_log(
+    conn: sqlite3.Connection,
+    *,
+    actor_user_id: str,
+    action: str,
+    entity_type: str,
+    entity_id: str,
+    details: dict[str, Any] | None = None,
+) -> None:
+    conn.execute(
+        """
+        INSERT INTO ari_audit_log (
+          actor_user_id,
+          action,
+          entity_type,
+          entity_id,
+          details_json,
+          created_at
+        )
+        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
+        """,
+        (
+            actor_user_id,
+            action,
+            entity_type,
+            entity_id,
+            json.dumps(details, ensure_ascii=False) if details else None,
+        ),
+    )
+
+
+def ari_get_settings(site_slug: str) -> models_ari.AriSettings:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        row = conn.execute(
+            """
+            SELECT feature_enabled, stress_required, rpe_enabled, min_sessions_for_certification
+            FROM ari_settings
+            WHERE site_id = ?
+            """,
+            (site_slug,),
+        ).fetchone()
+        if not row:
+            conn.execute(
+                """
+                INSERT INTO ari_settings (
+                  site_id,
+                  feature_enabled,
+                  stress_required,
+                  rpe_enabled,
+                  min_sessions_for_certification,
+                  created_at,
+                  updated_at
+                )
+                VALUES (?, 0, 1, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (site_slug,),
+            )
+            row = {
+                "feature_enabled": 0,
+                "stress_required": 1,
+                "rpe_enabled": 0,
+                "min_sessions_for_certification": 1,
+            }
+        return models_ari.AriSettings(
+            feature_enabled=bool(row["feature_enabled"]),
+            stress_required=bool(row["stress_required"]),
+            rpe_enabled=bool(row["rpe_enabled"]),
+            min_sessions_for_certification=int(row["min_sessions_for_certification"]),
+        )
+
+
+def ari_update_settings(
+    site_slug: str,
+    payload: models_ari.AriSettingsUpdate,
+    updated_by: str,
+) -> models_ari.AriSettings:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        conn.execute(
+            """
+            INSERT INTO ari_settings (
+              site_id,
+              feature_enabled,
+              stress_required,
+              rpe_enabled,
+              min_sessions_for_certification,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(site_id) DO UPDATE SET
+              feature_enabled = excluded.feature_enabled,
+              stress_required = excluded.stress_required,
+              rpe_enabled = excluded.rpe_enabled,
+              min_sessions_for_certification = excluded.min_sessions_for_certification,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                site_slug,
+                int(payload.feature_enabled),
+                int(payload.stress_required),
+                int(payload.rpe_enabled),
+                payload.min_sessions_for_certification,
+            ),
+        )
+        _ari_log(
+            conn,
+            actor_user_id=updated_by,
+            action="settings.update",
+            entity_type="ari_settings",
+            entity_id=site_slug,
+            details=payload.model_dump(),
+        )
+    return ari_get_settings(site_slug)
+
+
+def ari_create_session(
+    site_slug: str,
+    payload: models_ari.AriSessionCreate,
+    created_by: str,
+) -> models_ari.AriSession:
+    ensure_database_ready()
+    air_consumed = payload.start_pressure_bar - payload.end_pressure_bar
+    if air_consumed <= 0:
+        raise ValueError("Pression finale invalide")
+    performed_at = payload.performed_at.isoformat()
+    with _ari_connection(site_slug) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO ari_sessions (
+              collaborator_id,
+              performed_at,
+              course_name,
+              duration_seconds,
+              start_pressure_bar,
+              end_pressure_bar,
+              air_consumed_bar,
+              stress_level,
+              rpe,
+              physio_notes,
+              observations,
+              created_at,
+              created_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            """,
+            (
+                payload.collaborator_id,
+                performed_at,
+                payload.course_name,
+                payload.duration_seconds,
+                payload.start_pressure_bar,
+                payload.end_pressure_bar,
+                air_consumed,
+                payload.stress_level,
+                payload.rpe,
+                payload.physio_notes,
+                payload.observations,
+                created_by,
+            ),
+        )
+        session_id = cur.lastrowid
+        cert = conn.execute(
+            """
+            SELECT id FROM ari_certifications WHERE collaborator_id = ?
+            """,
+            (payload.collaborator_id,),
+        ).fetchone()
+        if not cert:
+            conn.execute(
+                """
+                INSERT INTO ari_certifications (
+                  collaborator_id,
+                  status,
+                  created_at,
+                  updated_at
+                )
+                VALUES (?, 'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                """,
+                (payload.collaborator_id,),
+            )
+        _ari_log(
+            conn,
+            actor_user_id=created_by,
+            action="session.create",
+            entity_type="ari_session",
+            entity_id=str(session_id),
+            details={"collaborator_id": payload.collaborator_id},
+        )
+        row = conn.execute(
+            "SELECT * FROM ari_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    if not row:
+        raise ValueError("Séance introuvable")
+    return models_ari.AriSession(**row)
+
+
+def ari_list_sessions(site_slug: str, collaborator_id: int) -> list[models_ari.AriSession]:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        rows = conn.execute(
+            """
+            SELECT * FROM ari_sessions
+            WHERE collaborator_id = ?
+            ORDER BY performed_at DESC, id DESC
+            """,
+            (collaborator_id,),
+        ).fetchall()
+    return [models_ari.AriSession(**row) for row in rows]
+
+
+def ari_get_certification(site_slug: str, collaborator_id: int) -> models_ari.AriCertification:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        row = conn.execute(
+            """
+            SELECT collaborator_id, status, comment, decision_at, decided_by
+            FROM ari_certifications
+            WHERE collaborator_id = ?
+            """,
+            (collaborator_id,),
+        ).fetchone()
+    if row:
+        return models_ari.AriCertification(**row)
+    return models_ari.AriCertification(
+        collaborator_id=collaborator_id,
+        status="PENDING",
+        comment=None,
+        decision_at=None,
+        decided_by=None,
+    )
+
+
+def ari_list_pending(site_slug: str) -> list[models_ari.AriCertification]:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        rows = conn.execute(
+            """
+            SELECT collaborator_id, status, comment, decision_at, decided_by
+            FROM ari_certifications
+            WHERE status = 'PENDING'
+            ORDER BY updated_at DESC
+            """,
+        ).fetchall()
+    return [models_ari.AriCertification(**row) for row in rows]
+
+
+def ari_decide_certification(
+    site_slug: str,
+    payload: models_ari.AriCertificationDecision,
+    decided_by: str,
+) -> models_ari.AriCertification:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        conn.execute(
+            """
+            INSERT INTO ari_certifications (
+              collaborator_id,
+              status,
+              comment,
+              decision_at,
+              decided_by,
+              created_at,
+              updated_at
+            )
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            ON CONFLICT(collaborator_id) DO UPDATE SET
+              status = excluded.status,
+              comment = excluded.comment,
+              decision_at = excluded.decision_at,
+              decided_by = excluded.decided_by,
+              updated_at = CURRENT_TIMESTAMP
+            """,
+            (
+                payload.collaborator_id,
+                payload.status,
+                payload.comment,
+                decided_by,
+            ),
+        )
+        _ari_log(
+            conn,
+            actor_user_id=decided_by,
+            action="certification.decide",
+            entity_type="ari_certification",
+            entity_id=str(payload.collaborator_id),
+            details={"status": payload.status, "comment": payload.comment},
+        )
+    return ari_get_certification(site_slug, payload.collaborator_id)
+
+
+def ari_get_collaborator_stats(
+    site_slug: str, collaborator_id: int
+) -> models_ari.AriCollaboratorStats:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS sessions_count,
+              AVG(duration_seconds) AS avg_duration_seconds,
+              AVG(air_consumed_bar) AS avg_air_consumed_bar,
+              AVG(CASE WHEN duration_seconds > 0 THEN air_consumed_bar * 60.0 / duration_seconds END)
+                AS avg_air_per_min,
+              AVG(stress_level) AS avg_stress_level,
+              MAX(performed_at) AS last_session_at
+            FROM ari_sessions
+            WHERE collaborator_id = ?
+            """,
+            (collaborator_id,),
+        ).fetchone()
+    certification = ari_get_certification(site_slug, collaborator_id)
+    return models_ari.AriCollaboratorStats(
+        sessions_count=int(row["sessions_count"]) if row else 0,
+        avg_duration_seconds=row["avg_duration_seconds"] if row else None,
+        avg_air_consumed_bar=row["avg_air_consumed_bar"] if row else None,
+        avg_air_per_min=row["avg_air_per_min"] if row else None,
+        avg_stress_level=row["avg_stress_level"] if row else None,
+        last_session_at=row["last_session_at"] if row else None,
+        certification_status=certification.status,
+        certification_decision_at=certification.decision_at,
+    )
+
+
+def ari_get_site_stats(site_slug: str) -> dict[str, object]:
+    ensure_database_ready()
+    with _ari_connection(site_slug) as conn:
+        row = conn.execute(
+            """
+            SELECT
+              COUNT(*) AS sessions_count,
+              AVG(duration_seconds) AS avg_duration_seconds,
+              AVG(CASE WHEN duration_seconds > 0 THEN air_consumed_bar * 60.0 / duration_seconds END)
+                AS avg_air_per_min
+            FROM ari_sessions
+            WHERE datetime(performed_at) >= datetime('now', '-30 days')
+            """,
+        ).fetchone()
+        pending = conn.execute(
+            "SELECT COUNT(*) AS count FROM ari_certifications WHERE status = 'PENDING'",
+        ).fetchone()
+    return {
+        "sessions_count_30d": int(row["sessions_count"]) if row else 0,
+        "avg_duration_30d": row["avg_duration_seconds"] if row else None,
+        "avg_air_per_min_30d": row["avg_air_per_min"] if row else None,
+        "pending_certifications_count": int(pending["count"]) if pending else 0,
+    }
+
+
+def ari_export_collaborator_pdf(site_slug: str, collaborator_id: int) -> bytes:
+    ensure_database_ready()
+    stats = ari_get_collaborator_stats(site_slug, collaborator_id)
+    sessions = ari_list_sessions(site_slug, collaborator_id)
+    with db.get_stock_connection(site_slug) as conn:
+        row = conn.execute(
+            "SELECT full_name, department FROM collaborators WHERE id = ?",
+            (collaborator_id,),
+        ).fetchone()
+    collaborator_name = row["full_name"] if row else f"Collaborateur #{collaborator_id}"
+    collaborator_department = row["department"] if row else None
+    buffer = io.BytesIO()
+    pdf = canvas.Canvas(buffer, pagesize=A4)
+    pdf.setTitle(f"ARI - {collaborator_name}")
+    pdf.setFont("Helvetica-Bold", 16)
+    pdf.drawString(24 * mm, 285 * mm, "Rapport ARI")
+    pdf.setFont("Helvetica", 11)
+    pdf.drawString(24 * mm, 275 * mm, f"Collaborateur : {collaborator_name}")
+    if collaborator_department:
+        pdf.drawString(24 * mm, 268 * mm, f"Service : {collaborator_department}")
+    pdf.drawString(24 * mm, 260 * mm, f"Séances : {stats.sessions_count}")
+    if stats.avg_air_per_min is not None:
+        pdf.drawString(24 * mm, 252 * mm, f"Air/min moyen : {stats.avg_air_per_min:.2f}")
+    y = 240 * mm
+    pdf.setFont("Helvetica-Bold", 12)
+    pdf.drawString(24 * mm, y, "Historique des séances")
+    pdf.setFont("Helvetica", 9)
+    y -= 8 * mm
+    for session in sessions[:25]:
+        line = (
+            f"{session.performed_at} · {session.course_name} · "
+            f"{session.duration_seconds}s · {session.air_consumed_bar} bar"
+        )
+        pdf.drawString(24 * mm, y, line[:110])
+        y -= 6 * mm
+        if y < 20 * mm:
+            pdf.showPage()
+            y = 280 * mm
+            pdf.setFont("Helvetica", 9)
+    pdf.showPage()
+    pdf.save()
+    buffer.seek(0)
+    return buffer.read()
