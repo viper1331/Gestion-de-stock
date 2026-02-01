@@ -42,6 +42,7 @@ interface AriState {
       duration_seconds: number;
       start_pressure_bar: number;
       end_pressure_bar: number;
+      cylinder_capacity_l: number;
       stress_level: number;
       rpe?: number | null;
       physio_notes?: string | null;

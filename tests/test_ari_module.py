@@ -6,6 +6,7 @@ from fastapi.testclient import TestClient
 
 from backend.app import app
 from backend.core import models, services
+from backend.services import system_settings
 from backend.tests.auth_helpers import login_headers
 
 client = TestClient(app)
@@ -28,6 +29,8 @@ def _create_collaborator() -> models.Collaborator:
 
 
 def test_ari_session_flow() -> None:
+    previous = system_settings.get_feature_ari_enabled()
+    system_settings.set_feature_ari_enabled(True, "admin")
     headers = _admin_headers()
     collaborator = _create_collaborator()
     payload = {
@@ -37,51 +40,55 @@ def test_ari_session_flow() -> None:
         "duration_seconds": 600,
         "start_pressure_bar": 300,
         "end_pressure_bar": 200,
+        "cylinder_capacity_l": 6.8,
         "stress_level": 4,
         "rpe": 5,
         "physio_notes": "RAS",
         "observations": "OK",
     }
-    response = client.post("/ari/sessions", json=payload, headers=headers)
-    assert response.status_code == 201, response.text
-    session = response.json()
-    assert session["air_consumed_bar"] == 100
+    try:
+        response = client.post("/ari/sessions", json=payload, headers=headers)
+        assert response.status_code == 201, response.text
+        session = response.json()
+        assert session["air_consumed_bar"] == 100
 
-    list_response = client.get(
-        f"/ari/sessions?collaborator_id={collaborator.id}",
-        headers=headers,
-    )
-    assert list_response.status_code == 200, list_response.text
-    sessions = list_response.json()
-    assert any(entry["id"] == session["id"] for entry in sessions)
+        list_response = client.get(
+            f"/ari/sessions?collaborator_id={collaborator.id}",
+            headers=headers,
+        )
+        assert list_response.status_code == 200, list_response.text
+        sessions = list_response.json()
+        assert any(entry["id"] == session["id"] for entry in sessions)
 
-    stats_response = client.get(
-        f"/ari/stats/collaborator/{collaborator.id}",
-        headers=headers,
-    )
-    assert stats_response.status_code == 200, stats_response.text
-    stats = stats_response.json()
-    assert stats["sessions_count"] == 1
-    assert stats["avg_air_per_min"] == 10
+        stats_response = client.get(
+            f"/ari/stats/collaborator/{collaborator.id}",
+            headers=headers,
+        )
+        assert stats_response.status_code == 200, stats_response.text
+        stats = stats_response.json()
+        assert stats["sessions_count"] == 1
+        assert stats["avg_air_per_min"] == 10
 
-    cert_response = client.get(
-        f"/ari/certifications?collaborator_id={collaborator.id}",
-        headers=headers,
-    )
-    assert cert_response.status_code == 200, cert_response.text
-    assert cert_response.json()["status"] == "PENDING"
+        cert_response = client.get(
+            f"/ari/certifications?collaborator_id={collaborator.id}",
+            headers=headers,
+        )
+        assert cert_response.status_code == 200, cert_response.text
+        assert cert_response.json()["status"] == "PENDING"
 
-    decision_response = client.post(
-        "/ari/certifications/decide",
-        json={"collaborator_id": collaborator.id, "status": "APPROVED"},
-        headers=headers,
-    )
-    assert decision_response.status_code == 200, decision_response.text
-    assert decision_response.json()["status"] == "APPROVED"
+        decision_response = client.post(
+            "/ari/certifications/decide",
+            json={"collaborator_id": collaborator.id, "status": "APPROVED"},
+            headers=headers,
+        )
+        assert decision_response.status_code == 200, decision_response.text
+        assert decision_response.json()["status"] == "APPROVED"
 
-    reject_response = client.post(
-        "/ari/certifications/decide",
-        json={"collaborator_id": collaborator.id, "status": "REJECTED"},
-        headers=headers,
-    )
-    assert reject_response.status_code == 422, reject_response.text
+        reject_response = client.post(
+            "/ari/certifications/decide",
+            json={"collaborator_id": collaborator.id, "status": "REJECTED"},
+            headers=headers,
+        )
+        assert reject_response.status_code == 422, reject_response.text
+    finally:
+        system_settings.set_feature_ari_enabled(previous, "admin")

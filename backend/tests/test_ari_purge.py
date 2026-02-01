@@ -45,6 +45,7 @@ def _create_session(site: str, collaborator_id: int, performed_at: datetime, sta
         duration_seconds=600,
         start_pressure_bar=300,
         end_pressure_bar=200,
+        cylinder_capacity_l=6.8,
         stress_level=5,
     )
     session = ari_services.create_ari_session(

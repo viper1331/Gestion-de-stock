@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import { DraggableModal } from "../../../components/DraggableModal";
-import type { AriSettings } from "../../../types/ari";
+import type { AriSession, AriSettings } from "../../../types/ari";
 
 type CreateAriSessionPayload = {
   collaborator_id: number;
@@ -10,7 +10,7 @@ type CreateAriSessionPayload = {
   duration_seconds: number;
   start_pressure_bar: number;
   end_pressure_bar: number;
-  air_consumed_bar?: number | null;
+  cylinder_capacity_l: number;
   stress_level: number;
   rpe?: number | null;
   physio_notes?: string | null;
@@ -34,10 +34,11 @@ type CollaboratorOption = {
 interface CreateAriSessionModalProps {
   open: boolean;
   onClose: () => void;
-  onSubmit: (payload: CreateAriSessionPayload) => Promise<void>;
+  onSubmit: (payload: CreateAriSessionPayload) => Promise<AriSession>;
   collaboratorId: number | null;
   settings: AriSettings | null;
   collaborators: CollaboratorOption[];
+  session?: AriSession | null;
 }
 
 const toLocalDateTimeInput = (date: Date) => {
@@ -82,7 +83,8 @@ export function CreateAriSessionModal({
   onSubmit,
   collaboratorId,
   settings,
-  collaborators
+  collaborators,
+  session
 }: CreateAriSessionModalProps) {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [performedAt, setPerformedAt] = useState(toLocalDateTimeInput(new Date()));
@@ -91,9 +93,9 @@ export function CreateAriSessionModal({
   );
   const [courseName, setCourseName] = useState("");
   const [durationInput, setDurationInput] = useState("600");
+  const [cylinderCapacity, setCylinderCapacity] = useState("6.8");
   const [startPressure, setStartPressure] = useState("300");
   const [endPressure, setEndPressure] = useState("200");
-  const [airConsumed, setAirConsumed] = useState("");
   const [stressLevel, setStressLevel] = useState("5");
   const [rpe, setRpe] = useState("");
   const [physioNotes, setPhysioNotes] = useState("");
@@ -115,12 +117,38 @@ export function CreateAriSessionModal({
     if (!open) {
       return;
     }
+    if (session) {
+      setPerformedAt(toLocalDateTimeInput(new Date(session.performed_at)));
+      setCourseName(session.course_name || "");
+      setDurationInput(String(session.duration_seconds));
+      setCylinderCapacity(session.cylinder_capacity_l.toString());
+      setStartPressure(session.start_pressure_bar.toString());
+      setEndPressure(session.end_pressure_bar.toString());
+      setStressLevel(session.stress_level.toString());
+      setRpe(session.rpe ? session.rpe.toString() : "");
+      setPhysioNotes(session.physio_notes ?? "");
+      setObservations(session.observations ?? "");
+      setPreValues({
+        bp_sys: session.bp_sys_pre?.toString() ?? "",
+        bp_dia: session.bp_dia_pre?.toString() ?? "",
+        hr: session.hr_pre?.toString() ?? "",
+        spo2: session.spo2_pre?.toString() ?? ""
+      });
+      setPostValues({
+        bp_sys: session.bp_sys_post?.toString() ?? "",
+        bp_dia: session.bp_dia_post?.toString() ?? "",
+        hr: session.hr_post?.toString() ?? "",
+        spo2: session.spo2_post?.toString() ?? ""
+      });
+      setSelectedCollaboratorId(session.collaborator_id);
+      return;
+    }
     setPerformedAt(toLocalDateTimeInput(new Date()));
     setCourseName("");
     setDurationInput("600");
+    setCylinderCapacity("6.8");
     setStartPressure("300");
     setEndPressure("200");
-    setAirConsumed("");
     setStressLevel("5");
     setRpe("");
     setPhysioNotes("");
@@ -128,7 +156,7 @@ export function CreateAriSessionModal({
     setPreValues({ bp_sys: "", bp_dia: "", hr: "", spo2: "" });
     setPostValues({ bp_sys: "", bp_dia: "", hr: "", spo2: "" });
     setSelectedCollaboratorId(collaboratorId ?? "");
-  }, [open]);
+  }, [open, collaboratorId, session]);
 
   useEffect(() => {
     if (collaboratorId) {
@@ -140,19 +168,64 @@ export function CreateAriSessionModal({
     () => parseDurationInput(durationInput),
     [durationInput]
   );
+  const cylinderCapacityValue = useMemo(
+    () => parseOptionalNumber(cylinderCapacity),
+    [cylinderCapacity]
+  );
   const startPressureValue = useMemo(() => parseOptionalNumber(startPressure), [startPressure]);
   const endPressureValue = useMemo(() => parseOptionalNumber(endPressure), [endPressure]);
   const stressValue = useMemo(() => parseOptionalNumber(stressLevel), [stressLevel]);
+  const airMetrics = useMemo(() => {
+    if (
+      cylinderCapacityValue === null ||
+      startPressureValue === null ||
+      endPressureValue === null ||
+      durationSeconds === null ||
+      durationSeconds <= 0
+    ) {
+      return null;
+    }
+    const deltaBar = startPressureValue - endPressureValue;
+    if (deltaBar <= 0) {
+      return null;
+    }
+    const airConsumedL = cylinderCapacityValue * deltaBar;
+    const durationMin = durationSeconds / 60;
+    if (durationMin <= 0) {
+      return null;
+    }
+    const airConsumptionLpm = airConsumedL / durationMin;
+    if (airConsumptionLpm <= 0) {
+      return null;
+    }
+    const autonomyStart = (cylinderCapacityValue * startPressureValue) / airConsumptionLpm;
+    const autonomyEnd = (cylinderCapacityValue * endPressureValue) / airConsumptionLpm;
+    return {
+      airConsumedL,
+      airConsumptionLpm,
+      autonomyStart,
+      autonomyEnd
+    };
+  }, [cylinderCapacityValue, durationSeconds, endPressureValue, startPressureValue]);
   const canSubmit = useMemo(() => {
     return Boolean(
       selectedCollaboratorId &&
         durationSeconds &&
         durationSeconds > 0 &&
+        cylinderCapacityValue !== null &&
+        cylinderCapacityValue > 0 &&
         startPressureValue !== null &&
         endPressureValue !== null &&
         stressValue !== null
     );
-  }, [selectedCollaboratorId, durationSeconds, endPressureValue, startPressureValue, stressValue]);
+  }, [
+    selectedCollaboratorId,
+    durationSeconds,
+    cylinderCapacityValue,
+    endPressureValue,
+    startPressureValue,
+    stressValue
+  ]);
 
   const handleSubmit = async () => {
     if (
@@ -160,6 +233,7 @@ export function CreateAriSessionModal({
       !canSubmit ||
       isSubmitting ||
       durationSeconds === null ||
+      cylinderCapacityValue === null ||
       startPressureValue === null ||
       endPressureValue === null ||
       stressValue === null
@@ -173,9 +247,9 @@ export function CreateAriSessionModal({
         performed_at: new Date(performedAt).toISOString(),
         course_name: courseName.trim() || "Séance ARI",
         duration_seconds: durationSeconds,
+        cylinder_capacity_l: cylinderCapacityValue,
         start_pressure_bar: startPressureValue,
         end_pressure_bar: endPressureValue,
-        air_consumed_bar: parseOptionalNumber(airConsumed),
         stress_level: stressValue,
         rpe: parseOptionalNumber(rpe),
         physio_notes: physioNotes.trim() || null,
@@ -200,7 +274,7 @@ export function CreateAriSessionModal({
     <DraggableModal
       open={open}
       onClose={onClose}
-      title="Ajouter une séance ARI"
+      title={session ? "Modifier une séance ARI" : "Ajouter une séance ARI"}
       maxWidthClassName="max-w-2xl"
       footer={
         <div className="flex items-center justify-end gap-2">
@@ -224,7 +298,7 @@ export function CreateAriSessionModal({
                 Enregistrement...
               </>
             ) : (
-              "Créer"
+              session ? "Mettre à jour" : "Créer"
             )}
           </button>
         </div>
@@ -279,6 +353,17 @@ export function CreateAriSessionModal({
           />
         </label>
         <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Capacité bouteille (L)
+          <input
+            type="number"
+            min={0}
+            step="0.1"
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={cylinderCapacity}
+            onChange={(event) => setCylinderCapacity(event.target.value)}
+          />
+        </label>
+        <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
           Pression départ (bar)
           <input
             type="number"
@@ -298,16 +383,41 @@ export function CreateAriSessionModal({
             onChange={(event) => setEndPressure(event.target.value)}
           />
         </label>
-        <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
-          Consommation d'air (bar)
-          <input
-            type="number"
-            min={0}
-            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
-            value={airConsumed}
-            onChange={(event) => setAirConsumed(event.target.value)}
-          />
-        </label>
+        <div className="flex flex-col gap-2 rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-xs text-slate-200 sm:col-span-2">
+          <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
+            Résultats air (prévisualisation)
+          </p>
+          {airMetrics ? (
+            <div className="grid gap-2 sm:grid-cols-2">
+              <div>
+                <p className="text-slate-400">Volume consommé</p>
+                <p className="text-sm font-semibold text-white">
+                  {airMetrics.airConsumedL.toFixed(1)} L
+                </p>
+              </div>
+              <div>
+                <p className="text-slate-400">Consommation moyenne</p>
+                <p className="text-sm font-semibold text-white">
+                  {airMetrics.airConsumptionLpm.toFixed(1)} L/min
+                </p>
+              </div>
+              <div>
+                <p className="text-slate-400">Autonomie départ</p>
+                <p className="text-sm font-semibold text-white">
+                  {airMetrics.autonomyStart.toFixed(1)} min
+                </p>
+              </div>
+              <div>
+                <p className="text-slate-400">Autonomie fin</p>
+                <p className="text-sm font-semibold text-white">
+                  {airMetrics.autonomyEnd.toFixed(1)} min
+                </p>
+              </div>
+            </div>
+          ) : (
+            <p className="text-sm text-slate-400">Renseignez les champs pour voir les calculs.</p>
+          )}
+        </div>
         <label className="flex flex-col gap-1 text-xs font-semibold uppercase tracking-wide text-slate-400">
           Stress (1-10)
           <input

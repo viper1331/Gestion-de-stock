@@ -137,7 +137,7 @@ export function SessionDetailModal({
             <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
               <p className="text-xs uppercase tracking-wide text-slate-400">Air consommé</p>
               <p className="text-lg font-semibold text-white">
-                {formatNumber(session.air_consumed_bar)} bar
+                {session.air_consumed_l > 0 ? `${session.air_consumed_l.toFixed(1)} L` : "—"}
               </p>
             </div>
             <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3">
@@ -145,6 +145,36 @@ export function SessionDetailModal({
               <p className="text-lg font-semibold text-white">
                 {formatNumber(session.stress_level)}
               </p>
+            </div>
+          </div>
+
+          <div className="rounded-lg border border-slate-800 bg-slate-900/60 p-3 text-sm text-slate-200">
+            <p className="text-xs uppercase tracking-wide text-slate-400">Métriques air</p>
+            <div className="mt-2 grid gap-2 sm:grid-cols-2">
+              <div>
+                <p className="text-slate-400">Consommation moyenne</p>
+                <p className="font-semibold text-white">
+                  {session.air_consumption_lpm > 0
+                    ? `${session.air_consumption_lpm.toFixed(1)} L/min`
+                    : "Non renseigné"}
+                </p>
+              </div>
+              <div>
+                <p className="text-slate-400">Autonomie départ / fin</p>
+                <p className="font-semibold text-white">
+                  {session.autonomy_start_min > 0
+                    ? `${session.autonomy_start_min.toFixed(1)} / ${session.autonomy_end_min.toFixed(1)} min`
+                    : "Non renseigné"}
+                </p>
+              </div>
+              <div>
+                <p className="text-slate-400">Capacité bouteille</p>
+                <p className="font-semibold text-white">
+                  {session.cylinder_capacity_l > 0
+                    ? `${session.cylinder_capacity_l.toFixed(1)} L`
+                    : "Non renseigné"}
+                </p>
+              </div>
             </div>
           </div>
 

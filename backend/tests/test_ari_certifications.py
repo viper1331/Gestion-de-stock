@@ -41,6 +41,7 @@ def _create_session(headers: dict[str, str], collaborator_id: int) -> None:
         "duration_seconds": 600,
         "start_pressure_bar": 300,
         "end_pressure_bar": 200,
+        "cylinder_capacity_l": 6.8,
         "stress_level": 5,
     }
     response = client.post("/ari/sessions", json=payload, headers=headers)

@@ -9,7 +9,8 @@ import {
   decideAriCertification,
   getAriCertification,
   listAriPending,
-  listAriSessions
+  listAriSessions,
+  updateAriSession
 } from "../../api/ari";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
@@ -48,6 +49,7 @@ export function AriSessionsPage() {
   const canCertify = canCertifyARI(user);
 
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
+  const [editingSession, setEditingSession] = useState<AriSession | null>(null);
   const [selectedSession, setSelectedSession] = useState<AriSession | null>(null);
 
   useEffect(() => {
@@ -113,6 +115,23 @@ export function AriSessionsPage() {
     }
   });
 
+  const updateSession = useMutation({
+    mutationFn: async (payload: { sessionId: number; data: Parameters<typeof updateAriSession>[1] }) =>
+      updateAriSession(payload.sessionId, payload.data),
+    onSuccess: () => {
+      toast.success("Séance ARI mise à jour.");
+      queryClient.invalidateQueries({ queryKey: ["ari", "sessions"] });
+      setEditingSession(null);
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.status === 403) {
+        toast.error("Vous n'avez pas les droits pour modifier une séance ARI.");
+        return;
+      }
+      toast.error("Impossible de modifier la séance.");
+    }
+  });
+
   const decideCertification = useMutation({
     mutationFn: async (payload: { collaborator_id: number; status: "APPROVED" | "REJECTED"; comment?: string | null }) => {
       const result = await decideAriCertification(payload);
@@ -170,7 +189,7 @@ export function AriSessionsPage() {
                 <th className="px-4 py-3 font-semibold">Collaborateur</th>
                 <th className="px-4 py-3 font-semibold">Parcours</th>
                 <th className="px-4 py-3 font-semibold">Durée</th>
-                <th className="px-4 py-3 font-semibold">Air</th>
+                <th className="px-4 py-3 font-semibold">Métriques air</th>
                 <th className="px-4 py-3 font-semibold">Statut</th>
                 <th className="px-4 py-3 font-semibold text-right">Actions</th>
               </tr>
@@ -209,7 +228,27 @@ export function AriSessionsPage() {
                       </td>
                       <td className="px-4 py-3">{session.course_name || "—"}</td>
                       <td className="px-4 py-3">{session.duration_seconds}s</td>
-                      <td className="px-4 py-3">{session.air_consumed_bar} bar</td>
+                      <td className="px-4 py-3">
+                        <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-200">
+                          <p className="font-semibold text-white">
+                            {session.air_consumption_lpm > 0
+                              ? `${session.air_consumption_lpm.toFixed(1)} L/min`
+                              : "Non renseigné"}
+                          </p>
+                          <p className="text-slate-400">
+                            Air consommé :{" "}
+                            {session.air_consumed_l > 0
+                              ? `${session.air_consumed_l.toFixed(1)} L`
+                              : "—"}
+                          </p>
+                          <p className="text-slate-400">
+                            Autonomie :{" "}
+                            {session.autonomy_start_min > 0 && session.autonomy_end_min >= 0
+                              ? `${session.autonomy_start_min.toFixed(1)} / ${session.autonomy_end_min.toFixed(1)} min`
+                              : "—"}
+                          </p>
+                        </div>
+                      </td>
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${
@@ -220,13 +259,24 @@ export function AriSessionsPage() {
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
-                        <button
-                          type="button"
-                          className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
-                          onClick={() => setSelectedSession(session)}
-                        >
-                          Ouvrir
-                        </button>
+                        <div className="flex justify-end gap-2">
+                          {canEdit ? (
+                            <button
+                              type="button"
+                              className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                              onClick={() => setEditingSession(session)}
+                            >
+                              Modifier
+                            </button>
+                          ) : null}
+                          <button
+                            type="button"
+                            className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                            onClick={() => setSelectedSession(session)}
+                          >
+                            Ouvrir
+                          </button>
+                        </div>
                       </td>
                     </tr>
                   );
@@ -244,6 +294,21 @@ export function AriSessionsPage() {
         settings={null}
         collaborators={collaborators}
         onSubmit={(payload) => createSession.mutateAsync(payload)}
+      />
+
+      <CreateAriSessionModal
+        open={Boolean(editingSession)}
+        onClose={() => setEditingSession(null)}
+        collaboratorId={editingSession?.collaborator_id ?? null}
+        settings={null}
+        collaborators={collaborators}
+        session={editingSession}
+        onSubmit={(payload) => {
+          if (!editingSession) {
+            return Promise.reject(new Error("Session manquante"));
+          }
+          return updateSession.mutateAsync({ sessionId: editingSession.id, data: payload });
+        }}
       />
 
       <SessionDetailModal
