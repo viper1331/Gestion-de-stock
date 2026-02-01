@@ -39,7 +39,7 @@ import { useThrottledHoverState } from "./useThrottledHoverState";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
-import { SubViewCard, type SubviewCardData } from "./SubViewCard";
+import { CompactSubViewTile, SubViewCard, type SubviewCardData } from "./SubViewCard";
 import { SubviewPinCard, type SubviewPinCardData } from "./SubviewPinCard";
 
 interface VehicleViewConfig {
@@ -3260,19 +3260,17 @@ export function VehicleInventoryPage() {
                         Aucune vue épinglable n'est disponible pour le moment.
                       </div>
                     ) : availableSubviewCards.length > 0 ? (
-                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
                         {availableSubviewCards.map((subview) => (
-                          <SubViewCard
+                          <CompactSubViewTile
                             key={subview.id}
                             subview={subview}
-                            mode="draggable"
                             dragData={{
                               kind: "SUBVIEW",
                               subviewId: subview.id,
                               parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
                               vehicleId: selectedVehicle.id
                             }}
-                            onOpen={handleOpenSubview}
                           />
                         ))}
                       </div>
