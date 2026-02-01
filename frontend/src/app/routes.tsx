@@ -79,7 +79,7 @@ export const router = createBrowserRouter([
       {
         path: "ari",
         children: [
-          { path: "", element: <Navigate to=\"sessions\" replace /> },
+          { index: true, element: <Navigate to="sessions" replace /> },
           { path: "sessions", element: <AriSessionsPage /> },
           { path: "certifications", element: <AriCertificationsPage /> },
           { path: "stats", element: <AriStatsPage /> }
