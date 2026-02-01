@@ -206,6 +206,13 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[_ModuleDefinitionMeta, ...] = (
         sort_order=110,
     ),
     _ModuleDefinitionMeta(
+        key="ari",
+        label="Sessions ARI",
+        category="Opérations",
+        is_admin_only=False,
+        sort_order=115,
+    ),
+    _ModuleDefinitionMeta(
         key="pharmacy",
         label="Pharmacie",
         category="Pharmacie",
@@ -17647,414 +17654,382 @@ def has_module_access(user: models.User, module: str, *, action: str = "view") -
     return True
 
 
-def _ari_connection(site_slug: str) -> ContextManager[sqlite3.Connection]:
-    @contextmanager
-    def _ctx() -> Iterator[sqlite3.Connection]:
-        conn = db.get_ari_connection(site_slug)
-        try:
-            yield conn
-            conn.commit()
-        except Exception:
-            if conn.in_transaction:
-                conn.rollback()
-            raise
-        finally:
-            conn.close()
-
-    return _ctx()
+def _format_ari_timestamp(value: datetime | None) -> str:
+    if value is None:
+        return datetime.now(timezone.utc).isoformat().replace("+00:00", "Z")
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
-def _ari_log(
-    conn: sqlite3.Connection,
-    *,
-    actor_user_id: str,
-    action: str,
-    entity_type: str,
-    entity_id: str,
-    details: dict[str, Any] | None = None,
-) -> None:
-    conn.execute(
-        """
-        INSERT INTO ari_audit_log (
-          actor_user_id,
-          action,
-          entity_type,
-          entity_id,
-          details_json,
-          created_at
-        )
-        VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP)
-        """,
-        (
-            actor_user_id,
-            action,
-            entity_type,
-            entity_id,
-            json.dumps(details, ensure_ascii=False) if details else None,
-        ),
+def _build_ari_physio_snapshot(row: sqlite3.Row) -> models.AriPhysioInput | None:
+    if row is None:
+        return None
+    source = row["physio_source"] or "manual"
+    device_id = row["physio_device_id"]
+    payload_json = {} if source == "sensor" and not device_id else None
+    pre = models.AriPhysioPoint(
+        bp_sys=row["bp_sys_pre"],
+        bp_dia=row["bp_dia_pre"],
+        hr=row["hr_pre"],
+        spo2=row["spo2_pre"],
+    )
+    post = models.AriPhysioPoint(
+        bp_sys=row["bp_sys_post"],
+        bp_dia=row["bp_dia_post"],
+        hr=row["hr_post"],
+        spo2=row["spo2_post"],
+    )
+    pre = pre if any(value is not None for value in pre.model_dump().values()) else None
+    post = post if any(value is not None for value in post.model_dump().values()) else None
+    return models.AriPhysioInput(
+        source=source,
+        pre=pre,
+        post=post,
+        device_id=device_id,
+        captured_at=row["physio_captured_at"],
+        payload_json=payload_json,
     )
 
 
-def ari_get_settings(site_slug: str) -> models_ari.AriSettings:
+def _ari_session_from_row(row: sqlite3.Row) -> models.AriSession:
+    return models.AriSession(
+        id=row["id"],
+        performed_at=row["performed_at"],
+        created_at=row["created_at"],
+        created_by=row["created_by"],
+        physio=_build_ari_physio_snapshot(row),
+    )
+
+
+def list_ari_sessions() -> list[models.AriSession]:
     ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
-        row = conn.execute(
-            """
-            SELECT feature_enabled, stress_required, rpe_enabled, min_sessions_for_certification
-            FROM ari_settings
-            WHERE site_id = ?
-            """,
-            (site_slug,),
-        ).fetchone()
-        if not row:
-            conn.execute(
-                """
-                INSERT INTO ari_settings (
-                  site_id,
-                  feature_enabled,
-                  stress_required,
-                  rpe_enabled,
-                  min_sessions_for_certification,
-                  created_at,
-                  updated_at
-                )
-                VALUES (?, 0, 1, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """,
-                (site_slug,),
-            )
-            row = {
-                "feature_enabled": 0,
-                "stress_required": 1,
-                "rpe_enabled": 0,
-                "min_sessions_for_certification": 1,
-            }
-        return models_ari.AriSettings(
-            feature_enabled=bool(row["feature_enabled"]),
-            stress_required=bool(row["stress_required"]),
-            rpe_enabled=bool(row["rpe_enabled"]),
-            min_sessions_for_certification=int(row["min_sessions_for_certification"]),
-        )
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            "SELECT * FROM ari_sessions ORDER BY performed_at DESC, id DESC"
+        ).fetchall()
+    return [_ari_session_from_row(row) for row in rows]
 
 
-def ari_update_settings(
-    site_slug: str,
-    payload: models_ari.AriSettingsUpdate,
-    updated_by: str,
-) -> models_ari.AriSettings:
+def get_ari_session(session_id: int) -> models.AriSession:
     ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
-        conn.execute(
-            """
-            INSERT INTO ari_settings (
-              site_id,
-              feature_enabled,
-              stress_required,
-              rpe_enabled,
-              min_sessions_for_certification,
-              created_at,
-              updated_at
-            )
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT(site_id) DO UPDATE SET
-              feature_enabled = excluded.feature_enabled,
-              stress_required = excluded.stress_required,
-              rpe_enabled = excluded.rpe_enabled,
-              min_sessions_for_certification = excluded.min_sessions_for_certification,
-              updated_at = CURRENT_TIMESTAMP
-            """,
-            (
-                site_slug,
-                int(payload.feature_enabled),
-                int(payload.stress_required),
-                int(payload.rpe_enabled),
-                payload.min_sessions_for_certification,
-            ),
-        )
-        _ari_log(
-            conn,
-            actor_user_id=updated_by,
-            action="settings.update",
-            entity_type="ari_settings",
-            entity_id=site_slug,
-            details=payload.model_dump(),
-        )
-    return ari_get_settings(site_slug)
-
-
-def ari_create_session(
-    site_slug: str,
-    payload: models_ari.AriSessionCreate,
-    created_by: str,
-) -> models_ari.AriSession:
-    ensure_database_ready()
-    air_consumed = payload.start_pressure_bar - payload.end_pressure_bar
-    if air_consumed <= 0:
-        raise ValueError("Pression finale invalide")
-    performed_at = payload.performed_at.isoformat()
-    with _ari_connection(site_slug) as conn:
-        cur = conn.execute(
-            """
-            INSERT INTO ari_sessions (
-              collaborator_id,
-              performed_at,
-              course_name,
-              duration_seconds,
-              start_pressure_bar,
-              end_pressure_bar,
-              air_consumed_bar,
-              stress_level,
-              rpe,
-              physio_notes,
-              observations,
-              created_at,
-              created_by
-            )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
-            """,
-            (
-                payload.collaborator_id,
-                performed_at,
-                payload.course_name,
-                payload.duration_seconds,
-                payload.start_pressure_bar,
-                payload.end_pressure_bar,
-                air_consumed,
-                payload.stress_level,
-                payload.rpe,
-                payload.physio_notes,
-                payload.observations,
-                created_by,
-            ),
-        )
-        session_id = cur.lastrowid
-        cert = conn.execute(
-            """
-            SELECT id FROM ari_certifications WHERE collaborator_id = ?
-            """,
-            (payload.collaborator_id,),
-        ).fetchone()
-        if not cert:
-            conn.execute(
-                """
-                INSERT INTO ari_certifications (
-                  collaborator_id,
-                  status,
-                  created_at,
-                  updated_at
-                )
-                VALUES (?, 'PENDING', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-                """,
-                (payload.collaborator_id,),
-            )
-        _ari_log(
-            conn,
-            actor_user_id=created_by,
-            action="session.create",
-            entity_type="ari_session",
-            entity_id=str(session_id),
-            details={"collaborator_id": payload.collaborator_id},
-        )
+    with db.get_stock_connection() as conn:
         row = conn.execute(
             "SELECT * FROM ari_sessions WHERE id = ?",
             (session_id,),
         ).fetchone()
-    if not row:
-        raise ValueError("Séance introuvable")
-    return models_ari.AriSession(**row)
+    if row is None:
+        raise ValueError("Session ARI introuvable")
+    return _ari_session_from_row(row)
 
 
-def ari_list_sessions(site_slug: str, collaborator_id: int) -> list[models_ari.AriSession]:
-    ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
-        rows = conn.execute(
-            """
-            SELECT * FROM ari_sessions
-            WHERE collaborator_id = ?
-            ORDER BY performed_at DESC, id DESC
-            """,
-            (collaborator_id,),
-        ).fetchall()
-    return [models_ari.AriSession(**row) for row in rows]
-
-
-def ari_get_certification(site_slug: str, collaborator_id: int) -> models_ari.AriCertification:
-    ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
-        row = conn.execute(
-            """
-            SELECT collaborator_id, status, comment, decision_at, decided_by
-            FROM ari_certifications
-            WHERE collaborator_id = ?
-            """,
-            (collaborator_id,),
-        ).fetchone()
-    if row:
-        return models_ari.AriCertification(**row)
-    return models_ari.AriCertification(
-        collaborator_id=collaborator_id,
-        status="PENDING",
-        comment=None,
-        decision_at=None,
-        decided_by=None,
+def _insert_ari_measurements(
+    *,
+    conn: sqlite3.Connection,
+    session_id: int,
+    physio: models.AriPhysioInput,
+    performed_at: str,
+    created_by: str,
+) -> None:
+    captured_at = (
+        _format_ari_timestamp(physio.captured_at)
+        if physio.captured_at is not None
+        else performed_at
     )
-
-
-def ari_list_pending(site_slug: str) -> list[models_ari.AriCertification]:
-    ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
-        rows = conn.execute(
-            """
-            SELECT collaborator_id, status, comment, decision_at, decided_by
-            FROM ari_certifications
-            WHERE status = 'PENDING'
-            ORDER BY updated_at DESC
-            """,
-        ).fetchall()
-    return [models_ari.AriCertification(**row) for row in rows]
-
-
-def ari_decide_certification(
-    site_slug: str,
-    payload: models_ari.AriCertificationDecision,
-    decided_by: str,
-) -> models_ari.AriCertification:
-    ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
-        conn.execute(
-            """
-            INSERT INTO ari_certifications (
-              collaborator_id,
-              status,
-              comment,
-              decision_at,
-              decided_by,
-              created_at,
-              updated_at
+    payload_json = (
+        json.dumps(physio.payload_json, ensure_ascii=False)
+        if physio.payload_json is not None
+        else None
+    )
+    measurement_units = {
+        "bp_sys": "mmHg",
+        "bp_dia": "mmHg",
+        "hr": "bpm",
+        "spo2": "percent",
+    }
+    for point in (physio.pre, physio.post):
+        if point is None:
+            continue
+        for measurement_type, value in point.model_dump().items():
+            if value is None:
+                continue
+            conn.execute(
+                """
+                INSERT INTO ari_measurements (
+                    session_id,
+                    captured_at,
+                    source,
+                    device_id,
+                    measurement_type,
+                    value,
+                    unit,
+                    quality,
+                    payload_json,
+                    created_at,
+                    created_by
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                """,
+                (
+                    session_id,
+                    captured_at,
+                    physio.source,
+                    physio.device_id,
+                    measurement_type,
+                    value,
+                    measurement_units[measurement_type],
+                    None,
+                    payload_json,
+                    created_by,
+                ),
             )
-            VALUES (?, ?, ?, CURRENT_TIMESTAMP, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
-            ON CONFLICT(collaborator_id) DO UPDATE SET
-              status = excluded.status,
-              comment = excluded.comment,
-              decision_at = excluded.decision_at,
-              decided_by = excluded.decided_by,
-              updated_at = CURRENT_TIMESTAMP
+
+
+def create_ari_session(
+    payload: models.AriSessionCreate,
+    *,
+    created_by: str,
+) -> models.AriSession:
+    ensure_database_ready()
+    performed_at = _format_ari_timestamp(payload.performed_at)
+    physio = payload.physio
+    pre = physio.pre if physio else None
+    post = physio.post if physio else None
+    physio_source = physio.source if physio else "manual"
+    physio_device_id = physio.device_id if physio else None
+    physio_captured_at = (
+        _format_ari_timestamp(physio.captured_at) if physio and physio.captured_at else None
+    )
+    with db.get_stock_connection() as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO ari_sessions (
+                performed_at,
+                created_at,
+                created_by,
+                bp_sys_pre,
+                bp_dia_pre,
+                hr_pre,
+                spo2_pre,
+                bp_sys_post,
+                bp_dia_post,
+                hr_post,
+                spo2_post,
+                physio_source,
+                physio_device_id,
+                physio_captured_at
+            )
+            VALUES (?, CURRENT_TIMESTAMP, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
-                payload.collaborator_id,
-                payload.status,
-                payload.comment,
-                decided_by,
+                performed_at,
+                created_by,
+                pre.bp_sys if pre else None,
+                pre.bp_dia if pre else None,
+                pre.hr if pre else None,
+                pre.spo2 if pre else None,
+                post.bp_sys if post else None,
+                post.bp_dia if post else None,
+                post.hr if post else None,
+                post.spo2 if post else None,
+                physio_source,
+                physio_device_id,
+                physio_captured_at,
             ),
         )
-        _ari_log(
-            conn,
-            actor_user_id=decided_by,
-            action="certification.decide",
-            entity_type="ari_certification",
-            entity_id=str(payload.collaborator_id),
-            details={"status": payload.status, "comment": payload.comment},
-        )
-    return ari_get_certification(site_slug, payload.collaborator_id)
+        session_id = int(cur.lastrowid)
+        if physio:
+            _insert_ari_measurements(
+                conn=conn,
+                session_id=session_id,
+                physio=physio,
+                performed_at=performed_at,
+                created_by=created_by,
+            )
+        conn.commit()
+    return get_ari_session(session_id)
 
 
-def ari_get_collaborator_stats(
-    site_slug: str, collaborator_id: int
-) -> models_ari.AriCollaboratorStats:
+def list_ari_measurements(session_id: int) -> list[models.AriMeasurement]:
     ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
+    with db.get_stock_connection() as conn:
+        rows = conn.execute(
+            """
+            SELECT *
+            FROM ari_measurements
+            WHERE session_id = ?
+            ORDER BY captured_at ASC, id ASC
+            """,
+            (session_id,),
+        ).fetchall()
+    return [models.AriMeasurement(**row) for row in rows]
+
+
+def create_ari_measurements(
+    session_id: int,
+    measurements: list[models.AriMeasurementCreate],
+    *,
+    created_by: str,
+) -> list[models.AriMeasurement]:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        exists = conn.execute(
+            "SELECT 1 FROM ari_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if exists is None:
+            raise ValueError("Session ARI introuvable")
+        for entry in measurements:
+            captured_at = _format_ari_timestamp(entry.captured_at)
+            payload_json = (
+                json.dumps(entry.payload_json, ensure_ascii=False)
+                if entry.payload_json is not None
+                else None
+            )
+            conn.execute(
+                """
+                INSERT INTO ari_measurements (
+                    session_id,
+                    captured_at,
+                    source,
+                    device_id,
+                    measurement_type,
+                    value,
+                    unit,
+                    quality,
+                    payload_json,
+                    created_at,
+                    created_by
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+                """,
+                (
+                    session_id,
+                    captured_at,
+                    entry.source,
+                    entry.device_id,
+                    entry.measurement_type,
+                    entry.value,
+                    entry.unit,
+                    entry.quality,
+                    payload_json,
+                    created_by,
+                ),
+            )
+        conn.commit()
+    return list_ari_measurements(session_id)
+
+
+def get_ari_stats() -> models.AriStats:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
         row = conn.execute(
             """
             SELECT
-              COUNT(*) AS sessions_count,
-              AVG(duration_seconds) AS avg_duration_seconds,
-              AVG(air_consumed_bar) AS avg_air_consumed_bar,
-              AVG(CASE WHEN duration_seconds > 0 THEN air_consumed_bar * 60.0 / duration_seconds END)
-                AS avg_air_per_min,
-              AVG(stress_level) AS avg_stress_level,
-              MAX(performed_at) AS last_session_at
+                AVG(hr_pre) AS avg_hr_pre,
+                AVG(hr_post) AS avg_hr_post,
+                AVG(spo2_pre) AS avg_spo2_pre,
+                AVG(spo2_post) AS avg_spo2_post,
+                AVG(bp_sys_pre) AS avg_bp_sys_pre,
+                AVG(bp_dia_pre) AS avg_bp_dia_pre,
+                AVG(bp_sys_post) AS avg_bp_sys_post,
+                AVG(bp_dia_post) AS avg_bp_dia_post
             FROM ari_sessions
-            WHERE collaborator_id = ?
-            """,
-            (collaborator_id,),
+            """
         ).fetchone()
-    certification = ari_get_certification(site_slug, collaborator_id)
-    return models_ari.AriCollaboratorStats(
-        sessions_count=int(row["sessions_count"]) if row else 0,
-        avg_duration_seconds=row["avg_duration_seconds"] if row else None,
-        avg_air_consumed_bar=row["avg_air_consumed_bar"] if row else None,
-        avg_air_per_min=row["avg_air_per_min"] if row else None,
-        avg_stress_level=row["avg_stress_level"] if row else None,
-        last_session_at=row["last_session_at"] if row else None,
-        certification_status=certification.status,
-        certification_decision_at=certification.decision_at,
+    if row is None:
+        return models.AriStats()
+    avg_hr_pre = row["avg_hr_pre"]
+    avg_hr_post = row["avg_hr_post"]
+    avg_spo2_pre = row["avg_spo2_pre"]
+    avg_spo2_post = row["avg_spo2_post"]
+    avg_bp_sys_pre = row["avg_bp_sys_pre"]
+    avg_bp_dia_pre = row["avg_bp_dia_pre"]
+    avg_bp_sys_post = row["avg_bp_sys_post"]
+    avg_bp_dia_post = row["avg_bp_dia_post"]
+    return models.AriStats(
+        avg_hr_pre=avg_hr_pre,
+        avg_hr_post=avg_hr_post,
+        avg_spo2_pre=avg_spo2_pre,
+        avg_spo2_post=avg_spo2_post,
+        avg_bp_sys_pre=avg_bp_sys_pre,
+        avg_bp_dia_pre=avg_bp_dia_pre,
+        avg_bp_sys_post=avg_bp_sys_post,
+        avg_bp_dia_post=avg_bp_dia_post,
+        delta_hr_avg=avg_hr_post - avg_hr_pre if avg_hr_pre is not None and avg_hr_post is not None else None,
+        delta_spo2_avg=(
+            avg_spo2_post - avg_spo2_pre
+            if avg_spo2_pre is not None and avg_spo2_post is not None
+            else None
+        ),
+        delta_bp_sys_avg=(
+            avg_bp_sys_post - avg_bp_sys_pre
+            if avg_bp_sys_pre is not None and avg_bp_sys_post is not None
+            else None
+        ),
+        delta_bp_dia_avg=(
+            avg_bp_dia_post - avg_bp_dia_pre
+            if avg_bp_dia_pre is not None and avg_bp_dia_post is not None
+            else None
+        ),
     )
 
 
-def ari_get_site_stats(site_slug: str) -> dict[str, object]:
-    ensure_database_ready()
-    with _ari_connection(site_slug) as conn:
-        row = conn.execute(
-            """
-            SELECT
-              COUNT(*) AS sessions_count,
-              AVG(duration_seconds) AS avg_duration_seconds,
-              AVG(CASE WHEN duration_seconds > 0 THEN air_consumed_bar * 60.0 / duration_seconds END)
-                AS avg_air_per_min
-            FROM ari_sessions
-            WHERE datetime(performed_at) >= datetime('now', '-30 days')
-            """,
-        ).fetchone()
-        pending = conn.execute(
-            "SELECT COUNT(*) AS count FROM ari_certifications WHERE status = 'PENDING'",
-        ).fetchone()
-    return {
-        "sessions_count_30d": int(row["sessions_count"]) if row else 0,
-        "avg_duration_30d": row["avg_duration_seconds"] if row else None,
-        "avg_air_per_min_30d": row["avg_air_per_min"] if row else None,
-        "pending_certifications_count": int(pending["count"]) if pending else 0,
-    }
-
-
-def ari_export_collaborator_pdf(site_slug: str, collaborator_id: int) -> bytes:
-    ensure_database_ready()
-    stats = ari_get_collaborator_stats(site_slug, collaborator_id)
-    sessions = ari_list_sessions(site_slug, collaborator_id)
-    with db.get_stock_connection(site_slug) as conn:
-        row = conn.execute(
-            "SELECT full_name, department FROM collaborators WHERE id = ?",
-            (collaborator_id,),
-        ).fetchone()
-    collaborator_name = row["full_name"] if row else f"Collaborateur #{collaborator_id}"
-    collaborator_department = row["department"] if row else None
+def generate_ari_session_pdf(session_id: int) -> bytes:
+    session = get_ari_session(session_id)
     buffer = io.BytesIO()
     pdf = canvas.Canvas(buffer, pagesize=A4)
-    pdf.setTitle(f"ARI - {collaborator_name}")
+    width, height = A4
+    y = height - 40
     pdf.setFont("Helvetica-Bold", 16)
-    pdf.drawString(24 * mm, 285 * mm, "Rapport ARI")
-    pdf.setFont("Helvetica", 11)
-    pdf.drawString(24 * mm, 275 * mm, f"Collaborateur : {collaborator_name}")
-    if collaborator_department:
-        pdf.drawString(24 * mm, 268 * mm, f"Service : {collaborator_department}")
-    pdf.drawString(24 * mm, 260 * mm, f"Séances : {stats.sessions_count}")
-    if stats.avg_air_per_min is not None:
-        pdf.drawString(24 * mm, 252 * mm, f"Air/min moyen : {stats.avg_air_per_min:.2f}")
-    y = 240 * mm
+    pdf.drawString(40, y, f"Session ARI #{session.id}")
+    y -= 20
+    pdf.setFont("Helvetica", 10)
+    pdf.drawString(40, y, f"Date: {session.performed_at}")
+    y -= 14
+    pdf.drawString(40, y, f"Créée par: {session.created_by}")
+    y -= 24
     pdf.setFont("Helvetica-Bold", 12)
-    pdf.drawString(24 * mm, y, "Historique des séances")
-    pdf.setFont("Helvetica", 9)
-    y -= 8 * mm
-    for session in sessions[:25]:
-        line = (
-            f"{session.performed_at} · {session.course_name} · "
-            f"{session.duration_seconds}s · {session.air_consumed_bar} bar"
-        )
-        pdf.drawString(24 * mm, y, line[:110])
-        y -= 6 * mm
-        if y < 20 * mm:
-            pdf.showPage()
-            y = 280 * mm
-            pdf.setFont("Helvetica", 9)
+    pdf.drawString(40, y, "Physiologie")
+    y -= 16
+    pdf.setFont("Helvetica", 10)
+    physio = session.physio
+    if physio is None:
+        pdf.drawString(40, y, "Aucune donnée physiologique.")
+    else:
+        source_label = "Manuel" if physio.source == "manual" else "Capteur"
+        pdf.drawString(40, y, f"Source: {source_label}")
+        y -= 14
+        if physio.device_id:
+            pdf.drawString(40, y, f"Capteur: {physio.device_id}")
+            y -= 14
+        if physio.captured_at:
+            pdf.drawString(40, y, f"Capture: {physio.captured_at}")
+            y -= 14
+        y -= 6
+        headers = ["Mesure", "Avant", "Après"]
+        rows = [
+            ("TA systolique (mmHg)", physio.pre.bp_sys if physio.pre else None, physio.post.bp_sys if physio.post else None),
+            ("TA diastolique (mmHg)", physio.pre.bp_dia if physio.pre else None, physio.post.bp_dia if physio.post else None),
+            ("HR (bpm)", physio.pre.hr if physio.pre else None, physio.post.hr if physio.post else None),
+            ("SpO₂ (%)", physio.pre.spo2 if physio.pre else None, physio.post.spo2 if physio.post else None),
+        ]
+        pdf.setFont("Helvetica-Bold", 10)
+        pdf.drawString(40, y, headers[0])
+        pdf.drawString(240, y, headers[1])
+        pdf.drawString(340, y, headers[2])
+        y -= 12
+        pdf.setFont("Helvetica", 10)
+        for label, pre_value, post_value in rows:
+            pdf.drawString(40, y, label)
+            pdf.drawString(240, y, "-" if pre_value is None else str(pre_value))
+            pdf.drawString(340, y, "-" if post_value is None else str(post_value))
+            y -= 12
+            if y < 40:
+                pdf.showPage()
+                y = height - 40
+                pdf.setFont("Helvetica", 10)
     pdf.showPage()
     pdf.save()
     buffer.seek(0)
-    return buffer.read()
+    return buffer.getvalue()

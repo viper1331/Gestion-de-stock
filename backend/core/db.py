@@ -1331,3 +1331,60 @@ def _init_stock_schema(conn: sqlite3.Connection) -> None:
                 );
                 """
     )
+    _init_ari_schema(conn)
+
+
+def _init_ari_schema(conn: sqlite3.Connection) -> None:
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ari_sessions (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            performed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT NOT NULL,
+            bp_sys_pre INTEGER NULL,
+            bp_dia_pre INTEGER NULL,
+            hr_pre INTEGER NULL,
+            spo2_pre INTEGER NULL,
+            bp_sys_post INTEGER NULL,
+            bp_dia_post INTEGER NULL,
+            hr_post INTEGER NULL,
+            spo2_post INTEGER NULL,
+            physio_source TEXT NOT NULL DEFAULT 'manual',
+            physio_device_id TEXT NULL,
+            physio_captured_at TEXT NULL
+        );
+        CREATE TABLE IF NOT EXISTS ari_measurements (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_id INTEGER NOT NULL,
+            captured_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            device_id TEXT NULL,
+            measurement_type TEXT NOT NULL,
+            value REAL NOT NULL,
+            unit TEXT NOT NULL,
+            quality INTEGER NULL,
+            payload_json TEXT NULL,
+            created_at TEXT NOT NULL,
+            created_by TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_ari_meas_session ON ari_measurements(session_id);
+        CREATE INDEX IF NOT EXISTS idx_ari_meas_captured ON ari_measurements(captured_at);
+        """
+    )
+    _ensure_column(conn, "ari_sessions", "bp_sys_pre", "bp_sys_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "bp_dia_pre", "bp_dia_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "hr_pre", "hr_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "spo2_pre", "spo2_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "bp_sys_post", "bp_sys_post INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "bp_dia_post", "bp_dia_post INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "hr_post", "hr_post INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "spo2_post", "spo2_post INTEGER NULL")
+    _ensure_column(
+        conn,
+        "ari_sessions",
+        "physio_source",
+        "physio_source TEXT NOT NULL DEFAULT 'manual'",
+    )
+    _ensure_column(conn, "ari_sessions", "physio_device_id", "physio_device_id TEXT NULL")
+    _ensure_column(conn, "ari_sessions", "physio_captured_at", "physio_captured_at TEXT NULL")

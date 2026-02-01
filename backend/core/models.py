@@ -119,6 +119,92 @@ class UserUpdate(BaseModel):
     site_key: Optional[str] = None
 
 
+class AriPhysioPoint(BaseModel):
+    bp_sys: Optional[int] = Field(default=None, ge=50, le=250)
+    bp_dia: Optional[int] = Field(default=None, ge=30, le=150)
+    hr: Optional[int] = Field(default=None, ge=30, le=220)
+    spo2: Optional[int] = Field(default=None, ge=50, le=100)
+
+    @model_validator(mode="after")
+    def validate_bp(self) -> "AriPhysioPoint":
+        if self.bp_sys is not None and self.bp_dia is not None:
+            if self.bp_sys <= self.bp_dia:
+                raise ValueError("La tension systolique doit être supérieure à la diastolique")
+        return self
+
+
+class AriPhysioInput(BaseModel):
+    source: Literal["manual", "sensor"] = "manual"
+    pre: Optional[AriPhysioPoint] = None
+    post: Optional[AriPhysioPoint] = None
+    device_id: Optional[str] = None
+    captured_at: Optional[datetime] = None
+    payload_json: Optional[dict] = None
+
+    @model_validator(mode="after")
+    def validate_sensor_payload(self) -> "AriPhysioInput":
+        if self.source == "sensor":
+            if not self.device_id and not self.payload_json:
+                raise ValueError("Un device_id ou payload_json est requis pour un capteur")
+        elif self.payload_json is not None:
+            raise ValueError("payload_json est réservé aux sources capteur")
+        return self
+
+
+class AriSessionCreate(BaseModel):
+    performed_at: Optional[datetime] = None
+    physio: Optional[AriPhysioInput] = None
+
+
+class AriSession(BaseModel):
+    id: int
+    performed_at: str
+    created_at: str
+    created_by: str
+    physio: Optional[AriPhysioInput] = None
+
+
+class AriMeasurementCreate(BaseModel):
+    measurement_type: Literal["bp_sys", "bp_dia", "hr", "spo2"]
+    value: float
+    unit: Literal["mmHg", "bpm", "percent"]
+    captured_at: Optional[datetime] = None
+    source: Literal["manual", "sensor"] = "sensor"
+    device_id: Optional[str] = None
+    quality: Optional[int] = Field(default=None, ge=0, le=100)
+    payload_json: Optional[dict] = None
+
+
+class AriMeasurement(BaseModel):
+    id: int
+    session_id: int
+    captured_at: str
+    source: Literal["manual", "sensor"]
+    device_id: Optional[str] = None
+    measurement_type: Literal["bp_sys", "bp_dia", "hr", "spo2"]
+    value: float
+    unit: Literal["mmHg", "bpm", "percent"]
+    quality: Optional[int] = None
+    payload_json: Optional[str] = None
+    created_at: str
+    created_by: str
+
+
+class AriStats(BaseModel):
+    avg_hr_pre: Optional[float] = None
+    avg_hr_post: Optional[float] = None
+    avg_spo2_pre: Optional[float] = None
+    avg_spo2_post: Optional[float] = None
+    avg_bp_sys_pre: Optional[float] = None
+    avg_bp_dia_pre: Optional[float] = None
+    avg_bp_sys_post: Optional[float] = None
+    avg_bp_dia_post: Optional[float] = None
+    delta_hr_avg: Optional[float] = None
+    delta_spo2_avg: Optional[float] = None
+    delta_bp_sys_avg: Optional[float] = None
+    delta_bp_dia_avg: Optional[float] = None
+
+
 class MessageRecipientInfo(BaseModel):
     username: str
     role: str

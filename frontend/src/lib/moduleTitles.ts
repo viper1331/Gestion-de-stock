@@ -17,7 +17,8 @@ export const MODULE_TITLE_DEFAULTS: Record<string, string> = {
   messages: "Messagerie",
   vehicle_qr: "QR codes véhicules",
   vehicle_inventory: "Inventaire véhicules",
-  inventory_remise: "Inventaire remises"
+  inventory_remise: "Inventaire remises",
+  ari: "Sessions ARI"
 };
 
 const MODULE_TITLE_ALIASES: Record<string, string> = {

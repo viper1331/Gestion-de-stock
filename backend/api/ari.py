@@ -1,159 +1,96 @@
-"""Routes ARI."""
+"""Routes pour la gestion des sessions ARI."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Request, Response, status
+import io
+
+from fastapi import APIRouter, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 
 from backend.api.auth import get_current_user
-from backend.core import db, models, models_ari, services, sites
+from backend.core import models, services
 
-router = APIRouter(prefix="/ari", tags=["ARI"])
+router = APIRouter()
 
-
-def _resolve_ari_site(user: models.User, request: Request) -> str:
-    if user.role == "certificateur":
-        header_site = request.headers.get("X-ARI-SITE")
-        if not header_site:
-            raise HTTPException(status_code=400, detail="X-ARI-SITE requis")
-        try:
-            return sites.normalize_site_key(header_site) or db.DEFAULT_SITE_KEY
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return db.get_current_site_key()
+MODULE_KEY = "ari"
 
 
-def _can_read(user: models.User) -> bool:
-    return user.role in {"admin", "certificateur"} or services.has_module_access(user, "ari")
+def _require_permission(user: models.User, *, action: str) -> None:
+    if services.has_module_access(user, MODULE_KEY, action=action):
+        return
+    raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
-def _can_write(user: models.User) -> bool:
-    return user.role == "admin" or services.has_module_access(user, "ari", action="edit")
-
-
-def _can_certify(user: models.User) -> bool:
-    return user.role in {"admin", "certificateur"}
-
-
-def _can_settings(user: models.User) -> bool:
-    return user.role == "admin"
-
-
-@router.get("/settings", response_model=models_ari.AriSettings)
-async def get_ari_settings(
-    request: Request,
-    user: models.User = Depends(get_current_user),
-) -> models_ari.AriSettings:
-    if not _can_read(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_get_settings(site_slug)
-
-
-@router.put("/settings", response_model=models_ari.AriSettings)
-async def update_ari_settings(
-    payload: models_ari.AriSettingsUpdate,
-    request: Request,
-    user: models.User = Depends(get_current_user),
-) -> models_ari.AriSettings:
-    if not _can_settings(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_update_settings(site_slug, payload, updated_by=user.username)
-
-
-@router.post("/sessions", response_model=models_ari.AriSession, status_code=status.HTTP_201_CREATED)
-async def create_ari_session(
-    payload: models_ari.AriSessionCreate,
-    request: Request,
-    user: models.User = Depends(get_current_user),
-) -> models_ari.AriSession:
-    if not _can_write(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    try:
-        return services.ari_create_session(site_slug, payload, created_by=user.username)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-
-@router.get("/sessions", response_model=list[models_ari.AriSession])
+@router.get("/sessions", response_model=list[models.AriSession])
 async def list_ari_sessions(
-    collaborator_id: int,
-    request: Request,
     user: models.User = Depends(get_current_user),
-) -> list[models_ari.AriSession]:
-    if not _can_read(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_list_sessions(site_slug, collaborator_id)
+) -> list[models.AriSession]:
+    _require_permission(user, action="view")
+    return services.list_ari_sessions()
 
 
-@router.get("/stats/collaborator/{collaborator_id}", response_model=models_ari.AriCollaboratorStats)
-async def get_ari_collaborator_stats(
-    collaborator_id: int,
-    request: Request,
+@router.post("/sessions", response_model=models.AriSession, status_code=201)
+async def create_ari_session(
+    payload: models.AriSessionCreate,
     user: models.User = Depends(get_current_user),
-) -> models_ari.AriCollaboratorStats:
-    if not _can_read(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_get_collaborator_stats(site_slug, collaborator_id)
+) -> models.AriSession:
+    _require_permission(user, action="edit")
+    return services.create_ari_session(payload, created_by=user.username)
 
 
-@router.get("/stats/site")
-async def get_ari_site_stats(
-    request: Request,
+@router.get("/sessions/{session_id}", response_model=models.AriSession)
+async def get_ari_session(
+    session_id: int,
     user: models.User = Depends(get_current_user),
-) -> dict[str, object]:
-    if not _can_read(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_get_site_stats(site_slug)
+) -> models.AriSession:
+    _require_permission(user, action="view")
+    try:
+        return services.get_ari_session(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.get("/certifications", response_model=models_ari.AriCertification)
-async def get_ari_certification(
-    collaborator_id: int,
-    request: Request,
+@router.get("/sessions/{session_id}/measurements", response_model=list[models.AriMeasurement])
+async def list_ari_measurements(
+    session_id: int,
     user: models.User = Depends(get_current_user),
-) -> models_ari.AriCertification:
-    if not _can_read(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_get_certification(site_slug, collaborator_id)
+) -> list[models.AriMeasurement]:
+    _require_permission(user, action="view")
+    return services.list_ari_measurements(session_id)
 
 
-@router.get("/certifications/pending", response_model=list[models_ari.AriCertification])
-async def list_ari_pending(
-    request: Request,
+@router.post("/sessions/{session_id}/measurements", response_model=list[models.AriMeasurement])
+async def create_ari_measurements(
+    session_id: int,
+    payload: list[models.AriMeasurementCreate],
     user: models.User = Depends(get_current_user),
-) -> list[models_ari.AriCertification]:
-    if not (_can_read(user) and _can_certify(user)):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_list_pending(site_slug)
+) -> list[models.AriMeasurement]:
+    _require_permission(user, action="edit")
+    try:
+        return services.create_ari_measurements(session_id, payload, created_by=user.username)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
-@router.post("/certifications/decide", response_model=models_ari.AriCertification)
-async def decide_ari_certification(
-    payload: models_ari.AriCertificationDecision,
-    request: Request,
+@router.get("/stats", response_model=models.AriStats)
+async def get_ari_stats(
     user: models.User = Depends(get_current_user),
-) -> models_ari.AriCertification:
-    if not _can_certify(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    return services.ari_decide_certification(site_slug, payload, decided_by=user.username)
+) -> models.AriStats:
+    _require_permission(user, action="view")
+    return services.get_ari_stats()
 
 
-@router.get("/collaborators/{collaborator_id}/export.pdf")
-async def export_ari_collaborator_pdf(
-    collaborator_id: int,
-    request: Request,
+@router.get("/sessions/{session_id}/export/pdf")
+async def export_ari_session_pdf(
+    session_id: int,
     user: models.User = Depends(get_current_user),
-) -> Response:
-    if not _can_read(user):
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Autorisations insuffisantes")
-    site_slug = _resolve_ari_site(user, request)
-    content = services.ari_export_collaborator_pdf(site_slug, collaborator_id)
-    headers = {"Content-Disposition": f"attachment; filename=ari_{collaborator_id}.pdf"}
-    return Response(content, media_type="application/pdf", headers=headers)
+) -> StreamingResponse:
+    _require_permission(user, action="view")
+    try:
+        pdf_bytes = services.generate_ari_session_pdf(session_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    return StreamingResponse(
+        io.BytesIO(pdf_bytes),
+        media_type="application/pdf",
+        headers={"Content-Disposition": f"attachment; filename=ari_session_{session_id}.pdf"},
+    )
