@@ -18,6 +18,7 @@ import {
   DragEndEvent,
   DragStartEvent,
   PointerSensor,
+  pointerWithin,
   useDroppable,
   useSensor,
   useSensors
@@ -358,7 +359,7 @@ const VEHICLE_SUBVIEW_CARDS_ENABLED =
   String(
     import.meta.env.VITE_FEATURE_VEHICLE_SUBVIEW_CARDS ??
       import.meta.env.FEATURE_VEHICLE_SUBVIEW_CARDS ??
-      "false"
+      "true"
   )
     .toLowerCase()
     .trim() === "true";
@@ -2314,7 +2315,19 @@ export function VehicleInventoryPage() {
         const overRect = over.rect;
         if (overRect) {
           if (data?.kind === "SUBVIEW" && typeof data.subviewId === "string") {
-            const activeRect = active.rect.current?.translated ?? active.rect.current?.initial;
+            const translatedRect = active.rect.current?.translated;
+            const initialRect = active.rect.current?.initial;
+            const activeRect =
+              translatedRect ??
+              (initialRect
+                ? {
+                    ...initialRect,
+                    left: initialRect.left + event.delta.x,
+                    right: initialRect.right + event.delta.x,
+                    top: initialRect.top + event.delta.y,
+                    bottom: initialRect.bottom + event.delta.y
+                  }
+                : undefined);
             if (activeRect) {
               const centerX = activeRect.left + activeRect.width / 2;
               const centerY = activeRect.top + activeRect.height / 2;
@@ -3202,6 +3215,7 @@ export function VehicleInventoryPage() {
 
           <DndContext
             sensors={sensors}
+            collisionDetection={pointerWithin}
             onDragStart={handleSubviewDragStart}
             onDragEnd={handleSubviewDragEnd}
             onDragCancel={() => setActiveSubviewId(null)}
