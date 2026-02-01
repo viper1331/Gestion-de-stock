@@ -69,3 +69,38 @@ export type AriCollaboratorStats = {
   certification_status: AriCertification["status"];
   certification_decision_at: string | null;
 };
+
+export type AriStatsTopSession = {
+  session_id: number;
+  performed_at: string;
+  collaborator_id: number;
+  collaborator_name: string;
+  air_lpm: number | null;
+  duration_min: number | null;
+};
+
+export type AriStatsOverview = {
+  total_sessions: number;
+  distinct_collaborators: number;
+  avg_duration_min: number | null;
+  avg_air_lpm: number | null;
+  validated_count: number;
+  rejected_count: number;
+  pending_count: number;
+  top_sessions_by_air: AriStatsTopSession[];
+};
+
+export type AriStatsByCollaboratorRow = {
+  collaborator_id: number;
+  collaborator_name: string;
+  sessions_count: number;
+  avg_duration_min: number | null;
+  avg_air_lpm: number | null;
+  max_air_lpm: number | null;
+  last_session_at: string | null;
+  status: "pending" | "certified" | "mixed";
+};
+
+export type AriStatsByCollaboratorResponse = {
+  rows: AriStatsByCollaboratorRow[];
+};

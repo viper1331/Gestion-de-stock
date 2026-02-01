@@ -5,7 +5,9 @@ import type {
   AriPurgeRequest,
   AriPurgeResponse,
   AriSession,
-  AriSettings
+  AriSettings,
+  AriStatsByCollaboratorResponse,
+  AriStatsOverview
 } from "../types/ari";
 
 type AriSessionPayload = {
@@ -43,6 +45,16 @@ type AriSettingsPayload = {
   min_sessions_for_certification: number;
 };
 
+type AriSessionsQuery = {
+  collaborator_id?: number;
+  from?: string;
+  to?: string;
+  course?: string;
+  status?: string;
+  q?: string;
+  sort?: string;
+};
+
 const buildAriHeaders = (site?: string) =>
   site ? { "X-ARI-SITE": site } : undefined;
 
@@ -78,9 +90,18 @@ export async function updateAriSession(
   return response.data;
 }
 
-export async function listAriSessions(collaboratorId?: number, site?: string) {
+export async function listAriSessions(
+  collaboratorIdOrParams?: number | AriSessionsQuery,
+  site?: string
+) {
+  const params =
+    typeof collaboratorIdOrParams === "number" || typeof collaboratorIdOrParams === "undefined"
+      ? collaboratorIdOrParams
+        ? { collaborator_id: collaboratorIdOrParams }
+        : undefined
+      : collaboratorIdOrParams;
   const response = await api.get<AriSession[]>("/ari/sessions", {
-    params: collaboratorId ? { collaborator_id: collaboratorId } : undefined,
+    params,
     headers: buildAriHeaders(site)
   });
   return response.data;
@@ -138,6 +159,25 @@ export async function downloadAriPdf(collaboratorId: number, site?: string) {
 
 export async function purgeAriSessions(payload: AriPurgeRequest, site?: string) {
   const response = await api.post<AriPurgeResponse>("/ari/admin/purge-sessions", payload, {
+    headers: buildAriHeaders(site)
+  });
+  return response.data;
+}
+
+export async function getAriStatsOverview(params?: { from?: string; to?: string }, site?: string) {
+  const response = await api.get<AriStatsOverview>("/ari/stats/overview", {
+    params,
+    headers: buildAriHeaders(site)
+  });
+  return response.data;
+}
+
+export async function getAriStatsByCollaborator(
+  params?: { from?: string; to?: string; q?: string; sort?: string },
+  site?: string
+) {
+  const response = await api.get<AriStatsByCollaboratorResponse>("/ari/stats/by-collaborator", {
+    params,
     headers: buildAriHeaders(site)
   });
   return response.data;

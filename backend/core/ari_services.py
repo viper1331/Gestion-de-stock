@@ -10,6 +10,55 @@ from backend.core import db, models_ari
 logger = logging.getLogger(__name__)
 
 
+def _format_date_bound(value: date, *, end: bool) -> str:
+    target_time = time.max if end else time.min
+    dt = datetime.combine(value, target_time, tzinfo=timezone.utc)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _with_alias(column: str, alias: str | None) -> str:
+    if alias:
+        return f"{alias}.{column}"
+    return column
+
+
+def _build_sessions_filters(
+    *,
+    date_from: date | None,
+    date_to: date | None,
+    collaborator_id: int | None,
+    course: str | None,
+    status: str | None,
+    query: str | None,
+    alias: str | None = None,
+) -> tuple[str, list[object]]:
+    filters: list[str] = []
+    params: list[object] = []
+    if collaborator_id is not None:
+        filters.append(f"{_with_alias('collaborator_id', alias)} = ?")
+        params.append(collaborator_id)
+    if date_from is not None:
+        filters.append(f"{_with_alias('performed_at', alias)} >= ?")
+        params.append(_format_date_bound(date_from, end=False))
+    if date_to is not None:
+        filters.append(f"{_with_alias('performed_at', alias)} <= ?")
+        params.append(_format_date_bound(date_to, end=True))
+    if course:
+        filters.append(f"{_with_alias('course_name', alias)} = ?")
+        params.append(course)
+    if status:
+        filters.append(f"{_with_alias('status', alias)} = ?")
+        params.append(status)
+    if query:
+        query_like = f"%{query.lower()}%"
+        filters.append(
+            f"(LOWER({_with_alias('course_name', alias)}) LIKE ? OR LOWER({_with_alias('status', alias)}) LIKE ?)"
+        )
+        params.extend([query_like, query_like])
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    return where_clause, params
+
+
 def _normalize_site(site: str | None, fallback: str | None) -> str:
     if site and site.strip():
         return site.strip().upper()
@@ -167,24 +216,40 @@ def list_ari_sessions(
     site: str | None,
     *,
     collaborator_id: int | None = None,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    course: str | None = None,
+    status: str | None = None,
+    query: str | None = None,
+    sort: str | None = None,
     fallback_site: str | None = None,
 ) -> list[models_ari.AriSession]:
     site_id = _normalize_site(site, fallback_site)
     conn = _ensure_ari_db(site_id)
     try:
-        if collaborator_id is None:
-            rows = conn.execute(
-                "SELECT * FROM ari_sessions ORDER BY performed_at DESC, id DESC"
-            ).fetchall()
-        else:
-            rows = conn.execute(
-                """
-                SELECT * FROM ari_sessions
-                WHERE collaborator_id = ?
-                ORDER BY performed_at DESC, id DESC
-                """,
-                (collaborator_id,),
-            ).fetchall()
+        where_clause, params = _build_sessions_filters(
+            date_from=date_from,
+            date_to=date_to,
+            collaborator_id=collaborator_id,
+            course=course,
+            status=status,
+            query=query,
+        )
+        sort_mapping = {
+            "date_asc": "performed_at ASC, id ASC",
+            "date_desc": "performed_at DESC, id DESC",
+            "duration_asc": "duration_seconds ASC",
+            "duration_desc": "duration_seconds DESC",
+            "air_asc": "air_consumption_lpm ASC",
+            "air_desc": "air_consumption_lpm DESC",
+            "status_asc": "status ASC",
+            "status_desc": "status DESC",
+        }
+        order_by = sort_mapping.get(sort or "date_desc", "performed_at DESC, id DESC")
+        rows = conn.execute(
+            f"SELECT * FROM ari_sessions {where_clause} ORDER BY {order_by}",
+            params,
+        ).fetchall()
     finally:
         conn.close()
     return [_session_from_row(row) for row in rows]
@@ -633,3 +698,150 @@ def get_ari_collaborator_stats(
         certification_status=status,
         certification_decision_at=decision_at,
     )
+
+
+def get_ari_stats_overview(
+    site: str | None,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    fallback_site: str | None = None,
+) -> dict[str, object]:
+    site_id = _normalize_site(site, fallback_site)
+    conn = _ensure_ari_db(site_id)
+    try:
+        where_clause, params = _build_sessions_filters(
+            date_from=date_from,
+            date_to=date_to,
+            collaborator_id=None,
+            course=None,
+            status=None,
+            query=None,
+        )
+        row = conn.execute(
+            f"""
+            SELECT
+              COUNT(*) AS total_sessions,
+              COUNT(DISTINCT collaborator_id) AS distinct_collaborators,
+              AVG(duration_seconds) / 60.0 AS avg_duration_min,
+              AVG(air_consumption_lpm) AS avg_air_lpm,
+              SUM(CASE WHEN status = 'CERTIFIED' THEN 1 ELSE 0 END) AS validated_count,
+              SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END) AS rejected_count,
+              SUM(CASE WHEN status NOT IN ('CERTIFIED', 'REJECTED') THEN 1 ELSE 0 END) AS pending_count
+            FROM ari_sessions
+            {where_clause}
+            """,
+            params,
+        ).fetchone()
+        top_sessions = conn.execute(
+            f"""
+            SELECT
+              id AS session_id,
+              collaborator_id,
+              performed_at,
+              air_consumption_lpm AS air_lpm,
+              duration_seconds
+            FROM ari_sessions
+            {where_clause}
+            ORDER BY air_consumption_lpm DESC, performed_at DESC, id DESC
+            LIMIT 5
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+    overview = {
+        "total_sessions": int(row["total_sessions"] or 0),
+        "distinct_collaborators": int(row["distinct_collaborators"] or 0),
+        "avg_duration_min": row["avg_duration_min"],
+        "avg_air_lpm": row["avg_air_lpm"],
+        "validated_count": int(row["validated_count"] or 0),
+        "rejected_count": int(row["rejected_count"] or 0),
+        "pending_count": int(row["pending_count"] or 0),
+        "top_sessions_by_air": [
+            {
+                "session_id": entry["session_id"],
+                "collaborator_id": entry["collaborator_id"],
+                "performed_at": entry["performed_at"],
+                "air_lpm": entry["air_lpm"],
+                "duration_min": entry["duration_seconds"] / 60.0 if entry["duration_seconds"] else None,
+            }
+            for entry in top_sessions
+        ],
+    }
+    return overview
+
+
+def get_ari_stats_by_collaborator(
+    site: str | None,
+    *,
+    date_from: date | None = None,
+    date_to: date | None = None,
+    sort: str | None = None,
+    fallback_site: str | None = None,
+) -> list[dict[str, object]]:
+    site_id = _normalize_site(site, fallback_site)
+    conn = _ensure_ari_db(site_id)
+    try:
+        where_clause, params = _build_sessions_filters(
+            date_from=date_from,
+            date_to=date_to,
+            collaborator_id=None,
+            course=None,
+            status=None,
+            query=None,
+            alias="s",
+        )
+        sort_mapping = {
+            "sessions_asc": "sessions_count ASC",
+            "sessions_desc": "sessions_count DESC",
+            "duration_asc": "avg_duration_min ASC",
+            "duration_desc": "avg_duration_min DESC",
+            "air_asc": "avg_air_lpm ASC",
+            "air_desc": "avg_air_lpm DESC",
+            "max_air_asc": "max_air_lpm ASC",
+            "max_air_desc": "max_air_lpm DESC",
+            "last_asc": "last_session_at ASC",
+            "last_desc": "last_session_at DESC",
+        }
+        order_by = sort_mapping.get(sort or "sessions_desc", "sessions_count DESC")
+        rows = conn.execute(
+            f"""
+            SELECT
+              s.collaborator_id,
+              COUNT(*) AS sessions_count,
+              AVG(s.duration_seconds) / 60.0 AS avg_duration_min,
+              AVG(s.air_consumption_lpm) AS avg_air_lpm,
+              MAX(s.air_consumption_lpm) AS max_air_lpm,
+              MAX(s.performed_at) AS last_session_at,
+              COALESCE(c.status, 'PENDING') AS certification_status
+            FROM ari_sessions AS s
+            LEFT JOIN ari_certifications AS c ON c.collaborator_id = s.collaborator_id
+            {where_clause}
+            GROUP BY s.collaborator_id
+            ORDER BY {order_by}
+            """,
+            params,
+        ).fetchall()
+    finally:
+        conn.close()
+
+    def _normalize_status(value: str | None) -> str:
+        if value == "APPROVED":
+            return "certified"
+        if value in {"REJECTED"}:
+            return "mixed"
+        return "pending"
+
+    return [
+        {
+            "collaborator_id": row["collaborator_id"],
+            "sessions_count": int(row["sessions_count"] or 0),
+            "avg_duration_min": row["avg_duration_min"],
+            "avg_air_lpm": row["avg_air_lpm"],
+            "max_air_lpm": row["max_air_lpm"],
+            "last_session_at": row["last_session_at"],
+            "status": _normalize_status(row["certification_status"]),
+        }
+        for row in rows
+    ]

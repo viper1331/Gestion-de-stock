@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { isAxiosError } from "axios";
 import { toast } from "sonner";
-import { useNavigate } from "react-router-dom";
+import { useNavigate, useSearchParams } from "react-router-dom";
 
 import {
   createAriSession,
@@ -25,14 +25,13 @@ import {
   applyAriSessionsFilters,
   ariSessionStatusLabels,
   createEmptyAriSessionsFilters,
-  getAirPerMinute,
-  getDurationMinutes,
   getSessionStatus,
   sortAriSessions,
   type AriSessionStatus,
   type AriSessionsSort,
   type AriSessionsSortKey
 } from "./utils/ariSessionsFilter";
+import { formatAir, formatMinutes, getAirPerMinute, getDurationMinutes, statusBadgeClasses } from "./utils/ariSessionDisplay";
 
 interface Collaborator {
   id: number;
@@ -40,32 +39,11 @@ interface Collaborator {
   department?: string | null;
 }
 
-const statusBadgeClasses = {
-  PENDING: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-  CERTIFIED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
-  REJECTED: "border-rose-500/30 bg-rose-500/10 text-rose-200",
-  COMPLETED: "border-slate-600/40 bg-slate-800/40 text-slate-200",
-  DRAFT: "border-slate-700/40 bg-slate-800/30 text-slate-300"
-};
-
-const formatMinutes = (value: number | null) => {
-  if (value === null || Number.isNaN(value)) {
-    return "—";
-  }
-  return `${value.toFixed(1)} min`;
-};
-
-const formatAir = (value: number | null) => {
-  if (value === null || Number.isNaN(value)) {
-    return "—";
-  }
-  return `${value.toFixed(1)} L/min`;
-};
-
 export function AriSessionsPage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
   const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
   const queryClient = useQueryClient();
   const { featureAriEnabled, isLoaded } = useFeatureFlagsStore((state) => ({
     featureAriEnabled: state.featureAriEnabled,
@@ -129,6 +107,14 @@ export function AriSessionsPage() {
     return Array.from(uniqueCourses).sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" }));
   }, [sessions]);
 
+  const availableCollaborators = useMemo(() => {
+    if (!collaborators.length || !sessions.length) {
+      return [];
+    }
+    const activeIds = new Set(sessions.map((session) => session.collaborator_id));
+    return collaborators.filter((collaborator) => activeIds.has(collaborator.id));
+  }, [collaborators, sessions]);
+
   const availableStatuses = useMemo(() => {
     const statuses = new Set<AriSessionStatus>();
     sessions.forEach((session) => {
@@ -147,6 +133,21 @@ export function AriSessionsPage() {
       selectedSession ? getAriCertification(selectedSession.collaborator_id) : Promise.resolve(null),
     enabled: Boolean(selectedSession && canCertify)
   });
+
+  useEffect(() => {
+    const sessionId = searchParams.get("session_id");
+    if (!sessionId) {
+      return;
+    }
+    const parsed = Number(sessionId);
+    if (!Number.isFinite(parsed)) {
+      return;
+    }
+    const session = sessions.find((entry) => entry.id === parsed);
+    if (session) {
+      setSelectedSession(session);
+    }
+  }, [searchParams, sessions]);
 
   const createSession = useMutation({
     mutationFn: createAriSession,
@@ -264,6 +265,7 @@ export function AriSessionsPage() {
         filters={filters}
         onChange={setFilters}
         onReset={() => setFilters(createEmptyAriSessionsFilters())}
+        availableCollaborators={availableCollaborators}
         availableCourses={availableCourses}
         availableStatuses={availableStatuses}
         totalCount={sessions.length}
@@ -273,7 +275,16 @@ export function AriSessionsPage() {
 
       <div className="rounded-xl border border-slate-800 bg-slate-900/60">
         <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-slate-800 text-sm">
+          <table className="min-w-full table-fixed divide-y divide-slate-800 text-sm">
+            <colgroup>
+              <col className="w-40" />
+              <col className="w-56" />
+              <col className="w-44" />
+              <col className="w-28" />
+              <col className="w-56" />
+              <col className="w-36" />
+              <col className="w-36" />
+            </colgroup>
             <thead className="bg-slate-900/80 text-left text-slate-200">
               <tr>
                 <th className="px-4 py-3 font-semibold">
@@ -322,7 +333,7 @@ export function AriSessionsPage() {
                     className="inline-flex items-center gap-2"
                     onClick={() => handleSort("air")}
                   >
-                    Air
+                    Air (L/min)
                     {renderSortIndicator("air")}
                   </button>
                 </th>
@@ -380,27 +391,28 @@ export function AriSessionsPage() {
                       </td>
                       <td className="px-4 py-3">{session.course_name || "—"}</td>
                       <td className="px-4 py-3">{formatMinutes(getDurationMinutes(session))}</td>
-                      <td className="px-4 py-3">{formatAir(getAirPerMinute(session))}</td>
-                      <td className="px-4 py-3">{session.duration_seconds}s</td>
                       <td className="px-4 py-3">
-                        <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-200">
-                          <p className="font-semibold text-white">
-                            {session.air_consumption_lpm > 0
-                              ? `${session.air_consumption_lpm.toFixed(1)} L/min`
-                              : "Non renseigné"}
-                          </p>
-                          <p className="text-slate-400">
-                            Air consommé :{" "}
-                            {session.air_consumed_l > 0
-                              ? `${session.air_consumed_l.toFixed(1)} L`
-                              : "—"}
-                          </p>
-                          <p className="text-slate-400">
-                            Autonomie :{" "}
-                            {session.autonomy_start_min > 0 && session.autonomy_end_min >= 0
-                              ? `${session.autonomy_start_min.toFixed(1)} / ${session.autonomy_end_min.toFixed(1)} min`
-                              : "—"}
-                          </p>
+                        <div className="flex flex-col gap-2">
+                          <span>{formatAir(getAirPerMinute(session))}</span>
+                          <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-200">
+                            <p className="font-semibold text-white">
+                              {session.air_consumption_lpm > 0
+                                ? `${session.air_consumption_lpm.toFixed(1)} L/min`
+                                : "Non renseigné"}
+                            </p>
+                            <p className="text-slate-400">
+                              Air consommé :{" "}
+                              {session.air_consumed_l > 0
+                                ? `${session.air_consumed_l.toFixed(1)} L`
+                                : "—"}
+                            </p>
+                            <p className="text-slate-400">
+                              Autonomie :{" "}
+                              {session.autonomy_start_min > 0 && session.autonomy_end_min >= 0
+                                ? `${session.autonomy_start_min.toFixed(1)} / ${session.autonomy_end_min.toFixed(1)} min`
+                                : "—"}
+                            </p>
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3">
@@ -467,7 +479,14 @@ export function AriSessionsPage() {
 
       <SessionDetailModal
         open={Boolean(selectedSession)}
-        onClose={() => setSelectedSession(null)}
+        onClose={() => {
+          setSelectedSession(null);
+          if (searchParams.get("session_id")) {
+            const next = new URLSearchParams(searchParams);
+            next.delete("session_id");
+            setSearchParams(next, { replace: true });
+          }
+        }}
         session={selectedSession}
         collaboratorName={selectedCollaborator?.full_name}
         certification={selectedCertification}
