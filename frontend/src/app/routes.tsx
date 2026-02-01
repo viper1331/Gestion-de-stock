@@ -28,6 +28,7 @@ import { PdfStudioPage } from "../features/pdf-config/PdfStudioPage";
 import { PharmacyLinksPage } from "../features/operations/PharmacyLinksPage";
 import { LinkCategoriesPage } from "../features/operations/LinkCategoriesPage";
 import { PurchaseSuggestionsPage } from "../features/purchasing/PurchaseSuggestionsPage";
+import { AriSessionsPage } from "../features/ari/AriSessionsPage";
 
 export const router = createBrowserRouter([
   {
@@ -67,7 +68,8 @@ export const router = createBrowserRouter([
       { path: "system-config", element: <SystemConfigPage /> },
       { path: "about", element: <AboutPage /> },
       { path: "messages", element: <MessagesPage /> },
-      { path: "pdf-config", element: <PdfStudioPage /> }
+      { path: "pdf-config", element: <PdfStudioPage /> },
+      { path: "ari", element: <AriSessionsPage /> }
     ]
   }
 ]);

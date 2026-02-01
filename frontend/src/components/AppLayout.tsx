@@ -427,6 +427,14 @@ export function AppLayout() {
               module: "pharmacy_links"
             },
             {
+              id: "operations_ari",
+              to: "/ari",
+              label: "Sessions ARI",
+              tooltip: "Renseigner les données physiologiques ARI",
+              icon: "🩺",
+              module: "ari"
+            },
+            {
               id: "operations_link_categories",
               to: "/operations/link-categories",
               label: "Configuration liens",
