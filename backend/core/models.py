@@ -408,6 +408,34 @@ class VehiclePinnedSubviews(BaseModel):
     pinned: list[str]
 
 
+class VehicleSubviewPin(BaseModel):
+    id: int
+    vehicle_id: int
+    view_id: str
+    subview_id: str
+    x_pct: float = Field(..., ge=0.0, le=1.0)
+    y_pct: float = Field(..., ge=0.0, le=1.0)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class VehicleSubviewPinCreate(BaseModel):
+    subview_id: str
+    x_pct: float
+    y_pct: float
+
+
+class VehicleSubviewPinUpdate(BaseModel):
+    x_pct: float
+    y_pct: float
+
+
+class VehicleSubviewPinList(BaseModel):
+    vehicle_id: int
+    view_id: str
+    pins: list[VehicleSubviewPin]
+
+
 class Category(BaseModel):
     id: int
     name: str

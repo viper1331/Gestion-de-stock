@@ -3276,6 +3276,41 @@ def _ensure_vehicle_view_pinned_subviews_table(
         execute("DROP TABLE vehicle_view_pinned_subviews_legacy")
 
 
+def _ensure_vehicle_view_subview_pins_table(
+    conn: sqlite3.Connection,
+    *,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+    executescript: Callable[[str], None] | None = None,
+) -> None:
+    if execute is None:
+        execute = conn.execute
+    if executescript is None:
+        executescript = conn.executescript
+    columns = {
+        row["name"] for row in execute("PRAGMA table_info(vehicle_view_subview_pins)").fetchall()
+    }
+    if columns:
+        return
+    executescript(
+        """
+        CREATE TABLE IF NOT EXISTS vehicle_view_subview_pins (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            vehicle_id INTEGER NOT NULL REFERENCES vehicle_categories(id) ON DELETE CASCADE,
+            view_id TEXT NOT NULL COLLATE NOCASE,
+            subview_id TEXT NOT NULL COLLATE NOCASE,
+            x_pct REAL NOT NULL,
+            y_pct REAL NOT NULL,
+            created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            created_by TEXT,
+            updated_by TEXT,
+            UNIQUE(vehicle_id, view_id, subview_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_vehicle_view_subview_pins_vehicle
+        ON vehicle_view_subview_pins(vehicle_id, view_id);
+        """
+    )
+
 def _ensure_remise_item_columns(
     conn: sqlite3.Connection,
     execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
@@ -4359,6 +4394,9 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
         _ensure_vehicle_category_columns(conn, execute=execute)
         _ensure_vehicle_view_settings_columns(conn, execute=execute)
         _ensure_vehicle_view_pinned_subviews_table(
+            conn, execute=execute, executescript=executescript
+        )
+        _ensure_vehicle_view_subview_pins_table(
             conn, execute=execute, executescript=executescript
         )
         _ensure_vehicle_applied_lot_table(conn, executescript=executescript)
@@ -8908,6 +8946,235 @@ def delete_vehicle_view_pinned_subview(
         )
         _persist_after_commit(conn, "vehicle_inventory")
     return list_vehicle_view_pinned_subviews(vehicle_id, normalized_view)
+
+
+def _clamp_pct(value: float) -> float:
+    return max(0.0, min(1.0, value))
+
+
+def _validate_vehicle_subview(
+    vehicle: models.Category,
+    parent_view: str,
+    subview_id: str,
+) -> tuple[str, str]:
+    normalized_view = _normalize_view_name(parent_view)
+    available_views = set(vehicle.sizes or [DEFAULT_VEHICLE_VIEW_NAME])
+    if normalized_view not in available_views:
+        raise ValueError("Vue introuvable")
+    normalized_subview = _normalize_view_name(subview_id)
+    prefix = f"{normalized_view} - "
+    if normalized_subview not in available_views or not normalized_subview.startswith(prefix):
+        raise ValueError("Sous-vue introuvable")
+    return normalized_view, normalized_subview
+
+
+def list_subview_pins(vehicle_id: int, view_id: str) -> list[models.VehicleSubviewPin]:
+    ensure_database_ready()
+    vehicle = get_vehicle_category(vehicle_id)
+    if vehicle is None:
+        raise ValueError("Véhicule introuvable")
+    normalized_view = _normalize_view_name(view_id)
+    available_views = set(vehicle.sizes or [DEFAULT_VEHICLE_VIEW_NAME])
+    if normalized_view not in available_views:
+        raise ValueError("Vue introuvable")
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_subview_pins_table(conn)
+        rows = conn.execute(
+            """
+            SELECT id, vehicle_id, view_id, subview_id, x_pct, y_pct, created_at, updated_at
+            FROM vehicle_view_subview_pins
+            WHERE vehicle_id = ? AND view_id = ?
+            ORDER BY created_at, id
+            """,
+            (vehicle_id, normalized_view),
+        ).fetchall()
+        pins: list[models.VehicleSubviewPin] = []
+        invalid_ids: list[int] = []
+        prefix = f"{normalized_view} - "
+        for row in rows:
+            normalized_subview = _normalize_view_name(row["subview_id"])
+            if normalized_subview not in available_views or not normalized_subview.startswith(prefix):
+                invalid_ids.append(int(row["id"]))
+                continue
+            pins.append(
+                models.VehicleSubviewPin(
+                    id=int(row["id"]),
+                    vehicle_id=int(row["vehicle_id"]),
+                    view_id=normalized_view,
+                    subview_id=normalized_subview,
+                    x_pct=float(row["x_pct"]),
+                    y_pct=float(row["y_pct"]),
+                    created_at=row["created_at"],
+                    updated_at=row["updated_at"],
+                )
+            )
+        if invalid_ids:
+            conn.execute(
+                f"""
+                DELETE FROM vehicle_view_subview_pins
+                WHERE id IN ({",".join("?" for _ in invalid_ids)})
+                """,
+                tuple(invalid_ids),
+            )
+            _persist_after_commit(conn, "vehicle_inventory")
+    return pins
+
+
+def get_subview_pin(pin_id: int) -> models.VehicleSubviewPin | None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_subview_pins_table(conn)
+        row = conn.execute(
+            """
+            SELECT id, vehicle_id, view_id, subview_id, x_pct, y_pct, created_at, updated_at
+            FROM vehicle_view_subview_pins
+            WHERE id = ?
+            """,
+            (pin_id,),
+        ).fetchone()
+    if row is None:
+        return None
+    return models.VehicleSubviewPin(
+        id=int(row["id"]),
+        vehicle_id=int(row["vehicle_id"]),
+        view_id=_normalize_view_name(row["view_id"]),
+        subview_id=_normalize_view_name(row["subview_id"]),
+        x_pct=float(row["x_pct"]),
+        y_pct=float(row["y_pct"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def create_subview_pin(
+    vehicle_id: int,
+    view_id: str,
+    subview_id: str,
+    x_pct: float,
+    y_pct: float,
+    created_by: str | None = None,
+) -> models.VehicleSubviewPin:
+    ensure_database_ready()
+    vehicle = get_vehicle_category(vehicle_id)
+    if vehicle is None:
+        raise ValueError("Véhicule introuvable")
+    normalized_view, normalized_subview = _validate_vehicle_subview(
+        vehicle, view_id, subview_id
+    )
+    clamped_x = _clamp_pct(x_pct)
+    clamped_y = _clamp_pct(y_pct)
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_subview_pins_table(conn)
+        existing = conn.execute(
+            """
+            SELECT id
+            FROM vehicle_view_subview_pins
+            WHERE vehicle_id = ? AND view_id = ? AND subview_id = ?
+            """,
+            (vehicle_id, normalized_view, normalized_subview),
+        ).fetchone()
+        if existing is not None:
+            raise ValueError("Sous-vue déjà épinglée")
+        cursor = conn.execute(
+            """
+            INSERT INTO vehicle_view_subview_pins (
+                vehicle_id, view_id, subview_id, x_pct, y_pct, created_by, updated_by
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                vehicle_id,
+                normalized_view,
+                normalized_subview,
+                clamped_x,
+                clamped_y,
+                created_by,
+                created_by,
+            ),
+        )
+        pin_id = int(cursor.lastrowid)
+        _persist_after_commit(conn, "vehicle_inventory")
+        row = conn.execute(
+            """
+            SELECT id, vehicle_id, view_id, subview_id, x_pct, y_pct, created_at, updated_at
+            FROM vehicle_view_subview_pins
+            WHERE id = ?
+            """,
+            (pin_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Impossible de créer l'épinglage")
+    return models.VehicleSubviewPin(
+        id=int(row["id"]),
+        vehicle_id=int(row["vehicle_id"]),
+        view_id=_normalize_view_name(row["view_id"]),
+        subview_id=_normalize_view_name(row["subview_id"]),
+        x_pct=float(row["x_pct"]),
+        y_pct=float(row["y_pct"]),
+        created_at=row["created_at"],
+        updated_at=row["updated_at"],
+    )
+
+
+def update_subview_pin(
+    pin_id: int,
+    x_pct: float,
+    y_pct: float,
+    updated_by: str | None = None,
+) -> models.VehicleSubviewPin:
+    ensure_database_ready()
+    clamped_x = _clamp_pct(x_pct)
+    clamped_y = _clamp_pct(y_pct)
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_subview_pins_table(conn)
+        row = conn.execute(
+            """
+            SELECT id
+            FROM vehicle_view_subview_pins
+            WHERE id = ?
+            """,
+            (pin_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Épinglage introuvable")
+        conn.execute(
+            """
+            UPDATE vehicle_view_subview_pins
+            SET x_pct = ?, y_pct = ?, updated_at = CURRENT_TIMESTAMP, updated_by = ?
+            WHERE id = ?
+            """,
+            (clamped_x, clamped_y, updated_by, pin_id),
+        )
+        _persist_after_commit(conn, "vehicle_inventory")
+    updated = get_subview_pin(pin_id)
+    if updated is None:
+        raise ValueError("Épinglage introuvable")
+    return updated
+
+
+def delete_subview_pin(pin_id: int, deleted_by: str | None = None) -> None:
+    ensure_database_ready()
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_view_subview_pins_table(conn)
+        row = conn.execute(
+            "SELECT id FROM vehicle_view_subview_pins WHERE id = ?",
+            (pin_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Épinglage introuvable")
+        conn.execute(
+            """
+            UPDATE vehicle_view_subview_pins
+            SET updated_at = CURRENT_TIMESTAMP, updated_by = ?
+            WHERE id = ?
+            """,
+            (deleted_by, pin_id),
+        )
+        conn.execute(
+            "DELETE FROM vehicle_view_subview_pins WHERE id = ?",
+            (pin_id,),
+        )
+        _persist_after_commit(conn, "vehicle_inventory")
 
 
 def list_low_stock(threshold: int) -> list[models.LowStockReport]:
