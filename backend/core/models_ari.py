@@ -12,14 +12,23 @@ class AriSessionCreate(BaseModel):
 
     collaborator_id: int
     performed_at: datetime
-    course_name: str
+    course_name: Optional[str] = None
     duration_seconds: int = Field(ge=1)
     start_pressure_bar: int
     end_pressure_bar: int
+    air_consumed_bar: Optional[int] = None
     stress_level: int = Field(ge=1, le=10)
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
     physio_notes: Optional[str] = None
     observations: Optional[str] = None
+    bp_sys_pre: Optional[int] = None
+    bp_dia_pre: Optional[int] = None
+    hr_pre: Optional[int] = None
+    spo2_pre: Optional[int] = None
+    bp_sys_post: Optional[int] = None
+    bp_dia_post: Optional[int] = None
+    hr_post: Optional[int] = None
+    spo2_post: Optional[int] = None
 
 
 class AriCertificationDecision(BaseModel):
@@ -66,6 +75,14 @@ class AriSession(BaseModel):
     rpe: Optional[int] = None
     physio_notes: Optional[str] = None
     observations: Optional[str] = None
+    bp_sys_pre: Optional[int] = None
+    bp_dia_pre: Optional[int] = None
+    hr_pre: Optional[int] = None
+    spo2_pre: Optional[int] = None
+    bp_sys_post: Optional[int] = None
+    bp_dia_post: Optional[int] = None
+    hr_post: Optional[int] = None
+    spo2_post: Optional[int] = None
     created_at: str
     created_by: str
 

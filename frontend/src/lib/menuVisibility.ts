@@ -10,6 +10,7 @@ export type MenuItemDefinition = MenuItem & {
   module?: string;
   modules?: string[];
   adminOnly?: boolean;
+  allowedRoles?: string[];
 };
 
 export type MenuGroupDefinition = {
@@ -56,6 +57,9 @@ export function filterMenuGroups(
         if (item.adminOnly) {
           return user.role === "admin";
         }
+        if (item.allowedRoles && !item.allowedRoles.includes(user.role)) {
+          return false;
+        }
         const allowedModules = item.modules ?? (item.module ? [item.module] : []);
         if (allowedModules.length === 0) {
           return true;
@@ -81,6 +85,6 @@ export function filterMenuGroups(
       label: group.label,
       tooltip: group.tooltip,
       icon: group.icon,
-      items: group.items.map(({ adminOnly, module, modules, ...item }) => item)
+      items: group.items.map(({ adminOnly, allowedRoles, module, modules, ...item }) => item)
     }));
 }

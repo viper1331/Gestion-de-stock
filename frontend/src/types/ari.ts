@@ -18,6 +18,14 @@ export type AriSession = {
   rpe?: number | null;
   physio_notes?: string | null;
   observations?: string | null;
+  bp_sys_pre?: number | null;
+  bp_dia_pre?: number | null;
+  hr_pre?: number | null;
+  spo2_pre?: number | null;
+  bp_sys_post?: number | null;
+  bp_dia_post?: number | null;
+  hr_post?: number | null;
+  spo2_post?: number | null;
   created_at: string;
   created_by: string;
 };
