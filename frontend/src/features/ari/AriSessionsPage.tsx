@@ -1,12 +1,14 @@
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { toast } from "sonner";
+import { useNavigate } from "react-router-dom";
 
 import { api } from "../../lib/api";
 import { DraggableModal } from "../../components/DraggableModal";
 import { AppTextInput } from "../../components/AppTextInput";
 import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
+import { useFeatureFlagsStore } from "../../app/featureFlags";
 
 type PhysioSource = "manual" | "sensor";
 
@@ -122,6 +124,11 @@ const formatPhysioTooltip = (physio?: AriPhysioInput | null) => {
 export function AriSessionsPage() {
   const { user } = useAuth();
   const modulePermissions = useModulePermissions({ enabled: Boolean(user) });
+  const navigate = useNavigate();
+  const { featureAriEnabled, isLoaded } = useFeatureFlagsStore((state) => ({
+    featureAriEnabled: state.featureAriEnabled,
+    isLoaded: state.isLoaded
+  }));
   const canView = user?.role === "admin" || modulePermissions.canAccess("ari");
   const canEdit = user?.role === "admin" || modulePermissions.canAccess("ari", "edit");
   const queryClient = useQueryClient();
@@ -135,13 +142,19 @@ export function AriSessionsPage() {
   const [preValues, setPreValues] = useState({ bp_sys: "", bp_dia: "", hr: "", spo2: "" });
   const [postValues, setPostValues] = useState({ bp_sys: "", bp_dia: "", hr: "", spo2: "" });
 
+  useEffect(() => {
+    if (isLoaded && !featureAriEnabled) {
+      navigate("/", { replace: true });
+    }
+  }, [featureAriEnabled, isLoaded, navigate]);
+
   const { data: sessions = [], isLoading } = useQuery({
     queryKey: ["ari", "sessions"],
     queryFn: async () => {
       const response = await api.get<AriSession[]>("/ari/sessions");
       return response.data;
     },
-    enabled: canView
+    enabled: canView && featureAriEnabled
   });
 
   const createSession = useMutation({

@@ -25,41 +25,15 @@ import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
 import { getMenuOrder, setMenuOrder, type MenuOrderPayload } from "../api/uiMenu";
-import { getAriSettings } from "../api/ari";
 import { api } from "../lib/api";
 import { fetchConfigEntries } from "../lib/config";
 import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
 import { mergeMenuOrder } from "../lib/menuOrder";
+import { filterMenuGroups, type MenuGroup, type MenuGroupDefinition } from "../lib/menuVisibility";
 import { useIdleLogout } from "../hooks/useIdleLogout";
-import { useAriStore } from "../features/ari/store";
-
-type MenuItem = {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon?: string;
-  to: string;
-};
-
-type MenuItemDefinition = MenuItem & {
-  module?: string;
-  modules?: string[];
-  adminOnly?: boolean;
-};
-
-type MenuGroup = {
-  id: string;
-  label: string;
-  tooltip: string;
-  icon?: string;
-  items: MenuItem[];
-};
-
-type MenuGroupDefinition = Omit<MenuGroup, "items"> & {
-  items: MenuItemDefinition[];
-};
+import { useFeatureFlagsStore } from "../app/featureFlags";
 
 type GlobalSearchResult = {
   result_type: string;
@@ -81,7 +55,14 @@ export function AppLayout() {
     }),
     shallow
   );
-  const { ariSite } = useAriStore((state) => ({ ariSite: state.ariSite }), shallow);
+  const { featureAriEnabled, loadFeatureFlags, resetFeatureFlags } = useFeatureFlagsStore(
+    (state) => ({
+      featureAriEnabled: state.featureAriEnabled,
+      loadFeatureFlags: state.loadFeatureFlags,
+      resetFeatureFlags: state.reset
+    }),
+    shallow
+  );
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(max-width: 640px)").matches
@@ -105,22 +86,6 @@ export function AppLayout() {
     queryFn: fetchSiteContext,
     enabled: user?.role === "admin"
   });
-  const canAriAccess = Boolean(
-    user &&
-      (user.role === "admin" || user.role === "certificateur" || modulePermissions.canAccess("ari"))
-  );
-  const ariSiteHeader = useMemo(() => {
-    if (!user || user.role !== "certificateur") {
-      return undefined;
-    }
-    return ariSite ?? user.site_key ?? "JLL";
-  }, [ariSite, user]);
-  const { data: ariSettings } = useQuery({
-    queryKey: ["ari", "settings", "menu", ariSiteHeader ?? "current"],
-    queryFn: () => getAriSettings(ariSiteHeader),
-    enabled: Boolean(user && canAriAccess)
-  });
-  const ariFeatureEnabled = Boolean(ariSettings?.feature_enabled);
   const { data: searchResults = [], isFetching: isSearching } = useQuery({
     queryKey: ["global-search", searchQuery],
     queryFn: async () => {
@@ -145,6 +110,14 @@ export function AppLayout() {
   useEffect(() => {
     initialize();
   }, [initialize]);
+
+  useEffect(() => {
+    if (!user) {
+      resetFeatureFlags();
+      return;
+    }
+    loadFeatureFlags();
+  }, [loadFeatureFlags, resetFeatureFlags, user]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -556,42 +529,13 @@ export function AppLayout() {
         return [];
       }
 
-      return groups
-        .map((group) => ({
-          ...group,
-          items: group.items.filter((item) => {
-            if (item.adminOnly) {
-              return user?.role === "admin";
-            }
-            const allowedModules = item.modules ?? (item.module ? [item.module] : []);
-            if (allowedModules.length === 0) {
-              return true;
-            }
-            if (allowedModules.includes("ari")) {
-              if (!ariFeatureEnabled) {
-                return false;
-              }
-              if (user.role === "admin" || user.role === "certificateur") {
-                return true;
-              }
-              return modulePermissions.canAccess("ari");
-            }
-            if (user.role === "admin") {
-              return true;
-            }
-            return allowedModules.some((module) => modulePermissions.canAccess(module));
-          })
-        }))
-        .filter((group) => group.items.length > 0)
-        .map((group) => ({
-          id: group.id,
-          label: group.label,
-          tooltip: group.tooltip,
-          icon: group.icon,
-          items: group.items.map(({ adminOnly, module, modules, ...item }) => item)
-        }));
+      return filterMenuGroups(groups, {
+        user,
+        modulePermissions,
+        featureAriEnabled
+      });
     },
-    [ariFeatureEnabled, modulePermissions.canAccess, moduleTitles, user]
+    [featureAriEnabled, modulePermissions, moduleTitles, user]
   );
 
   const siteKey = useMemo(() => {
