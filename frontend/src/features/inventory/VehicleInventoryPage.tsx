@@ -14,6 +14,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
 import {
   DndContext,
+  DragOverlay,
   DragEndEvent,
   DragStartEvent,
   PointerSensor,
@@ -2187,6 +2188,15 @@ export function VehicleInventoryPage() {
     [pinnedSubviewIds, subviewCards]
   );
 
+  const [activeSubviewId, setActiveSubviewId] = useState<string | null>(null);
+
+  const activeSubviewCard = useMemo(() => {
+    if (!activeSubviewId) {
+      return null;
+    }
+    return subviewCards.find((subview) => subview.id === activeSubviewId) ?? null;
+  }, [activeSubviewId, subviewCards]);
+
   const subviewPinCards = useMemo<SubviewPinCardData[]>(
     () =>
       (subviewPins?.pins ?? [])
@@ -2288,42 +2298,42 @@ export function VehicleInventoryPage() {
   );
 
   const handleSubviewDragStart = useCallback((event: DragStartEvent) => {
-    console.log("dragStart", event.active);
+    const data = event.active.data.current;
+    if (data?.kind === "SUBVIEW" && typeof data.subviewId === "string") {
+      setActiveSubviewId(data.subviewId);
+      return;
+    }
+    setActiveSubviewId(null);
   }, []);
 
   const handleSubviewDragEnd = useCallback(
     (event: DragEndEvent) => {
       const { active, over } = event;
-      console.log("dragEnd", { active: active.data.current, over: over?.id });
-      if (typeof over?.id !== "string" || !over.id.startsWith("SUBVIEW_BOARD:")) {
-        return;
-      }
       const data = active.data.current;
-      const overRect = over.rect;
-      if (!overRect) {
-        return;
-      }
-      if (data?.kind === "SUBVIEW" && typeof data.subviewId === "string") {
-        const activeRect = active.rect.current?.translated ?? active.rect.current?.initial;
-        if (!activeRect) {
-          return;
+      if (typeof over?.id === "string" && over.id.startsWith("SUBVIEW_BOARD:")) {
+        const overRect = over.rect;
+        if (overRect) {
+          if (data?.kind === "SUBVIEW" && typeof data.subviewId === "string") {
+            const activeRect = active.rect.current?.translated ?? active.rect.current?.initial;
+            if (activeRect) {
+              const centerX = activeRect.left + activeRect.width / 2;
+              const centerY = activeRect.top + activeRect.height / 2;
+              const position = {
+                x: clamp((centerX - overRect.left) / overRect.width, 0, 1),
+                y: clamp((centerY - overRect.top) / overRect.height, 0, 1)
+              };
+              handleSubviewPinCreate(data.subviewId, position);
+            }
+          } else if (data?.kind === "SUBVIEW_PIN" && typeof data.pinId === "number") {
+            const position = {
+              x: clamp(data.xPct + event.delta.x / overRect.width, 0, 1),
+              y: clamp(data.yPct + event.delta.y / overRect.height, 0, 1)
+            };
+            handleSubviewPinMove(data.pinId, position);
+          }
         }
-        const centerX = activeRect.left + activeRect.width / 2;
-        const centerY = activeRect.top + activeRect.height / 2;
-        const position = {
-          x: clamp((centerX - overRect.left) / overRect.width, 0, 1),
-          y: clamp((centerY - overRect.top) / overRect.height, 0, 1)
-        };
-        handleSubviewPinCreate(data.subviewId, position);
-        return;
       }
-      if (data?.kind === "SUBVIEW_PIN" && typeof data.pinId === "number") {
-        const position = {
-          x: clamp(data.xPct + event.delta.x / overRect.width, 0, 1),
-          y: clamp(data.yPct + event.delta.y / overRect.height, 0, 1)
-        };
-        handleSubviewPinMove(data.pinId, position);
-      }
+      setActiveSubviewId(null);
     },
     [handleSubviewPinCreate, handleSubviewPinMove]
   );
@@ -3194,6 +3204,7 @@ export function VehicleInventoryPage() {
             sensors={sensors}
             onDragStart={handleSubviewDragStart}
             onDragEnd={handleSubviewDragEnd}
+            onDragCancel={() => setActiveSubviewId(null)}
           >
             <VehicleViewSelector
               views={normalizedVehicleViews}
@@ -3459,7 +3470,7 @@ export function VehicleInventoryPage() {
                 />
               </div>
 
-              <aside className="min-w-0 space-y-6">
+              <aside className="side-panels min-w-0 space-y-6">
                 <VehicleItemsPanel
                   title="Matériel dans les autres vues"
                   description="Faites glisser un équipement vers la vue courante pour le déplacer."
@@ -3543,6 +3554,16 @@ export function VehicleInventoryPage() {
                 />
               </aside>
             </div>
+            <DragOverlay>
+              {activeSubviewCard ? (
+                <div
+                  className="pointer-events-none"
+                  style={{ position: "relative", zIndex: 99999 }}
+                >
+                  <SubviewDragPreview subview={activeSubviewCard} />
+                </div>
+              ) : null}
+            </DragOverlay>
           </DndContext>
           <VehiclePhotosPanel />
         </section>
@@ -4391,7 +4412,7 @@ function VehicleCompartment({
         <div
           ref={setBoardNodeRef}
           className={clsx(
-            "relative min-h-[320px] w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 transition dark:border-slate-700 dark:bg-slate-800",
+            "vehicle-view-photo relative min-h-[320px] w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 transition dark:border-slate-700 dark:bg-slate-800",
             (isHovering || isSubviewDropActive) &&
               "border-blue-400 ring-4 ring-blue-200/60 dark:border-blue-500 dark:ring-blue-900/50",
             isPointerModeEnabled &&
@@ -4560,6 +4581,39 @@ function VehicleCompartment({
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function SubviewDragPreview({ subview }: { subview: SubviewCardData }) {
+  const itemCountLabel =
+    typeof subview.itemCount === "number"
+      ? `${subview.itemCount} équipement${subview.itemCount > 1 ? "s" : ""}`
+      : null;
+
+  return (
+    <div className="w-64 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            {subview.label}
+          </p>
+          {itemCountLabel ? (
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{itemCountLabel}</p>
+          ) : null}
+        </div>
+        <span
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-400 dark:border-slate-600 dark:text-slate-300"
+          aria-hidden
+        >
+          ⠿
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-200">
+          Sous-vue
+        </span>
       </div>
     </div>
   );
