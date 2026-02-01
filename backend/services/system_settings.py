@@ -17,12 +17,14 @@ SMTP_SETTINGS_KEY = "email.smtp"
 OTP_EMAIL_SETTINGS_KEY = "email.otp"
 PURCHASE_SUGGESTION_SETTINGS_KEY = "purchase_suggestions"
 QOL_SETTINGS_KEY = "qol.settings"
+FEATURE_ARI_ENABLED_KEY = "feature_ari_enabled"
 
 _DEFAULT_FROM_EMAIL = "StockOps <no-reply@localhost>"
 _DEFAULT_EXPIRY_SOON_DAYS = 30
 _DEFAULT_QOL_TIMEZONE = "Europe/Paris"
 _DEFAULT_QOL_DATE_FORMAT = "DD/MM/YYYY"
 _DEFAULT_QOL_NOTE_PREVIEW_LENGTH = 180
+_DEFAULT_FEATURE_ARI_ENABLED = False
 
 
 @dataclass(frozen=True)
@@ -141,6 +143,10 @@ def _qol_env_defaults() -> dict[str, Any]:
     }
 
 
+def _feature_flags_defaults() -> dict[str, Any]:
+    return {"enabled": _DEFAULT_FEATURE_ARI_ENABLED}
+
+
 def get_setting_json(key: str) -> dict[str, Any] | None:
     with db.get_core_connection() as conn:
         row = conn.execute(
@@ -204,6 +210,7 @@ def seed_default_system_settings() -> None:
     purchase_suggestion_value = _purchase_suggestion_env_defaults()
 
     qol_value = _qol_env_defaults()
+    feature_ari_value = _feature_flags_defaults()
     with db.get_core_connection() as conn:
         smtp_exists = conn.execute(
             "SELECT 1 FROM system_settings WHERE key = ?",
@@ -257,6 +264,20 @@ def seed_default_system_settings() -> None:
                 (
                     QOL_SETTINGS_KEY,
                     json.dumps(qol_value, ensure_ascii=False),
+                    _utc_now_iso(),
+                    None,
+                ),
+            )
+        feature_ari_exists = conn.execute(
+            "SELECT 1 FROM system_settings WHERE key = ?",
+            (FEATURE_ARI_ENABLED_KEY,),
+        ).fetchone()
+        if not feature_ari_exists:
+            conn.execute(
+                "INSERT INTO system_settings (key, value, updated_at, updated_by) VALUES (?, ?, ?, ?)",
+                (
+                    FEATURE_ARI_ENABLED_KEY,
+                    json.dumps(feature_ari_value, ensure_ascii=False),
                     _utc_now_iso(),
                     None,
                 ),
@@ -436,3 +457,21 @@ def set_qol_settings(payload: dict[str, Any], updated_by: str | None) -> QolSett
         updated_by,
     )
     return settings
+
+
+def get_feature_ari_enabled() -> bool:
+    raw = get_setting_json(FEATURE_ARI_ENABLED_KEY)
+    if raw is None:
+        return _DEFAULT_FEATURE_ARI_ENABLED
+    if isinstance(raw, dict):
+        return _coerce_bool(raw.get("enabled"), _DEFAULT_FEATURE_ARI_ENABLED)
+    return _DEFAULT_FEATURE_ARI_ENABLED
+
+
+def set_feature_ari_enabled(enabled: bool, updated_by: str | None) -> bool:
+    set_setting_json(
+        FEATURE_ARI_ENABLED_KEY,
+        {"enabled": bool(enabled)},
+        updated_by,
+    )
+    return bool(enabled)

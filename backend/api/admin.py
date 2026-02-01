@@ -482,6 +482,24 @@ def update_qol_settings(
     )
 
 
+@router.get("/settings", response_model=models.AdminSettingsResponse)
+def get_admin_settings(user: models.User = Depends(require_admin)) -> models.AdminSettingsResponse:
+    return models.AdminSettingsResponse(
+        feature_ari_enabled=system_settings.get_feature_ari_enabled(),
+    )
+
+
+@router.patch("/settings", response_model=models.AdminSettingsResponse)
+def update_admin_settings(
+    payload: models.AdminSettingsUpdate,
+    user: models.User = Depends(require_admin),
+) -> models.AdminSettingsResponse:
+    if payload.feature_ari_enabled is None:
+        raise HTTPException(status_code=400, detail="Aucune clé de configuration autorisée")
+    enabled = system_settings.set_feature_ari_enabled(payload.feature_ari_enabled, user.username)
+    return models.AdminSettingsResponse(feature_ari_enabled=enabled)
+
+
 @router.get("/backup/settings", response_model=models.BackupSettingsStatus)
 async def get_backup_settings(user: models.User = Depends(require_admin)):
     site_key = db.get_current_site_key()

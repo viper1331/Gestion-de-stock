@@ -1,8 +1,11 @@
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { toast } from "sonner";
+import { shallow } from "zustand/shallow";
 
 import { api } from "../../lib/api";
 import { fetchSiteContext, updateActiveSite, type SiteContext } from "../../lib/sites";
+import { fetchAdminSettings, updateAdminSettings } from "../../api/adminSettings";
 import {
   CUSTOM_FIELD_SCOPES,
   CUSTOM_FIELD_TYPES,
@@ -18,6 +21,7 @@ import { useAuth } from "../auth/useAuth";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
+import { useFeatureFlagsStore } from "../../app/featureFlags";
 
 interface VehicleTypeEntry {
   id: number;
@@ -172,10 +176,15 @@ export function AdminSettingsPage() {
   const [persistLogsEnabled, setPersistLogsEnabled] = useState<boolean>(() =>
     isLogPersistenceEnabled()
   );
+  const [ariModuleEnabled, setAriModuleEnabled] = useState<boolean>(false);
   const [logMessage, setLogMessage] = useState<string | null>(null);
   const [siteMessage, setSiteMessage] = useState<string | null>(null);
   const [siteError, setSiteError] = useState<string | null>(null);
   const [selectedSite, setSelectedSite] = useState<string>("");
+  const { setFeatureAriEnabled } = useFeatureFlagsStore(
+    (state) => ({ setFeatureAriEnabled: state.setFeatureAriEnabled }),
+    shallow
+  );
 
   const { data: vehicleTypes = [] } = useQuery({
     queryKey: ["admin-vehicle-types"],
@@ -241,6 +250,12 @@ export function AdminSettingsPage() {
     enabled: isAdmin
   });
 
+  const { data: adminSettingsData } = useQuery({
+    queryKey: ["admin-settings"],
+    queryFn: fetchAdminSettings,
+    enabled: isAdmin
+  });
+
   useEffect(() => {
     setSelectedSite(siteContext?.override_site_key ?? "");
   }, [siteContext?.override_site_key]);
@@ -283,6 +298,14 @@ export function AdminSettingsPage() {
     }
     setQolSettings(qolSettingsData);
   }, [qolSettingsData]);
+
+  useEffect(() => {
+    if (!adminSettingsData) {
+      return;
+    }
+    setAriModuleEnabled(adminSettingsData.feature_ari_enabled);
+    setFeatureAriEnabled(adminSettingsData.feature_ari_enabled);
+  }, [adminSettingsData, setFeatureAriEnabled]);
 
   const resetVehicleTypeForm = () => {
     setVehicleTypeForm(EMPTY_VEHICLE_TYPE_FORM);
@@ -422,6 +445,25 @@ export function AdminSettingsPage() {
       enabled ? "Persistance des logs activée." : "Persistance des logs désactivée."
     );
   };
+
+  const updateAriModuleSetting = useMutation({
+    mutationFn: async (enabled: boolean) => updateAdminSettings({ feature_ari_enabled: enabled }),
+    onMutate: (enabled) => {
+      const previous = ariModuleEnabled;
+      setAriModuleEnabled(enabled);
+      return { previous };
+    },
+    onSuccess: (data) => {
+      setAriModuleEnabled(data.feature_ari_enabled);
+      setFeatureAriEnabled(data.feature_ari_enabled);
+      toast.success("Paramètre ARI mis à jour.");
+      queryClient.invalidateQueries({ queryKey: ["admin-settings"] });
+    },
+    onError: (_error, _enabled, context) => {
+      setAriModuleEnabled(context?.previous ?? false);
+      toast.error("Impossible de mettre à jour le module ARI.");
+    }
+  });
 
   const handleExportLogs = () => {
     const entries = getPersistedLogs();
@@ -1069,6 +1111,29 @@ export function AdminSettingsPage() {
             </button>
           </div>
         </form>
+      </div>
+
+      <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
+        <div>
+          <h3 className="text-sm font-semibold text-white">Modules</h3>
+          <p className="text-xs text-slate-400">
+            Active/désactive l'accès au module ARI dans toute l'application.
+          </p>
+        </div>
+        <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
+          <div>
+            <p className="font-semibold text-slate-200">Module ARI</p>
+            <p className="text-[11px] text-slate-500">
+              Active/désactive l'accès au module ARI dans toute l'application.
+            </p>
+          </div>
+          <AppTextInput
+            type="checkbox"
+            checked={ariModuleEnabled}
+            onChange={(event) => updateAriModuleSetting.mutate(event.target.checked)}
+            className="h-5 w-10 rounded border-slate-600 bg-slate-900 text-indigo-500"
+          />
+        </label>
       </div>
 
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">

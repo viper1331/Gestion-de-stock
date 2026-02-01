@@ -107,3 +107,8 @@ async def read_qol_settings(_: models.User = Depends(get_current_user)) -> model
         auto_archive_days=settings.auto_archive_days,
         note_preview_length=settings.note_preview_length,
     )
+
+
+@router.get("/feature-flags", response_model=models.FeatureFlags)
+async def read_feature_flags(_: models.User = Depends(get_current_user)) -> models.FeatureFlags:
+    return models.FeatureFlags(feature_ari_enabled=system_settings.get_feature_ari_enabled())

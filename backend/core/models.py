@@ -465,6 +465,20 @@ class SecuritySettings(BaseModel):
     logout_on_close: bool = False
 
 
+class AdminSettingsResponse(BaseModel):
+    feature_ari_enabled: bool
+
+
+class AdminSettingsUpdate(BaseModel):
+    feature_ari_enabled: bool | None = None
+
+    model_config = ConfigDict(extra="forbid")
+
+
+class FeatureFlags(BaseModel):
+    feature_ari_enabled: bool
+
+
 class RefreshRequest(BaseModel):
     refresh_token: str
 
