@@ -24,6 +24,11 @@ interface SubViewCardProps {
   onRemove?: (subviewId: string) => void;
 }
 
+interface CompactSubViewTileProps {
+  subview: SubviewCardData;
+  dragData: SubviewDragData;
+}
+
 export function SubViewCard({
   subview,
   mode,
@@ -125,6 +130,58 @@ export function SubViewCard({
           </span>
         ) : null}
       </div>
+    </div>
+  );
+}
+
+export function CompactSubViewTile({ subview, dragData }: CompactSubViewTileProps) {
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    setActivatorNodeRef,
+    transform,
+    isDragging
+  } = useDraggable({
+    id: `subview:${subview.id}`,
+    data: dragData
+  });
+  const style = transform ? { transform: CSS.Translate.toString(transform) } : undefined;
+  const itemCountLabel =
+    typeof subview.itemCount === "number"
+      ? `${subview.itemCount} équipement${subview.itemCount > 1 ? "s" : ""}`
+      : null;
+
+  return (
+    <div
+      ref={setNodeRef}
+      style={style}
+      className={clsx(
+        "flex min-w-0 items-center justify-between gap-2 rounded-xl border border-white/10 bg-white/5 px-3 py-2 text-left transition hover:bg-white/8",
+        isDragging && "opacity-70"
+      )}
+      {...attributes}
+      {...listeners}
+    >
+      <div className="min-w-0">
+        <p
+          className="truncate text-sm font-semibold text-slate-900 dark:text-slate-100"
+          title={subview.label}
+        >
+          {subview.label}
+        </p>
+        {itemCountLabel ? (
+          <p className="text-xs text-slate-500 dark:text-slate-400">{itemCountLabel}</p>
+        ) : null}
+      </div>
+      <button
+        type="button"
+        ref={setActivatorNodeRef}
+        className="flex h-8 w-8 items-center justify-center rounded-md border border-white/10 text-slate-400 transition hover:border-white/20 hover:text-slate-600 dark:text-slate-300 dark:hover:text-white"
+      >
+        <span className="sr-only">Glisser</span>
+        <span aria-hidden>⠿</span>
+      </button>
     </div>
   );
 }
