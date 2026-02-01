@@ -751,6 +751,7 @@ export function VehicleInventoryPage() {
     });
   }
   const selectedHierarchy = useMemo(() => splitViewHierarchy(selectedView), [selectedView]);
+  const isSubView = Boolean(selectedHierarchy.subView);
   const prefs = useMemo(
     () => ({
       pinnedViewName: normalizeViewName(selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL)
@@ -2309,6 +2310,10 @@ export function VehicleInventoryPage() {
 
   const handleSubviewDragEnd = useCallback(
     (event: DragEndEvent) => {
+      if (isSubView) {
+        setActiveSubviewId(null);
+        return;
+      }
       const { active, over } = event;
       const data = active.data.current;
       if (typeof over?.id === "string" && over.id.startsWith("SUBVIEW_BOARD:")) {
@@ -2348,7 +2353,7 @@ export function VehicleInventoryPage() {
       }
       setActiveSubviewId(null);
     },
-    [handleSubviewPinCreate, handleSubviewPinMove]
+    [handleSubviewPinCreate, handleSubviewPinMove, isSubView]
   );
 
   const lotRemiseItemIds = useMemo(() => {
@@ -3226,7 +3231,7 @@ export function VehicleInventoryPage() {
               onSelect={requestViewChange}
             />
 
-            {selectedVehicle ? (
+            {selectedVehicle && !isSubView ? (
               <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
                 <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
                   <div>
@@ -3320,12 +3325,15 @@ export function VehicleInventoryPage() {
                   allItems={items}
                   appliedLots={appliedLots}
                   appliedLotItemsByAssignment={appliedLotItemsByAssignment}
-                  subviewPins={VEHICLE_SUBVIEW_CARDS_ENABLED ? subviewPinCards : undefined}
+                  subviewPins={
+                    !isSubView && VEHICLE_SUBVIEW_CARDS_ENABLED ? subviewPinCards : undefined
+                  }
                   parentViewId={selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL}
                   categoryId={selectedVehicle.id}
                   viewConfig={selectedViewConfig}
                   availablePhotos={vehiclePhotos}
                   selectedView={selectedView}
+                  isSubView={isSubView}
                   onDragStartCapture={lockViewSelection}
                   onDropItem={(dropRequest) => {
                     const targetView = dropRequest.targetView;
@@ -3903,6 +3911,7 @@ interface VehicleCompartmentProps {
   viewConfig: VehicleViewConfig | null;
   availablePhotos: VehiclePhoto[];
   selectedView: string | null;
+  isSubView: boolean;
   onDropItem: (payload: DropRequestPayload) => void;
   onRemoveItem: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
@@ -3933,6 +3942,7 @@ function VehicleCompartment({
   viewConfig,
   availablePhotos,
   selectedView,
+  isSubView,
   onDropItem,
   onRemoveItem,
   onItemFeedback,
@@ -3996,7 +4006,8 @@ function VehicleCompartment({
   const { isOver: isSubviewOver, setNodeRef: setSubviewDropRef, active: activeSubview } =
     useDroppable({
       id: `SUBVIEW_BOARD:${parentViewId}`,
-      data: { accepts: ["SUBVIEW", "SUBVIEW_PIN"] }
+      data: { accepts: ["SUBVIEW", "SUBVIEW_PIN"] },
+      disabled: isSubView
     });
   const queryClient = useQueryClient();
   const markerEntries = useMemo(
@@ -4282,7 +4293,7 @@ function VehicleCompartment({
   };
 
   const isSubviewDragging = activeSubview?.data.current?.kind === "SUBVIEW";
-  const isSubviewDropActive = isSubviewDragging && isSubviewOver;
+  const isSubviewDropActive = !isSubView && isSubviewDragging && isSubviewOver;
   const isHovering = hover.hoverRef.current;
   const backgroundImageUrl = resolveMediaUrl(viewConfig?.background_url);
 
@@ -4447,14 +4458,16 @@ function VehicleCompartment({
               </div>
             </div>
           ) : null}
-          {subviewPins?.map((pin) => (
-            <SubviewPinCard
-              key={pin.id}
-              pin={pin}
-              onOpen={onOpenSubview}
-              onRemove={onRemoveSubviewPin}
-            />
-          ))}
+          {!isSubView
+            ? subviewPins?.map((pin) => (
+                <SubviewPinCard
+                  key={pin.id}
+                  pin={pin}
+                  onOpen={onOpenSubview}
+                  onRemove={onRemoveSubviewPin}
+                />
+              ))
+            : null}
           {markerEntries.map((entry) => {
             const pointerTarget = pointerTargets[entry.key] ?? null;
             return (
