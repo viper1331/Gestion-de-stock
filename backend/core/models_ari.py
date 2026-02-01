@@ -7,16 +7,17 @@ from typing import Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
-class AriSessionCreate(BaseModel):
+class AriSessionInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     collaborator_id: int
     performed_at: datetime
     course_name: Optional[str] = None
-    duration_seconds: int = Field(ge=1)
+    duration_seconds: int
     start_pressure_bar: int
     end_pressure_bar: int
     air_consumed_bar: Optional[int] = None
+    cylinder_capacity_l: float
     stress_level: int = Field(ge=1, le=10)
     rpe: Optional[int] = Field(default=None, ge=1, le=10)
     physio_notes: Optional[str] = None
@@ -29,6 +30,14 @@ class AriSessionCreate(BaseModel):
     bp_dia_post: Optional[int] = None
     hr_post: Optional[int] = None
     spo2_post: Optional[int] = None
+
+
+class AriSessionCreate(AriSessionInput):
+    model_config = ConfigDict(extra="forbid")
+
+
+class AriSessionUpdate(AriSessionInput):
+    model_config = ConfigDict(extra="forbid")
 
 
 AriSessionStatus = Literal["DRAFT", "COMPLETED", "CERTIFIED", "REJECTED"]
@@ -74,6 +83,11 @@ class AriSession(BaseModel):
     start_pressure_bar: int
     end_pressure_bar: int
     air_consumed_bar: int
+    cylinder_capacity_l: float
+    air_consumed_l: float
+    air_consumption_lpm: float
+    autonomy_start_min: float
+    autonomy_end_min: float
     stress_level: int
     status: AriSessionStatus
     rpe: Optional[int] = None

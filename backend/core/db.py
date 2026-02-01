@@ -195,6 +195,11 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
           start_pressure_bar INTEGER NOT NULL,
           end_pressure_bar INTEGER NOT NULL,
           air_consumed_bar INTEGER NOT NULL,
+          cylinder_capacity_l REAL NOT NULL DEFAULT 0,
+          air_consumed_l REAL NOT NULL DEFAULT 0,
+          air_consumption_lpm REAL NOT NULL DEFAULT 0,
+          autonomy_start_min REAL NOT NULL DEFAULT 0,
+          autonomy_end_min REAL NOT NULL DEFAULT 0,
           stress_level INTEGER NOT NULL,
           status TEXT NOT NULL DEFAULT 'COMPLETED',
           rpe INTEGER NULL,
@@ -247,6 +252,36 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "ari_sessions", "bp_dia_post", "bp_dia_post INTEGER NULL")
     _ensure_column(conn, "ari_sessions", "hr_post", "hr_post INTEGER NULL")
     _ensure_column(conn, "ari_sessions", "spo2_post", "spo2_post INTEGER NULL")
+    _ensure_column(
+        conn,
+        "ari_sessions",
+        "cylinder_capacity_l",
+        "cylinder_capacity_l REAL NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "ari_sessions",
+        "air_consumed_l",
+        "air_consumed_l REAL NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "ari_sessions",
+        "air_consumption_lpm",
+        "air_consumption_lpm REAL NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "ari_sessions",
+        "autonomy_start_min",
+        "autonomy_start_min REAL NOT NULL DEFAULT 0",
+    )
+    _ensure_column(
+        conn,
+        "ari_sessions",
+        "autonomy_end_min",
+        "autonomy_end_min REAL NOT NULL DEFAULT 0",
+    )
     _ensure_column(
         conn,
         "ari_sessions",

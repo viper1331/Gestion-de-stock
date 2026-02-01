@@ -441,7 +441,7 @@ export function AriPage() {
         collaborators={collaborators}
         onSubmit={async (payload) => {
           try {
-            await createSession(payload, ariSiteHeader);
+            const session = await createSession(payload, ariSiteHeader);
             toast.success("Séance ajoutée.");
             if (selectedCollaboratorId) {
               await Promise.all([
@@ -449,8 +449,10 @@ export function AriPage() {
                 loadCertification(selectedCollaboratorId, ariSiteHeader)
               ]);
             }
+            return session;
           } catch {
             toast.error("Impossible de créer la séance.");
+            throw new Error("Création impossible");
           }
         }}
       />

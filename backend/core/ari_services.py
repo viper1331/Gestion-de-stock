@@ -126,6 +126,43 @@ def _session_from_row(row: dict[str, object]) -> models_ari.AriSession:
     return models_ari.AriSession(**row)
 
 
+def _compute_ari_air_metrics(payload: models_ari.AriSessionInput) -> dict[str, float]:
+    if payload.cylinder_capacity_l <= 0:
+        raise ValueError("Capacité bouteille invalide")
+    if payload.start_pressure_bar <= 0:
+        raise ValueError("Pression de départ invalide")
+    if payload.end_pressure_bar < 0:
+        raise ValueError("Pression de fin invalide")
+    if payload.end_pressure_bar >= payload.start_pressure_bar:
+        raise ValueError("La pression de fin doit être inférieure à la pression de départ")
+    if payload.duration_seconds <= 0:
+        raise ValueError("Durée invalide")
+    delta_bar = payload.start_pressure_bar - payload.end_pressure_bar
+    if delta_bar <= 0:
+        raise ValueError("Delta pression invalide")
+
+    air_consumed_l = payload.cylinder_capacity_l * delta_bar
+    duration_min = payload.duration_seconds / 60.0
+    air_consumption_lpm = air_consumed_l / duration_min if duration_min > 0 else 0.0
+    autonomy_start_min = (
+        (payload.cylinder_capacity_l * payload.start_pressure_bar) / air_consumption_lpm
+        if air_consumption_lpm > 0
+        else 0.0
+    )
+    autonomy_end_min = (
+        (payload.cylinder_capacity_l * payload.end_pressure_bar) / air_consumption_lpm
+        if air_consumption_lpm > 0
+        else 0.0
+    )
+    return {
+        "air_consumed_bar": int(delta_bar),
+        "air_consumed_l": float(air_consumed_l),
+        "air_consumption_lpm": float(air_consumption_lpm),
+        "autonomy_start_min": float(autonomy_start_min),
+        "autonomy_end_min": float(autonomy_end_min),
+    }
+
+
 def list_ari_sessions(
     site: str | None,
     *,
@@ -212,9 +249,7 @@ def create_ari_session(
     conn = _ensure_ari_db(site_id)
     performed_at = _format_timestamp(payload.performed_at)
     course_name = payload.course_name.strip() if payload.course_name else "Séance ARI"
-    air_consumed = payload.air_consumed_bar
-    if air_consumed is None:
-        air_consumed = max(payload.start_pressure_bar - payload.end_pressure_bar, 0)
+    metrics = _compute_ari_air_metrics(payload)
     try:
         cur = conn.execute(
             """
@@ -226,6 +261,11 @@ def create_ari_session(
               start_pressure_bar,
               end_pressure_bar,
               air_consumed_bar,
+              cylinder_capacity_l,
+              air_consumed_l,
+              air_consumption_lpm,
+              autonomy_start_min,
+              autonomy_end_min,
               stress_level,
               status,
               rpe,
@@ -242,7 +282,7 @@ def create_ari_session(
               created_at,
               created_by
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
             """,
             (
                 payload.collaborator_id,
@@ -251,7 +291,12 @@ def create_ari_session(
                 payload.duration_seconds,
                 payload.start_pressure_bar,
                 payload.end_pressure_bar,
-                air_consumed,
+                metrics["air_consumed_bar"],
+                payload.cylinder_capacity_l,
+                metrics["air_consumed_l"],
+                metrics["air_consumption_lpm"],
+                metrics["autonomy_start_min"],
+                metrics["autonomy_end_min"],
                 payload.stress_level,
                 "COMPLETED",
                 payload.rpe,
@@ -277,6 +322,95 @@ def create_ari_session(
         ).fetchone()
     finally:
         conn.close()
+    return _session_from_row(row)
+
+
+def update_ari_session(
+    session_id: int,
+    payload: models_ari.AriSessionUpdate,
+    *,
+    site: str | None,
+    fallback_site: str | None = None,
+) -> models_ari.AriSession:
+    site_id = _normalize_site(site, fallback_site)
+    conn = _ensure_ari_db(site_id)
+    performed_at = _format_timestamp(payload.performed_at)
+    course_name = payload.course_name.strip() if payload.course_name else "Séance ARI"
+    metrics = _compute_ari_air_metrics(payload)
+    try:
+        existing = conn.execute(
+            "SELECT 1 FROM ari_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+        if existing is None:
+            raise LookupError("Session ARI introuvable")
+        conn.execute(
+            """
+            UPDATE ari_sessions
+            SET
+              collaborator_id = ?,
+              performed_at = ?,
+              course_name = ?,
+              duration_seconds = ?,
+              start_pressure_bar = ?,
+              end_pressure_bar = ?,
+              air_consumed_bar = ?,
+              cylinder_capacity_l = ?,
+              air_consumed_l = ?,
+              air_consumption_lpm = ?,
+              autonomy_start_min = ?,
+              autonomy_end_min = ?,
+              stress_level = ?,
+              rpe = ?,
+              physio_notes = ?,
+              observations = ?,
+              bp_sys_pre = ?,
+              bp_dia_pre = ?,
+              hr_pre = ?,
+              spo2_pre = ?,
+              bp_sys_post = ?,
+              bp_dia_post = ?,
+              hr_post = ?,
+              spo2_post = ?
+            WHERE id = ?
+            """,
+            (
+                payload.collaborator_id,
+                performed_at,
+                course_name,
+                payload.duration_seconds,
+                payload.start_pressure_bar,
+                payload.end_pressure_bar,
+                metrics["air_consumed_bar"],
+                payload.cylinder_capacity_l,
+                metrics["air_consumed_l"],
+                metrics["air_consumption_lpm"],
+                metrics["autonomy_start_min"],
+                metrics["autonomy_end_min"],
+                payload.stress_level,
+                payload.rpe,
+                payload.physio_notes,
+                payload.observations,
+                payload.bp_sys_pre,
+                payload.bp_dia_pre,
+                payload.hr_pre,
+                payload.spo2_pre,
+                payload.bp_sys_post,
+                payload.bp_dia_post,
+                payload.hr_post,
+                payload.spo2_post,
+                session_id,
+            ),
+        )
+        conn.commit()
+        row = conn.execute(
+            "SELECT * FROM ari_sessions WHERE id = ?",
+            (session_id,),
+        ).fetchone()
+    finally:
+        conn.close()
+    if row is None:
+        raise LookupError("Session ARI introuvable")
     return _session_from_row(row)
 
 

@@ -97,12 +97,37 @@ async def create_ari_session(
 ) -> models_ari.AriSession:
     _require_feature_enabled()
     _require_ari_edit(user)
-    return ari_services.create_ari_session(
-        payload,
-        created_by=user.username,
-        site=_resolve_site(user, ari_site),
-        fallback_site=user.site_key,
-    )
+    try:
+        return ari_services.create_ari_session(
+            payload,
+            created_by=user.username,
+            site=_resolve_site(user, ari_site),
+            fallback_site=user.site_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/sessions/{session_id}", response_model=models_ari.AriSession)
+async def update_ari_session(
+    session_id: int,
+    payload: models_ari.AriSessionUpdate,
+    user: models.User = Depends(get_current_user),
+    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
+) -> models_ari.AriSession:
+    _require_feature_enabled()
+    _require_ari_edit(user)
+    try:
+        return ari_services.update_ari_session(
+            session_id,
+            payload,
+            site=_resolve_site(user, ari_site),
+            fallback_site=user.site_key,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/sessions/{session_id}", response_model=models_ari.AriSession)
