@@ -15,7 +15,7 @@ type AriSessionPayload = {
   duration_seconds: number;
   start_pressure_bar: number;
   end_pressure_bar: number;
-  air_consumed_bar?: number | null;
+  cylinder_capacity_l: number;
   stress_level: number;
   rpe?: number | null;
   physio_notes?: string | null;
@@ -62,6 +62,17 @@ export async function updateAriSettings(payload: AriSettingsPayload, site?: stri
 
 export async function createAriSession(payload: AriSessionPayload, site?: string) {
   const response = await api.post<AriSession>("/ari/sessions", payload, {
+    headers: buildAriHeaders(site)
+  });
+  return response.data;
+}
+
+export async function updateAriSession(
+  sessionId: number,
+  payload: AriSessionPayload,
+  site?: string
+) {
+  const response = await api.put<AriSession>(`/ari/sessions/${sessionId}`, payload, {
     headers: buildAriHeaders(site)
   });
   return response.data;

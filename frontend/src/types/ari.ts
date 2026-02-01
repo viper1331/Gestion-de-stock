@@ -14,6 +14,11 @@ export type AriSession = {
   start_pressure_bar: number;
   end_pressure_bar: number;
   air_consumed_bar: number;
+  cylinder_capacity_l: number;
+  air_consumed_l: number;
+  air_consumption_lpm: number;
+  autonomy_start_min: number;
+  autonomy_end_min: number;
   stress_level: number;
   status: "DRAFT" | "COMPLETED" | "CERTIFIED" | "REJECTED";
   rpe?: number | null;
