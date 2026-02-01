@@ -20,6 +20,19 @@ import type { AriSession } from "../../types/ari";
 import { CreateAriSessionModal } from "./modals/CreateAriSessionModal";
 import { SessionDetailModal } from "./modals/SessionDetailModal";
 import { canCertifyARI } from "./permissions";
+import { AriSessionsFilters } from "./components/AriSessionsFilters";
+import {
+  applyAriSessionsFilters,
+  ariSessionStatusLabels,
+  createEmptyAriSessionsFilters,
+  getAirPerMinute,
+  getDurationMinutes,
+  getSessionStatus,
+  sortAriSessions,
+  type AriSessionStatus,
+  type AriSessionsSort,
+  type AriSessionsSortKey
+} from "./utils/ariSessionsFilter";
 
 interface Collaborator {
   id: number;
@@ -28,8 +41,25 @@ interface Collaborator {
 }
 
 const statusBadgeClasses = {
-  pending: "border-amber-500/30 bg-amber-500/10 text-amber-200",
-  decided: "border-slate-600/40 bg-slate-800/40 text-slate-200"
+  PENDING: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+  CERTIFIED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+  REJECTED: "border-rose-500/30 bg-rose-500/10 text-rose-200",
+  COMPLETED: "border-slate-600/40 bg-slate-800/40 text-slate-200",
+  DRAFT: "border-slate-700/40 bg-slate-800/30 text-slate-300"
+};
+
+const formatMinutes = (value: number | null) => {
+  if (value === null || Number.isNaN(value)) {
+    return "—";
+  }
+  return `${value.toFixed(1)} min`;
+};
+
+const formatAir = (value: number | null) => {
+  if (value === null || Number.isNaN(value)) {
+    return "—";
+  }
+  return `${value.toFixed(1)} L/min`;
 };
 
 export function AriSessionsPage() {
@@ -51,6 +81,8 @@ export function AriSessionsPage() {
   const [isCreateModalOpen, setIsCreateModalOpen] = useState(false);
   const [editingSession, setEditingSession] = useState<AriSession | null>(null);
   const [selectedSession, setSelectedSession] = useState<AriSession | null>(null);
+  const [filters, setFilters] = useState(() => createEmptyAriSessionsFilters());
+  const [sort, setSort] = useState<AriSessionsSort>(null);
 
   useEffect(() => {
     if (isLoaded && !featureAriEnabled) {
@@ -86,6 +118,24 @@ export function AriSessionsPage() {
   const collaboratorMap = useMemo(() => {
     return new Map(collaborators.map((collaborator) => [collaborator.id, collaborator]));
   }, [collaborators]);
+
+  const availableCourses = useMemo(() => {
+    const uniqueCourses = new Set<string>();
+    sessions.forEach((session) => {
+      if (session.course_name) {
+        uniqueCourses.add(session.course_name);
+      }
+    });
+    return Array.from(uniqueCourses).sort((a, b) => a.localeCompare(b, "fr", { sensitivity: "base" }));
+  }, [sessions]);
+
+  const availableStatuses = useMemo(() => {
+    const statuses = new Set<AriSessionStatus>();
+    sessions.forEach((session) => {
+      statuses.add(getSessionStatus(session, pendingByCollaborator));
+    });
+    return Array.from(statuses).sort();
+  }, [pendingByCollaborator, sessions]);
 
   const selectedCollaborator = selectedSession
     ? collaboratorMap.get(selectedSession.collaborator_id)
@@ -152,6 +202,36 @@ export function AriSessionsPage() {
     }
   });
 
+  const filteredSessions = useMemo(
+    () => applyAriSessionsFilters(sessions, filters, collaboratorMap, pendingByCollaborator),
+    [collaboratorMap, filters, pendingByCollaborator, sessions]
+  );
+
+  const sortedSessions = useMemo(
+    () => sortAriSessions(filteredSessions, sort, collaboratorMap, pendingByCollaborator),
+    [collaboratorMap, filteredSessions, pendingByCollaborator, sort]
+  );
+
+  const handleSort = (key: AriSessionsSortKey) => {
+    setSort((current) => {
+      if (!current || current.key !== key) {
+        return { key, direction: "asc" };
+      }
+      return { key, direction: current.direction === "asc" ? "desc" : "asc" };
+    });
+  };
+
+  const renderSortIndicator = (key: AriSessionsSortKey) => {
+    if (!sort || sort.key !== key) {
+      return null;
+    }
+    return (
+      <span aria-hidden className="text-xs text-slate-400">
+        {sort.direction === "asc" ? "↑" : "↓"}
+      </span>
+    );
+  };
+
   if (!canView) {
     return (
       <div className="p-6 text-slate-200">
@@ -180,17 +260,82 @@ export function AriSessionsPage() {
         </button>
       </header>
 
+      <AriSessionsFilters
+        filters={filters}
+        onChange={setFilters}
+        onReset={() => setFilters(createEmptyAriSessionsFilters())}
+        availableCourses={availableCourses}
+        availableStatuses={availableStatuses}
+        totalCount={sessions.length}
+        filteredCount={filteredSessions.length}
+        disabled={isLoadingSessions || isLoadingCollaborators || sessions.length === 0}
+      />
+
       <div className="rounded-xl border border-slate-800 bg-slate-900/60">
         <div className="overflow-x-auto">
           <table className="min-w-full divide-y divide-slate-800 text-sm">
             <thead className="bg-slate-900/80 text-left text-slate-200">
               <tr>
-                <th className="px-4 py-3 font-semibold">Date</th>
-                <th className="px-4 py-3 font-semibold">Collaborateur</th>
-                <th className="px-4 py-3 font-semibold">Parcours</th>
-                <th className="px-4 py-3 font-semibold">Durée</th>
-                <th className="px-4 py-3 font-semibold">Métriques air</th>
-                <th className="px-4 py-3 font-semibold">Statut</th>
+                <th className="px-4 py-3 font-semibold">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2"
+                    onClick={() => handleSort("date")}
+                  >
+                    Date
+                    {renderSortIndicator("date")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-semibold">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2"
+                    onClick={() => handleSort("collaborator")}
+                  >
+                    Collaborateur
+                    {renderSortIndicator("collaborator")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-semibold">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2"
+                    onClick={() => handleSort("course")}
+                  >
+                    Parcours
+                    {renderSortIndicator("course")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-semibold">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2"
+                    onClick={() => handleSort("duration")}
+                  >
+                    Durée
+                    {renderSortIndicator("duration")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-semibold">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2"
+                    onClick={() => handleSort("air")}
+                  >
+                    Air
+                    {renderSortIndicator("air")}
+                  </button>
+                </th>
+                <th className="px-4 py-3 font-semibold">
+                  <button
+                    type="button"
+                    className="inline-flex items-center gap-2"
+                    onClick={() => handleSort("status")}
+                  >
+                    Statut
+                    {renderSortIndicator("status")}
+                  </button>
+                </th>
                 <th className="px-4 py-3 font-semibold text-right">Actions</th>
               </tr>
             </thead>
@@ -207,10 +352,17 @@ export function AriSessionsPage() {
                     Aucune séance enregistrée.
                   </td>
                 </tr>
+              ) : filteredSessions.length === 0 ? (
+                <tr>
+                  <td className="px-4 py-4 text-slate-400" colSpan={7}>
+                    Aucun résultat pour ces filtres.
+                  </td>
+                </tr>
               ) : (
-                sessions.map((session) => {
+                sortedSessions.map((session) => {
                   const collaborator = collaboratorMap.get(session.collaborator_id);
-                  const isPending = pendingByCollaborator.has(session.collaborator_id);
+                  const sessionStatus = getSessionStatus(session, pendingByCollaborator);
+                  const statusLabel = ariSessionStatusLabels[sessionStatus];
                   return (
                     <tr key={session.id} className="hover:bg-slate-900/60">
                       <td className="px-4 py-3">
@@ -227,6 +379,8 @@ export function AriSessionsPage() {
                         </div>
                       </td>
                       <td className="px-4 py-3">{session.course_name || "—"}</td>
+                      <td className="px-4 py-3">{formatMinutes(getDurationMinutes(session))}</td>
+                      <td className="px-4 py-3">{formatAir(getAirPerMinute(session))}</td>
                       <td className="px-4 py-3">{session.duration_seconds}s</td>
                       <td className="px-4 py-3">
                         <div className="rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-200">
@@ -252,10 +406,10 @@ export function AriSessionsPage() {
                       <td className="px-4 py-3">
                         <span
                           className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${
-                            isPending ? statusBadgeClasses.pending : statusBadgeClasses.decided
+                            statusBadgeClasses[sessionStatus]
                           }`}
                         >
-                          {isPending ? "En attente" : "Traitée"}
+                          {statusLabel}
                         </span>
                       </td>
                       <td className="px-4 py-3 text-right">
