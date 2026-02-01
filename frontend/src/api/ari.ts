@@ -13,10 +13,19 @@ type AriSessionPayload = {
   duration_seconds: number;
   start_pressure_bar: number;
   end_pressure_bar: number;
+  air_consumed_bar?: number | null;
   stress_level: number;
   rpe?: number | null;
   physio_notes?: string | null;
   observations?: string | null;
+  bp_sys_pre?: number | null;
+  bp_dia_pre?: number | null;
+  hr_pre?: number | null;
+  spo2_pre?: number | null;
+  bp_sys_post?: number | null;
+  bp_dia_post?: number | null;
+  hr_post?: number | null;
+  spo2_post?: number | null;
 };
 
 type AriDecisionPayload = {
@@ -56,9 +65,9 @@ export async function createAriSession(payload: AriSessionPayload, site?: string
   return response.data;
 }
 
-export async function listAriSessions(collaboratorId: number, site?: string) {
+export async function listAriSessions(collaboratorId?: number, site?: string) {
   const response = await api.get<AriSession[]>("/ari/sessions", {
-    params: { collaborator_id: collaboratorId },
+    params: collaboratorId ? { collaborator_id: collaboratorId } : undefined,
     headers: buildAriHeaders(site)
   });
   return response.data;

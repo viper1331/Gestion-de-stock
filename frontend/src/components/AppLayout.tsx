@@ -329,14 +329,40 @@ export function AppLayout() {
               tooltip: "Attribuer les dotations d'habillement",
               icon: "🎯",
               module: "dotations"
+            }
+          ]
+        },
+        {
+          id: "ari_group",
+          label: "ARI",
+          tooltip: "Suivre les séances et certifications ARI",
+          icon: "🫁",
+          items: [
+            {
+              id: "ari_sessions",
+              to: "/ari/sessions",
+              label: "Sessions ARI",
+              tooltip: "Consulter et saisir les séances ARI",
+              icon: "🗂️",
+              module: "ari"
             },
             {
-              id: "ari",
-              to: "/ari",
-              label: "ARI",
-              tooltip: "Suivre les parcours ARI et certifications",
-              icon: "🫁",
-              module: "ari"
+              id: "ari_certifications",
+              to: "/ari/certifications",
+              label: "Certifications",
+              tooltip: "Valider ou refuser les certifications ARI",
+              icon: "✅",
+              module: "ari",
+              allowedRoles: ["admin", "certificateur"]
+            },
+            {
+              id: "ari_stats",
+              to: "/ari/stats",
+              label: "Statistiques",
+              tooltip: "Suivre les statistiques ARI",
+              icon: "📊",
+              module: "ari",
+              adminOnly: true
             }
           ]
         },
@@ -425,14 +451,6 @@ export function AppLayout() {
               tooltip: "Gérer les liens associés aux articles pharmacie",
               icon: "💊",
               module: "pharmacy_links"
-            },
-            {
-              id: "operations_ari",
-              to: "/ari",
-              label: "Sessions ARI",
-              tooltip: "Renseigner les données physiologiques ARI",
-              icon: "🩺",
-              module: "ari"
             },
             {
               id: "operations_link_categories",

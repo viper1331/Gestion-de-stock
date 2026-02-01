@@ -199,6 +199,14 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
           rpe INTEGER NULL,
           physio_notes TEXT NULL,
           observations TEXT NULL,
+          bp_sys_pre INTEGER NULL,
+          bp_dia_pre INTEGER NULL,
+          hr_pre INTEGER NULL,
+          spo2_pre INTEGER NULL,
+          bp_sys_post INTEGER NULL,
+          bp_dia_post INTEGER NULL,
+          hr_post INTEGER NULL,
+          spo2_post INTEGER NULL,
           created_at TEXT NOT NULL,
           created_by TEXT NOT NULL
         );
@@ -230,6 +238,14 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
         );
         """
     )
+    _ensure_column(conn, "ari_sessions", "bp_sys_pre", "bp_sys_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "bp_dia_pre", "bp_dia_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "hr_pre", "hr_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "spo2_pre", "spo2_pre INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "bp_sys_post", "bp_sys_post INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "bp_dia_post", "bp_dia_post INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "hr_post", "hr_post INTEGER NULL")
+    _ensure_column(conn, "ari_sessions", "spo2_post", "spo2_post INTEGER NULL")
 
 
 def init_ari_databases() -> None:

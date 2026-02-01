@@ -1,4 +1,4 @@
-import { createBrowserRouter } from "react-router-dom";
+import { createBrowserRouter, Navigate } from "react-router-dom";
 
 import { AuthLayout } from "../features/auth/AuthLayout";
 import { Login } from "../features/auth/Login";
@@ -30,6 +30,8 @@ import { PharmacyLinksPage } from "../features/operations/PharmacyLinksPage";
 import { LinkCategoriesPage } from "../features/operations/LinkCategoriesPage";
 import { PurchaseSuggestionsPage } from "../features/purchasing/PurchaseSuggestionsPage";
 import { AriSessionsPage } from "../features/ari/AriSessionsPage";
+import { AriCertificationsPage } from "../features/ari/AriCertificationsPage";
+import { AriStatsPage } from "../features/ari/AriStatsPage";
 
 export const router = createBrowserRouter([
   {
@@ -74,7 +76,15 @@ export const router = createBrowserRouter([
       { path: "about", element: <AboutPage /> },
       { path: "messages", element: <MessagesPage /> },
       { path: "pdf-config", element: <PdfStudioPage /> },
-      { path: "ari", element: <AriSessionsPage /> }
+      {
+        path: "ari",
+        children: [
+          { path: "", element: <Navigate to=\"sessions\" replace /> },
+          { path: "sessions", element: <AriSessionsPage /> },
+          { path: "certifications", element: <AriCertificationsPage /> },
+          { path: "stats", element: <AriStatsPage /> }
+        ]
+      }
     ]
   }
 ]);

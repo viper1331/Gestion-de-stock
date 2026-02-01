@@ -438,6 +438,7 @@ export function AriPage() {
         onClose={() => setIsCreateModalOpen(false)}
         collaboratorId={selectedCollaboratorId}
         settings={settings}
+        collaborators={collaborators}
         onSubmit={async (payload) => {
           try {
             await createSession(payload, ariSiteHeader);
