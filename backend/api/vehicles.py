@@ -52,12 +52,24 @@ async def add_vehicle_view_pinned_subview(
     user: models.User = Depends(get_current_user),
 ) -> models.VehiclePinnedSubviews:
     _require_vehicle_permission(user, action="edit")
+    raw_id = payload.subview_id
+    if isinstance(raw_id, int):
+        subview_id = str(raw_id)
+        numeric_input = True
+    elif isinstance(raw_id, str) and raw_id.isdigit():
+        subview_id = raw_id
+        numeric_input = True
+    else:
+        subview_id = raw_id
+        numeric_input = False
     try:
-        pinned = services.add_vehicle_view_pinned_subview(
-            vehicle_id, view_id, payload.subview_id
-        )
+        pinned = services.add_vehicle_view_pinned_subview(vehicle_id, view_id, subview_id)
     except ValueError as exc:
         detail = str(exc)
+        if not numeric_input and "sous-vue introuvable" in detail.lower():
+            raise HTTPException(
+                status_code=400, detail="Identifiant sous-vue invalide"
+            ) from exc
         status_code = 404 if "introuvable" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
     return models.VehiclePinnedSubviews(

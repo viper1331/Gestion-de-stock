@@ -485,7 +485,7 @@ class VehicleViewConfig(BaseModel):
 
 
 class VehiclePinnedSubviewCreate(BaseModel):
-    subview_id: str
+    subview_id: str | int
 
 
 class VehiclePinnedSubviews(BaseModel):
