@@ -7,6 +7,7 @@ type AriSessionsFiltersProps = {
   filters: AriSessionsFiltersState;
   onChange: (next: AriSessionsFiltersState) => void;
   onReset: () => void;
+  availableCollaborators: { id: number; full_name: string; department?: string | null }[];
   availableCourses: string[];
   availableStatuses: AriSessionStatus[];
   totalCount: number;
@@ -20,6 +21,7 @@ export function AriSessionsFilters({
   filters,
   onChange,
   onReset,
+  availableCollaborators,
   availableCourses,
   availableStatuses,
   totalCount,
@@ -80,6 +82,18 @@ export function AriSessionsFilters({
       </div>
 
       <div className={`mt-4 grid gap-4 md:grid-cols-2 xl:grid-cols-3 ${isExpanded ? "grid" : "hidden md:grid"}`}>
+        <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3 md:col-span-2 xl:col-span-3">
+          <p className="text-xs uppercase tracking-wide text-slate-400">Recherche</p>
+          <input
+            type="text"
+            placeholder="Collaborateur, parcours, statut..."
+            className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
+            value={filters.query}
+            onChange={(event) => handleFieldChange("query", event.target.value)}
+            disabled={disabled}
+          />
+        </div>
+
         <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
           <p className="text-xs uppercase tracking-wide text-slate-400">Date</p>
           <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
@@ -134,14 +148,19 @@ export function AriSessionsFilters({
 
         <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3">
           <p className="text-xs uppercase tracking-wide text-slate-400">Collaborateur</p>
-          <input
-            type="text"
-            placeholder="Collaborateur…"
+          <select
             className="w-full rounded-md border border-slate-700 bg-slate-900 px-3 py-2 text-sm text-slate-100"
-            value={filters.collaboratorQuery}
-            onChange={(event) => handleFieldChange("collaboratorQuery", event.target.value)}
-            disabled={disabled}
-          />
+            value={filters.collaboratorId}
+            onChange={(event) => handleFieldChange("collaboratorId", event.target.value)}
+            disabled={disabled || availableCollaborators.length === 0}
+          >
+            <option value="">Tous</option>
+            {availableCollaborators.map((collaborator) => (
+              <option key={collaborator.id} value={collaborator.id}>
+                {collaborator.full_name}
+              </option>
+            ))}
+          </select>
         </div>
 
         <div className="space-y-2 rounded-lg border border-slate-800 bg-slate-950/40 p-3">

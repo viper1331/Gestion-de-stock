@@ -139,3 +139,38 @@ class AriPurgeResponse(BaseModel):
     dry_run: bool
     total: int
     by_site: dict[str, int]
+
+
+class AriStatsTopSession(BaseModel):
+    session_id: int
+    performed_at: str
+    collaborator_id: int
+    collaborator_name: str
+    air_lpm: Optional[float] = None
+    duration_min: Optional[float] = None
+
+
+class AriStatsOverview(BaseModel):
+    total_sessions: int
+    distinct_collaborators: int
+    avg_duration_min: Optional[float] = None
+    avg_air_lpm: Optional[float] = None
+    validated_count: int
+    rejected_count: int
+    pending_count: int
+    top_sessions_by_air: list[AriStatsTopSession]
+
+
+class AriStatsByCollaboratorRow(BaseModel):
+    collaborator_id: int
+    collaborator_name: str
+    sessions_count: int
+    avg_duration_min: Optional[float] = None
+    avg_air_lpm: Optional[float] = None
+    max_air_lpm: Optional[float] = None
+    last_session_at: Optional[str] = None
+    status: Literal["pending", "certified", "mixed"]
+
+
+class AriStatsByCollaboratorResponse(BaseModel):
+    rows: list[AriStatsByCollaboratorRow]

@@ -1,11 +1,13 @@
 import type { AriSession } from "../../../types/ari";
+import { getAirPerMinute, getDurationMinutes } from "./ariSessionDisplay";
 
 export type AriSessionStatus = "PENDING" | "CERTIFIED" | "REJECTED" | "COMPLETED" | "DRAFT";
 
 export type AriSessionsFiltersState = {
+  query: string;
   dateFrom: string;
   dateTo: string;
-  collaboratorQuery: string;
+  collaboratorId: string;
   course: string;
   durationMin: string;
   durationMax: string;
@@ -30,9 +32,10 @@ export const ariSessionStatusLabels: Record<AriSessionStatus, string> = {
 };
 
 export const createEmptyAriSessionsFilters = (): AriSessionsFiltersState => ({
+  query: "",
   dateFrom: "",
   dateTo: "",
-  collaboratorQuery: "",
+  collaboratorId: "",
   course: "",
   durationMin: "",
   durationMax: "",
@@ -59,23 +62,6 @@ export const getSessionStatus = (
     default:
       return "DRAFT";
   }
-};
-
-export const getAirPerMinute = (session: AriSession): number | null => {
-  if (!session.duration_seconds || session.duration_seconds <= 0) {
-    return null;
-  }
-  if (session.air_consumed_bar === null || session.air_consumed_bar === undefined) {
-    return null;
-  }
-  return (session.air_consumed_bar * 60) / session.duration_seconds;
-};
-
-export const getDurationMinutes = (session: AriSession): number | null => {
-  if (!session.duration_seconds || session.duration_seconds <= 0) {
-    return null;
-  }
-  return session.duration_seconds / 60;
 };
 
 export const getCollaboratorName = (
@@ -126,7 +112,8 @@ export const applyAriSessionsFilters = (
   }
   const dateFrom = parseDateStart(filters.dateFrom);
   const dateTo = parseDateEnd(filters.dateTo);
-  const collaboratorQuery = filters.collaboratorQuery.trim().toLowerCase();
+  const query = filters.query.trim().toLowerCase();
+  const collaboratorId = parseNumber(filters.collaboratorId);
   const durationMin = parseNumber(filters.durationMin);
   const durationMax = parseNumber(filters.durationMax);
   const airMin = parseNumber(filters.airMin);
@@ -141,11 +128,8 @@ export const applyAriSessionsFilters = (
     if (dateTo && performedAt > dateTo) {
       return false;
     }
-    if (collaboratorQuery) {
-      const collaboratorName = getCollaboratorName(session, collaboratorMap).toLowerCase();
-      if (!collaboratorName.includes(collaboratorQuery)) {
-        return false;
-      }
+    if (collaboratorId !== null && session.collaborator_id !== collaboratorId) {
+      return false;
     }
     if (filters.course && session.course_name !== filters.course) {
       return false;
@@ -177,6 +161,18 @@ export const applyAriSessionsFilters = (
     if (statusFilter) {
       const status = getSessionStatus(session, pendingByCollaborator);
       if (status !== statusFilter) {
+        return false;
+      }
+    }
+    if (query) {
+      const collaboratorName = getCollaboratorName(session, collaboratorMap).toLowerCase();
+      const courseName = (session.course_name || "").toLowerCase();
+      const statusLabel = ariSessionStatusLabels[getSessionStatus(session, pendingByCollaborator)].toLowerCase();
+      if (
+        !collaboratorName.includes(query) &&
+        !courseName.includes(query) &&
+        !statusLabel.includes(query)
+      ) {
         return false;
       }
     }

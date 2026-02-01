@@ -1,6 +1,8 @@
 """Routes pour la gestion des sessions ARI."""
 from __future__ import annotations
 
+from datetime import date
+
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 
 from backend.api.auth import get_current_user
@@ -52,6 +54,15 @@ def _require_admin(user: models.User) -> None:
     raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
+def _parse_date(value: str | None) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(value)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Date invalide (format YYYY-MM-DD)") from exc
+
+
 @router.get("/settings", response_model=models_ari.AriSettings)
 async def get_ari_settings(
     user: models.User = Depends(get_current_user),
@@ -77,6 +88,12 @@ async def update_ari_settings(
 @router.get("/sessions", response_model=list[models_ari.AriSession])
 async def list_ari_sessions(
     collaborator_id: int | None = Query(default=None),
+    date_from: str | None = Query(default=None, alias="from"),
+    date_to: str | None = Query(default=None, alias="to"),
+    course: str | None = Query(default=None),
+    status: str | None = Query(default=None),
+    query: str | None = Query(default=None, alias="q"),
+    sort: str | None = Query(default=None),
     user: models.User = Depends(get_current_user),
     ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
 ) -> list[models_ari.AriSession]:
@@ -85,6 +102,12 @@ async def list_ari_sessions(
     return ari_services.list_ari_sessions(
         _resolve_site(user, ari_site),
         collaborator_id=collaborator_id,
+        date_from=_parse_date(date_from),
+        date_to=_parse_date(date_to),
+        course=course,
+        status=status,
+        query=query,
+        sort=sort,
         fallback_site=user.site_key,
     )
 
@@ -146,6 +169,104 @@ async def get_ari_session(
         )
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+
+@router.get("/stats/overview", response_model=models_ari.AriStatsOverview)
+async def get_ari_stats_overview(
+    date_from: str | None = Query(default=None, alias="from"),
+    date_to: str | None = Query(default=None, alias="to"),
+    user: models.User = Depends(get_current_user),
+    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
+) -> models_ari.AriStatsOverview:
+    _require_feature_enabled()
+    _require_ari_read(user)
+    overview = ari_services.get_ari_stats_overview(
+        _resolve_site(user, ari_site),
+        date_from=_parse_date(date_from),
+        date_to=_parse_date(date_to),
+        fallback_site=user.site_key,
+    )
+    collaborators = services.list_collaborators()
+    collaborator_map = {collaborator.id: collaborator.full_name for collaborator in collaborators}
+    top_sessions = [
+        models_ari.AriStatsTopSession(
+            session_id=entry["session_id"],
+            performed_at=entry["performed_at"],
+            collaborator_id=entry["collaborator_id"],
+            collaborator_name=collaborator_map.get(entry["collaborator_id"], f"#{entry['collaborator_id']}"),
+            air_lpm=entry["air_lpm"],
+            duration_min=entry["duration_min"],
+        )
+        for entry in overview["top_sessions_by_air"]
+    ]
+    return models_ari.AriStatsOverview(
+        total_sessions=overview["total_sessions"],
+        distinct_collaborators=overview["distinct_collaborators"],
+        avg_duration_min=overview["avg_duration_min"],
+        avg_air_lpm=overview["avg_air_lpm"],
+        validated_count=overview["validated_count"],
+        rejected_count=overview["rejected_count"],
+        pending_count=overview["pending_count"],
+        top_sessions_by_air=top_sessions,
+    )
+
+
+@router.get("/stats/by-collaborator", response_model=models_ari.AriStatsByCollaboratorResponse)
+async def get_ari_stats_by_collaborator(
+    date_from: str | None = Query(default=None, alias="from"),
+    date_to: str | None = Query(default=None, alias="to"),
+    query: str | None = Query(default=None, alias="q"),
+    sort: str | None = Query(default=None),
+    user: models.User = Depends(get_current_user),
+    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
+) -> models_ari.AriStatsByCollaboratorResponse:
+    _require_feature_enabled()
+    _require_ari_read(user)
+    rows = ari_services.get_ari_stats_by_collaborator(
+        _resolve_site(user, ari_site),
+        date_from=_parse_date(date_from),
+        date_to=_parse_date(date_to),
+        sort=sort,
+        fallback_site=user.site_key,
+    )
+    collaborators = services.list_collaborators()
+    collaborator_map = {collaborator.id: collaborator.full_name for collaborator in collaborators}
+    results = [
+        {
+            **row,
+            "collaborator_name": collaborator_map.get(row["collaborator_id"], f"#{row['collaborator_id']}"),
+        }
+        for row in rows
+    ]
+    if query:
+        query_lower = query.lower()
+        results = [
+            row
+            for row in results
+            if query_lower in row["collaborator_name"].lower()
+        ]
+    if sort in {"collaborator_asc", "collaborator_desc"}:
+        reverse = sort.endswith("desc")
+        results = sorted(
+            results,
+            key=lambda row: row["collaborator_name"].lower(),
+            reverse=reverse,
+        )
+    return models_ari.AriStatsByCollaboratorResponse(
+        rows=[
+            models_ari.AriStatsByCollaboratorRow(
+                collaborator_id=row["collaborator_id"],
+                collaborator_name=row["collaborator_name"],
+                sessions_count=row["sessions_count"],
+                avg_duration_min=row["avg_duration_min"],
+                avg_air_lpm=row["avg_air_lpm"],
+                max_air_lpm=row["max_air_lpm"],
+                last_session_at=row["last_session_at"],
+                status=row["status"],
+            )
+            for row in results
+        ]
+    )
 
 
 @router.get("/stats/collaborator/{collaborator_id}", response_model=models_ari.AriCollaboratorStats)
