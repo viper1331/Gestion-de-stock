@@ -15,6 +15,7 @@ export type AriSession = {
   end_pressure_bar: number;
   air_consumed_bar: number;
   stress_level: number;
+  status: "DRAFT" | "COMPLETED" | "CERTIFIED" | "REJECTED";
   rpe?: number | null;
   physio_notes?: string | null;
   observations?: string | null;
@@ -28,6 +29,21 @@ export type AriSession = {
   spo2_post?: number | null;
   created_at: string;
   created_by: string;
+};
+
+export type AriPurgeRequest = {
+  site?: "CURRENT" | "ALL";
+  older_than_days?: number | null;
+  before_date?: string | null;
+  include_certified?: boolean;
+  dry_run?: boolean;
+};
+
+export type AriPurgeResponse = {
+  ok: boolean;
+  dry_run: boolean;
+  total: number;
+  by_site: Record<string, number>;
 };
 
 export type AriCertification = {

@@ -1,7 +1,7 @@
 """Modèles Pydantic pour le module ARI."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
@@ -29,6 +29,9 @@ class AriSessionCreate(BaseModel):
     bp_dia_post: Optional[int] = None
     hr_post: Optional[int] = None
     spo2_post: Optional[int] = None
+
+
+AriSessionStatus = Literal["DRAFT", "COMPLETED", "CERTIFIED", "REJECTED"]
 
 
 class AriCertificationDecision(BaseModel):
@@ -72,6 +75,7 @@ class AriSession(BaseModel):
     end_pressure_bar: int
     air_consumed_bar: int
     stress_level: int
+    status: AriSessionStatus
     rpe: Optional[int] = None
     physio_notes: Optional[str] = None
     observations: Optional[str] = None
@@ -104,3 +108,20 @@ class AriCollaboratorStats(BaseModel):
     last_session_at: Optional[str] = None
     certification_status: Literal["PENDING", "APPROVED", "REJECTED", "CONDITIONAL"]
     certification_decision_at: Optional[str] = None
+
+
+class AriPurgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    site: Literal["CURRENT", "ALL"] = "CURRENT"
+    older_than_days: Optional[int] = Field(default=None, ge=1)
+    before_date: Optional[date] = None
+    include_certified: bool = False
+    dry_run: bool = True
+
+
+class AriPurgeResponse(BaseModel):
+    ok: bool
+    dry_run: bool
+    total: int
+    by_site: dict[str, int]

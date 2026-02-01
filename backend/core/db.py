@@ -196,6 +196,7 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
           end_pressure_bar INTEGER NOT NULL,
           air_consumed_bar INTEGER NOT NULL,
           stress_level INTEGER NOT NULL,
+          status TEXT NOT NULL DEFAULT 'COMPLETED',
           rpe INTEGER NULL,
           physio_notes TEXT NULL,
           observations TEXT NULL,
@@ -246,6 +247,13 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(conn, "ari_sessions", "bp_dia_post", "bp_dia_post INTEGER NULL")
     _ensure_column(conn, "ari_sessions", "hr_post", "hr_post INTEGER NULL")
     _ensure_column(conn, "ari_sessions", "spo2_post", "spo2_post INTEGER NULL")
+    _ensure_column(
+        conn,
+        "ari_sessions",
+        "status",
+        "status TEXT NOT NULL DEFAULT 'COMPLETED'",
+    )
+    conn.execute("UPDATE ari_sessions SET status = 'COMPLETED' WHERE status IS NULL")
 
 
 def init_ari_databases() -> None:
@@ -1358,6 +1366,7 @@ def _init_ari_schema(conn: sqlite3.Connection) -> None:
             performed_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP,
             created_by TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'COMPLETED',
             bp_sys_pre INTEGER NULL,
             bp_dia_pre INTEGER NULL,
             hr_pre INTEGER NULL,
@@ -1399,8 +1408,15 @@ def _init_ari_schema(conn: sqlite3.Connection) -> None:
     _ensure_column(
         conn,
         "ari_sessions",
+        "status",
+        "status TEXT NOT NULL DEFAULT 'COMPLETED'",
+    )
+    _ensure_column(
+        conn,
+        "ari_sessions",
         "physio_source",
         "physio_source TEXT NOT NULL DEFAULT 'manual'",
     )
     _ensure_column(conn, "ari_sessions", "physio_device_id", "physio_device_id TEXT NULL")
     _ensure_column(conn, "ari_sessions", "physio_captured_at", "physio_captured_at TEXT NULL")
+    conn.execute("UPDATE ari_sessions SET status = 'COMPLETED' WHERE status IS NULL")

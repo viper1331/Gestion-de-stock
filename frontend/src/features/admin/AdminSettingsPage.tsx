@@ -6,6 +6,7 @@ import { shallow } from "zustand/shallow";
 import { api } from "../../lib/api";
 import { fetchSiteContext, updateActiveSite, type SiteContext } from "../../lib/sites";
 import { fetchAdminSettings, updateAdminSettings } from "../../api/adminSettings";
+import { purgeAriSessions } from "../../api/ari";
 import {
   CUSTOM_FIELD_SCOPES,
   CUSTOM_FIELD_TYPES,
@@ -22,6 +23,8 @@ import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 import { useFeatureFlagsStore } from "../../app/featureFlags";
+import { DraggableModal } from "../../components/DraggableModal";
+import type { AriPurgeResponse } from "../../types/ari";
 
 interface VehicleTypeEntry {
   id: number;
@@ -93,6 +96,14 @@ interface QolSettingsPayload {
   note_preview_length: number;
 }
 
+interface AriPurgeFormState {
+  site: "CURRENT" | "ALL";
+  older_than_days: string;
+  before_date: string;
+  include_certified: boolean;
+  dry_run: boolean;
+}
+
 const EMPTY_VEHICLE_TYPE_FORM: VehicleTypeFormState = {
   code: "",
   label: "",
@@ -144,6 +155,14 @@ const DEFAULT_QOL_SETTINGS: QolSettingsPayload = {
   note_preview_length: 180
 };
 
+const DEFAULT_ARI_PURGE_FORM: AriPurgeFormState = {
+  site: "CURRENT",
+  older_than_days: "",
+  before_date: "",
+  include_certified: false,
+  dry_run: true
+};
+
 export function AdminSettingsPage() {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
@@ -177,6 +196,13 @@ export function AdminSettingsPage() {
     isLogPersistenceEnabled()
   );
   const [ariModuleEnabled, setAriModuleEnabled] = useState<boolean>(false);
+  const [isAriPurgeModalOpen, setIsAriPurgeModalOpen] = useState<boolean>(false);
+  const [isAriPurgeConfirmOpen, setIsAriPurgeConfirmOpen] = useState<boolean>(false);
+  const [ariPurgeForm, setAriPurgeForm] = useState<AriPurgeFormState>(DEFAULT_ARI_PURGE_FORM);
+  const [ariPurgePreview, setAriPurgePreview] = useState<AriPurgeResponse | null>(null);
+  const [ariPurgeError, setAriPurgeError] = useState<string | null>(null);
+  const [ariPurgeConfirmText, setAriPurgeConfirmText] = useState<string>("");
+  const [ariPurgeCertifiedConfirmText, setAriPurgeCertifiedConfirmText] = useState<string>("");
   const [logMessage, setLogMessage] = useState<string | null>(null);
   const [siteMessage, setSiteMessage] = useState<string | null>(null);
   const [siteError, setSiteError] = useState<string | null>(null);
@@ -211,6 +237,8 @@ export function AdminSettingsPage() {
     queryFn: fetchSiteContext,
     enabled: isAdmin
   });
+
+  const activeAriSite = siteContext?.active_site_key ?? user?.site_key ?? "JLL";
 
   const { data: smtpSettings } = useQuery<SmtpSettingsResponse>({
     queryKey: ["admin-smtp-settings"],
@@ -510,6 +538,45 @@ export function AdminSettingsPage() {
     }
   });
 
+  const buildAriPurgePayload = (dryRun: boolean) => {
+    const olderThan = ariPurgeForm.older_than_days.trim();
+    const olderThanValue = olderThan ? Number(olderThan) : null;
+    return {
+      site: ariPurgeForm.site,
+      older_than_days: Number.isFinite(olderThanValue) ? olderThanValue : null,
+      before_date: ariPurgeForm.before_date.trim() || null,
+      include_certified: ariPurgeForm.include_certified,
+      dry_run: dryRun
+    };
+  };
+
+  const ariPurgePreviewMutation = useMutation({
+    mutationFn: async () => purgeAriSessions(buildAriPurgePayload(true), activeAriSite),
+    onSuccess: (data) => {
+      setAriPurgePreview(data);
+      setAriPurgeError(null);
+      toast.success("Aperçu de purge ARI prêt.");
+    },
+    onError: () => {
+      setAriPurgeError("Impossible de prévisualiser la purge ARI.");
+      toast.error("Erreur lors de la prévisualisation ARI.");
+    }
+  });
+
+  const ariPurgeDeleteMutation = useMutation({
+    mutationFn: async () => purgeAriSessions(buildAriPurgePayload(false), activeAriSite),
+    onSuccess: (data) => {
+      setAriPurgePreview(data);
+      setAriPurgeError(null);
+      setIsAriPurgeConfirmOpen(false);
+      toast.success("Purge des sessions ARI terminée.");
+    },
+    onError: () => {
+      setAriPurgeError("Impossible de purger les sessions ARI.");
+      toast.error("Erreur lors de la purge des sessions ARI.");
+    }
+  });
+
   const updateSmtpSettings = useMutation({
     mutationFn: async (payload: SmtpFormState) => {
       const response = await api.put<SmtpSettingsResponse>("/admin/email/smtp-settings", {
@@ -611,6 +678,233 @@ export function AdminSettingsPage() {
       </section>
     );
   }
+
+  const canConfirmAriPurge =
+    ariPurgeConfirmText.trim().toUpperCase() === "PURGER" &&
+    (!ariPurgeForm.include_certified ||
+      ariPurgeCertifiedConfirmText.trim().toUpperCase() === "CERTIFIEES");
+
+  const closeAriPurgeModal = () => {
+    setIsAriPurgeModalOpen(false);
+    setAriPurgeError(null);
+    setAriPurgePreview(null);
+  };
+
+  const openAriPurgeModal = () => {
+    setIsAriPurgeModalOpen(true);
+    setAriPurgeForm(DEFAULT_ARI_PURGE_FORM);
+    setAriPurgeError(null);
+    setAriPurgePreview(null);
+  };
+
+  const closeAriPurgeConfirm = () => {
+    setIsAriPurgeConfirmOpen(false);
+    setAriPurgeConfirmText("");
+    setAriPurgeCertifiedConfirmText("");
+  };
+
+  const openAriPurgeConfirm = () => {
+    setIsAriPurgeConfirmOpen(true);
+    setAriPurgeConfirmText("");
+    setAriPurgeCertifiedConfirmText("");
+  };
+
+  const ariPurgeModal = (
+    <DraggableModal
+      open={isAriPurgeModalOpen}
+      title="Purger les sessions ARI"
+      onClose={closeAriPurgeModal}
+      maxWidthClassName="max-w-[min(92vw,560px)]"
+      bodyClassName="px-6 py-5"
+      footer={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={closeAriPurgeModal}
+            className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            Fermer
+          </button>
+          <button
+            type="button"
+            onClick={() => ariPurgePreviewMutation.mutate()}
+            className="rounded-md border border-indigo-400/60 px-4 py-2 text-sm font-semibold text-indigo-200 hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={ariPurgePreviewMutation.isPending || ariPurgeDeleteMutation.isPending}
+          >
+            {ariPurgePreviewMutation.isPending ? "Prévisualisation..." : "Prévisualiser"}
+          </button>
+          <button
+            type="button"
+            onClick={openAriPurgeConfirm}
+            className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={
+              ariPurgeForm.dry_run ||
+              ariPurgePreviewMutation.isPending ||
+              ariPurgeDeleteMutation.isPending
+            }
+          >
+            {ariPurgeDeleteMutation.isPending ? "Purge..." : "Purger"}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-4 text-sm text-slate-200">
+        <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-300">
+          Site actif : <span className="font-semibold text-white">{activeAriSite}</span>
+        </div>
+        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Site ciblé
+          <select
+            value={ariPurgeForm.site}
+            onChange={(event) =>
+              setAriPurgeForm((prev) => ({ ...prev, site: event.target.value as "CURRENT" | "ALL" }))
+            }
+            className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+          >
+            <option value="CURRENT">Site actif ({activeAriSite})</option>
+            {(siteContext?.sites ?? []).length > 1 ? (
+              <option value="ALL">Tous les sites</option>
+            ) : null}
+          </select>
+        </label>
+        <div className="grid gap-4 md:grid-cols-2">
+          <label className="text-xs text-slate-300">
+            Anciennes de (jours)
+            <AppTextInput
+              type="number"
+              min={1}
+              value={ariPurgeForm.older_than_days}
+              onChange={(event) =>
+                setAriPurgeForm((prev) => ({ ...prev, older_than_days: event.target.value }))
+              }
+              className="mt-1 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+            />
+          </label>
+          <label className="text-xs text-slate-300">
+            Date limite
+            <AppTextInput
+              type="date"
+              value={ariPurgeForm.before_date}
+              onChange={(event) =>
+                setAriPurgeForm((prev) => ({ ...prev, before_date: event.target.value }))
+              }
+              className="mt-1 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+            />
+          </label>
+        </div>
+        <label className="flex items-center gap-2 text-xs text-slate-300">
+          <AppTextInput
+            type="checkbox"
+            checked={ariPurgeForm.dry_run}
+            onChange={(event) =>
+              setAriPurgeForm((prev) => ({ ...prev, dry_run: event.target.checked }))
+            }
+            className="h-4 w-4 rounded border-slate-600 bg-slate-900 text-indigo-500"
+          />
+          Aperçu (dry-run) activé par défaut
+        </label>
+        {ariPurgeForm.dry_run ? (
+          <p className="text-xs text-slate-400">
+            Décochez l'aperçu pour activer la purge réelle.
+          </p>
+        ) : null}
+        <label className="flex items-center gap-2 text-xs text-rose-200">
+          <AppTextInput
+            type="checkbox"
+            checked={ariPurgeForm.include_certified}
+            onChange={(event) =>
+              setAriPurgeForm((prev) => ({ ...prev, include_certified: event.target.checked }))
+            }
+            className="h-4 w-4 rounded border-rose-400 bg-slate-900 text-rose-400"
+          />
+          Inclure les sessions certifiées / rejetées
+        </label>
+        {ariPurgeForm.include_certified ? (
+          <div className="rounded-md border border-rose-500/40 bg-rose-500/10 px-3 py-2 text-xs text-rose-200">
+            Cette option supprimera aussi les sessions certifiées ou rejetées.
+          </div>
+        ) : null}
+        {ariPurgeError ? (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+            {ariPurgeError}
+          </div>
+        ) : null}
+        {ariPurgePreview ? (
+          <div className="rounded-md border border-slate-800 bg-slate-950/60 px-3 py-2 text-xs text-slate-200">
+            <p className="font-semibold text-white">
+              {ariPurgePreview.dry_run ? "Aperçu" : "Purge"} : {ariPurgePreview.total} session(s)
+            </p>
+            <ul className="mt-2 space-y-1 text-slate-300">
+              {Object.entries(ariPurgePreview.by_site).map(([site, count]) => (
+                <li key={site}>
+                  {site} : <span className="font-semibold text-slate-100">{count}</span>
+                </li>
+              ))}
+            </ul>
+          </div>
+        ) : null}
+      </div>
+    </DraggableModal>
+  );
+
+  const ariPurgeConfirmModal = (
+    <DraggableModal
+      open={isAriPurgeConfirmOpen}
+      title="Confirmation de purge ARI"
+      onClose={closeAriPurgeConfirm}
+      maxWidthClassName="max-w-[min(92vw,520px)]"
+      bodyClassName="px-6 py-5"
+      footer={
+        <div className="flex flex-wrap items-center justify-end gap-2">
+          <button
+            type="button"
+            onClick={closeAriPurgeConfirm}
+            className="rounded-md border border-slate-700 px-4 py-2 text-sm font-semibold text-slate-200 hover:bg-slate-800"
+          >
+            Annuler
+          </button>
+          <button
+            type="button"
+            onClick={() => ariPurgeDeleteMutation.mutate()}
+            className="rounded-md bg-red-500 px-4 py-2 text-sm font-semibold text-white shadow hover:bg-red-400 disabled:cursor-not-allowed disabled:opacity-60"
+            disabled={!canConfirmAriPurge || ariPurgeDeleteMutation.isPending}
+          >
+            {ariPurgeDeleteMutation.isPending ? "Purge..." : "Confirmer la purge"}
+          </button>
+        </div>
+      }
+    >
+      <div className="space-y-4 text-sm text-slate-200">
+        <p>
+          Confirmez la suppression définitive des sessions ARI pour{" "}
+          <span className="font-semibold text-white">
+            {ariPurgeForm.site === "ALL" ? "tous les sites" : `le site ${activeAriSite}`}
+          </span>
+          .
+        </p>
+        <label className="block text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Confirmation
+          <AppTextInput
+            value={ariPurgeConfirmText}
+            onChange={(event) => setAriPurgeConfirmText(event.target.value)}
+            placeholder="Tapez PURGER"
+            className="mt-2 w-full rounded-md border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-red-400 focus:outline-none"
+          />
+        </label>
+        {ariPurgeForm.include_certified ? (
+          <label className="block text-xs font-semibold uppercase tracking-wide text-rose-300">
+            Confirmation certifiées
+            <AppTextInput
+              value={ariPurgeCertifiedConfirmText}
+              onChange={(event) => setAriPurgeCertifiedConfirmText(event.target.value)}
+              placeholder="Tapez CERTIFIEES"
+              className="mt-2 w-full rounded-md border border-rose-400/60 bg-slate-950 px-3 py-2 text-sm text-rose-100 focus:border-rose-300 focus:outline-none"
+            />
+          </label>
+        ) : null}
+      </div>
+    </DraggableModal>
+  );
 
   const content = (
     <section className="space-y-6">
@@ -1115,14 +1409,14 @@ export function AdminSettingsPage() {
 
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
         <div>
-          <h3 className="text-sm font-semibold text-white">Modules</h3>
+          <h3 className="text-sm font-semibold text-white">Module ARI</h3>
           <p className="text-xs text-slate-400">
-            Active/désactive l'accès au module ARI dans toute l'application.
+            Activez le module et gérez la purge des sessions par site.
           </p>
         </div>
         <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
           <div>
-            <p className="font-semibold text-slate-200">Module ARI</p>
+            <p className="font-semibold text-slate-200">Activer le module ARI</p>
             <p className="text-[11px] text-slate-500">
               Active/désactive l'accès au module ARI dans toute l'application.
             </p>
@@ -1134,6 +1428,23 @@ export function AdminSettingsPage() {
             className="h-5 w-10 rounded border-slate-600 bg-slate-900 text-indigo-500"
           />
         </label>
+        <div className="rounded-md border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-300">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <p className="font-semibold text-slate-200">Purge sessions ARI</p>
+              <p className="text-[11px] text-slate-500">
+                Prévisualisez ou purgez les sessions selon le site actif.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={openAriPurgeModal}
+              className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+            >
+              Configurer la purge
+            </button>
+          </div>
+        </div>
       </div>
 
       <div className="rounded-lg border border-slate-800 bg-slate-900 p-4 space-y-4">
@@ -1576,6 +1887,8 @@ export function AdminSettingsPage() {
           </div>
         </div>
       )}
+      {ariPurgeModal}
+      {ariPurgeConfirmModal}
     </section>
   );
 

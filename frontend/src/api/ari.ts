@@ -2,6 +2,8 @@ import { api } from "../lib/api";
 import type {
   AriCertification,
   AriCollaboratorStats,
+  AriPurgeRequest,
+  AriPurgeResponse,
   AriSession,
   AriSettings
 } from "../types/ari";
@@ -121,4 +123,11 @@ export async function downloadAriPdf(collaboratorId: number, site?: string) {
   link.click();
   link.remove();
   window.URL.revokeObjectURL(url);
+}
+
+export async function purgeAriSessions(payload: AriPurgeRequest, site?: string) {
+  const response = await api.post<AriPurgeResponse>("/ari/admin/purge-sessions", payload, {
+    headers: buildAriHeaders(site)
+  });
+  return response.data;
 }

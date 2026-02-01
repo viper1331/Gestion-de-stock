@@ -1,10 +1,13 @@
 """Services pour le module ARI (certifications)."""
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, time, timedelta, timezone
+import logging
 import sqlite3
 
 from backend.core import db, models_ari
+
+logger = logging.getLogger(__name__)
 
 
 def _normalize_site(site: str | None, fallback: str | None) -> str:
@@ -224,6 +227,7 @@ def create_ari_session(
               end_pressure_bar,
               air_consumed_bar,
               stress_level,
+              status,
               rpe,
               physio_notes,
               observations,
@@ -238,7 +242,7 @@ def create_ari_session(
               created_at,
               created_by
             )
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
             """,
             (
                 payload.collaborator_id,
@@ -249,6 +253,7 @@ def create_ari_session(
                 payload.end_pressure_bar,
                 air_consumed,
                 payload.stress_level,
+                "COMPLETED",
                 payload.rpe,
                 payload.physio_notes,
                 payload.observations,
@@ -349,6 +354,16 @@ def decide_certification(
                 decided_by,
             ),
         )
+        session_status = None
+        if payload.status == "APPROVED":
+            session_status = "CERTIFIED"
+        elif payload.status == "REJECTED":
+            session_status = "REJECTED"
+        if session_status:
+            conn.execute(
+                "UPDATE ari_sessions SET status = ? WHERE collaborator_id = ?",
+                (session_status, payload.collaborator_id),
+            )
         row = conn.execute(
             "SELECT * FROM ari_certifications WHERE collaborator_id = ?",
             (payload.collaborator_id,),
@@ -357,6 +372,81 @@ def decide_certification(
     finally:
         conn.close()
     return models_ari.AriCertification(**row)
+
+
+def purge_ari_sessions(
+    *,
+    site_scope: str,
+    older_than_days: int | None,
+    before_date: date | None,
+    include_certified: bool,
+    dry_run: bool,
+    site: str | None,
+    fallback_site: str | None = None,
+) -> tuple[dict[str, int], int]:
+    site_scope_normalized = (site_scope or "CURRENT").upper()
+    if site_scope_normalized not in {"CURRENT", "ALL"}:
+        raise ValueError("Site invalide")
+    if site_scope_normalized == "ALL":
+        site_ids = list(db.SITE_KEYS)
+    else:
+        site_ids = [_normalize_site(site, fallback_site)]
+
+    filters: list[str] = []
+    params: list[object] = []
+    if older_than_days:
+        threshold = datetime.now(timezone.utc) - timedelta(days=older_than_days)
+        filters.append("performed_at <= ?")
+        params.append(_format_timestamp(threshold))
+    if before_date:
+        threshold = datetime.combine(before_date, time.max, tzinfo=timezone.utc)
+        filters.append("performed_at <= ?")
+        params.append(_format_timestamp(threshold))
+    if not include_certified:
+        filters.append("(status IS NULL OR status NOT IN ('CERTIFIED', 'REJECTED'))")
+
+    where_clause = f"WHERE {' AND '.join(filters)}" if filters else ""
+    results: dict[str, int] = {}
+
+    for site_id in site_ids:
+        conn = _ensure_ari_db(site_id)
+        try:
+            if dry_run:
+                row = conn.execute(
+                    f"SELECT COUNT(*) AS total FROM ari_sessions {where_clause}",
+                    params,
+                ).fetchone()
+                count = int(row["total"] if row and row["total"] is not None else 0)
+            else:
+                try:
+                    if not conn.in_transaction:
+                        conn.execute("BEGIN")
+                    cur = conn.execute(
+                        f"DELETE FROM ari_sessions {where_clause}",
+                        params,
+                    )
+                    count = int(cur.rowcount or 0)
+                    conn.commit()
+                except Exception:
+                    conn.rollback()
+                    raise
+            results[site_id] = count
+        finally:
+            conn.close()
+
+    total = sum(results.values())
+    logger.info(
+        "[ARI] purge sessions dry_run=%s scope=%s total=%s include_certified=%s filters=%s",
+        dry_run,
+        site_scope_normalized,
+        total,
+        include_certified,
+        {
+            "older_than_days": older_than_days,
+            "before_date": before_date.isoformat() if before_date else None,
+        },
+    )
+    return results, total
 
 
 def get_ari_collaborator_stats(

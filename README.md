@@ -195,6 +195,7 @@ python scripts/run_backend.py
 - Provision automatique d'un administrateur `admin/admin123` et protection contre sa désactivation ou suppression accidentelle.【F:backend/core/services.py†L144-L188】【F:backend/tests/test_app.py†L392-L460】
 - Gestion des utilisateurs (création, mise à jour du rôle/mot de passe, activation) réservée aux administrateurs.【F:backend/api/users.py†L10-L54】
 - Droits modulaires fins (`suppliers`, `dotations`, `pharmacy`, etc.) via l'API `/permissions/modules` pour déléguer la vue/l'édition par utilisateur.【F:backend/api/permissions.py†L12-L66】【F:backend/tests/test_app.py†L300-L349】
+- Purge admin des sessions ARI (dry-run, filtre par site et date) via l'endpoint `/ari/admin/purge-sessions`.【F:backend/api/ari.py†L154-L206】
 
 ### Stock & inventaire
 - CRUD d'articles avec recherche nom/SKU, tailles, seuils de réapprovisionnement et rattachement à un fournisseur.【F:backend/api/items.py†L12-L42】【F:backend/core/services.py†L309-L358】

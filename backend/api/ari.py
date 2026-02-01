@@ -46,6 +46,12 @@ def _require_ari_certify(user: models.User) -> None:
     raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
+def _require_admin(user: models.User) -> None:
+    if user.role == "admin":
+        return
+    raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
+
 @router.get("/settings", response_model=models_ari.AriSettings)
 async def get_ari_settings(
     user: models.User = Depends(get_current_user),
@@ -173,4 +179,32 @@ async def decide_ari_certification(
         decided_by=user.username,
         site=_resolve_site(user, ari_site),
         fallback_site=user.site_key,
+    )
+
+
+@router.post("/admin/purge-sessions", response_model=models_ari.AriPurgeResponse)
+async def purge_ari_sessions(
+    payload: models_ari.AriPurgeRequest,
+    user: models.User = Depends(get_current_user),
+    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
+) -> models_ari.AriPurgeResponse:
+    _require_feature_enabled()
+    _require_admin(user)
+    try:
+        by_site, total = ari_services.purge_ari_sessions(
+            site_scope=payload.site,
+            older_than_days=payload.older_than_days,
+            before_date=payload.before_date,
+            include_certified=payload.include_certified,
+            dry_run=payload.dry_run,
+            site=_resolve_site(user, ari_site),
+            fallback_site=user.site_key,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return models_ari.AriPurgeResponse(
+        ok=True,
+        dry_run=payload.dry_run,
+        total=total,
+        by_site=by_site,
     )
