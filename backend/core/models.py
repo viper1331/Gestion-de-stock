@@ -69,7 +69,7 @@ UserStatus = Literal["active", "pending", "rejected", "disabled"]
 
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
-    role: str = Field(..., pattern=r"^(admin|user)$")
+    role: str = Field(..., pattern=r"^(admin|user|certificateur)$")
     site_key: str | None = None
 
 
@@ -113,7 +113,7 @@ class SiteSelectionRequest(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    role: Optional[str] = Field(default=None, pattern=r"^(admin|user)$")
+    role: Optional[str] = Field(default=None, pattern=r"^(admin|user|certificateur)$")
     password: Optional[str] = Field(default=None, min_length=8, max_length=128)
     is_active: Optional[bool] = None
     site_key: Optional[str] = None
@@ -484,14 +484,42 @@ class VehicleViewConfig(BaseModel):
     hide_edit_buttons: bool = False
 
 
-class VehiclePinnedSubviewsUpdate(BaseModel):
-    pinned: list[str]
+class VehiclePinnedSubviewCreate(BaseModel):
+    subview_id: str
 
 
 class VehiclePinnedSubviews(BaseModel):
     vehicle_id: int
     view_id: str
     pinned: list[str]
+
+
+class VehicleSubviewPin(BaseModel):
+    id: int
+    vehicle_id: int
+    view_id: str
+    subview_id: str
+    x_pct: float = Field(..., ge=0.0, le=1.0)
+    y_pct: float = Field(..., ge=0.0, le=1.0)
+    created_at: str | None = None
+    updated_at: str | None = None
+
+
+class VehicleSubviewPinCreate(BaseModel):
+    subview_id: str
+    x_pct: float
+    y_pct: float
+
+
+class VehicleSubviewPinUpdate(BaseModel):
+    x_pct: float
+    y_pct: float
+
+
+class VehicleSubviewPinList(BaseModel):
+    vehicle_id: int
+    view_id: str
+    pins: list[VehicleSubviewPin]
 
 
 class Category(BaseModel):
@@ -709,6 +737,7 @@ class RemiseLot(RemiseLotBase):
     id: int
     created_at: datetime
     image_url: str | None = None
+    cover_image_url: str | None = None
     item_count: int = 0
     total_quantity: int = 0
     extra: dict[str, object] = Field(default_factory=dict)
@@ -756,6 +785,7 @@ class PharmacyLot(PharmacyLotBase):
     id: int
     created_at: datetime
     image_url: str | None = None
+    cover_image_url: str | None = None
     item_count: int = 0
     total_quantity: int = 0
     extra: dict[str, object] = Field(default_factory=dict)

@@ -12,6 +12,17 @@ import {
 import { isAxiosError } from "axios";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import clsx from "clsx";
+import {
+  DndContext,
+  DragOverlay,
+  DragEndEvent,
+  DragStartEvent,
+  PointerSensor,
+  pointerWithin,
+  useDroppable,
+  useSensor,
+  useSensors
+} from "@dnd-kit/core";
 
 import vanIllustration from "../../assets/vehicles/vehicle-van.svg";
 import pickupIllustration from "../../assets/vehicles/vehicle-pickup.svg";
@@ -28,7 +39,8 @@ import { useThrottledHoverState } from "./useThrottledHoverState";
 import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
-import { SousVuesCardsGrid, type SubviewCardData } from "./SousVuesCardsGrid";
+import { CompactSubViewTile, SubViewCard, type SubviewCardData } from "./SubViewCard";
+import { SubviewPinCard, type SubviewPinCardData } from "./SubviewPinCard";
 
 interface VehicleViewConfig {
   name: string;
@@ -36,10 +48,19 @@ interface VehicleViewConfig {
   background_url: string | null;
 }
 
-interface VehiclePinnedSubviews {
+interface VehicleSubviewPin {
+  id: number;
   vehicle_id: number;
   view_id: string;
-  pinned: string[];
+  subview_id: string;
+  x_pct: number;
+  y_pct: number;
+}
+
+interface VehicleSubviewPinList {
+  vehicle_id: number;
+  view_id: string;
+  pins: VehicleSubviewPin[];
 }
 
 type VehicleType = string;
@@ -124,6 +145,7 @@ interface RemiseLot {
   description: string | null;
   created_at: string;
   image_url: string | null;
+  cover_image_url: string | null;
   item_count: number;
   total_quantity: number;
 }
@@ -149,6 +171,7 @@ interface PharmacyLot {
   description: string | null;
   created_at: string;
   image_url: string | null;
+  cover_image_url: string | null;
   item_count: number;
   total_quantity: number;
 }
@@ -185,12 +208,44 @@ interface LibraryLot {
   name: string;
   description: string | null;
   image_url: string | null;
+  cover_image_url: string | null;
   item_count: number;
   total_quantity: number;
   sku?: string | null;
   code?: string | null;
   items: LibraryLotItem[];
   source: LibraryLotSource;
+}
+
+export function LibraryLotCardImage({
+  lot,
+  showCatalogBadge = false
+}: {
+  lot: Pick<LibraryLot, "name" | "image_url" | "cover_image_url">;
+  showCatalogBadge?: boolean;
+}) {
+  const resolvedImageUrl = resolveMediaUrl(lot.cover_image_url ?? lot.image_url);
+  const shouldShowBadge = showCatalogBadge && Boolean(lot.cover_image_url);
+
+  return (
+    <div className="relative h-16 w-16 overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-900">
+      {resolvedImageUrl ? (
+        <img src={resolvedImageUrl} alt={`Illustration du lot ${lot.name}`} className="h-full w-full object-cover" />
+      ) : (
+        <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400 dark:text-slate-500">
+          Aucune image
+        </div>
+      )}
+      {shouldShowBadge ? (
+        <span
+          className="absolute left-1 top-1 rounded bg-slate-900/80 px-1.5 py-0.5 text-[9px] font-semibold text-white"
+          title="Image catalogue du lot"
+        >
+          Catalogue
+        </span>
+      ) : null}
+    </div>
+  );
 }
 
 interface VehiclePhoto {
@@ -304,7 +359,7 @@ const VEHICLE_SUBVIEW_CARDS_ENABLED =
   String(
     import.meta.env.VITE_FEATURE_VEHICLE_SUBVIEW_CARDS ??
       import.meta.env.FEATURE_VEHICLE_SUBVIEW_CARDS ??
-      "false"
+      "true"
   )
     .toLowerCase()
     .trim() === "true";
@@ -315,8 +370,7 @@ type DragKind =
   | "pharmacy_lot"
   | "remise_lot"
   | "library_item"
-  | "applied_lot"
-  | "vehicle_subview";
+  | "applied_lot";
 
 type DraggedItemData = {
   kind: DragKind;
@@ -335,7 +389,6 @@ type DraggedItemData = {
   lotId?: number | null;
   lotName?: string | null;
   appliedLotId?: number | null;
-  subviewId?: string;
 };
 
 export function resolveTargetView(selectedView: string | null): string {
@@ -697,6 +750,15 @@ export function VehicleInventoryPage() {
       selectedView
     });
   }
+  const selectedHierarchy = useMemo(() => splitViewHierarchy(selectedView), [selectedView]);
+  const isSubView = Boolean(selectedHierarchy.subView);
+  const prefs = useMemo(
+    () => ({
+      pinnedViewName: normalizeViewName(selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL)
+    }),
+    [selectedHierarchy.parent]
+  );
+  const pinnedViewName = prefs?.pinnedViewName ?? null;
 
   const {
     data: vehicles = [],
@@ -792,6 +854,14 @@ export function VehicleInventoryPage() {
   );
 
   const selectedVehicleType = selectedVehicle?.vehicle_type ?? null;
+  const normalizedVehicleViews = useMemo(
+    () => getVehicleViews(selectedVehicle),
+    [selectedVehicle]
+  );
+  const pinnedView = useMemo(
+    () => resolvePinnedView(normalizedVehicleViews, pinnedViewName),
+    [normalizedVehicleViews, pinnedViewName]
+  );
 
   useEffect(() => {
     logDebug("SELECTED VEHICLE TYPE", {
@@ -866,15 +936,17 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const { data: pinnedSubviews } = useQuery({
-    queryKey: ["vehicle-pinned-subviews", selectedVehicle?.id, pinnedViewName],
-    enabled: VEHICLE_SUBVIEW_CARDS_ENABLED && Boolean(selectedVehicle?.id && pinnedViewName),
+  const { data: subviewPins } = useQuery({
+    queryKey: ["vehicle-subview-pins", selectedVehicle?.id, pinnedViewName],
+    enabled:
+      VEHICLE_SUBVIEW_CARDS_ENABLED &&
+      Boolean(selectedVehicle?.id && pinnedViewName && pinnedView),
     queryFn: async () => {
-      if (!selectedVehicle?.id) {
-        return { vehicle_id: 0, view_id: pinnedViewName, pinned: [] };
+      if (!selectedVehicle?.id || !pinnedViewName) {
+        return { vehicle_id: 0, view_id: pinnedViewName ?? "", pins: [] };
       }
-      const response = await api.get<VehiclePinnedSubviews>(
-        `/vehicles/${selectedVehicle.id}/views/${encodeURIComponent(pinnedViewName)}/pinned-subviews`
+      const response = await api.get<VehicleSubviewPinList>(
+        `/vehicles/${selectedVehicle.id}/views/${encodeURIComponent(pinnedViewName)}/subview-pins`
       );
       return response.data;
     }
@@ -981,29 +1053,78 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const updatePinnedSubviews = useMutation({
-    mutationFn: async (nextPinned: string[]) => {
-      if (!selectedVehicle?.id) {
+  const createSubviewPin = useMutation({
+    mutationFn: async ({
+      subviewId,
+      parentViewId,
+      vehicleId,
+      xPct,
+      yPct
+    }: {
+      subviewId: string;
+      parentViewId: string;
+      vehicleId: number;
+      xPct: number;
+      yPct: number;
+    }) => {
+      const response = await api.post<VehicleSubviewPin>(
+        `/vehicles/${vehicleId}/views/${encodeURIComponent(parentViewId)}/subview-pins`,
+        { subview_id: subviewId, x_pct: xPct, y_pct: yPct }
+      );
+      return response.data;
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.status === 409) {
+        setFeedback({ type: "error", text: "Sous-vue déjà épinglée." });
         return;
       }
-      await api.put(
-        `/vehicles/${selectedVehicle.id}/views/${encodeURIComponent(pinnedViewName)}/pinned-subviews`,
-        { pinned: nextPinned }
-      );
+      setFeedback({ type: "error", text: "Impossible d'épingler cette sous-vue." });
     },
-    onMutate: async (nextPinned) => {
-      if (!selectedVehicle?.id) {
+    onSettled: () => {
+      if (selectedVehicle?.id && pinnedViewName) {
+        queryClient.invalidateQueries({
+          queryKey: ["vehicle-subview-pins", selectedVehicle.id, pinnedViewName]
+        });
+      }
+    }
+  });
+
+  const updateSubviewPin = useMutation({
+    mutationFn: async ({
+      pinId,
+      parentViewId,
+      vehicleId,
+      xPct,
+      yPct
+    }: {
+      pinId: number;
+      parentViewId: string;
+      vehicleId: number;
+      xPct: number;
+      yPct: number;
+    }) => {
+      const response = await api.patch<VehicleSubviewPin>(
+        `/vehicles/${vehicleId}/views/${encodeURIComponent(parentViewId)}/subview-pins/${pinId}`,
+        { x_pct: xPct, y_pct: yPct }
+      );
+      return response.data;
+    },
+    onMutate: async ({ pinId, xPct, yPct }) => {
+      if (!selectedVehicle?.id || !pinnedViewName) {
         return undefined;
       }
-      const queryKey = ["vehicle-pinned-subviews", selectedVehicle.id, pinnedViewName];
+      const queryKey = ["vehicle-subview-pins", selectedVehicle.id, pinnedViewName];
       await queryClient.cancelQueries({ queryKey });
       const previous =
-        queryClient.getQueryData<VehiclePinnedSubviews>(queryKey) ?? null;
-      queryClient.setQueryData<VehiclePinnedSubviews>(queryKey, {
-        vehicle_id: selectedVehicle.id,
-        view_id: pinnedViewName,
-        pinned: nextPinned
-      });
+        queryClient.getQueryData<VehicleSubviewPinList>(queryKey) ?? null;
+      if (previous) {
+        queryClient.setQueryData<VehicleSubviewPinList>(queryKey, {
+          ...previous,
+          pins: previous.pins.map((pin) =>
+            pin.id === pinId ? { ...pin, x_pct: xPct, y_pct: yPct } : pin
+          )
+        });
+      }
       return { previous, queryKey };
     },
     onError: (_error, _variables, context) => {
@@ -1013,6 +1134,55 @@ export function VehicleInventoryPage() {
       if (context.previous) {
         queryClient.setQueryData(context.queryKey, context.previous);
       }
+    },
+    onSettled: (_data, _error, _variables, context) => {
+      if (context?.queryKey) {
+        queryClient.invalidateQueries({ queryKey: context.queryKey });
+      }
+    }
+  });
+
+  const deleteSubviewPin = useMutation({
+    mutationFn: async ({
+      pinId,
+      parentViewId,
+      vehicleId
+    }: {
+      pinId: number;
+      parentViewId: string;
+      vehicleId: number;
+    }) => {
+      await api.delete(
+        `/vehicles/${vehicleId}/views/${encodeURIComponent(parentViewId)}/subview-pins/${pinId}`
+      );
+    },
+    onMutate: async ({ pinId }) => {
+      if (!selectedVehicle?.id || !pinnedViewName) {
+        return undefined;
+      }
+      const queryKey = ["vehicle-subview-pins", selectedVehicle.id, pinnedViewName];
+      await queryClient.cancelQueries({ queryKey });
+      const previous =
+        queryClient.getQueryData<VehicleSubviewPinList>(queryKey) ?? null;
+      if (previous) {
+        queryClient.setQueryData<VehicleSubviewPinList>(queryKey, {
+          ...previous,
+          pins: previous.pins.filter((pin) => pin.id !== pinId)
+        });
+      }
+      return { previous, queryKey };
+    },
+    onError: (_error, _variables, context) => {
+      if (!context?.queryKey) {
+        return;
+      }
+      if (context.previous) {
+        queryClient.setQueryData(context.queryKey, context.previous);
+      }
+      setFeedback({ type: "error", text: "Impossible de retirer cette sous-vue." });
+    },
+    onSuccess: () => {
+      setFeedback({ type: "success", text: "Sous-vue retirée de la vue principale." });
     },
     onSettled: (_data, _error, _variables, context) => {
       if (context?.queryKey) {
@@ -1577,16 +1747,6 @@ export function VehicleInventoryPage() {
     setIsExportLocked(Boolean(isActive));
   }, [exportJob]);
 
-  const normalizedVehicleViews = useMemo(
-    () => getVehicleViews(selectedVehicle),
-    [selectedVehicle]
-  );
-  const selectedHierarchy = useMemo(() => splitViewHierarchy(selectedView), [selectedView]);
-  const pinnedViewName = useMemo(
-    () => normalizeViewName(selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL),
-    [selectedHierarchy.parent]
-  );
-
   const triggerExportJob = useCallback(async () => {
     if (exportLockRef.current || isExportLocked) {
       return;
@@ -1977,6 +2137,9 @@ export function VehicleInventoryPage() {
   );
 
   const availableSubViews = useMemo(() => {
+    if (!pinnedViewName || !pinnedView) {
+      return [];
+    }
     const parentView = selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL;
     return normalizedVehicleViews.filter((view) => {
       const { parent, subView } = splitViewHierarchy(view);
@@ -1985,36 +2148,23 @@ export function VehicleInventoryPage() {
       }
       return normalizeViewName(parent) === normalizeViewName(parentView);
     });
-  }, [normalizedVehicleViews, selectedHierarchy.parent]);
+  }, [normalizedVehicleViews, pinnedView, pinnedViewName, selectedHierarchy.parent]);
 
-  const filteredPinnedSubviews = useMemo(
-    () =>
-      filterPinnedSubviews({
-        pinned: pinnedSubviews?.pinned ?? [],
-        availableSubViews,
-        parentView: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
-      }),
-    [availableSubViews, pinnedSubviews?.pinned, selectedHierarchy.parent]
-  );
-
-  useEffect(() => {
-    if (!pinnedSubviews || !selectedVehicle?.id || !VEHICLE_SUBVIEW_CARDS_ENABLED) {
-      return;
+  const pinnedSubviewIds = useMemo(() => {
+    if (!pinnedViewName || !pinnedView) {
+      return [];
     }
-    const sameLength = pinnedSubviews.pinned.length === filteredPinnedSubviews.length;
-    const sameEntries = sameLength
-      ? pinnedSubviews.pinned.every((entry, index) => entry === filteredPinnedSubviews[index])
-      : false;
-    if (sameEntries) {
-      return;
-    }
-    updatePinnedSubviews.mutate(filteredPinnedSubviews);
+    return filterPinnedSubviews({
+      pinned: (subviewPins?.pins ?? []).map((pin) => pin.subview_id),
+      availableSubViews,
+      parentView: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
+    });
   }, [
-    filteredPinnedSubviews,
-    pinnedSubviews,
-    selectedVehicle?.id,
-    updatePinnedSubviews,
-    VEHICLE_SUBVIEW_CARDS_ENABLED
+    availableSubViews,
+    pinnedView,
+    pinnedViewName,
+    selectedHierarchy.parent,
+    subviewPins?.pins
   ]);
 
   const subviewCards = useMemo<SubviewCardData[]>(() => {
@@ -2024,80 +2174,72 @@ export function VehicleInventoryPage() {
     return availableSubViews.map((subView) => ({
       id: subView,
       label: formatSubViewLabel(subView, selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL),
-      itemCount: viewItemCountMap.get(normalizeViewName(subView)),
-      isPinned: filteredPinnedSubviews.includes(normalizeViewName(subView))
+      itemCount: viewItemCountMap.get(normalizeViewName(subView))
     }));
   }, [
     availableSubViews,
-    filteredPinnedSubviews,
     selectedHierarchy.parent,
     viewItemCountMap
   ]);
 
-  const commitPinnedSubviews = useCallback(
-    (nextPinned: string[]) => {
-      if (!selectedVehicle?.id) {
+  const availableSubviewCards = useMemo(
+    () =>
+      subviewCards.filter(
+        (subview) => !pinnedSubviewIds.includes(normalizeViewName(subview.id))
+      ),
+    [pinnedSubviewIds, subviewCards]
+  );
+
+  const [activeSubviewId, setActiveSubviewId] = useState<string | null>(null);
+
+  const activeSubviewCard = useMemo(() => {
+    if (!activeSubviewId) {
+      return null;
+    }
+    return subviewCards.find((subview) => subview.id === activeSubviewId) ?? null;
+  }, [activeSubviewId, subviewCards]);
+
+  const subviewPinCards = useMemo<SubviewPinCardData[]>(
+    () =>
+      (subviewPins?.pins ?? [])
+        .filter((pin) =>
+          pinnedSubviewIds.includes(normalizeViewName(pin.subview_id))
+        )
+        .map((pin) => ({
+          id: pin.id,
+          subviewId: pin.subview_id,
+          label: formatSubViewLabel(pin.subview_id, selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL),
+          itemCount: viewItemCountMap.get(normalizeViewName(pin.subview_id)),
+          xPct: pin.x_pct,
+          yPct: pin.y_pct
+        })),
+    [pinnedSubviewIds, selectedHierarchy.parent, subviewPins?.pins, viewItemCountMap]
+  );
+
+  useEffect(() => {
+    console.log("[SubViewsUI] render", {
+      vehicleId: selectedVehicle?.id ?? null,
+      viewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+      subviewsCount: availableSubViews.length
+    });
+  }, [availableSubViews.length, selectedHierarchy.parent, selectedVehicle?.id]);
+
+  useEffect(() => {
+    console.log("[SubViewsUI] pinned", pinnedSubviewIds);
+  }, [pinnedSubviewIds]);
+
+  const handleRemoveSubviewPin = useCallback(
+    (pinId: number) => {
+      if (!selectedVehicle?.id || !pinnedViewName) {
         return;
       }
-      const filtered = filterPinnedSubviews({
-        pinned: nextPinned,
-        availableSubViews,
-        parentView: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
+      deleteSubviewPin.mutate({
+        pinId,
+        parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+        vehicleId: selectedVehicle.id
       });
-      updatePinnedSubviews.mutate(filtered);
     },
-    [availableSubViews, selectedHierarchy.parent, selectedVehicle?.id, updatePinnedSubviews]
-  );
-
-  const handlePinSubview = useCallback(
-    (subviewId: string, targetSubviewId?: string) => {
-      const nextPinned = upsertPinnedSubview(
-        filteredPinnedSubviews,
-        subviewId,
-        targetSubviewId
-      );
-      commitPinnedSubviews(nextPinned);
-    },
-    [commitPinnedSubviews, filteredPinnedSubviews]
-  );
-
-  const handleUnpinSubview = useCallback(
-    (subviewId: string) => {
-      const normalized = normalizeViewName(subviewId);
-      const nextPinned = filteredPinnedSubviews.filter(
-        (entry) => normalizeViewName(entry) !== normalized
-      );
-      commitPinnedSubviews(nextPinned);
-    },
-    [commitPinnedSubviews, filteredPinnedSubviews]
-  );
-
-  const handleSubviewDragStart = useCallback(
-    (event: DragEvent<HTMLButtonElement>, subviewId: string) => {
-      const rect = event.currentTarget.getBoundingClientRect();
-      writeDraggedItemData(event, {
-        kind: "vehicle_subview",
-        subviewId,
-        offsetX: event.clientX - rect.left,
-        offsetY: event.clientY - rect.top,
-        elementWidth: rect.width,
-        elementHeight: rect.height
-      });
-      event.dataTransfer.effectAllowed = "move";
-    },
-    []
-  );
-
-  const handlePinnedDrop = useCallback(
-    (event: DragEvent<HTMLElement>, targetSubviewId?: string) => {
-      event.preventDefault();
-      const data = readDraggedItemData(event);
-      if (data?.kind !== "vehicle_subview" || !data.subviewId) {
-        return;
-      }
-      handlePinSubview(data.subviewId, targetSubviewId);
-    },
-    [handlePinSubview]
+    [deleteSubviewPin, pinnedViewName, selectedHierarchy.parent, selectedVehicle?.id]
   );
 
   const handleOpenSubview = useCallback(
@@ -2105,6 +2247,113 @@ export function VehicleInventoryPage() {
       requestViewChange(subviewId);
     },
     [requestViewChange]
+  );
+
+  const handleSubviewPinCreate = useCallback(
+    (subviewId: string, position: { x: number; y: number }) => {
+      if (!selectedVehicle?.id || !pinnedViewName || !pinnedView) {
+        return;
+      }
+      const normalized = normalizeViewName(subviewId);
+      if (pinnedSubviewIds.some((entry) => normalizeViewName(entry) === normalized)) {
+        setFeedback({ type: "error", text: "Sous-vue déjà épinglée." });
+        return;
+      }
+      createSubviewPin.mutate({
+        subviewId,
+        parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+        vehicleId: selectedVehicle.id,
+        xPct: position.x,
+        yPct: position.y
+      });
+    },
+    [
+      createSubviewPin,
+      pinnedSubviewIds,
+      pinnedView,
+      pinnedViewName,
+      selectedHierarchy.parent,
+      selectedVehicle?.id
+    ]
+  );
+
+  const handleSubviewPinMove = useCallback(
+    (pinId: number, position: { x: number; y: number }) => {
+      if (!selectedVehicle?.id || !pinnedViewName) {
+        return;
+      }
+      updateSubviewPin.mutate({
+        pinId,
+        parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+        vehicleId: selectedVehicle.id,
+        xPct: position.x,
+        yPct: position.y
+      });
+    },
+    [pinnedViewName, selectedHierarchy.parent, selectedVehicle?.id, updateSubviewPin]
+  );
+
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: { distance: 6 }
+    })
+  );
+
+  const handleSubviewDragStart = useCallback((event: DragStartEvent) => {
+    const data = event.active.data.current;
+    if (data?.kind === "SUBVIEW" && typeof data.subviewId === "string") {
+      setActiveSubviewId(data.subviewId);
+      return;
+    }
+    setActiveSubviewId(null);
+  }, []);
+
+  const handleSubviewDragEnd = useCallback(
+    (event: DragEndEvent) => {
+      if (isSubView) {
+        setActiveSubviewId(null);
+        return;
+      }
+      const { active, over } = event;
+      const data = active.data.current;
+      if (typeof over?.id === "string" && over.id.startsWith("SUBVIEW_BOARD:")) {
+        const overRect = over.rect;
+        if (overRect) {
+          if (data?.kind === "SUBVIEW" && typeof data.subviewId === "string") {
+            const translatedRect = active.rect.current?.translated;
+            const initialRect = active.rect.current?.initial;
+            const activeRect =
+              translatedRect ??
+              (initialRect
+                ? {
+                    ...initialRect,
+                    left: initialRect.left + event.delta.x,
+                    right: initialRect.right + event.delta.x,
+                    top: initialRect.top + event.delta.y,
+                    bottom: initialRect.bottom + event.delta.y
+                  }
+                : undefined);
+            if (activeRect) {
+              const centerX = activeRect.left + activeRect.width / 2;
+              const centerY = activeRect.top + activeRect.height / 2;
+              const position = {
+                x: clamp((centerX - overRect.left) / overRect.width, 0, 1),
+                y: clamp((centerY - overRect.top) / overRect.height, 0, 1)
+              };
+              handleSubviewPinCreate(data.subviewId, position);
+            }
+          } else if (data?.kind === "SUBVIEW_PIN" && typeof data.pinId === "number") {
+            const position = {
+              x: clamp(data.xPct + event.delta.x / overRect.width, 0, 1),
+              y: clamp(data.yPct + event.delta.y / overRect.height, 0, 1)
+            };
+            handleSubviewPinMove(data.pinId, position);
+          }
+        }
+      }
+      setActiveSubviewId(null);
+    },
+    [handleSubviewPinCreate, handleSubviewPinMove, isSubView]
   );
 
   const lotRemiseItemIds = useMemo(() => {
@@ -2142,6 +2391,7 @@ export function VehicleInventoryPage() {
         name: lot.name,
         description: lot.description,
         image_url: lot.image_url,
+        cover_image_url: lot.cover_image_url,
         item_count: lot.item_count,
         total_quantity: lot.total_quantity,
         source: "remise",
@@ -2177,6 +2427,7 @@ export function VehicleInventoryPage() {
         name: lot.name,
         description: lot.description,
         image_url: lot.image_url,
+        cover_image_url: lot.cover_image_url,
         item_count: lot.item_count,
         total_quantity: lot.total_quantity,
         source: "pharmacy",
@@ -2967,404 +3218,375 @@ export function VehicleInventoryPage() {
             </form>
           ) : null}
 
-          <VehicleViewSelector
-            views={normalizedVehicleViews}
-            selectedView={selectedView}
-            onSelect={requestViewChange}
-          />
+          <DndContext
+            sensors={sensors}
+            collisionDetection={pointerWithin}
+            onDragStart={handleSubviewDragStart}
+            onDragEnd={handleSubviewDragEnd}
+            onDragCancel={() => setActiveSubviewId(null)}
+          >
+            <VehicleViewSelector
+              views={normalizedVehicleViews}
+              selectedView={selectedView}
+              onSelect={requestViewChange}
+            />
 
-          {selectedVehicle ? (
-            <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
-              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-                <div>
-                  <p className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-200">
-                    Sous-vues pour {selectedView ?? DEFAULT_VIEW_LABEL}
-                  </p>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">
-                    Créez des vues détaillées (par exemple des rangements dans la cabine) sans quitter la vue principale.
-                  </p>
-                </div>
-                <button
-                  type="button"
-                  onClick={() => setIsAddingSubView((previous) => !previous)}
-                  className="inline-flex items-center gap-2 rounded-md border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-indigo-500/40 dark:text-indigo-200 dark:hover:border-indigo-400"
-                >
-                  {isAddingSubView ? "Fermer" : "Ajouter une sous-vue"}
-                </button>
-              </div>
-              {isAddingSubView ? (
-                <form className="mt-3 space-y-2 sm:flex sm:items-end sm:gap-3" onSubmit={createSubviewForSelectedView}>
-                  <label className="flex-1 space-y-1" htmlFor="sub-view-name">
-                    <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
-                      Nom de la sous-vue
-                    </span>
-                    <AppTextInput
-                      id="sub-view-name"
-                      type="text"
-                      value={newSubViewName}
-                      onChange={(event) => setNewSubViewName(event.target.value)}
-                      placeholder="Rangement conducteur, Casier passager..."
-                      className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
-                      disabled={updateVehicle.isPending}
-                    />
-                  </label>
+            {selectedVehicle && !isSubView ? (
+              <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/40">
+                <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div>
+                    <p className="text-sm font-semibold uppercase tracking-wide text-slate-600 dark:text-slate-200">
+                      Sous-vues pour {selectedView ?? DEFAULT_VIEW_LABEL}
+                    </p>
+                    <p className="text-xs text-slate-500 dark:text-slate-400">
+                      Créez des vues détaillées (par exemple des rangements dans la cabine) sans quitter la vue principale.
+                    </p>
+                  </div>
                   <button
-                    type="submit"
-                    disabled={updateVehicle.isPending}
-                    className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
+                    type="button"
+                    onClick={() => setIsAddingSubView((previous) => !previous)}
+                    className="inline-flex items-center gap-2 rounded-md border border-indigo-200 px-3 py-2 text-xs font-semibold text-indigo-600 transition hover:border-indigo-300 hover:text-indigo-700 dark:border-indigo-500/40 dark:text-indigo-200 dark:hover:border-indigo-400"
                   >
-                    {updateVehicle.isPending ? "Ajout..." : "Créer la sous-vue"}
+                    {isAddingSubView ? "Fermer" : "Ajouter une sous-vue"}
                   </button>
-                </form>
-              ) : null}
-              {VEHICLE_SUBVIEW_CARDS_ENABLED && subviewCards.length > 0 ? (
-                <div className="mt-5 space-y-4">
-                  <SousVuesCardsGrid
-                    title="Sous-vues disponibles"
-                    subtitle="Glissez une carte pour l'épingler ou cliquez pour l'ouvrir."
-                    subviews={subviewCards}
-                    onOpen={handleOpenSubview}
-                    onPin={(subviewId) => handlePinSubview(subviewId)}
-                    onDragStart={handleSubviewDragStart}
-                    showPinAction
-                  />
-                  <div className="space-y-2">
+                </div>
+                <div className="mt-4 space-y-4">
+                  <section className="space-y-3">
                     <div>
                       <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
-                        Sous-vues affichées dans cette vue
+                        Sous-vues disponibles
                       </p>
                       <p className="text-xs text-slate-500 dark:text-slate-400">
-                        Réorganisez par glisser-déposer ou retirez une sous-vue si besoin.
+                        Glissez une sous-vue directement sur la photo pour l'afficher dans la vue principale.
                       </p>
                     </div>
-                    <div
-                      className="flex min-h-[120px] gap-3 overflow-x-auto rounded-xl border border-slate-200 bg-white p-3 shadow-sm dark:border-slate-700 dark:bg-slate-900"
-                      onDragOver={(event) => {
-                        event.preventDefault();
-                        event.dataTransfer.dropEffect = "move";
-                      }}
-                      onDrop={(event) => handlePinnedDrop(event)}
+                    {!pinnedView ? (
+                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                        Aucune vue épinglable n'est disponible pour le moment.
+                      </div>
+                    ) : availableSubviewCards.length > 0 ? (
+                      <div className="grid grid-cols-1 gap-2 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+                        {availableSubviewCards.map((subview) => (
+                          <CompactSubViewTile
+                            key={subview.id}
+                            subview={subview}
+                            dragData={{
+                              kind: "SUBVIEW",
+                              subviewId: subview.id,
+                              parentViewId: selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL,
+                              vehicleId: selectedVehicle.id
+                            }}
+                          />
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 p-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
+                        Aucune sous-vue disponible pour l'instant.
+                      </div>
+                    )}
+                  </section>
+                </div>
+                {isAddingSubView ? (
+                  <form className="mt-3 space-y-2 sm:flex sm:items-end sm:gap-3" onSubmit={createSubviewForSelectedView}>
+                    <label className="flex-1 space-y-1" htmlFor="sub-view-name">
+                      <span className="block text-xs font-semibold uppercase tracking-wide text-slate-500 dark:text-slate-300">
+                        Nom de la sous-vue
+                      </span>
+                      <AppTextInput
+                        id="sub-view-name"
+                        type="text"
+                        value={newSubViewName}
+                        onChange={(event) => setNewSubViewName(event.target.value)}
+                        placeholder="Rangement conducteur, Casier passager..."
+                        className="w-full rounded-md border border-slate-300 bg-white px-3 py-2 text-sm text-slate-900 focus:border-indigo-500 focus:outline-none dark:border-slate-600 dark:bg-slate-950 dark:text-slate-100"
+                        disabled={updateVehicle.isPending}
+                      />
+                    </label>
+                    <button
+                      type="submit"
+                      disabled={updateVehicle.isPending}
+                      className="inline-flex items-center justify-center rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-70"
                     >
-                      {filteredPinnedSubviews.length === 0 ? (
-                        <div className="flex flex-1 items-center justify-center rounded-lg border border-dashed border-slate-200 bg-slate-50 px-4 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-400">
-                          Glissez une sous-vue ici pour l'épingler.
-                        </div>
-                      ) : null}
-                      {filteredPinnedSubviews.map((subviewId) => (
-                        <div
-                          key={subviewId}
-                          className="min-w-[220px] flex-1"
-                          onDragOver={(event) => {
-                            event.preventDefault();
-                            event.dataTransfer.dropEffect = "move";
-                          }}
-                          onDrop={(event) => handlePinnedDrop(event, subviewId)}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleOpenSubview(subviewId)}
-                            draggable
-                            onDragStart={(event) => handleSubviewDragStart(event, subviewId)}
-                            className="flex w-full flex-col gap-2 rounded-xl border border-indigo-200 bg-indigo-50/40 p-3 text-left text-sm shadow-sm transition hover:border-indigo-300 hover:bg-indigo-50 dark:border-indigo-500/40 dark:bg-indigo-950/50"
-                          >
-                            <div className="flex items-start justify-between gap-2">
-                              <p className="font-semibold text-slate-900 dark:text-slate-100">
-                                {formatSubViewLabel(
-                                  subviewId,
-                                  selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL
-                                )}
-                              </p>
-                              <span aria-hidden>📌</span>
-                            </div>
-                            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600 dark:text-slate-300">
-                              <span className="rounded-full bg-white px-2 py-1 text-[11px] font-semibold text-slate-500 dark:bg-slate-900 dark:text-slate-300">
-                                Épinglée
-                              </span>
-                              <span className="rounded-md border border-slate-200 px-2 py-1 text-[11px] font-semibold text-slate-600 dark:border-slate-600 dark:text-slate-300">
-                                Ouvrir
-                              </span>
-                            </div>
-                          </button>
-                          <div className="mt-2 flex items-center justify-between text-xs text-slate-500 dark:text-slate-400">
-                            <span>
-                              {viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0} équipement
-                              {(viewItemCountMap.get(normalizeViewName(subviewId)) ?? 0) > 1 ? "s" : ""}
-                            </span>
-                            <button
-                              type="button"
-                              onClick={() => handleUnpinSubview(subviewId)}
-                              className="text-rose-600 hover:text-rose-700 dark:text-rose-300"
-                            >
-                              Retirer
-                            </button>
-                          </div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
+                      {updateVehicle.isPending ? "Ajout..." : "Créer la sous-vue"}
+                    </button>
+                  </form>
+                ) : null}
+              </div>
+            ) : null}
+
+            <div className="grid min-w-0 gap-6 lg:grid-cols-[2fr,1fr]">
+              <div className="min-w-0">
+                <VehicleCompartment
+                  title={selectedView ?? DEFAULT_VIEW_LABEL}
+                  description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
+                  items={itemsForSelectedView}
+                  allItems={items}
+                  appliedLots={appliedLots}
+                  appliedLotItemsByAssignment={appliedLotItemsByAssignment}
+                  subviewPins={
+                    !isSubView && VEHICLE_SUBVIEW_CARDS_ENABLED ? subviewPinCards : undefined
+                  }
+                  parentViewId={selectedHierarchy.parent ?? DEFAULT_VIEW_LABEL}
+                  categoryId={selectedVehicle.id}
+                  viewConfig={selectedViewConfig}
+                  availablePhotos={vehiclePhotos}
+                  selectedView={selectedView}
+                  isSubView={isSubView}
+                  onDragStartCapture={lockViewSelection}
+                  onDropItem={(dropRequest) => {
+                    const targetView = dropRequest.targetView;
+
+                    logDebug("DROP EVENT", {
+                      selectedView: dropRequest.targetView,
+                      normalizedSelectedView: dropRequest.targetView,
+                      backendView: dropRequest.targetView,
+                      vehicleViews: selectedVehicle?.sizes ?? [],
+                      itemId: dropRequest.vehicleItemId ?? dropRequest.sourceId,
+                      position: dropRequest.position,
+                      options: dropRequest
+                    });
+
+                    const isInternalReposition =
+                      dropRequest.sourceType === "vehicle" &&
+                      (dropRequest.sourceCategoryId === undefined ||
+                        dropRequest.sourceCategoryId === selectedVehicle.id);
+
+                    if (isInternalReposition) {
+                      const vehicleItemId = dropRequest.vehicleItemId ?? dropRequest.sourceId;
+                      const existingItem = vehicleItems.find(
+                        (entry) => entry.id === vehicleItemId
+                      );
+
+                      const resolvedQuantity = dropRequest.quantity ?? existingItem?.quantity;
+                      if (resolvedQuantity === 0) {
+                        pushFeedback({
+                          type: "error",
+                          text: "Impossible de déplacer un matériel avec une quantité nulle sans suppression explicite."
+                        });
+                        return;
+                      }
+
+                      updateVehicleItem.mutate({
+                        itemId: vehicleItemId,
+                        categoryId: selectedVehicle.id,
+                        targetView,
+                        position: dropRequest.position,
+                        // Never send quantity: 0 on DROP: the backend interprets it as a removal.
+                        quantity: resolvedQuantity ?? undefined,
+                        successMessage: dropRequest.suppressFeedback
+                          ? undefined
+                          : "Position enregistrée."
+                      });
+                      return;
+                    }
+
+                    if (dropRequest.quantity === 0) {
+                      pushFeedback({
+                        type: "error",
+                        text: "Impossible de déplacer un matériel avec une quantité nulle sans suppression explicite."
+                      });
+                      return;
+                    }
+
+                    if (dropRequest.sourceType === "vehicle") {
+                      updateVehicleItem.mutate({
+                        itemId: dropRequest.vehicleItemId ?? dropRequest.sourceId,
+                        categoryId: dropRequest.categoryId,
+                        targetView: dropRequest.targetView,
+                        position: dropRequest.position,
+                        quantity:
+                          dropRequest.quantity === 0
+                            ? undefined
+                            : dropRequest.quantity ?? undefined,
+                        sourceCategoryId: dropRequest.sourceCategoryId,
+                        remiseItemId: dropRequest.remiseItemId,
+                        pharmacyItemId: dropRequest.pharmacyItemId,
+                        successMessage:
+                          dropRequest.isReposition && !dropRequest.suppressFeedback
+                            ? "Position enregistrée."
+                            : undefined
+                      });
+                      return;
+                    }
+
+                    assignItemToVehicle.mutate(dropRequest);
+                  }}
+                  onRemoveItem={(itemId) => {
+                    const lockedItem = findLockedLotItem(itemId);
+                    if (lockedItem) {
+                      pushFeedback({
+                        type: "error",
+                        text: `Ce matériel appartient au ${describeLot(lockedItem)}. Ajustez le lot depuis la page dédiée.`,
+                      });
+                      return;
+                    }
+                    logDebug("DROP EVENT", {
+                      selectedView,
+                      normalizedSelectedView,
+                      vehicleViews,
+                      backendView: null,
+                      itemId,
+                      position: null,
+                      options: undefined
+                    });
+                    removeVehicleItem.mutate({
+                      itemId,
+                      categoryId: selectedVehicle.id,
+                      position: null,
+                      successMessage: "Le matériel a été retiré du véhicule."
+                    });
+                  }}
+                  onItemFeedback={pushFeedback}
+                  onBackgroundChange={(photoId) =>
+                    updateViewBackground.mutate({
+                      categoryId: selectedVehicle.id,
+                      name: normalizedSelectedView ?? DEFAULT_VIEW_LABEL,
+                      photoId
+                    })
+                  }
+                  isUpdatingBackground={updateViewBackground.isPending}
+                  backgroundPanelStorageKey={backgroundPanelStorageKey}
+                  itemsPanelStorageKey={itemsPanelStorageKey}
+                  onDropLot={handleDropLotOnView}
+                  onDropAppliedLot={(assignmentId, position) =>
+                    updateAppliedLotPosition.mutate({ assignmentId, position })
+                  }
+                  onOpenSubview={handleOpenSubview}
+                  onRemoveSubviewPin={handleRemoveSubviewPin}
+                  onRemoveAppliedLot={removeAppliedLot.mutate}
+                  isRemovingAppliedLot={removeAppliedLot.isPending}
+                  onUpdateItemQuantity={(itemId, quantity) => {
+                    if (!selectedVehicle) {
+                      return;
+                    }
+                    const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                    logDebug("DROP EVENT", {
+                      selectedView,
+                      normalizedSelectedView,
+                      vehicleViews,
+                      backendView: targetView,
+                      itemId,
+                      position: undefined,
+                      options: undefined
+                    });
+                    if (quantity === 0) {
+                      removeVehicleItem.mutate({
+                        itemId,
+                        categoryId: selectedVehicle.id,
+                        targetView,
+                        position: null,
+                        successMessage: "Le matériel a été retiré du véhicule."
+                      });
+                      return;
+                    }
+                    updateVehicleItem.mutate({
+                      itemId,
+                      categoryId: selectedVehicle.id,
+                      targetView,
+                      quantity,
+                      successMessage: "Quantité mise à jour."
+                    });
+                  }}
+                />
+              </div>
+
+              <aside className="side-panels min-w-0 space-y-6">
+                <VehicleItemsPanel
+                  title="Matériel dans les autres vues"
+                  description="Faites glisser un équipement vers la vue courante pour le déplacer."
+                  emptyMessage="Aucun matériel n'est stocké dans les autres vues pour ce véhicule."
+                  items={itemsInOtherViews}
+                  onItemFeedback={pushFeedback}
+                  storageKey="vehicleInventory:panel:otherViews"
+                  onDragStartCapture={lockViewSelection}
+                  customFieldDefinitions={activeVehicleItemCustomFields}
+                  onUpdateExtra={handleUpdateExtra}
+                />
+
+                <VehicleItemsPanel
+                  title="Matériel en attente d'affectation"
+                  description="Ces éléments sont liés au véhicule mais pas à une vue précise."
+                  emptyMessage="Tout le matériel est déjà affecté à une vue."
+                  items={itemsWaitingAssignment}
+                  onItemFeedback={pushFeedback}
+                  storageKey="vehicleInventory:panel:pendingAssignment"
+                  onDragStartCapture={lockViewSelection}
+                  customFieldDefinitions={activeVehicleItemCustomFields}
+                  onUpdateExtra={handleUpdateExtra}
+                />
+
+                <DroppableLibrary
+                  items={availableItems}
+                  lots={availableLots}
+                  isLoadingLots={isLoadingLots}
+                  isAssigningLot={assignLotToVehicle.isPending}
+                  vehicleName={selectedVehicle?.name ?? null}
+                  vehicleType={selectedVehicleType}
+                  onDragStartCapture={lockViewSelection}
+                  onAssignLot={(lot) => {
+                    if (!selectedVehicle) {
+                      setFeedback({
+                        type: "error",
+                        text: "Sélectionnez un véhicule avant d'ajouter un lot."
+                      });
+                      return;
+                    }
+                    const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
+                    assignLotToVehicle.mutate({
+                      lot,
+                      categoryId: selectedVehicle.id,
+                      view: targetView,
+                      position: null
+                    });
+                  }}
+                  onDropItem={(itemId) => {
+                    logDebug("DROP EVENT", {
+                      selectedView,
+                      normalizedSelectedView,
+                      vehicleViews,
+                      backendView: null,
+                      itemId,
+                      position: null,
+                      options: undefined
+                    });
+                    returnItemToLibrary(itemId);
+                  }}
+                  onDropLot={
+                    selectedVehicleType === "secours_a_personne"
+                      ? undefined
+                      : (lotId, categoryId) => removeLotFromVehicle.mutate({ lotId, categoryId })
+                  }
+                  onRemoveFromVehicle={(itemId) => {
+                    logDebug("DROP EVENT", {
+                      selectedView,
+                      normalizedSelectedView,
+                      vehicleViews,
+                      backendView: null,
+                      itemId,
+                      position: null,
+                      options: undefined
+                    });
+                    returnItemToLibrary(itemId);
+                  }}
+                  onItemFeedback={pushFeedback}
+                  customFieldDefinitions={activeVehicleItemCustomFields}
+                  onUpdateExtra={handleUpdateExtra}
+                />
+              </aside>
+            </div>
+            <DragOverlay>
+              {activeSubviewCard ? (
+                <div
+                  className="pointer-events-none"
+                  style={{ position: "relative", zIndex: 99999 }}
+                >
+                  <SubviewDragPreview subview={activeSubviewCard} />
                 </div>
               ) : null}
-            </div>
-          ) : null}
-
-          <div className="grid min-w-0 gap-6 lg:grid-cols-[2fr,1fr]">
-            <div className="min-w-0">
-              <VehicleCompartment
-                title={selectedView ?? DEFAULT_VIEW_LABEL}
-                description="Déposez ici le matériel pour l'associer à cette vue du véhicule."
-                items={itemsForSelectedView}
-                allItems={items}
-                appliedLots={appliedLots}
-                appliedLotItemsByAssignment={appliedLotItemsByAssignment}
-                categoryId={selectedVehicle.id}
-                viewConfig={selectedViewConfig}
-                availablePhotos={vehiclePhotos}
-                selectedView={selectedView}
-                onDragStartCapture={lockViewSelection}
-                onDropItem={(dropRequest) => {
-                const targetView = dropRequest.targetView;
-
-                logDebug("DROP EVENT", {
-                  selectedView: dropRequest.targetView,
-                  normalizedSelectedView: dropRequest.targetView,
-                  backendView: dropRequest.targetView,
-                  vehicleViews: selectedVehicle?.sizes ?? [],
-                  itemId: dropRequest.vehicleItemId ?? dropRequest.sourceId,
-                  position: dropRequest.position,
-                  options: dropRequest
-                });
-
-                const isInternalReposition =
-                  dropRequest.sourceType === "vehicle" &&
-                  (dropRequest.sourceCategoryId === undefined ||
-                    dropRequest.sourceCategoryId === selectedVehicle.id);
-
-                if (isInternalReposition) {
-                  const vehicleItemId = dropRequest.vehicleItemId ?? dropRequest.sourceId;
-                  const existingItem = vehicleItems.find(
-                    (entry) => entry.id === vehicleItemId
-                  );
-
-                  const resolvedQuantity = dropRequest.quantity ?? existingItem?.quantity;
-                  if (resolvedQuantity === 0) {
-                    pushFeedback({
-                      type: "error",
-                      text: "Impossible de déplacer un matériel avec une quantité nulle sans suppression explicite."
-                    });
-                    return;
-                  }
-
-                  updateVehicleItem.mutate({
-                    itemId: vehicleItemId,
-                    categoryId: selectedVehicle.id,
-                    targetView,
-                    position: dropRequest.position,
-                    // Never send quantity: 0 on DROP: the backend interprets it as a removal.
-                    quantity: resolvedQuantity ?? undefined,
-                    successMessage: dropRequest.suppressFeedback
-                      ? undefined
-                      : "Position enregistrée."
-                  });
-                  return;
-                }
-
-                if (dropRequest.quantity === 0) {
-                  pushFeedback({
-                    type: "error",
-                    text: "Impossible de déplacer un matériel avec une quantité nulle sans suppression explicite."
-                  });
-                  return;
-                }
-
-                if (dropRequest.sourceType === "vehicle") {
-                  updateVehicleItem.mutate({
-                    itemId: dropRequest.vehicleItemId ?? dropRequest.sourceId,
-                    categoryId: dropRequest.categoryId,
-                    targetView: dropRequest.targetView,
-                    position: dropRequest.position,
-                    quantity:
-                      dropRequest.quantity === 0
-                        ? undefined
-                        : dropRequest.quantity ?? undefined,
-                    sourceCategoryId: dropRequest.sourceCategoryId,
-                    remiseItemId: dropRequest.remiseItemId,
-                    pharmacyItemId: dropRequest.pharmacyItemId,
-                    successMessage:
-                      dropRequest.isReposition && !dropRequest.suppressFeedback
-                        ? "Position enregistrée."
-                        : undefined
-                  });
-                  return;
-                }
-
-                assignItemToVehicle.mutate(dropRequest);
-              }}
-              onRemoveItem={(itemId) => {
-                const lockedItem = findLockedLotItem(itemId);
-                if (lockedItem) {
-                  pushFeedback({
-                    type: "error",
-                    text: `Ce matériel appartient au ${describeLot(lockedItem)}. Ajustez le lot depuis la page dédiée.`,
-                  });
-                  return;
-                }
-                logDebug("DROP EVENT", {
-                  selectedView,
-                  normalizedSelectedView,
-                  vehicleViews,
-                  backendView: null,
-                  itemId,
-                  position: null,
-                  options: undefined
-                });
-                removeVehicleItem.mutate({
-                  itemId,
-                  categoryId: selectedVehicle.id,
-                  position: null,
-                  successMessage: "Le matériel a été retiré du véhicule."
-                });
-              }}
-              onItemFeedback={pushFeedback}
-              onBackgroundChange={(photoId) =>
-                updateViewBackground.mutate({
-                  categoryId: selectedVehicle.id,
-                  name: normalizedSelectedView ?? DEFAULT_VIEW_LABEL,
-                  photoId
-                })
-              }
-              isUpdatingBackground={updateViewBackground.isPending}
-              backgroundPanelStorageKey={backgroundPanelStorageKey}
-              itemsPanelStorageKey={itemsPanelStorageKey}
-              onDropLot={handleDropLotOnView}
-              onDropAppliedLot={(assignmentId, position) =>
-                updateAppliedLotPosition.mutate({ assignmentId, position })
-              }
-              onDropSubview={(subviewId) => {
-                handlePinSubview(subviewId);
-              }}
-              onRemoveAppliedLot={removeAppliedLot.mutate}
-              isRemovingAppliedLot={removeAppliedLot.isPending}
-              onUpdateItemQuantity={(itemId, quantity) => {
-                if (!selectedVehicle) {
-                  return;
-                }
-                const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
-                logDebug("DROP EVENT", {
-                  selectedView,
-                  normalizedSelectedView,
-                  vehicleViews,
-                  backendView: targetView,
-                  itemId,
-                  position: undefined,
-                  options: undefined
-                });
-                if (quantity === 0) {
-                  removeVehicleItem.mutate({
-                    itemId,
-                    categoryId: selectedVehicle.id,
-                    targetView,
-                    position: null,
-                    successMessage: "Le matériel a été retiré du véhicule."
-                  });
-                  return;
-                }
-                updateVehicleItem.mutate({
-                  itemId,
-                  categoryId: selectedVehicle.id,
-                  targetView,
-                  quantity,
-                  successMessage: "Quantité mise à jour."
-                });
-              }}
-              />
-            </div>
-
-            <aside className="min-w-0 space-y-6">
-              <VehicleItemsPanel
-                title="Matériel dans les autres vues"
-                description="Faites glisser un équipement vers la vue courante pour le déplacer."
-                emptyMessage="Aucun matériel n'est stocké dans les autres vues pour ce véhicule."
-                items={itemsInOtherViews}
-                onItemFeedback={pushFeedback}
-                storageKey="vehicleInventory:panel:otherViews"
-                onDragStartCapture={lockViewSelection}
-                customFieldDefinitions={activeVehicleItemCustomFields}
-                onUpdateExtra={handleUpdateExtra}
-              />
-
-              <VehicleItemsPanel
-                title="Matériel en attente d'affectation"
-                description="Ces éléments sont liés au véhicule mais pas à une vue précise."
-                emptyMessage="Tout le matériel est déjà affecté à une vue."
-                items={itemsWaitingAssignment}
-                onItemFeedback={pushFeedback}
-                storageKey="vehicleInventory:panel:pendingAssignment"
-                onDragStartCapture={lockViewSelection}
-                customFieldDefinitions={activeVehicleItemCustomFields}
-                onUpdateExtra={handleUpdateExtra}
-              />
-
-              <DroppableLibrary
-                items={availableItems}
-                lots={availableLots}
-                isLoadingLots={isLoadingLots}
-                isAssigningLot={assignLotToVehicle.isPending}
-                vehicleName={selectedVehicle?.name ?? null}
-                vehicleType={selectedVehicleType}
-                onDragStartCapture={lockViewSelection}
-                onAssignLot={(lot) => {
-                  if (!selectedVehicle) {
-                    setFeedback({
-                      type: "error",
-                      text: "Sélectionnez un véhicule avant d'ajouter un lot."
-                    });
-                    return;
-                  }
-                  const targetView = normalizedSelectedView ?? DEFAULT_VIEW_LABEL;
-                  assignLotToVehicle.mutate({
-                    lot,
-                    categoryId: selectedVehicle.id,
-                    view: targetView,
-                    position: null
-                  });
-                }}
-                onDropItem={(itemId) => {
-                  logDebug("DROP EVENT", {
-                    selectedView,
-                    normalizedSelectedView,
-                    vehicleViews,
-                    backendView: null,
-                    itemId,
-                    position: null,
-                    options: undefined
-                  });
-                  returnItemToLibrary(itemId);
-                }}
-                onDropLot={
-                  selectedVehicleType === "secours_a_personne"
-                    ? undefined
-                    : (lotId, categoryId) => removeLotFromVehicle.mutate({ lotId, categoryId })
-                }
-                onRemoveFromVehicle={(itemId) => {
-                  logDebug("DROP EVENT", {
-                    selectedView,
-                    normalizedSelectedView,
-                    vehicleViews,
-                    backendView: null,
-                    itemId,
-                    position: null,
-                    options: undefined
-                  });
-                  returnItemToLibrary(itemId);
-                }}
-                onItemFeedback={pushFeedback}
-                customFieldDefinitions={activeVehicleItemCustomFields}
-                onUpdateExtra={handleUpdateExtra}
-              />
-            </aside>
-          </div>
-              <VehiclePhotosPanel />
-            </section>
+            </DragOverlay>
+          </DndContext>
+          <VehiclePhotosPanel />
+        </section>
           </EditableBlock>
         ) : null
     }
@@ -3681,10 +3903,13 @@ interface VehicleCompartmentProps {
   allItems: VehicleItem[];
   appliedLots?: VehicleAppliedLot[];
   appliedLotItemsByAssignment?: Map<number, VehicleItem[]>;
+  subviewPins?: SubviewPinCardData[];
+  parentViewId: string;
   categoryId: number;
   viewConfig: VehicleViewConfig | null;
   availablePhotos: VehiclePhoto[];
   selectedView: string | null;
+  isSubView: boolean;
   onDropItem: (payload: DropRequestPayload) => void;
   onRemoveItem: (itemId: number) => void;
   onItemFeedback: (feedback: Feedback) => void;
@@ -3695,7 +3920,8 @@ interface VehicleCompartmentProps {
   onDropLot?: (lotId: number, position: { x: number; y: number }) => void;
   onDropAppliedLot?: (assignmentId: number, position: { x: number; y: number }) => void;
   onUpdateItemQuantity?: (itemId: number, quantity: number) => void;
-  onDropSubview?: (subviewId: string) => void;
+  onOpenSubview?: (subviewId: string) => void;
+  onRemoveSubviewPin?: (pinId: number) => void;
   onDragStartCapture: () => void;
   onRemoveAppliedLot?: (assignmentId: number) => void;
   isRemovingAppliedLot?: boolean;
@@ -3708,10 +3934,13 @@ function VehicleCompartment({
   allItems,
   appliedLots = [],
   appliedLotItemsByAssignment = new Map(),
+  subviewPins,
+  parentViewId,
   categoryId,
   viewConfig,
   availablePhotos,
   selectedView,
+  isSubView,
   onDropItem,
   onRemoveItem,
   onItemFeedback,
@@ -3722,7 +3951,8 @@ function VehicleCompartment({
   onDropLot,
   onDropAppliedLot,
   onUpdateItemQuantity,
-  onDropSubview,
+  onOpenSubview,
+  onRemoveSubviewPin,
   onDragStartCapture,
   onRemoveAppliedLot,
   isRemovingAppliedLot
@@ -3771,6 +4001,12 @@ function VehicleCompartment({
   const isSelectingPointerTarget = pendingPointerKey !== null;
   const boardRef = useRef<HTMLDivElement | null>(null);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const { isOver: isSubviewOver, setNodeRef: setSubviewDropRef, active: activeSubview } =
+    useDroppable({
+      id: `SUBVIEW_BOARD:${parentViewId}`,
+      data: { accepts: ["SUBVIEW", "SUBVIEW_PIN"] },
+      disabled: isSubView
+    });
   const queryClient = useQueryClient();
   const markerEntries = useMemo(
     () => buildVehicleMarkerEntries(items, appliedLots, appliedLotItemsByAssignment),
@@ -3783,6 +4019,14 @@ function VehicleCompartment({
       setPendingPointerKey(null);
     }
   }, [isPointerModeEnabled]);
+
+  const setBoardNodeRef = useCallback(
+    (node: HTMLDivElement | null) => {
+      boardRef.current = node;
+      setSubviewDropRef(node);
+    },
+    [setSubviewDropRef]
+  );
 
   const uploadBackground = useMutation({
     mutationFn: async (file: File) => {
@@ -3832,17 +4076,6 @@ function VehicleCompartment({
     hover.resetHover();
     const data = readDraggedItemData(event);
     if (!data) {
-      return;
-    }
-    if (data.kind === "vehicle_subview") {
-      if (data.subviewId && onDropSubview) {
-        onDropSubview(data.subviewId);
-      } else {
-        onItemFeedback({
-          type: "error",
-          text: "Impossible d'épingler cette sous-vue."
-        });
-      }
       return;
     }
     const targetView = resolveTargetView(selectedView);
@@ -4057,6 +4290,8 @@ function VehicleCompartment({
     onBackgroundChange(null);
   };
 
+  const isSubviewDragging = activeSubview?.data.current?.kind === "SUBVIEW";
+  const isSubviewDropActive = !isSubView && isSubviewDragging && isSubviewOver;
   const isHovering = hover.hoverRef.current;
   const backgroundImageUrl = resolveMediaUrl(viewConfig?.background_url);
 
@@ -4189,19 +4424,19 @@ function VehicleCompartment({
                     : "Importez une photo de l'intérieur du véhicule pour définir un fond personnalisé."}
                 </span>
               </>
-            ) : (
-              <div className="rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[11px] text-slate-500 dark:border-slate-600 dark:text-slate-400">
-                Cette section est masquée. Cliquez sur « Afficher » pour la rouvrir.
-              </div>
-            )}
+              ) : (
+                <div className="rounded-xl border border-dashed border-slate-300 px-4 py-3 text-[11px] text-slate-500 dark:border-slate-600 dark:text-slate-400">
+                  Cette section est masquée. Cliquez sur « Afficher » pour la rouvrir.
+                </div>
+              )}
           </div>
         </div>
 
         <div
-          ref={boardRef}
+          ref={setBoardNodeRef}
           className={clsx(
-            "relative min-h-[320px] w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 transition dark:border-slate-700 dark:bg-slate-800",
-            isHovering &&
+            "vehicle-view-photo relative min-h-[320px] w-full overflow-hidden rounded-2xl border border-slate-200 bg-slate-100 transition dark:border-slate-700 dark:bg-slate-800",
+            (isHovering || isSubviewDropActive) &&
               "border-blue-400 ring-4 ring-blue-200/60 dark:border-blue-500 dark:ring-blue-900/50",
             isPointerModeEnabled &&
               isSelectingPointerTarget &&
@@ -4214,6 +4449,23 @@ function VehicleCompartment({
           onClick={handleBoardClick}
         >
           <div className="pointer-events-none absolute inset-0 bg-gradient-to-br from-slate-900/5 via-transparent to-white/10 dark:from-slate-950/20 dark:to-slate-900/10" />
+          {isSubviewDropActive ? (
+            <div className="pointer-events-none absolute inset-0 flex items-center justify-center">
+              <div className="rounded-full border border-blue-200 bg-white/80 px-4 py-2 text-xs font-semibold text-blue-700 shadow-sm backdrop-blur-sm dark:border-blue-800 dark:bg-blue-950/50 dark:text-blue-200">
+                Déposez pour épingler cette sous-vue
+              </div>
+            </div>
+          ) : null}
+          {!isSubView
+            ? subviewPins?.map((pin) => (
+                <SubviewPinCard
+                  key={pin.id}
+                  pin={pin}
+                  onOpen={onOpenSubview}
+                  onRemove={onRemoveSubviewPin}
+                />
+              ))
+            : null}
           {markerEntries.map((entry) => {
             const pointerTarget = pointerTargets[entry.key] ?? null;
             return (
@@ -4354,6 +4606,39 @@ function VehicleCompartment({
             )}
           </div>
         )}
+      </div>
+    </div>
+  );
+}
+
+function SubviewDragPreview({ subview }: { subview: SubviewCardData }) {
+  const itemCountLabel =
+    typeof subview.itemCount === "number"
+      ? `${subview.itemCount} équipement${subview.itemCount > 1 ? "s" : ""}`
+      : null;
+
+  return (
+    <div className="w-64 rounded-xl border border-slate-200 bg-white p-3 text-left shadow-xl dark:border-slate-700 dark:bg-slate-900">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">
+            {subview.label}
+          </p>
+          {itemCountLabel ? (
+            <p className="mt-1 text-xs text-slate-500 dark:text-slate-400">{itemCountLabel}</p>
+          ) : null}
+        </div>
+        <span
+          className="flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-400 dark:border-slate-600 dark:text-slate-300"
+          aria-hidden
+        >
+          ⠿
+        </span>
+      </div>
+      <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+        <span className="rounded-full bg-slate-100 px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide text-slate-600 dark:bg-slate-800 dark:text-slate-200">
+          Sous-vue
+        </span>
       </div>
     </div>
   );
@@ -4973,13 +5258,6 @@ function DroppableLibrary({
           });
           return;
         }
-        if (data.kind === "vehicle_subview") {
-          onItemFeedback({
-            type: "error",
-            text: "Impossible de déposer une sous-vue sur cette bibliothèque."
-          });
-          return;
-        }
         if (
           typeof data.lotId === "number" &&
           data.categoryId !== null &&
@@ -5119,7 +5397,6 @@ function DroppableLibrary({
                     lot.items.length > 0
                       ? lot.items.map((entry) => `${entry.quantity} × ${entry.name}`).join("\n")
                       : "Ce lot est encore vide.";
-                  const lotImageUrl = resolveMediaUrl(lot.image_url);
                   return (
                     <div
                       key={lot.id}
@@ -5137,15 +5414,7 @@ function DroppableLibrary({
                       className="rounded-lg border border-slate-200 bg-slate-50 p-3 shadow-sm transition hover:border-slate-300 dark:border-slate-700 dark:bg-slate-800 dark:hover:border-slate-600"
                     >
                       <div className="flex items-start gap-3">
-                        <div className="h-16 w-16 overflow-hidden rounded-md border border-slate-200 bg-white dark:border-slate-600 dark:bg-slate-900">
-                          {lotImageUrl ? (
-                            <img src={lotImageUrl} alt={`Illustration du lot ${lot.name}`} className="h-full w-full object-cover" />
-                          ) : (
-                            <div className="flex h-full w-full items-center justify-center text-[10px] text-slate-400 dark:text-slate-500">
-                              Aucune image
-                            </div>
-                          )}
-                        </div>
+                        <LibraryLotCardImage lot={lot} showCatalogBadge={import.meta.env.DEV} />
                         <div className="flex-1 space-y-1">
                           <div className="flex items-start gap-2">
                             <div>
@@ -5994,8 +6263,7 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
       value === "library_item" ||
       value === "pharmacy_lot" ||
       value === "remise_lot" ||
-      value === "applied_lot" ||
-      value === "vehicle_subview";
+      value === "applied_lot";
     if (!isDragKind(parsed.kind)) {
       return null;
     }
@@ -6007,12 +6275,10 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
     const hasLotId = typeof parsed.lotId === "number";
     const lotIdIsNull = parsed.lotId === null;
     const hasAppliedLotId = typeof parsed.appliedLotId === "number";
-    const hasSubviewId = typeof parsed.subviewId === "string" && parsed.subviewId.length > 0;
     if (
       (parsed.kind === "library_item" && (!hasSourceType || !hasSourceId)) ||
       ((parsed.kind === "pharmacy_lot" || parsed.kind === "remise_lot") && !hasLotId) ||
-      (parsed.kind === "applied_lot" && !hasAppliedLotId) ||
-      (parsed.kind === "vehicle_subview" && !hasSubviewId)
+      (parsed.kind === "applied_lot" && !hasAppliedLotId)
     ) {
       return null;
     }
@@ -6043,7 +6309,6 @@ function readDraggedItemData(event: DragEvent<HTMLElement>): DraggedItemData | n
       lotId: hasLotId ? parsed.lotId : lotIdIsNull ? null : undefined,
       lotName: typeof parsed.lotName === "string" ? parsed.lotName : undefined,
       appliedLotId: hasAppliedLotId ? parsed.appliedLotId : undefined,
-      subviewId: hasSubviewId ? parsed.subviewId : undefined,
       assignedLotItemIds: Array.isArray(parsed.assignedLotItemIds)
         ? parsed.assignedLotItemIds
             .map((entry) => (typeof entry === "number" ? entry : null))
@@ -6090,6 +6355,19 @@ export function getVehicleViews(vehicle: VehicleCategory | null): string[] {
   return sanitized.length > 0 ? sanitized : [DEFAULT_VIEW_LABEL];
 }
 
+export function resolvePinnedView(
+  views: string[],
+  pinnedViewName: string | null
+): string | null {
+  if (!pinnedViewName) {
+    return null;
+  }
+  const normalizedPinned = normalizeViewName(pinnedViewName);
+  return (
+    views.find((view) => normalizeViewName(view) === normalizedPinned) ?? null
+  );
+}
+
 export function filterPinnedSubviews(params: {
   pinned: string[];
   availableSubViews: string[];
@@ -6120,29 +6398,6 @@ export function filterPinnedSubviews(params: {
     filtered.push(normalized);
   });
   return filtered;
-}
-
-export function upsertPinnedSubview(
-  pinned: string[],
-  subviewId: string,
-  targetSubviewId?: string
-): string[] {
-  const normalizedSubview = normalizeViewName(subviewId);
-  const normalizedTarget = targetSubviewId ? normalizeViewName(targetSubviewId) : null;
-  const deduped = pinned.filter(
-    (entry) => normalizeViewName(entry) !== normalizedSubview
-  );
-  if (normalizedTarget) {
-    const targetIndex = deduped.findIndex(
-      (entry) => normalizeViewName(entry) === normalizedTarget
-    );
-    if (targetIndex >= 0) {
-      const next = [...deduped];
-      next.splice(targetIndex, 0, normalizedSubview);
-      return next;
-    }
-  }
-  return [...deduped, normalizedSubview];
 }
 
 function normalizeViewNameStrict(name: string | null | undefined): string {

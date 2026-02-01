@@ -151,6 +151,113 @@ def get_stock_db_path(site_key: str | None = None) -> Path:
     return get_site_db_path(resolved_key)
 
 
+def get_ari_db_path(site_slug: str) -> str:
+    normalized = (site_slug or DEFAULT_SITE_KEY).strip().upper()
+    if normalized not in SITE_KEYS:
+        normalized = DEFAULT_SITE_KEY
+    return str(DATA_DIR / f"ari_{normalized}.db")
+
+
+def _dict_row_factory(cursor: sqlite3.Cursor, row: sqlite3.Row) -> dict[str, object]:
+    return {col[0]: row[idx] for idx, col in enumerate(cursor.description)}
+
+
+def get_ari_connection(site_slug: str) -> sqlite3.Connection:
+    path = Path(get_ari_db_path(site_slug))
+    path.parent.mkdir(parents=True, exist_ok=True)
+    conn = sqlite3.connect(path, timeout=10, check_same_thread=False)
+    conn.row_factory = _dict_row_factory
+    conn.execute("PRAGMA busy_timeout=10000")
+    return conn
+
+
+def init_ari_schema(conn: sqlite3.Connection) -> None:
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute("PRAGMA foreign_keys=ON")
+    conn.executescript(
+        """
+        CREATE TABLE IF NOT EXISTS ari_settings (
+          site_id TEXT PRIMARY KEY,
+          feature_enabled INTEGER NOT NULL DEFAULT 0,
+          stress_required INTEGER NOT NULL DEFAULT 1,
+          rpe_enabled INTEGER NOT NULL DEFAULT 0,
+          min_sessions_for_certification INTEGER NOT NULL DEFAULT 1,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS ari_sessions (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          collaborator_id INTEGER NOT NULL,
+          performed_at TEXT NOT NULL,
+          course_name TEXT NOT NULL,
+          duration_seconds INTEGER NOT NULL,
+          start_pressure_bar INTEGER NOT NULL,
+          end_pressure_bar INTEGER NOT NULL,
+          air_consumed_bar INTEGER NOT NULL,
+          stress_level INTEGER NOT NULL,
+          rpe INTEGER NULL,
+          physio_notes TEXT NULL,
+          observations TEXT NULL,
+          created_at TEXT NOT NULL,
+          created_by TEXT NOT NULL
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_ari_sessions_collab ON ari_sessions(collaborator_id);
+        CREATE INDEX IF NOT EXISTS idx_ari_sessions_date ON ari_sessions(performed_at);
+
+        CREATE TABLE IF NOT EXISTS ari_certifications (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          collaborator_id INTEGER NOT NULL,
+          status TEXT NOT NULL,
+          comment TEXT NULL,
+          decision_at TEXT NULL,
+          decided_by TEXT NULL,
+          created_at TEXT NOT NULL,
+          updated_at TEXT NOT NULL
+        );
+
+        CREATE UNIQUE INDEX IF NOT EXISTS uq_ari_cert_collab ON ari_certifications(collaborator_id);
+
+        CREATE TABLE IF NOT EXISTS ari_audit_log (
+          id INTEGER PRIMARY KEY AUTOINCREMENT,
+          actor_user_id TEXT NOT NULL,
+          action TEXT NOT NULL,
+          entity_type TEXT NOT NULL,
+          entity_id TEXT NOT NULL,
+          details_json TEXT NULL,
+          created_at TEXT NOT NULL
+        );
+        """
+    )
+
+
+def init_ari_databases() -> None:
+    for site_key in list_site_keys():
+        conn = get_ari_connection(site_key)
+        try:
+            init_ari_schema(conn)
+            conn.execute(
+                """
+                INSERT INTO ari_settings (
+                  site_id,
+                  feature_enabled,
+                  stress_required,
+                  rpe_enabled,
+                  min_sessions_for_certification,
+                  created_at,
+                  updated_at
+                )
+                VALUES (?, 0, 1, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+                ON CONFLICT(site_id) DO NOTHING
+                """,
+                (site_key,),
+            )
+            conn.commit()
+        finally:
+            conn.close()
+
+
 def _has_table(conn: sqlite3.Connection, table: str) -> bool:
     row = conn.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name = ?",
@@ -369,6 +476,7 @@ def init_databases() -> None:
             site_path.parent.mkdir(parents=True, exist_ok=True)
             with _managed_connection(site_path) as conn:
                 _init_stock_schema(conn)
+        init_ari_databases()
         _ensure_stock_db_path_alias()
 
 

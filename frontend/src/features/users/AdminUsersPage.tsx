@@ -7,7 +7,7 @@ import { AppTextInput } from "components/AppTextInput";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
 
-type UserRole = "admin" | "user";
+type UserRole = "admin" | "user" | "certificateur";
 
 const SITE_OPTIONS = [
   { value: "JLL", label: "JLL" },
@@ -343,6 +343,7 @@ export function AdminUsersPage() {
           >
             <option value="user">Utilisateur</option>
             <option value="admin">Administrateur</option>
+            <option value="certificateur">Certificateur</option>
           </select>
         </label>
         <label className="flex flex-col text-xs font-semibold uppercase tracking-wide text-slate-400">
@@ -414,6 +415,7 @@ export function AdminUsersPage() {
                     >
                       <option value="user">Utilisateur</option>
                       <option value="admin">Administrateur</option>
+                      <option value="certificateur">Certificateur</option>
                     </select>
                   </td>
                   <td className="px-4 py-3">
