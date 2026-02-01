@@ -164,13 +164,6 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[_ModuleDefinitionMeta, ...] = (
         sort_order=60,
     ),
     _ModuleDefinitionMeta(
-        key="ari",
-        label="ARI",
-        category="Habillement",
-        is_admin_only=False,
-        sort_order=65,
-    ),
-    _ModuleDefinitionMeta(
         key="dotations",
         label="Dotations",
         category="Habillement",
@@ -208,7 +201,7 @@ _AVAILABLE_MODULE_DEFINITIONS: tuple[_ModuleDefinitionMeta, ...] = (
     _ModuleDefinitionMeta(
         key="ari",
         label="Sessions ARI",
-        category="Opérations",
+        category="ARI",
         is_admin_only=False,
         sort_order=115,
     ),
