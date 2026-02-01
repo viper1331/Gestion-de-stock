@@ -69,7 +69,7 @@ UserStatus = Literal["active", "pending", "rejected", "disabled"]
 
 class UserBase(BaseModel):
     username: str = Field(..., min_length=3, max_length=64)
-    role: str = Field(..., pattern=r"^(admin|user)$")
+    role: str = Field(..., pattern=r"^(admin|user|certificateur)$")
     site_key: str | None = None
 
 
@@ -113,7 +113,7 @@ class SiteSelectionRequest(BaseModel):
 
 
 class UserUpdate(BaseModel):
-    role: Optional[str] = Field(default=None, pattern=r"^(admin|user)$")
+    role: Optional[str] = Field(default=None, pattern=r"^(admin|user|certificateur)$")
     password: Optional[str] = Field(default=None, min_length=8, max_length=128)
     is_active: Optional[bool] = None
     site_key: Optional[str] = None

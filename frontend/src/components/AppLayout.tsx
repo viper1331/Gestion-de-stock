@@ -25,6 +25,7 @@ import { MicToggle } from "../features/voice/MicToggle";
 import { useModulePermissions } from "../features/permissions/useModulePermissions";
 import { useUiStore } from "../app/store";
 import { getMenuOrder, setMenuOrder, type MenuOrderPayload } from "../api/uiMenu";
+import { getAriSettings } from "../api/ari";
 import { api } from "../lib/api";
 import { fetchConfigEntries } from "../lib/config";
 import { fetchSiteContext } from "../lib/sites";
@@ -32,6 +33,7 @@ import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
 import { mergeMenuOrder } from "../lib/menuOrder";
 import { useIdleLogout } from "../hooks/useIdleLogout";
+import { useAriStore } from "../features/ari/store";
 
 type MenuItem = {
   id: string;
@@ -79,6 +81,7 @@ export function AppLayout() {
     }),
     shallow
   );
+  const { ariSite } = useAriStore((state) => ({ ariSite: state.ariSite }), shallow);
   const [mobileDrawerOpen, setMobileDrawerOpen] = useState(false);
   const [isMobile, setIsMobile] = useState(() =>
     typeof window === "undefined" ? false : window.matchMedia("(max-width: 640px)").matches
@@ -102,6 +105,22 @@ export function AppLayout() {
     queryFn: fetchSiteContext,
     enabled: user?.role === "admin"
   });
+  const canAriAccess = Boolean(
+    user &&
+      (user.role === "admin" || user.role === "certificateur" || modulePermissions.canAccess("ari"))
+  );
+  const ariSiteHeader = useMemo(() => {
+    if (!user || user.role !== "certificateur") {
+      return undefined;
+    }
+    return ariSite ?? user.site_key ?? "JLL";
+  }, [ariSite, user]);
+  const { data: ariSettings } = useQuery({
+    queryKey: ["ari", "settings", "menu", ariSiteHeader ?? "current"],
+    queryFn: () => getAriSettings(ariSiteHeader),
+    enabled: Boolean(user && canAriAccess)
+  });
+  const ariFeatureEnabled = Boolean(ariSettings?.feature_enabled);
   const { data: searchResults = [], isFetching: isSearching } = useQuery({
     queryKey: ["global-search", searchQuery],
     queryFn: async () => {
@@ -337,6 +356,14 @@ export function AppLayout() {
               tooltip: "Attribuer les dotations d'habillement",
               icon: "🎯",
               module: "dotations"
+            },
+            {
+              id: "ari",
+              to: "/ari",
+              label: "ARI",
+              tooltip: "Suivre les parcours ARI et certifications",
+              icon: "🫁",
+              module: "ari"
             }
           ]
         },
@@ -532,6 +559,15 @@ export function AppLayout() {
             if (allowedModules.length === 0) {
               return true;
             }
+            if (allowedModules.includes("ari")) {
+              if (!ariFeatureEnabled) {
+                return false;
+              }
+              if (user.role === "admin" || user.role === "certificateur") {
+                return true;
+              }
+              return modulePermissions.canAccess("ari");
+            }
             if (user.role === "admin") {
               return true;
             }
@@ -547,7 +583,7 @@ export function AppLayout() {
           items: group.items.map(({ adminOnly, module, modules, ...item }) => item)
         }));
     },
-    [modulePermissions.canAccess, moduleTitles, user]
+    [ariFeatureEnabled, modulePermissions.canAccess, moduleTitles, user]
   );
 
   const siteKey = useMemo(() => {
