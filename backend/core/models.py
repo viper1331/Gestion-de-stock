@@ -1841,6 +1841,40 @@ class VehicleLibraryItem(BaseModel):
     pharmacy_item_id: int | None = None
 
 
+class VehicleLibraryLotItem(BaseModel):
+    id: int
+    name: str
+    sku: str | None = Field(default=None, max_length=64)
+    quantity: int
+    available_quantity: int
+    remise_item_id: int | None = None
+    pharmacy_item_id: int | None = None
+
+
+class VehicleLibraryLot(BaseModel):
+    lot_id: int
+    name: str
+    description: str | None = Field(default=None, max_length=256)
+    image_url: str | None = None
+    cover_image_url: str | None = None
+    item_count: int = 0
+    total_quantity: int = 0
+    origin: str
+    items: list[VehicleLibraryLotItem] = Field(default_factory=list)
+
+
+class VehicleLibraryCounts(BaseModel):
+    items: int = 0
+    lots: int = 0
+
+
+class VehicleLibraryResponse(BaseModel):
+    sources: list[str] = Field(default_factory=list)
+    items: list[VehicleLibraryItem] = Field(default_factory=list)
+    lots: list[VehicleLibraryLot] = Field(default_factory=list)
+    counts: VehicleLibraryCounts = Field(default_factory=VehicleLibraryCounts)
+
+
 class BarcodeValue(BaseModel):
     sku: str = Field(..., min_length=1, max_length=64)
 

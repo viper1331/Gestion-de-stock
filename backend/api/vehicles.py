@@ -1,7 +1,7 @@
 """Routes for vehicle subview pinning."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -18,6 +18,30 @@ def _require_vehicle_permission(user: models.User, *, action: str) -> None:
     if services.has_module_access(user, FALLBACK_MODULE_KEY, action=action):
         return
     raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
+
+
+@router.get(
+    "/vehicles/{vehicle_id}/library",
+    response_model=models.VehicleLibraryResponse,
+)
+async def get_vehicle_library(
+    vehicle_id: int,
+    view_name: str | None = Query(default=None, description="Vue ciblée"),
+    q: str | None = Query(default=None, description="Recherche par nom ou SKU"),
+    include_lots: bool = Query(default=False, description="Inclure les lots"),
+    user: models.User = Depends(get_current_user),
+) -> models.VehicleLibraryResponse:
+    _require_vehicle_permission(user, action="view")
+    try:
+        return services.list_vehicle_library_bundle(
+            vehicle_id=vehicle_id,
+            search=q,
+            include_lots=include_lots,
+        )
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
 
 
 @router.get(

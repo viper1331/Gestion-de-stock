@@ -16385,6 +16385,121 @@ def list_vehicle_library_items(
     return items
 
 
+def _normalize_library_search_term(value: str) -> str:
+    return value.strip().casefold()
+
+
+def _matches_library_search(query: str | None, *values: str | None) -> bool:
+    if not query:
+        return True
+    normalized_query = _normalize_library_search_term(query)
+    if not normalized_query:
+        return True
+    return any(
+        normalized_query in _normalize_library_search_term(value)
+        for value in values
+        if value
+    )
+
+
+def _filter_vehicle_library_lots(
+    query: str | None,
+    *,
+    lots: list[models.VehicleLibraryLot],
+) -> list[models.VehicleLibraryLot]:
+    if not query:
+        return lots
+    filtered: list[models.VehicleLibraryLot] = []
+    for lot in lots:
+        sku_values = [item.sku for item in lot.items if item.sku]
+        if _matches_library_search(query, lot.name, *sku_values):
+            filtered.append(lot)
+    return filtered
+
+
+def list_vehicle_library_bundle(
+    *,
+    vehicle_id: int,
+    search: str | None = None,
+    include_lots: bool = False,
+) -> models.VehicleLibraryResponse:
+    ensure_database_ready()
+    vehicle = get_vehicle_category(vehicle_id)
+    if vehicle is None:
+        raise ValueError("Véhicule introuvable")
+    resolved_types = vehicle.types or ([vehicle.vehicle_type] if vehicle.vehicle_type else [])
+    from backend.core.constants_vehicle_types import resolve_vehicle_library_sources
+
+    sources = resolve_vehicle_library_sources(resolved_types)
+    items = list_vehicle_library_items(vehicle_id=vehicle_id, search=search)
+    lots: list[models.VehicleLibraryLot] = []
+    if include_lots and sources:
+        if "remise" in sources:
+            remise_lots = list_remise_lots_with_items()
+            for lot in remise_lots:
+                lots.append(
+                    models.VehicleLibraryLot(
+                        lot_id=lot.id,
+                        name=lot.name,
+                        description=lot.description,
+                        image_url=lot.image_url,
+                        cover_image_url=lot.cover_image_url,
+                        item_count=lot.item_count,
+                        total_quantity=lot.total_quantity,
+                        origin="remise",
+                        items=[
+                            models.VehicleLibraryLotItem(
+                                id=item.id,
+                                name=item.remise_name,
+                                sku=item.remise_sku,
+                                quantity=item.quantity,
+                                available_quantity=item.available_quantity,
+                                remise_item_id=item.remise_item_id,
+                                pharmacy_item_id=None,
+                            )
+                            for item in lot.items
+                        ],
+                    )
+                )
+        if "pharmacy" in sources:
+            pharmacy_lots = list_pharmacy_lots_with_items(
+                exclude_applied_vehicle_id=vehicle_id
+            )
+            for lot in pharmacy_lots:
+                lots.append(
+                    models.VehicleLibraryLot(
+                        lot_id=lot.id,
+                        name=lot.name,
+                        description=lot.description,
+                        image_url=lot.image_url,
+                        cover_image_url=lot.cover_image_url,
+                        item_count=lot.item_count,
+                        total_quantity=lot.total_quantity,
+                        origin="pharmacy",
+                        items=[
+                            models.VehicleLibraryLotItem(
+                                id=item.id,
+                                name=item.pharmacy_name,
+                                sku=item.pharmacy_sku,
+                                quantity=item.quantity,
+                                available_quantity=item.available_quantity,
+                                remise_item_id=None,
+                                pharmacy_item_id=item.pharmacy_item_id,
+                            )
+                            for item in lot.items
+                        ],
+                    )
+                )
+        lots = _filter_vehicle_library_lots(search, lots=lots)
+    counts = models.VehicleLibraryCounts(items=len(items), lots=len(lots))
+    return models.VehicleLibraryResponse(
+        sources=sources,
+        items=items,
+        lots=lots,
+        counts=counts,
+    )
+
+
 def list_vehicle_pharmacy_lots(
     vehicle_type: str, vehicle_id: int | None = None
 ) -> list[models.PharmacyLotWithItems]:
