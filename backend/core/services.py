@@ -8542,6 +8542,35 @@ def list_remise_items(search: str | None = None) -> list[models.Item]:
     return _list_inventory_items_internal("inventory_remise", search)
 
 
+def _list_remise_items_for_pdf() -> list[models.Item]:
+    ensure_database_ready()
+    query = (
+        "SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names, "
+        "lot_memberships.lot_names, lot_memberships.lot_count "
+        "FROM remise_items AS ri "
+        "LEFT JOIN ("
+        "  SELECT vi.remise_item_id, GROUP_CONCAT(DISTINCT vc.name) AS vehicle_names "
+        "  FROM vehicle_items AS vi "
+        "  JOIN vehicle_categories AS vc ON vc.id = vi.category_id "
+        "  WHERE vi.remise_item_id IS NOT NULL "
+        "  GROUP BY vi.remise_item_id"
+        ") AS assignments ON assignments.remise_item_id = ri.id "
+        "LEFT JOIN ("
+        "  SELECT rli.remise_item_id, GROUP_CONCAT(DISTINCT rl.name) AS lot_names, "
+        "         COUNT(DISTINCT rl.id) AS lot_count "
+        "  FROM remise_lot_items AS rli "
+        "  JOIN remise_lots AS rl ON rl.id = rli.lot_id "
+        "  GROUP BY rli.remise_item_id"
+        ") AS lot_memberships ON lot_memberships.remise_item_id = ri.id "
+        "WHERE ri.quantity > 0 "
+        "ORDER BY ri.name COLLATE NOCASE"
+    )
+    with db.get_stock_connection() as conn:
+        _ensure_remise_item_columns(conn)
+        cur = conn.execute(query)
+        return [_build_inventory_item(row) for row in cur.fetchall()]
+
+
 def find_items_by_barcode(module: str, barcode: str) -> list[models.BarcodeLookupItem]:
     ensure_database_ready()
     normalized_input = barcode.strip().replace(" ", "")
@@ -12831,7 +12860,7 @@ def generate_vehicle_inventory_pdf(
 
 def generate_remise_inventory_pdf() -> bytes:
     ensure_database_ready()
-    items = [item for item in list_remise_items() if (item.quantity or 0) > 0]
+    items = _list_remise_items_for_pdf()
     categories = {category.id: category.name for category in list_remise_categories()}
 
     return _render_remise_inventory_pdf(
