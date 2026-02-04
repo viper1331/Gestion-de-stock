@@ -2968,9 +2968,10 @@ def test_remise_inventory_pdf_includes_assigned_vehicle_items() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
 
+    vehicle_name = f"VPI-{uuid4().hex[:6]}"
     vehicle_category_resp = client.post(
         "/vehicle-inventory/categories/",
-        json={"name": "VPI", "sizes": ["CABINE"]},
+        json={"name": vehicle_name, "sizes": ["CABINE"]},
         headers=admin_headers,
     )
     assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
@@ -3018,15 +3019,18 @@ def test_remise_inventory_pdf_includes_assigned_vehicle_items() -> None:
     assert payload.startswith(b"%PDF")
     content = _extract_pdf_stream_text(payload)
     assert b"Materiel assigne" in content
+    assert b"Affect\xc3\xa9 \xc3\xa0" not in content
+    assert vehicle_name.encode() not in content
 
 
 def test_remise_inventory_pdf_includes_assigned_lot_items_with_stock() -> None:
     services.ensure_database_ready()
     admin_headers = _login_headers("admin", "admin123")
 
+    vehicle_name = f"VPI-{uuid4().hex[:6]}"
     vehicle_category_resp = client.post(
         "/vehicle-inventory/categories/",
-        json={"name": "VPI", "sizes": ["CABINE"]},
+        json={"name": vehicle_name, "sizes": ["CABINE"]},
         headers=admin_headers,
     )
     assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
@@ -3090,6 +3094,8 @@ def test_remise_inventory_pdf_includes_assigned_lot_items_with_stock() -> None:
     content = _extract_pdf_stream_text(payload)
     assert b"Absorbant Captex" in content
     assert b"71" in content
+    assert b"Affect\xc3\xa9 \xc3\xa0" not in content
+    assert vehicle_name.encode() not in content
 
 
 def test_remise_inventory_crud_cycle() -> None:

@@ -8545,16 +8545,8 @@ def list_remise_items(search: str | None = None) -> list[models.Item]:
 def _list_remise_items_for_pdf() -> list[models.Item]:
     ensure_database_ready()
     query = (
-        "SELECT ri.*, assignments.vehicle_names AS assigned_vehicle_names, "
-        "lot_memberships.lot_names, lot_memberships.lot_count "
+        "SELECT ri.*, lot_memberships.lot_names, lot_memberships.lot_count "
         "FROM remise_items AS ri "
-        "LEFT JOIN ("
-        "  SELECT vi.remise_item_id, GROUP_CONCAT(DISTINCT vc.name) AS vehicle_names "
-        "  FROM vehicle_items AS vi "
-        "  JOIN vehicle_categories AS vc ON vc.id = vi.category_id "
-        "  WHERE vi.remise_item_id IS NOT NULL "
-        "  GROUP BY vi.remise_item_id"
-        ") AS assignments ON assignments.remise_item_id = ri.id "
         "LEFT JOIN ("
         "  SELECT rli.remise_item_id, GROUP_CONCAT(DISTINCT rl.name) AS lot_names, "
         "         COUNT(DISTINCT rl.id) AS lot_count "
