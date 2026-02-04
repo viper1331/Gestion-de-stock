@@ -2,6 +2,7 @@ import { ChangeEvent, FormEvent, useEffect, useMemo, useRef, useState } from "re
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { CustomFieldsForm } from "../../components/CustomFieldsForm";
+import { DraggableModal } from "../../components/DraggableModal";
 import { api } from "../../lib/api";
 import { buildCustomFieldDefaults, CustomFieldDefinition } from "../../lib/customFields";
 import { resolveMediaUrl } from "../../lib/media";
@@ -66,7 +67,9 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
   const [message, setMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [editingLotId, setEditingLotId] = useState<number | null>(null);
+  const [isLotModalOpen, setIsLotModalOpen] = useState(false);
   const fileInputRef = useRef<HTMLInputElement | null>(null);
+  const lotNameInputRef = useRef<HTMLInputElement | null>(null);
 
   const lotsQuery = useQuery({
     queryKey: ["pharmacy-lots"],
@@ -99,17 +102,6 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
       setSelectedLotId(lots[0].id);
     }
   }, [lots, selectedLotId]);
-
-  useEffect(() => {
-    if (editingLotId !== selectedLot?.id) {
-      setEditingLotId(selectedLot?.id ?? null);
-      setLotForm({
-        name: selectedLot?.name ?? "",
-        description: selectedLot?.description ?? "",
-        extra: buildCustomFieldDefaults(activeCustomFields, selectedLot?.extra ?? {})
-      });
-    }
-  }, [activeCustomFields, selectedLot, editingLotId]);
 
   useEffect(() => {
     setLotForm((previous) => ({
@@ -149,6 +141,8 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
         description: "",
         extra: buildCustomFieldDefaults(activeCustomFields, {})
       });
+      setEditingLotId(null);
+      setIsLotModalOpen(false);
     },
     onError: () => setError("Impossible de créer le lot."),
     onSettled: () => setTimeout(() => setMessage(null), 3000)
@@ -168,6 +162,7 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
     onSuccess: async () => {
       setMessage("Lot mis à jour.");
       await queryClient.invalidateQueries({ queryKey: ["pharmacy-lots"] });
+      setIsLotModalOpen(false);
     },
     onError: () => setError("Impossible de mettre à jour le lot."),
     onSettled: () => setTimeout(() => setMessage(null), 3000)
@@ -271,6 +266,9 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
       return;
     }
     setError(null);
+    if (import.meta.env.DEV) {
+      console.debug("[pharmacy] submit lot payload", { editingLotId, ...lotForm });
+    }
     if (editingLotId) {
       void updateLot.mutateAsync({
         lotId: editingLotId,
@@ -287,6 +285,46 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
       });
     }
   };
+
+  const handleOpenCreateLotModal = () => {
+    if (import.meta.env.DEV) {
+      console.debug("[pharmacy] click new lot");
+      console.debug("[pharmacy] opening modal");
+    }
+    setError(null);
+    setEditingLotId(null);
+    setLotForm({
+      name: "",
+      description: "",
+      extra: buildCustomFieldDefaults(activeCustomFields, {})
+    });
+    setIsLotModalOpen(true);
+  };
+
+  const handleOpenEditLotModal = () => {
+    if (!selectedLot) return;
+    if (import.meta.env.DEV) {
+      console.debug("[pharmacy] opening modal");
+    }
+    setError(null);
+    setEditingLotId(selectedLot.id);
+    setLotForm({
+      name: selectedLot.name,
+      description: selectedLot.description ?? "",
+      extra: buildCustomFieldDefaults(activeCustomFields, selectedLot.extra ?? {})
+    });
+    setIsLotModalOpen(true);
+  };
+
+  useEffect(() => {
+    if (!isLotModalOpen) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      lotNameInputRef.current?.focus();
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [isLotModalOpen]);
 
   const handleAddLotItem = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -318,6 +356,75 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
 
   return (
     <section className="min-w-0 space-y-3 rounded-lg border border-slate-800 bg-slate-950 p-4">
+      <DraggableModal
+        open={isLotModalOpen}
+        title={editingLotId ? "Modifier le lot" : "Créer un lot"}
+        onClose={() => setIsLotModalOpen(false)}
+        footer={
+          <div className="flex items-center justify-end gap-2">
+            <button
+              type="button"
+              className="rounded border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+              onClick={() => setIsLotModalOpen(false)}
+            >
+              Annuler
+            </button>
+            <button
+              type="submit"
+              form="pharmacy-lot-form"
+              className="rounded bg-indigo-500 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={createLot.isPending || updateLot.isPending}
+            >
+              {createLot.isPending || updateLot.isPending ? "Enregistrement..." : "Enregistrer"}
+            </button>
+          </div>
+        }
+      >
+        {canEdit ? (
+          <form id="pharmacy-lot-form" className="space-y-3" onSubmit={handleSubmitLot}>
+            <div>
+              <label className="text-xs font-semibold text-slate-300" htmlFor="lot-name">
+                Nom
+              </label>
+              <AppTextInput
+                id="lot-name"
+                ref={lotNameInputRef}
+                value={lotForm.name}
+                onChange={(event) => setLotForm((previous) => ({ ...previous, name: event.target.value }))}
+                className="mt-1 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                required
+              />
+            </div>
+            <div>
+              <label className="text-xs font-semibold text-slate-300" htmlFor="lot-description">
+                Description
+              </label>
+              <AppTextArea
+                id="lot-description"
+                value={lotForm.description}
+                onChange={(event) => setLotForm((previous) => ({ ...previous, description: event.target.value }))}
+                className="mt-1 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
+                rows={3}
+              />
+            </div>
+            {activeCustomFields.length > 0 ? (
+              <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2">
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">Champs personnalisés</p>
+                <div className="mt-3">
+                  <CustomFieldsForm
+                    definitions={activeCustomFields}
+                    values={lotForm.extra}
+                    onChange={(next) => setLotForm((prev) => ({ ...prev, extra: next }))}
+                    disabled={!canEdit || createLot.isPending || updateLot.isPending}
+                  />
+                </div>
+              </div>
+            ) : null}
+          </form>
+        ) : (
+          <p className="text-sm text-slate-400">Accès insuffisant pour créer un lot.</p>
+        )}
+      </DraggableModal>
       <div className="flex items-center justify-between gap-3">
         <div>
           <h3 className="text-lg font-semibold text-white">Lots pharmacie</h3>
@@ -326,16 +433,26 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
           </p>
         </div>
         {canEdit ? (
-          <button
-            type="button"
-            onClick={() => {
-              setEditingLotId(null);
-              setLotForm({ name: "", description: "", extra: {} });
-            }}
-            className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400"
-          >
-            Nouveau lot
-          </button>
+          <div className="flex items-center gap-2">
+            {selectedLot ? (
+              <button
+                type="button"
+                onClick={handleOpenEditLotModal}
+                className="rounded-md border border-slate-700 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                disabled={createLot.isPending || updateLot.isPending}
+              >
+                Modifier
+              </button>
+            ) : null}
+            <button
+              type="button"
+              onClick={handleOpenCreateLotModal}
+              className="rounded-md bg-indigo-500 px-3 py-2 text-xs font-semibold text-white shadow hover:bg-indigo-400 disabled:cursor-not-allowed disabled:opacity-60"
+              disabled={createLot.isPending || updateLot.isPending}
+            >
+              Nouveau lot
+            </button>
+          </div>
         ) : null}
       </div>
 
@@ -406,60 +523,6 @@ export function PharmacyLotsPanel({ canEdit }: { canEdit: boolean }) {
         </div>
 
         <div className="min-w-0 space-y-3">
-          {canEdit ? (
-            <form className="rounded border border-slate-800 bg-slate-900 p-3" onSubmit={handleSubmitLot}>
-              <h4 className="text-sm font-semibold text-white">{editingLotId ? "Modifier le lot" : "Créer un lot"}</h4>
-              <div className="mt-2 space-y-2 text-sm text-slate-200">
-                <div>
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="lot-name">
-                    Nom
-                  </label>
-                  <AppTextInput
-                    id="lot-name"
-                    value={lotForm.name}
-                    onChange={(event) => setLotForm((previous) => ({ ...previous, name: event.target.value }))}
-                    className="mt-1 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-                    required
-                  />
-                </div>
-                <div>
-                  <label className="text-xs font-semibold text-slate-300" htmlFor="lot-description">
-                    Description
-                  </label>
-                  <AppTextArea
-                    id="lot-description"
-                    value={lotForm.description}
-                    onChange={(event) => setLotForm((previous) => ({ ...previous, description: event.target.value }))}
-                    className="mt-1 w-full rounded border border-slate-800 bg-slate-950 px-3 py-2 text-sm text-white focus:border-indigo-500 focus:outline-none"
-                    rows={3}
-                  />
-                </div>
-                {activeCustomFields.length > 0 ? (
-                  <div className="rounded border border-slate-800 bg-slate-950 px-3 py-2">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-400">
-                      Champs personnalisés
-                    </p>
-                    <div className="mt-3">
-                      <CustomFieldsForm
-                        definitions={activeCustomFields}
-                        values={lotForm.extra}
-                        onChange={(next) => setLotForm((prev) => ({ ...prev, extra: next }))}
-                        disabled={!canEdit || createLot.isPending || updateLot.isPending}
-                      />
-                    </div>
-                  </div>
-                ) : null}
-                <button
-                  type="submit"
-                  className="rounded bg-indigo-500 px-3 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
-                  disabled={createLot.isPending || updateLot.isPending}
-                >
-                  {createLot.isPending || updateLot.isPending ? "Enregistrement..." : "Enregistrer"}
-                </button>
-              </div>
-            </form>
-          ) : null}
-
           <div className="rounded border border-slate-800 bg-slate-900 p-3">
             <div className="flex items-center justify-between">
               <div>
