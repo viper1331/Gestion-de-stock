@@ -15,6 +15,8 @@ export function AriSettingsModal({ open, onClose, settings, onSubmit }: AriSetti
   const [stressRequired, setStressRequired] = useState(true);
   const [rpeEnabled, setRpeEnabled] = useState(false);
   const [minSessions, setMinSessions] = useState(1);
+  const [certValidityDays, setCertValidityDays] = useState(365);
+  const [certWarningDays, setCertWarningDays] = useState(30);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
@@ -25,6 +27,8 @@ export function AriSettingsModal({ open, onClose, settings, onSubmit }: AriSetti
     setStressRequired(settings?.stress_required ?? true);
     setRpeEnabled(settings?.rpe_enabled ?? false);
     setMinSessions(settings?.min_sessions_for_certification ?? 1);
+    setCertValidityDays(settings?.cert_validity_days ?? 365);
+    setCertWarningDays(settings?.cert_expiry_warning_days ?? 30);
   }, [open, settings]);
 
   const handleSubmit = async () => {
@@ -34,7 +38,9 @@ export function AriSettingsModal({ open, onClose, settings, onSubmit }: AriSetti
         feature_enabled: featureEnabled,
         stress_required: stressRequired,
         rpe_enabled: rpeEnabled,
-        min_sessions_for_certification: minSessions
+        min_sessions_for_certification: minSessions,
+        cert_validity_days: certValidityDays,
+        cert_expiry_warning_days: certWarningDays
       });
       onClose();
     } finally {
@@ -112,6 +118,26 @@ export function AriSettingsModal({ open, onClose, settings, onSubmit }: AriSetti
             className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
             value={minSessions}
             onChange={(event) => setMinSessions(Number(event.target.value))}
+          />
+        </label>
+        <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Durée de validité (jours)
+          <input
+            type="number"
+            min={1}
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={certValidityDays}
+            onChange={(event) => setCertValidityDays(Number(event.target.value))}
+          />
+        </label>
+        <label className="flex flex-col gap-2 text-xs font-semibold uppercase tracking-wide text-slate-400">
+          Alerte avant expiration (jours)
+          <input
+            type="number"
+            min={0}
+            className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100 focus:border-indigo-500 focus:outline-none"
+            value={certWarningDays}
+            onChange={(event) => setCertWarningDays(Number(event.target.value))}
           />
         </label>
       </div>

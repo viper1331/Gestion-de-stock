@@ -3,6 +3,8 @@ export type AriSettings = {
   stress_required: boolean;
   rpe_enabled: boolean;
   min_sessions_for_certification: number;
+  cert_validity_days: number;
+  cert_expiry_warning_days: number;
 };
 
 export type AriSession = {
@@ -53,10 +55,19 @@ export type AriPurgeResponse = {
 
 export type AriCertification = {
   collaborator_id: number;
-  status: "PENDING" | "APPROVED" | "REJECTED" | "CONDITIONAL";
+  status: "PENDING" | "APPROVED" | "REJECTED" | "CONDITIONAL" | "NONE";
   comment?: string | null;
   decision_at?: string | null;
   decided_by?: string | null;
+  certified_at?: string | null;
+  expires_at?: string | null;
+  certified_by_user_id?: number | null;
+  notes?: string | null;
+  reset_at?: string | null;
+  reset_by_user_id?: number | null;
+  reset_reason?: string | null;
+  alert_state?: "valid" | "expiring_soon" | "expired" | "none";
+  days_until_expiry?: number | null;
 };
 
 export type AriCollaboratorStats = {

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 from backend.api.auth import get_current_user
-from backend.core import db, models, services
+from backend.core import ari_services, db, models, models_ari, services
 from backend.core.system_config import get_config, save_config
 from backend.core.logging_config import (
     LOG_BACKUP_COUNT,
@@ -484,8 +484,11 @@ def update_qol_settings(
 
 @router.get("/settings", response_model=models.AdminSettingsResponse)
 def get_admin_settings(user: models.User = Depends(require_admin)) -> models.AdminSettingsResponse:
+    ari_settings = ari_services.get_ari_settings(user.site_key, user.site_key)
     return models.AdminSettingsResponse(
         feature_ari_enabled=system_settings.get_feature_ari_enabled(),
+        ari_cert_validity_days=ari_settings.cert_validity_days,
+        ari_cert_expiry_warning_days=ari_settings.cert_expiry_warning_days,
     )
 
 
@@ -494,10 +497,45 @@ def update_admin_settings(
     payload: models.AdminSettingsUpdate,
     user: models.User = Depends(require_admin),
 ) -> models.AdminSettingsResponse:
-    if payload.feature_ari_enabled is None:
+    if (
+        payload.feature_ari_enabled is None
+        and payload.ari_cert_validity_days is None
+        and payload.ari_cert_expiry_warning_days is None
+    ):
         raise HTTPException(status_code=400, detail="Aucune clé de configuration autorisée")
-    enabled = system_settings.set_feature_ari_enabled(payload.feature_ari_enabled, user.username)
-    return models.AdminSettingsResponse(feature_ari_enabled=enabled)
+    enabled = system_settings.get_feature_ari_enabled()
+    if payload.feature_ari_enabled is not None:
+        enabled = system_settings.set_feature_ari_enabled(payload.feature_ari_enabled, user.username)
+
+    ari_settings = ari_services.get_ari_settings(user.site_key, user.site_key)
+    validity_days = payload.ari_cert_validity_days or ari_settings.cert_validity_days
+    warning_days = payload.ari_cert_expiry_warning_days or ari_settings.cert_expiry_warning_days
+    if warning_days >= validity_days:
+        raise HTTPException(
+            status_code=400,
+            detail="Le seuil d'alerte doit être inférieur à la durée de validité",
+        )
+    if (
+        payload.ari_cert_validity_days is not None
+        or payload.ari_cert_expiry_warning_days is not None
+    ):
+        ari_services.update_ari_settings(
+            models_ari.AriSettingsUpdate(
+                feature_enabled=ari_settings.feature_enabled,
+                stress_required=ari_settings.stress_required,
+                rpe_enabled=ari_settings.rpe_enabled,
+                min_sessions_for_certification=ari_settings.min_sessions_for_certification,
+                cert_validity_days=validity_days,
+                cert_expiry_warning_days=warning_days,
+            ),
+            user.site_key,
+            fallback_site=user.site_key,
+        )
+    return models.AdminSettingsResponse(
+        feature_ari_enabled=enabled,
+        ari_cert_validity_days=validity_days,
+        ari_cert_expiry_warning_days=warning_days,
+    )
 
 
 @router.get("/backup/settings", response_model=models.BackupSettingsStatus)

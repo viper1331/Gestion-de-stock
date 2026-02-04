@@ -43,6 +43,8 @@ type AriSettingsPayload = {
   stress_required: boolean;
   rpe_enabled: boolean;
   min_sessions_for_certification: number;
+  cert_validity_days: number;
+  cert_expiry_warning_days: number;
 };
 
 type AriSessionsQuery = {
@@ -116,8 +118,15 @@ export async function getAriCollaboratorStats(collaboratorId: number, site?: str
 }
 
 export async function getAriCertification(collaboratorId: number, site?: string) {
-  const response = await api.get<AriCertification>("/ari/certifications", {
-    params: { collaborator_id: collaboratorId },
+  const response = await api.get<AriCertification>(`/ari/certifications/${collaboratorId}`, {
+    headers: buildAriHeaders(site)
+  });
+  return response.data;
+}
+
+export async function listAriCertifications(params?: { q?: string }, site?: string) {
+  const response = await api.get<AriCertification[]>("/ari/certifications", {
+    params,
     headers: buildAriHeaders(site)
   });
   return response.data;
@@ -134,6 +143,19 @@ export async function decideAriCertification(payload: AriDecisionPayload, site?:
   const response = await api.post<AriCertification>("/ari/certifications/decide", payload, {
     headers: buildAriHeaders(site)
   });
+  return response.data;
+}
+
+export async function resetAriCertification(
+  collaboratorId: number,
+  payload: { reason: string },
+  site?: string
+) {
+  const response = await api.post<AriCertification>(
+    `/ari/certifications/${collaboratorId}/reset`,
+    payload,
+    { headers: buildAriHeaders(site) }
+  );
   return response.data;
 }
 

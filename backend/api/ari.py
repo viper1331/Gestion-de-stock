@@ -284,9 +284,24 @@ async def get_ari_collaborator_stats(
     )
 
 
-@router.get("/certifications", response_model=models_ari.AriCertification)
+@router.get("/certifications", response_model=list[models_ari.AriCertification])
+async def list_ari_certifications(
+    query: str | None = Query(default=None, alias="q"),
+    user: models.User = Depends(get_current_user),
+    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
+) -> list[models_ari.AriCertification]:
+    _require_feature_enabled()
+    _require_ari_read(user)
+    return ari_services.list_ari_certifications(
+        _resolve_site(user, ari_site),
+        query=query,
+        fallback_site=user.site_key,
+    )
+
+
+@router.get("/certifications/{collaborator_id}", response_model=models_ari.AriCertification)
 async def get_ari_certification(
-    collaborator_id: int = Query(...),
+    collaborator_id: int,
     user: models.User = Depends(get_current_user),
     ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
 ) -> models_ari.AriCertification:
@@ -323,9 +338,31 @@ async def decide_ari_certification(
     return ari_services.decide_certification(
         payload,
         decided_by=user.username,
+        decided_by_id=user.id,
         site=_resolve_site(user, ari_site),
         fallback_site=user.site_key,
     )
+
+
+@router.post("/certifications/{collaborator_id}/reset", response_model=models_ari.AriCertification)
+async def reset_ari_certification(
+    collaborator_id: int,
+    payload: models_ari.AriCertificationResetRequest,
+    user: models.User = Depends(get_current_user),
+    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
+) -> models_ari.AriCertification:
+    _require_feature_enabled()
+    _require_admin(user)
+    try:
+        return ari_services.reset_ari_certification(
+            collaborator_id,
+            reason=payload.reason,
+            reset_by_user_id=user.id,
+            site=_resolve_site(user, ari_site),
+            fallback_site=user.site_key,
+        )
+    except LookupError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @router.post("/admin/purge-sessions", response_model=models_ari.AriPurgeResponse)

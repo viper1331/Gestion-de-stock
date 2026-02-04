@@ -182,6 +182,8 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
           stress_required INTEGER NOT NULL DEFAULT 1,
           rpe_enabled INTEGER NOT NULL DEFAULT 0,
           min_sessions_for_certification INTEGER NOT NULL DEFAULT 1,
+          cert_validity_days INTEGER NOT NULL DEFAULT 365,
+          cert_expiry_warning_days INTEGER NOT NULL DEFAULT 30,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -227,6 +229,13 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
           comment TEXT NULL,
           decision_at TEXT NULL,
           decided_by TEXT NULL,
+          certified_at TEXT NULL,
+          expires_at TEXT NULL,
+          certified_by_user_id INTEGER NULL,
+          notes TEXT NULL,
+          reset_at TEXT NULL,
+          reset_by_user_id INTEGER NULL,
+          reset_reason TEXT NULL,
           created_at TEXT NOT NULL,
           updated_at TEXT NOT NULL
         );
@@ -258,6 +267,35 @@ def init_ari_schema(conn: sqlite3.Connection) -> None:
         "cylinder_capacity_l",
         "cylinder_capacity_l REAL NOT NULL DEFAULT 0",
     )
+    _ensure_column(
+        conn,
+        "ari_settings",
+        "cert_validity_days",
+        "cert_validity_days INTEGER NOT NULL DEFAULT 365",
+    )
+    _ensure_column(
+        conn,
+        "ari_settings",
+        "cert_expiry_warning_days",
+        "cert_expiry_warning_days INTEGER NOT NULL DEFAULT 30",
+    )
+    _ensure_column(conn, "ari_certifications", "certified_at", "certified_at TEXT NULL")
+    _ensure_column(conn, "ari_certifications", "expires_at", "expires_at TEXT NULL")
+    _ensure_column(
+        conn,
+        "ari_certifications",
+        "certified_by_user_id",
+        "certified_by_user_id INTEGER NULL",
+    )
+    _ensure_column(conn, "ari_certifications", "notes", "notes TEXT NULL")
+    _ensure_column(conn, "ari_certifications", "reset_at", "reset_at TEXT NULL")
+    _ensure_column(
+        conn,
+        "ari_certifications",
+        "reset_by_user_id",
+        "reset_by_user_id INTEGER NULL",
+    )
+    _ensure_column(conn, "ari_certifications", "reset_reason", "reset_reason TEXT NULL")
     _ensure_column(
         conn,
         "ari_sessions",
