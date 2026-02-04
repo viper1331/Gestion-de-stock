@@ -117,6 +117,8 @@ interface VehicleItem {
   pharmacy_item_id: number | null;
   remise_quantity: number | null;
   pharmacy_quantity: number | null;
+  library_sources?: LibraryLotSource[];
+  available_quantities?: Partial<Record<LibraryLotSource, number>>;
   image_url: string | null;
   position_x: number | null;
   position_y: number | null;
@@ -131,15 +133,14 @@ interface VehicleItem {
 }
 
 interface VehicleLibraryItem {
-  id: number;
+  item_id: number;
   name: string;
   sku: string | null;
-  category_id: number | null;
-  quantity: number;
-  expiration_date: string | null;
   image_url: string | null;
-  track_low_stock: boolean;
-  low_stock_threshold: number;
+  sources: LibraryLotSource[];
+  available_qty: Partial<Record<LibraryLotSource, number>>;
+  remise_item_id: number | null;
+  pharmacy_item_id: number | null;
 }
 
 interface RemiseLot {
@@ -195,6 +196,11 @@ interface PharmacyLotWithItems extends PharmacyLot {
 }
 
 type LibraryLotSource = "remise" | "pharmacy";
+
+const LIBRARY_SOURCE_LABELS: Record<LibraryLotSource, string> = {
+  remise: "Remise",
+  pharmacy: "Pharmacie"
+};
 
 interface LibraryLotItem {
   id: number;
@@ -326,6 +332,12 @@ const DEFAULT_VEHICLE_TYPES: Array<{ code: VehicleType; label: string }> = [
 ];
 
 function getAvailableQuantity(item: VehicleItem): number {
+  if (item.available_quantities) {
+    const values = Object.values(item.available_quantities);
+    if (values.length > 0) {
+      return values.reduce((sum, value) => sum + (value ?? 0), 0);
+    }
+  }
   if (item.remise_item_id !== null) {
     return item.remise_quantity ?? item.available_quantity ?? item.quantity ?? 0;
   }
@@ -333,6 +345,17 @@ function getAvailableQuantity(item: VehicleItem): number {
     return item.pharmacy_quantity ?? item.available_quantity ?? item.quantity ?? 0;
   }
   return item.quantity ?? 0;
+}
+
+function formatLibraryStockLabel(item: VehicleItem): string | null {
+  if (!item.library_sources || item.library_sources.length === 0) {
+    return null;
+  }
+  const quantities = item.available_quantities ?? {};
+  const parts = item.library_sources.map(
+    (source) => `${LIBRARY_SOURCE_LABELS[source]} : ${quantities[source] ?? 0}`
+  );
+  return parts.join(" / ");
 }
 
 // Vehicle placement (target_view) must stay isolated from the packaging "size" value.
@@ -475,8 +498,7 @@ function resolveTemplateForSource(items: VehicleItem[], payload: DropRequestPayl
       items.find(
         (item) =>
           item.category_id === null &&
-          item.pharmacy_item_id === payload.sourceId &&
-          item.remise_item_id === null
+          item.pharmacy_item_id === payload.sourceId
       ) ?? null
     );
   }
@@ -513,6 +535,8 @@ type DragPayloadSource = Pick<
   | "lot_name"
   | "quantity"
   | "available_quantity"
+  | "available_quantities"
+  | "library_sources"
 >;
 
 type DragSourceDescriptor = {
@@ -538,7 +562,30 @@ function resolveDragSource(item: DragPayloadSource): DragSourceDescriptor | null
     };
   }
 
-  if (item.remise_item_id !== null) {
+  const sourceOrder = item.library_sources?.length
+    ? item.library_sources
+    : (["remise", "pharmacy"] as LibraryLotSource[]);
+  const sourceCandidates = sourceOrder.filter((source) =>
+    source === "remise" ? item.remise_item_id !== null : item.pharmacy_item_id !== null
+  );
+  if (sourceCandidates.length === 0) {
+    return null;
+  }
+  const resolveQuantity = (source: LibraryLotSource) =>
+    item.available_quantities?.[source] ??
+    item.available_quantity ??
+    item.quantity ??
+    0;
+  let chosenSource = sourceCandidates[0];
+  let bestQuantity = resolveQuantity(chosenSource);
+  for (const candidate of sourceCandidates.slice(1)) {
+    const candidateQuantity = resolveQuantity(candidate);
+    if (candidateQuantity > bestQuantity) {
+      bestQuantity = candidateQuantity;
+      chosenSource = candidate;
+    }
+  }
+  if (chosenSource === "remise" && item.remise_item_id !== null) {
     return {
       sourceType: "remise",
       sourceId: item.remise_item_id,
@@ -546,11 +593,10 @@ function resolveDragSource(item: DragPayloadSource): DragSourceDescriptor | null
       categoryId: null,
       remiseItemId: item.remise_item_id,
       pharmacyItemId: null,
-      quantity: item.available_quantity ?? item.quantity ?? 0
+      quantity: resolveQuantity("remise")
     };
   }
-
-  if (item.pharmacy_item_id !== null) {
+  if (chosenSource === "pharmacy" && item.pharmacy_item_id !== null) {
     return {
       sourceType: "pharmacy",
       sourceId: item.pharmacy_item_id,
@@ -558,7 +604,7 @@ function resolveDragSource(item: DragPayloadSource): DragSourceDescriptor | null
       categoryId: null,
       remiseItemId: null,
       pharmacyItemId: item.pharmacy_item_id,
-      quantity: item.available_quantity ?? item.quantity ?? 0
+      quantity: resolveQuantity("pharmacy")
     };
   }
 
@@ -910,7 +956,16 @@ export function VehicleInventoryPage() {
   );
   const isSecoursVehicle = selectedVehicleTypes.includes("secours_a_personne");
   const isIncendieVehicle = selectedVehicleTypes.includes("incendie");
-  const libraryVehicleType = isSecoursVehicle ? "secours_a_personne" : null;
+  const librarySources = useMemo(() => {
+    const sources = new Set<LibraryLotSource>();
+    if (selectedVehicleTypes.includes("incendie")) {
+      sources.add("remise");
+    }
+    if (selectedVehicleTypes.includes("secours_a_personne")) {
+      sources.add("pharmacy");
+    }
+    return Array.from(sources);
+  }, [selectedVehicleTypes]);
   const normalizedVehicleViews = useMemo(
     () => getVehicleViews(selectedVehicle),
     [selectedVehicle]
@@ -949,18 +1004,20 @@ export function VehicleInventoryPage() {
 
   const { data: remiseLots = [], isLoading: isLoadingRemiseLots } = useQuery({
     queryKey: ["remise-lots-with-items"],
+    enabled: librarySources.includes("remise"),
     queryFn: async () => {
       const response = await api.get<RemiseLotWithItems[]>("/remise-inventory/lots/with-items");
       return response.data;
     }
   });
 
+  const shouldLoadPharmacyLots = librarySources.includes("pharmacy");
   const {
     data: pharmacyLots = [],
     isLoading: isLoadingPharmacyLots
   } = useQuery({
-    queryKey: ["vehicle-library-lots", libraryVehicleType],
-    enabled: isSecoursVehicle,
+    queryKey: ["vehicle-library-lots", selectedVehicle?.id, "pharmacy"],
+    enabled: shouldLoadPharmacyLots,
     queryFn: async () => {
       const response = await api.get<PharmacyLotWithItems[]>("/vehicle-inventory/library/lots", {
         params: { vehicle_type: "secours_a_personne", vehicle_id: selectedVehicle?.id }
@@ -969,21 +1026,54 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const { data: pharmacyLibraryItems = [] } = useQuery({
-    queryKey: ["vehicle-library", libraryVehicleType],
-    enabled: !!selectedVehicle?.id && isSecoursVehicle,
+  const { data: libraryItems = [] } = useQuery({
+    queryKey: ["vehicle-library", selectedVehicle?.id, librarySources],
+    enabled: Boolean(selectedVehicle?.id && librarySources.length > 0),
     queryFn: async () => {
       const response = await api.get<VehicleLibraryItem[]>("/vehicle-inventory/library", {
-        params: { vehicle_type: "secours_a_personne" }
+        params: { vehicle_id: selectedVehicle?.id }
       });
       return response.data;
     }
   });
 
+  const libraryInventoryItems = useMemo(
+    () =>
+      libraryItems.map((item) => {
+        const totalAvailable = Object.values(item.available_qty ?? {}).reduce(
+          (sum, value) => sum + (value ?? 0),
+          0
+        );
+        return {
+          id: item.item_id,
+          name: item.name,
+          sku: item.sku ?? `LIB-${item.item_id}`,
+          category_id: null,
+          size: null,
+          target_view: null,
+          quantity: totalAvailable,
+          remise_item_id: item.remise_item_id ?? null,
+          pharmacy_item_id: item.pharmacy_item_id ?? null,
+          remise_quantity: item.available_qty?.remise ?? null,
+          pharmacy_quantity: item.available_qty?.pharmacy ?? null,
+          image_url: item.image_url,
+          position_x: null,
+          position_y: null,
+          lot_id: null,
+          lot_name: null,
+          show_in_qr: false,
+          vehicle_type: null,
+          available_quantity: totalAvailable,
+          available_quantities: item.available_qty,
+          library_sources: item.sources
+        };
+      }),
+    [libraryItems]
+  );
+
   const isLoadingLots =
-    isSecoursVehicle
-      ? isLoadingPharmacyLots
-      : isLoadingRemiseLots;
+    (librarySources.includes("pharmacy") && isLoadingPharmacyLots) ||
+    (librarySources.includes("remise") && isLoadingRemiseLots);
 
   const { data: vehiclePhotos = [] } = useQuery({
     queryKey: ["vehicle-photos"],
@@ -1305,20 +1395,35 @@ export function VehicleInventoryPage() {
       ensureValidSizeForMutation(payload.targetView);
 
       const templateSourceItems =
-        payload.sourceType === "pharmacy" && isSecoursVehicle
-          ? pharmacyLibraryInventoryItems
+        payload.sourceType === "remise" || payload.sourceType === "pharmacy"
+          ? libraryInventoryItems
           : items;
       const template = resolveTemplateForSource(templateSourceItems, payload);
       if (!template) {
         throw new Error("Matériel introuvable.");
       }
-      const sourceQuantity = getAvailableQuantity(template);
+      const sourceQuantity =
+        payload.sourceType === "remise"
+          ? template.available_quantities?.remise ??
+            template.remise_quantity ??
+            template.available_quantity ??
+            template.quantity ??
+            0
+          : payload.sourceType === "pharmacy"
+            ? template.available_quantities?.pharmacy ??
+              template.pharmacy_quantity ??
+              template.available_quantity ??
+              template.quantity ??
+              0
+            : getAvailableQuantity(template);
       if (template.remise_item_id == null && template.pharmacy_item_id == null) {
         throw new Error("Ce matériel n'est pas lié à un inventaire disponible.");
       }
       if (sourceQuantity <= 0 || (payload.quantity ?? 0) <= 0) {
         throw new Error(
-          template.remise_item_id ? "Stock insuffisant en remise." : "Stock insuffisant en pharmacie."
+          payload.sourceType === "remise"
+            ? "Stock insuffisant en remise."
+            : "Stock insuffisant en pharmacie."
         );
       }
       const vehicle = vehicles.find((entry) => entry.id === payload.categoryId) ?? null;
@@ -1502,8 +1607,8 @@ export function VehicleInventoryPage() {
       ];
       if (variables.lot.source === "pharmacy") {
         invalidations.push(
-          queryClient.invalidateQueries({ queryKey: ["vehicle-library", libraryVehicleType] }),
-          queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots", libraryVehicleType] }),
+          queryClient.invalidateQueries({ queryKey: ["vehicle-library"] }),
+          queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots"] }),
           queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] }),
           queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots-library"] })
         );
@@ -1614,8 +1719,8 @@ export function VehicleInventoryPage() {
         queryClient.invalidateQueries({
           queryKey: ["vehicle-applied-lots-library", selectedVehicle?.id]
         }),
-        queryClient.invalidateQueries({ queryKey: ["vehicle-library", libraryVehicleType] }),
-        queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots", libraryVehicleType] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-library"] }),
+        queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots"] }),
         queryClient.invalidateQueries({ queryKey: ["vehicle-items"] })
       ]);
     },
@@ -2015,7 +2120,7 @@ export function VehicleInventoryPage() {
 
   const { data: appliedLotsForLibrary = [] } = useQuery({
     queryKey: ["vehicle-applied-lots-library", selectedVehicle?.id],
-    enabled: !!selectedVehicle?.id && isSecoursVehicle,
+    enabled: !!selectedVehicle?.id && librarySources.includes("pharmacy"),
     queryFn: async () => {
       const response = await api.get<VehicleAppliedLot[]>("/vehicle-inventory/applied-lots", {
         params: {
@@ -2501,33 +2606,19 @@ export function VehicleInventoryPage() {
     [filteredPharmacyLots]
   );
 
-  const pharmacyLibraryInventoryItems = useMemo(
-    () =>
-      pharmacyLibraryItems.map((item) => ({
-        id: item.id,
-        name: item.name,
-        sku: item.sku ?? `PHARM-${item.id}`,
-        category_id: null,
-        size: null,
-        target_view: null,
-        quantity: item.quantity,
-        remise_item_id: null,
-        pharmacy_item_id: item.id,
-        remise_quantity: null,
-        pharmacy_quantity: item.quantity,
-        image_url: item.image_url,
-        position_x: null,
-        position_y: null,
-        lot_id: null,
-        lot_name: null,
-        show_in_qr: false,
-        vehicle_type: "secours_a_personne" as VehicleType,
-        available_quantity: item.quantity
-      })),
-    [pharmacyLibraryItems]
-  );
+  const libraryLots = useMemo(() => {
+    const lots: LibraryLot[] = [];
+    if (librarySources.includes("remise")) {
+      lots.push(...remiseLibraryLots);
+    }
+    if (librarySources.includes("pharmacy")) {
+      lots.push(...pharmacyLibraryLots);
+    }
+    return lots;
+  }, [librarySources, remiseLibraryLots, pharmacyLibraryLots]);
 
-  const librarySourceItems = isSecoursVehicle ? pharmacyLibraryInventoryItems : items;
+  const useLibraryItems = librarySources.length > 0;
+  const librarySourceItems = useLibraryItems ? libraryInventoryItems : items;
 
   const isCompatibleWithVehicle = useCallback(
     (itemType: VehicleType | null | undefined) =>
@@ -2552,7 +2643,11 @@ export function VehicleInventoryPage() {
           return false;
         }
 
-        if (item.remise_item_id && lotRemiseItemIds.has(item.remise_item_id)) {
+        if (
+          item.remise_item_id &&
+          lotRemiseItemIds.has(item.remise_item_id) &&
+          item.pharmacy_item_id === null
+        ) {
           return false;
         }
 
@@ -2576,7 +2671,7 @@ export function VehicleInventoryPage() {
           }
         }
 
-        if (isSecoursVehicle) {
+        if (isSecoursVehicle && !isIncendieVehicle) {
           if (item.pharmacy_item_id === null && templateType !== "secours_a_personne") {
             return false;
           }
@@ -2594,8 +2689,7 @@ export function VehicleInventoryPage() {
   );
 
   const availableLots = useMemo(() => {
-    const sourceLots = isSecoursVehicle ? pharmacyLibraryLots : remiseLibraryLots;
-    return sourceLots.filter((lot) => {
+    return libraryLots.filter((lot) => {
       if (lot.items.length === 0) {
         return false;
       }
@@ -2606,7 +2700,7 @@ export function VehicleInventoryPage() {
       ) {
         return false;
       }
-      if (isSecoursVehicle) {
+      if (lot.source === "pharmacy") {
         return true;
       }
       return lot.items.every((item) => {
@@ -2617,11 +2711,9 @@ export function VehicleInventoryPage() {
       });
     });
   }, [
-    pharmacyLibraryLots,
-    remiseLibraryLots,
+    libraryLots,
     remiseItemTypeMap,
-    isCompatibleWithVehicle,
-    isSecoursVehicle
+    isCompatibleWithVehicle
   ]);
 
   const handleDropLotOnView = (lotId: number, position: { x: number; y: number }) => {
@@ -3640,6 +3732,7 @@ export function VehicleInventoryPage() {
                   isAssigningLot={assignLotToVehicle.isPending}
                   vehicleName={selectedVehicle?.name ?? null}
                   isSecoursVehicle={isSecoursVehicle}
+                  librarySources={librarySources}
                   onDragStartCapture={lockViewSelection}
                   onAssignLot={(lot) => {
                     if (!selectedVehicle) {
@@ -3670,9 +3763,9 @@ export function VehicleInventoryPage() {
                     returnItemToLibrary(itemId);
                   }}
                   onDropLot={
-                    isSecoursVehicle
-                      ? undefined
-                      : (lotId, categoryId) => removeLotFromVehicle.mutate({ lotId, categoryId })
+                    librarySources.includes("remise")
+                      ? (lotId, categoryId) => removeLotFromVehicle.mutate({ lotId, categoryId })
+                      : undefined
                   }
                   onRemoveFromVehicle={(itemId) => {
                     logDebug("DROP EVENT", {
@@ -5279,6 +5372,7 @@ interface DroppableLibraryProps {
   isAssigningLot?: boolean;
   vehicleName: string | null;
   isSecoursVehicle?: boolean;
+  librarySources?: LibraryLotSource[];
   onAssignLot?: (lot: LibraryLot) => void;
   onDropItem: (itemId: number) => void;
   onDropLot?: (lotId: number, categoryId: number) => void;
@@ -5296,6 +5390,7 @@ function DroppableLibrary({
   isAssigningLot = false,
   vehicleName,
   isSecoursVehicle = false,
+  librarySources = [],
   onAssignLot,
   onDropItem,
   onDropLot,
@@ -5348,6 +5443,12 @@ function DroppableLibrary({
   );
   const lotCountLabel = `${filteredLots.length} lot${filteredLots.length > 1 ? "s" : ""}`;
   const itemCountLabel = `${filteredItems.length} article${filteredItems.length > 1 ? "s" : ""}`;
+  const emptyLibraryMessage =
+    librarySources.length > 1
+      ? "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises et pharmacie pour les rendre disponibles ici."
+      : librarySources[0] === "pharmacy"
+        ? "Aucun matériel disponible. Gérez vos articles depuis l'inventaire pharmacie pour les rendre disponibles ici."
+        : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici.";
 
   return (
     <div
@@ -5632,9 +5733,7 @@ function DroppableLibrary({
                 <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-center text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
                   {lots.length > 0
                     ? "Aucun article individuel disponible. Ajoutez un lot pour préparer du matériel."
-                    : isSecoursVehicle
-                      ? "Aucun matériel disponible. Gérez vos articles depuis l'inventaire pharmacie pour les rendre disponibles ici."
-                      : "Aucun matériel disponible. Gérez vos articles depuis l'inventaire remises pour les rendre disponibles ici."}
+                    : emptyLibraryMessage}
                 </p>
               )}
               {items.length > 0 && filteredItems.length === 0 && (
@@ -5734,11 +5833,13 @@ function ItemCard({
   const hasImage = Boolean(imageUrl);
 
   const availableQuantity = getAvailableQuantity(item);
+  const libraryStockLabel = item.category_id === null ? formatLibraryStockLabel(item) : null;
   const quantityLabel =
     item.category_id === null
-      ? item.pharmacy_item_id !== null
-        ? `Stock pharmacie : ${availableQuantity}`
-        : `Stock remise : ${availableQuantity}`
+      ? libraryStockLabel ??
+        (item.pharmacy_item_id !== null
+          ? `Stock pharmacie : ${availableQuantity}`
+          : `Stock remise : ${availableQuantity}`)
       : `Qté : ${item.quantity}`;
   const isLockedByLot = item.lot_id !== null;
   const lotLabel = isLockedByLot ? item.lot_name ?? `Lot #${item.lot_id}` : null;
@@ -5955,7 +6056,9 @@ function ItemCard({
           lot_id: item.lot_id,
           lot_name: item.lot_name,
           quantity: item.quantity,
-          available_quantity: item.available_quantity ?? null
+          available_quantity: item.available_quantity ?? null,
+          available_quantities: item.available_quantities,
+          library_sources: item.library_sources
         });
       }}
     >
@@ -5982,6 +6085,18 @@ function ItemCard({
         </div>
         <div>
           <p className="text-sm font-medium text-slate-900 dark:text-slate-100">{item.name}</p>
+          {item.category_id === null && item.library_sources && item.library_sources.length > 0 ? (
+            <div className="mt-1 flex flex-wrap gap-1">
+              {item.library_sources.map((source) => (
+                <span
+                  key={`${item.id}-${source}`}
+                  className="rounded-full border border-slate-200 bg-slate-50 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-slate-600 dark:border-slate-600 dark:bg-slate-800 dark:text-slate-200"
+                >
+                  {LIBRARY_SOURCE_LABELS[source]}
+                </span>
+              ))}
+            </div>
+          ) : null}
           <p className="text-xs text-slate-500 dark:text-slate-400">
             Taille / Variante : {item.size ?? "—"}
           </p>

@@ -1831,17 +1831,14 @@ class CustomFieldDefinitionUpdate(BaseModel):
 
 
 class VehicleLibraryItem(BaseModel):
-    id: int
-    pharmacy_item_id: int
+    item_id: int
     name: str
     sku: Optional[str] = Field(default=None, max_length=64)
-    category_id: Optional[int] = Field(default=None, gt=0)
-    quantity: int = Field(default=0, ge=0)
-    expiration_date: Optional[date] = None
     image_url: Optional[str] = None
-    vehicle_type: Optional[str] = None
-    track_low_stock: bool = True
-    low_stock_threshold: int = Field(default=0, ge=0)
+    sources: list[str] = Field(default_factory=list)
+    available_qty: dict[str, int] = Field(default_factory=dict)
+    remise_item_id: int | None = None
+    pharmacy_item_id: int | None = None
 
 
 class BarcodeValue(BaseModel):

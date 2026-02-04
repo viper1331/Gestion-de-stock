@@ -72,7 +72,8 @@ async def list_vehicle_items(
 
 @router.get("/library", response_model=list[models.VehicleLibraryItem])
 async def list_vehicle_library(
-    vehicle_type: str = Query(..., description="Type de véhicule ciblé"),
+    vehicle_id: int | None = Query(default=None, ge=1, description="ID du véhicule ciblé"),
+    vehicle_type: str | None = Query(default=None, description="Type de véhicule ciblé"),
     q: str | None = Query(default=None, description="Recherche par nom ou code barre"),
     category_id: int | None = Query(default=None, gt=0, description="Filtre catégorie"),
     limit: int | None = Query(default=None, ge=1, description="Pagination: taille"),
@@ -80,10 +81,9 @@ async def list_vehicle_library(
     user: models.User = Depends(get_current_user),
 ) -> list[models.VehicleLibraryItem]:
     _require_permission(user, action="view")
-    if vehicle_type != "secours_a_personne":
-        return []
     return services.list_vehicle_library_items(
-        vehicle_type=vehicle_type,
+        vehicle_id=vehicle_id,
+        vehicle_types=[vehicle_type] if vehicle_type else None,
         search=q,
         category_id=category_id,
         limit=limit,

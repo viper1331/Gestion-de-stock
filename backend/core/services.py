@@ -16252,64 +16252,134 @@ def list_pharmacy_items() -> list[models.PharmacyItem]:
 
 
 def list_vehicle_library_items(
-    vehicle_type: str,
+    *,
+    vehicle_id: int | None = None,
+    vehicle_types: Iterable[str] | None = None,
     search: str | None = None,
     category_id: int | None = None,
     limit: int | None = None,
     offset: int | None = None,
 ) -> list[models.VehicleLibraryItem]:
-    if vehicle_type != "secours_a_personne":
-        return []
     ensure_database_ready()
-    filters = ["quantity > 0"]
-    params: list[object] = []
-    if search:
-        filters.append("(name LIKE ? OR barcode LIKE ?)")
-        like = f"%{search.strip()}%"
-        params.extend([like, like])
-    if category_id is not None:
-        filters.append("category_id = ?")
-        params.append(category_id)
-    where_clause = " AND ".join(filters)
-    query = f"""
-        SELECT id,
-               name,
-               barcode AS sku,
-               category_id,
-               quantity,
-               expiration_date,
-               low_stock_threshold
-        FROM pharmacy_items
-        WHERE {where_clause}
-        ORDER BY name COLLATE NOCASE
-    """
-    if limit is not None:
-        query += " LIMIT ?"
-        params.append(limit)
-        if offset is not None:
-            query += " OFFSET ?"
-            params.append(offset)
-    elif offset is not None:
-        query += " LIMIT -1 OFFSET ?"
-        params.append(offset)
-    with db.get_stock_connection() as conn:
-        cur = conn.execute(query, params)
-        return [
-            models.VehicleLibraryItem(
-                id=row["id"],
-                pharmacy_item_id=row["id"],
-                name=row["name"],
-                sku=row["sku"],
-                category_id=None,
-                quantity=row["quantity"],
-                expiration_date=row["expiration_date"],
-                image_url=None,
-                vehicle_type="secours_a_personne",
-                track_low_stock=True,
-                low_stock_threshold=row["low_stock_threshold"],
+    resolved_types: list[str] = []
+    if vehicle_id is not None:
+        vehicle = get_vehicle_category(vehicle_id)
+        if vehicle is None:
+            return []
+        resolved_types = vehicle.types or ([vehicle.vehicle_type] if vehicle.vehicle_type else [])
+    elif vehicle_types is not None:
+        resolved_types = [value for value in vehicle_types if value]
+    if not resolved_types:
+        return []
+
+    from backend.core.constants_vehicle_types import resolve_vehicle_library_sources
+
+    sources = resolve_vehicle_library_sources(resolved_types)
+    if not sources:
+        return []
+
+    normalized_search = search.strip() if search else None
+    items_by_key: dict[str, models.VehicleLibraryItem] = {}
+
+    def build_library_key(*, source: str, source_item_id: int, name: str, sku: str | None) -> str:
+        normalized_sku = (sku or "").strip().lower()
+        if normalized_sku:
+            return f"sku:{normalized_sku}"
+        normalized_name = (name or "").strip().lower()
+        if normalized_name:
+            return f"name:{normalized_name}"
+        return f"{source}:{source_item_id}"
+
+    def build_library_item_id(key: str) -> int:
+        import zlib
+
+        return int(zlib.adler32(key.encode("utf-8")))
+
+    def merge_library_item(
+        *,
+        source: str,
+        source_item_id: int,
+        name: str,
+        sku: str | None,
+        image_url: str | None,
+        quantity: int,
+    ) -> None:
+        key = build_library_key(
+            source=source, source_item_id=source_item_id, name=name, sku=sku
+        )
+        existing = items_by_key.get(key)
+        if existing:
+            if source not in existing.sources:
+                existing.sources.append(source)
+            existing.available_qty[source] = quantity
+            if source == "remise":
+                existing.remise_item_id = source_item_id
+            elif source == "pharmacy":
+                existing.pharmacy_item_id = source_item_id
+            if not existing.image_url and image_url:
+                existing.image_url = image_url
+            if not existing.sku and sku:
+                existing.sku = sku
+            return
+        items_by_key[key] = models.VehicleLibraryItem(
+            item_id=build_library_item_id(key),
+            name=name,
+            sku=sku,
+            image_url=image_url,
+            sources=[source],
+            available_qty={source: quantity},
+            remise_item_id=source_item_id if source == "remise" else None,
+            pharmacy_item_id=source_item_id if source == "pharmacy" else None,
+        )
+
+    if "remise" in sources:
+        for item in list_remise_items(normalized_search):
+            if item.quantity <= 0:
+                continue
+            merge_library_item(
+                source="remise",
+                source_item_id=item.id,
+                name=item.name,
+                sku=item.sku,
+                image_url=item.image_url,
+                quantity=item.quantity,
             )
-            for row in cur.fetchall()
-        ]
+
+    if "pharmacy" in sources:
+        filters = ["quantity > 0"]
+        params: list[object] = []
+        if normalized_search:
+            filters.append("(name LIKE ? OR barcode LIKE ?)")
+            like = f"%{normalized_search}%"
+            params.extend([like, like])
+        if category_id is not None:
+            filters.append("category_id = ?")
+            params.append(category_id)
+        where_clause = " AND ".join(filters)
+        query = f"""
+            SELECT id, name, barcode AS sku, quantity
+            FROM pharmacy_items
+            WHERE {where_clause}
+            ORDER BY name COLLATE NOCASE
+        """
+        with db.get_stock_connection() as conn:
+            cur = conn.execute(query, params)
+            for row in cur.fetchall():
+                merge_library_item(
+                    source="pharmacy",
+                    source_item_id=row["id"],
+                    name=row["name"],
+                    sku=row["sku"],
+                    image_url=None,
+                    quantity=row["quantity"],
+                )
+
+    items = sorted(items_by_key.values(), key=lambda entry: entry.name.lower())
+    if offset:
+        items = items[offset:]
+    if limit is not None:
+        items = items[:limit]
+    return items
 
 
 def list_vehicle_pharmacy_lots(
