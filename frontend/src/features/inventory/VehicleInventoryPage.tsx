@@ -143,58 +143,6 @@ interface VehicleLibraryItem {
   pharmacy_item_id: number | null;
 }
 
-interface RemiseLot {
-  id: number;
-  name: string;
-  description: string | null;
-  created_at: string;
-  image_url: string | null;
-  cover_image_url: string | null;
-  item_count: number;
-  total_quantity: number;
-}
-
-interface RemiseLotItem {
-  id: number;
-  lot_id: number;
-  remise_item_id: number;
-  quantity: number;
-  remise_name: string;
-  remise_sku: string;
-  size: string | null;
-  available_quantity: number;
-}
-
-interface RemiseLotWithItems extends RemiseLot {
-  items: RemiseLotItem[];
-}
-
-interface PharmacyLot {
-  id: number;
-  name: string;
-  description: string | null;
-  created_at: string;
-  image_url: string | null;
-  cover_image_url: string | null;
-  item_count: number;
-  total_quantity: number;
-}
-
-interface PharmacyLotItem {
-  id: number;
-  lot_id: number;
-  pharmacy_item_id: number;
-  quantity: number;
-  compartment_name: string | null;
-  pharmacy_name: string;
-  pharmacy_sku: string;
-  available_quantity: number;
-}
-
-interface PharmacyLotWithItems extends PharmacyLot {
-  items: PharmacyLotItem[];
-}
-
 type LibraryLotSource = "remise" | "pharmacy";
 
 const LIBRARY_SOURCE_LABELS: Record<LibraryLotSource, string> = {
@@ -224,6 +172,65 @@ interface LibraryLot {
   code?: string | null;
   items: LibraryLotItem[];
   source: LibraryLotSource;
+}
+
+interface VehicleLibraryLot {
+  lot_id: number;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  cover_image_url: string | null;
+  item_count: number;
+  total_quantity: number;
+  origin: LibraryLotSource;
+  items: LibraryLotItem[];
+}
+
+interface VehicleLibraryResponse {
+  sources: LibraryLotSource[];
+  items: VehicleLibraryItem[];
+  lots: VehicleLibraryLot[];
+  counts: { items: number; lots: number };
+}
+
+interface RemiseLotItemResponse {
+  id: number;
+  remise_item_id: number;
+  quantity: number;
+  remise_name: string;
+  remise_sku: string;
+  available_quantity: number;
+}
+
+interface RemiseLotWithItemsResponse {
+  id: number;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  cover_image_url: string | null;
+  item_count: number;
+  total_quantity: number;
+  items: RemiseLotItemResponse[];
+}
+
+interface PharmacyLotItemResponse {
+  id: number;
+  pharmacy_item_id: number;
+  quantity: number;
+  pharmacy_name: string;
+  pharmacy_sku: string;
+  available_quantity: number;
+}
+
+interface PharmacyLotWithItemsResponse {
+  id: number;
+  name: string;
+  description: string | null;
+  image_url: string | null;
+  cover_image_url: string | null;
+  item_count: number;
+  total_quantity: number;
+  items: PharmacyLotItemResponse[];
 }
 
 export function LibraryLotCardImage({
@@ -956,7 +963,7 @@ export function VehicleInventoryPage() {
   );
   const isSecoursVehicle = selectedVehicleTypes.includes("secours_a_personne");
   const isIncendieVehicle = selectedVehicleTypes.includes("incendie");
-  const librarySources = useMemo(() => {
+  const baseLibrarySources = useMemo(() => {
     const sources = new Set<LibraryLotSource>();
     if (selectedVehicleTypes.includes("incendie")) {
       sources.add("remise");
@@ -1002,40 +1009,101 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const { data: remiseLots = [], isLoading: isLoadingRemiseLots } = useQuery({
-    queryKey: ["remise-lots-with-items"],
-    enabled: librarySources.includes("remise"),
+  const { data: libraryBundle, isLoading: isLoadingLibrary } = useQuery({
+    queryKey: ["vehicle-library", selectedVehicle?.id, baseLibrarySources],
+    enabled: Boolean(selectedVehicle?.id && baseLibrarySources.length > 0),
     queryFn: async () => {
-      const response = await api.get<RemiseLotWithItems[]>("/remise-inventory/lots/with-items");
-      return response.data;
+      if (!selectedVehicle?.id) {
+        return { sources: [], items: [], lots: [], counts: { items: 0, lots: 0 } };
+      }
+      try {
+        const response = await api.get<VehicleLibraryResponse>(
+          `/vehicles/${selectedVehicle.id}/library`,
+          {
+            params: { include_lots: true }
+          }
+        );
+        return response.data;
+      } catch (error) {
+        if (isAxiosError(error)) {
+          const status = error.response?.status;
+          if (status === 404 || status === 405) {
+            const [itemsResponse, remiseLotsResponse, pharmacyLotsResponse] = await Promise.all([
+              api.get<VehicleLibraryItem[]>("/vehicle-inventory/library", {
+                params: { vehicle_id: selectedVehicle.id }
+              }),
+              baseLibrarySources.includes("remise")
+                ? api.get<RemiseLotWithItemsResponse[]>("/remise-inventory/lots/with-items")
+                : Promise.resolve({ data: [] as RemiseLotWithItemsResponse[] }),
+              baseLibrarySources.includes("pharmacy")
+                ? api.get<PharmacyLotWithItemsResponse[]>("/vehicle-inventory/library/lots", {
+                    params: {
+                      vehicle_type: "secours_a_personne",
+                      vehicle_id: selectedVehicle.id
+                    }
+                  })
+                : Promise.resolve({ data: [] as PharmacyLotWithItemsResponse[] })
+            ]);
+
+            const fallbackLots: VehicleLibraryLot[] = [
+              ...remiseLotsResponse.data.map((lot) => ({
+                lot_id: lot.id,
+                name: lot.name,
+                description: lot.description,
+                image_url: lot.image_url,
+                cover_image_url: lot.cover_image_url,
+                item_count: lot.item_count,
+                total_quantity: lot.total_quantity,
+                origin: "remise",
+                items: lot.items.map((item) => ({
+                  id: item.id,
+                  name: item.remise_name,
+                  quantity: item.quantity,
+                  available_quantity: item.available_quantity,
+                  remise_item_id: item.remise_item_id,
+                  pharmacy_item_id: null,
+                  sku: item.remise_sku
+                }))
+              })),
+              ...pharmacyLotsResponse.data.map((lot) => ({
+                lot_id: lot.id,
+                name: lot.name,
+                description: lot.description,
+                image_url: lot.image_url,
+                cover_image_url: lot.cover_image_url,
+                item_count: lot.item_count,
+                total_quantity: lot.total_quantity,
+                origin: "pharmacy",
+                items: lot.items.map((item) => ({
+                  id: item.id,
+                  name: item.pharmacy_name,
+                  quantity: item.quantity,
+                  available_quantity: item.available_quantity,
+                  remise_item_id: null,
+                  pharmacy_item_id: item.pharmacy_item_id,
+                  sku: item.pharmacy_sku
+                }))
+              }))
+            ];
+            return {
+              sources: baseLibrarySources,
+              items: itemsResponse.data,
+              lots: fallbackLots,
+              counts: { items: itemsResponse.data.length, lots: fallbackLots.length }
+            };
+          }
+        }
+        throw error;
+      }
     }
   });
 
-  const shouldLoadPharmacyLots = librarySources.includes("pharmacy");
-  const {
-    data: pharmacyLots = [],
-    isLoading: isLoadingPharmacyLots
-  } = useQuery({
-    queryKey: ["vehicle-library-lots", selectedVehicle?.id, "pharmacy"],
-    enabled: shouldLoadPharmacyLots,
-    queryFn: async () => {
-      const response = await api.get<PharmacyLotWithItems[]>("/vehicle-inventory/library/lots", {
-        params: { vehicle_type: "secours_a_personne", vehicle_id: selectedVehicle?.id }
-      });
-      return response.data;
-    }
-  });
+  const librarySources = useMemo(
+    () => (libraryBundle?.sources?.length ? libraryBundle.sources : baseLibrarySources),
+    [baseLibrarySources, libraryBundle?.sources]
+  );
 
-  const { data: libraryItems = [] } = useQuery({
-    queryKey: ["vehicle-library", selectedVehicle?.id, librarySources],
-    enabled: Boolean(selectedVehicle?.id && librarySources.length > 0),
-    queryFn: async () => {
-      const response = await api.get<VehicleLibraryItem[]>("/vehicle-inventory/library", {
-        params: { vehicle_id: selectedVehicle?.id }
-      });
-      return response.data;
-    }
-  });
+  const libraryItems = libraryBundle?.items ?? [];
 
   const libraryInventoryItems = useMemo(
     () =>
@@ -1071,9 +1139,7 @@ export function VehicleInventoryPage() {
     [libraryItems]
   );
 
-  const isLoadingLots =
-    (librarySources.includes("pharmacy") && isLoadingPharmacyLots) ||
-    (librarySources.includes("remise") && isLoadingRemiseLots);
+  const isLoadingLots = isLoadingLibrary;
 
   const { data: vehiclePhotos = [] } = useQuery({
     queryKey: ["vehicle-photos"],
@@ -1608,9 +1674,7 @@ export function VehicleInventoryPage() {
       if (variables.lot.source === "pharmacy") {
         invalidations.push(
           queryClient.invalidateQueries({ queryKey: ["vehicle-library"] }),
-          queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots"] }),
-          queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] }),
-          queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots-library"] })
+          queryClient.invalidateQueries({ queryKey: ["vehicle-applied-lots"] })
         );
       } else {
         invalidations.push(
@@ -1641,7 +1705,8 @@ export function VehicleInventoryPage() {
     },
     onSuccess: async (_, variables) => {
       const vehicleName = vehicles.find((vehicle) => vehicle.id === variables.categoryId)?.name;
-      const lotName = remiseLots.find((lot) => lot.id === variables.lotId)?.name ?? null;
+      const lotName =
+        libraryBundle?.lots.find((lot) => lot.lot_id === variables.lotId)?.name ?? null;
       setFeedback({
         type: "success",
         text: vehicleName
@@ -1716,11 +1781,7 @@ export function VehicleInventoryPage() {
         queryClient.invalidateQueries({
           queryKey: ["vehicle-applied-lots", selectedVehicle?.id, normalizedSelectedView]
         }),
-        queryClient.invalidateQueries({
-          queryKey: ["vehicle-applied-lots-library", selectedVehicle?.id]
-        }),
         queryClient.invalidateQueries({ queryKey: ["vehicle-library"] }),
-        queryClient.invalidateQueries({ queryKey: ["vehicle-library-lots"] }),
         queryClient.invalidateQueries({ queryKey: ["vehicle-items"] })
       ]);
     },
@@ -2118,19 +2179,6 @@ export function VehicleInventoryPage() {
     }
   });
 
-  const { data: appliedLotsForLibrary = [] } = useQuery({
-    queryKey: ["vehicle-applied-lots-library", selectedVehicle?.id],
-    enabled: !!selectedVehicle?.id && librarySources.includes("pharmacy"),
-    queryFn: async () => {
-      const response = await api.get<VehicleAppliedLot[]>("/vehicle-inventory/applied-lots", {
-        params: {
-          vehicle_id: selectedVehicle?.id
-        }
-      });
-      return response.data;
-    }
-  });
-
   const backgroundPanelStorageKey = useMemo(() => {
     const vehicleIdentifier = selectedVehicle?.id ? `vehicle-${selectedVehicle.id}` : "no-vehicle";
     const viewIdentifier = normalizeViewName(normalizedSelectedView).replace(/\s+/g, "-");
@@ -2518,15 +2566,36 @@ export function VehicleInventoryPage() {
     [handleSubviewPinCreate, handleSubviewPinMove, isSubView]
   );
 
+  const libraryLots = useMemo<LibraryLot[]>(
+    () =>
+      (libraryBundle?.lots ?? []).map((lot) => ({
+        id: lot.lot_id,
+        name: lot.name,
+        description: lot.description,
+        image_url: lot.image_url,
+        cover_image_url: lot.cover_image_url,
+        item_count: lot.item_count,
+        total_quantity: lot.total_quantity,
+        source: lot.origin,
+        items: lot.items
+      })),
+    [libraryBundle?.lots]
+  );
+
   const lotRemiseItemIds = useMemo(() => {
     const ids = new Set<number>();
-    for (const lot of remiseLots) {
+    for (const lot of libraryLots) {
+      if (lot.source !== "remise") {
+        continue;
+      }
       for (const entry of lot.items) {
-        ids.add(entry.remise_item_id);
+        if (entry.remise_item_id) {
+          ids.add(entry.remise_item_id);
+        }
       }
     }
     return ids;
-  }, [remiseLots]);
+  }, [libraryLots]);
 
   const remiseItemTypeMap = useMemo(() => {
     const map = new Map<number, VehicleType | null>();
@@ -2545,77 +2614,6 @@ export function VehicleInventoryPage() {
     });
     return map;
   }, [items]);
-
-  const remiseLibraryLots = useMemo<LibraryLot[]>(
-    () =>
-      remiseLots.map((lot) => ({
-        id: lot.id,
-        name: lot.name,
-        description: lot.description,
-        image_url: lot.image_url,
-        cover_image_url: lot.cover_image_url,
-        item_count: lot.item_count,
-        total_quantity: lot.total_quantity,
-        source: "remise",
-        items: lot.items.map((item) => ({
-          id: item.id,
-          name: item.remise_name,
-          quantity: item.quantity,
-          available_quantity: item.available_quantity,
-          remise_item_id: item.remise_item_id,
-          pharmacy_item_id: null,
-          sku: item.remise_sku
-        }))
-      })),
-    [remiseLots]
-  );
-
-  const filteredPharmacyLots = useMemo(() => {
-    if (appliedLotsForLibrary.length === 0) {
-      return pharmacyLots;
-    }
-    const appliedLotIds = new Set(
-      appliedLotsForLibrary
-        .map((lot) => lot.pharmacy_lot_id)
-        .filter((lotId): lotId is number => typeof lotId === "number")
-    );
-    return pharmacyLots.filter((lot) => !appliedLotIds.has(lot.id));
-  }, [appliedLotsForLibrary, pharmacyLots]);
-
-  const pharmacyLibraryLots = useMemo<LibraryLot[]>(
-    () =>
-      filteredPharmacyLots.map((lot) => ({
-        id: lot.id,
-        name: lot.name,
-        description: lot.description,
-        image_url: lot.image_url,
-        cover_image_url: lot.cover_image_url,
-        item_count: lot.item_count,
-        total_quantity: lot.total_quantity,
-        source: "pharmacy",
-        items: lot.items.map((item) => ({
-          id: item.id,
-          name: item.pharmacy_name,
-          quantity: item.quantity,
-          available_quantity: item.available_quantity,
-          remise_item_id: null,
-          pharmacy_item_id: item.pharmacy_item_id,
-          sku: item.pharmacy_sku
-        }))
-      })),
-    [filteredPharmacyLots]
-  );
-
-  const libraryLots = useMemo(() => {
-    const lots: LibraryLot[] = [];
-    if (librarySources.includes("remise")) {
-      lots.push(...remiseLibraryLots);
-    }
-    if (librarySources.includes("pharmacy")) {
-      lots.push(...pharmacyLibraryLots);
-    }
-    return lots;
-  }, [librarySources, remiseLibraryLots, pharmacyLibraryLots]);
 
   const useLibraryItems = librarySources.length > 0;
   const librarySourceItems = useLibraryItems ? libraryInventoryItems : items;
@@ -5654,6 +5652,11 @@ function DroppableLibrary({
                           <div className="flex items-start gap-2">
                             <div>
                               <p className="text-sm font-semibold text-slate-900 dark:text-slate-100">{lot.name}</p>
+                              <div className="mt-1">
+                                <span className="inline-flex items-center rounded-full border border-slate-200 bg-white px-2 py-0.5 text-[10px] font-medium text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-200">
+                                  Origine : {LIBRARY_SOURCE_LABELS[lot.source]}
+                                </span>
+                              </div>
                               {lot.description ? (
                                 <p className="text-[11px] text-slate-500 dark:text-slate-400">{lot.description}</p>
                               ) : null}
