@@ -7,6 +7,7 @@ import sys
 import zipfile
 
 import io
+import zlib
 from datetime import datetime, timezone
 from pathlib import Path
 from shutil import copy2
@@ -17,6 +18,7 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
+from base64 import a85decode
 
 ROOT = Path(__file__).resolve().parents[2]
 if str(ROOT) not in sys.path:
@@ -108,6 +110,36 @@ def _configure_barcode_assets(
     monkeypatch.setattr(barcode_service, "ASSETS_ROOT", assets_root)
     return barcode_service.get_site_assets_dir(site_key or db.DEFAULT_SITE_KEY)
 
+
+def _extract_pdf_stream_text(pdf_bytes: bytes) -> bytes:
+    chunks: list[bytes] = []
+    cursor = 0
+    while True:
+        start = pdf_bytes.find(b"stream", cursor)
+        if start == -1:
+            break
+        start = pdf_bytes.find(b"\n", start)
+        if start == -1:
+            break
+        start += 1
+        end = pdf_bytes.find(b"endstream", start)
+        if end == -1:
+            break
+        stream = pdf_bytes[start:end].strip()
+        decoded = stream
+        try:
+            decoded = a85decode(stream, adobe=True)
+        except Exception:
+            try:
+                decoded = a85decode(stream, adobe=False)
+            except Exception:
+                decoded = stream
+        try:
+            chunks.append(zlib.decompress(decoded))
+        except zlib.error:
+            chunks.append(decoded)
+        cursor = end + len(b"endstream")
+    return b"".join(chunks)
 
 _TRANSPARENT_PIXEL = (
     b"\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR"
@@ -2930,6 +2962,62 @@ def test_remise_inventory_pdf_export() -> None:
     payload = export_resp.content
     assert payload.startswith(b"%PDF")
     assert len(payload) > 200
+
+
+def test_remise_inventory_pdf_includes_assigned_vehicle_items() -> None:
+    services.ensure_database_ready()
+    admin_headers = _login_headers("admin", "admin123")
+
+    vehicle_category_resp = client.post(
+        "/vehicle-inventory/categories/",
+        json={"name": "VPI", "sizes": ["CABINE"]},
+        headers=admin_headers,
+    )
+    assert vehicle_category_resp.status_code == 201, vehicle_category_resp.text
+    vehicle_category_id = vehicle_category_resp.json()["id"]
+
+    category_resp = client.post(
+        "/remise-inventory/categories/",
+        json={"name": "Remise assignée", "sizes": ["STANDARD"]},
+        headers=admin_headers,
+    )
+    assert category_resp.status_code == 201, category_resp.text
+    category_id = category_resp.json()["id"]
+
+    item_resp = client.post(
+        "/remise-inventory/",
+        json={
+            "name": "Materiel assigne",
+            "sku": "REM-ASSIGN",
+            "quantity": 2,
+            "low_stock_threshold": 1,
+            "category_id": category_id,
+            "size": "STANDARD",
+        },
+        headers=admin_headers,
+    )
+    assert item_resp.status_code == 201, item_resp.text
+    remise_item_id = item_resp.json()["id"]
+
+    assign_resp = client.post(
+        "/vehicle-inventory/assign-from-remise",
+        json={
+            "remise_item_id": remise_item_id,
+            "category_id": vehicle_category_id,
+            "target_view": "CABINE",
+            "position": {"x": 0.25, "y": 0.5},
+            "quantity": 1,
+        },
+        headers=admin_headers,
+    )
+    assert assign_resp.status_code == 201, assign_resp.text
+
+    export_resp = client.get("/remise-inventory/export/pdf", headers=admin_headers)
+    assert export_resp.status_code == 200, export_resp.text
+    payload = export_resp.content
+    assert payload.startswith(b"%PDF")
+    content = _extract_pdf_stream_text(payload)
+    assert b"Materiel assigne" in content
 
 
 def test_remise_inventory_crud_cycle() -> None:

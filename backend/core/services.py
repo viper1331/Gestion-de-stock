@@ -11863,6 +11863,9 @@ def _render_remise_inventory_pdf(
         threshold_label = str(item.low_stock_threshold or 1) if item.track_low_stock else "1"
         size_label = _format_cell(item.size)
         name_label = _format_cell(item.name)
+        if item.assigned_vehicle_names and name_label != "-":
+            assigned_label = ", ".join(item.assigned_vehicle_names)
+            name_label = f"{name_label} (Affecté à : {assigned_label})"
 
         display = {
             "name": name_label,
@@ -12828,7 +12831,7 @@ def generate_vehicle_inventory_pdf(
 
 def generate_remise_inventory_pdf() -> bytes:
     ensure_database_ready()
-    items = [item for item in list_remise_items() if not item.assigned_vehicle_names]
+    items = [item for item in list_remise_items() if (item.quantity or 0) > 0]
     categories = {category.id: category.name for category in list_remise_categories()}
 
     return _render_remise_inventory_pdf(
