@@ -3186,8 +3186,78 @@ def _ensure_vehicle_category_columns(
 
     if "vehicle_type" not in category_columns:
         execute("ALTER TABLE vehicle_categories ADD COLUMN vehicle_type TEXT")
+    if "types_json" not in category_columns:
+        execute("ALTER TABLE vehicle_categories ADD COLUMN types_json TEXT")
     if "extra_json" not in category_columns:
         execute("ALTER TABLE vehicle_categories ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+
+
+def _normalize_vehicle_types(raw_types: Iterable[object] | None) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in raw_types or []:
+        if not isinstance(value, str):
+            continue
+        trimmed = value.strip()
+        if not trimmed or trimmed in seen:
+            continue
+        seen.add(trimmed)
+        normalized.append(trimmed)
+    return normalized
+
+
+def _load_vehicle_type_codes(
+    conn: sqlite3.Connection,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> set[str]:
+    if execute is None:
+        execute = conn.execute
+    rows = execute("SELECT code FROM vehicle_types").fetchall()
+    return {row["code"] for row in rows}
+
+
+def _resolve_vehicle_types_payload(
+    conn: sqlite3.Connection,
+    *,
+    payload_types: Iterable[object] | None,
+    payload_vehicle_type: str | None,
+    execute: Callable[[str, tuple[Any, ...]], sqlite3.Cursor] | None = None,
+) -> list[str] | None:
+    if payload_types is None and payload_vehicle_type is None:
+        return None
+    raw_types = payload_types if payload_types is not None else [payload_vehicle_type]
+    normalized = _normalize_vehicle_types(raw_types)
+    if payload_types is not None and not normalized:
+        raise ValueError("Au moins un type de véhicule est requis.")
+    if payload_vehicle_type is not None and not normalized:
+        raise ValueError("Type de véhicule invalide.")
+    valid_codes = _load_vehicle_type_codes(conn, execute=execute)
+    invalid = [value for value in normalized if value not in valid_codes]
+    if invalid:
+        joined = ", ".join(invalid)
+        raise ValueError(f"Type(s) de véhicule invalide(s): {joined}")
+    return normalized
+
+
+def _dump_vehicle_types_json(types: list[str] | None) -> str | None:
+    if not types:
+        return None
+    return json.dumps(types)
+
+
+def _parse_vehicle_types(raw_types_json: str | None, legacy_type: str | None) -> list[str]:
+    if raw_types_json:
+        try:
+            parsed = json.loads(raw_types_json)
+        except (TypeError, json.JSONDecodeError):
+            parsed = None
+        if isinstance(parsed, list):
+            normalized = _normalize_vehicle_types(parsed)
+            if normalized:
+                return normalized
+    if legacy_type:
+        return [legacy_type]
+    return []
 
 
 def _ensure_vehicle_view_settings_columns(
@@ -4220,6 +4290,7 @@ def _apply_schema_migrations_for_site(site_key: str) -> None:
                 name TEXT UNIQUE NOT NULL,
                 image_path TEXT,
                 vehicle_type TEXT,
+                types_json TEXT,
                 extra_json TEXT NOT NULL DEFAULT '{}'
             );
             CREATE TABLE IF NOT EXISTS vehicle_applied_lots (
@@ -6106,7 +6177,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
             _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path, vehicle_type, extra_json"
+            select_columns += ", image_path, vehicle_type, types_json, extra_json"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
         )
@@ -6171,6 +6242,14 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
             if module == "vehicle_inventory" and "image_path" in row.keys():
                 image_url = _build_media_url(row["image_path"])
             extra = _parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None)
+            types = (
+                _parse_vehicle_types(
+                    row["types_json"] if "types_json" in row.keys() else None,
+                    row["vehicle_type"] if "vehicle_type" in row.keys() else None,
+                )
+                if module == "vehicle_inventory"
+                else []
+            )
             categories.append(
                 models.Category(
                     id=category_id,
@@ -6179,6 +6258,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
                     view_configs=category_view_configs,
                     image_url=image_url,
                     vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
+                    types=types,
                     extra=extra,
                 )
             )
@@ -6195,7 +6275,7 @@ def _get_inventory_category_internal(
             _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path, vehicle_type, extra_json"
+            select_columns += ", image_path, vehicle_type, types_json, extra_json"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
@@ -6234,6 +6314,14 @@ def _get_inventory_category_internal(
         if "image_path" in row.keys():
             image_url = _build_media_url(row["image_path"])
         extra = _parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None)
+        types = (
+            _parse_vehicle_types(
+                row["types_json"] if "types_json" in row.keys() else None,
+                row["vehicle_type"] if "vehicle_type" in row.keys() else None,
+            )
+            if module == "vehicle_inventory"
+            else []
+        )
         return models.Category(
             id=row["id"],
             name=row["name"],
@@ -6241,6 +6329,7 @@ def _get_inventory_category_internal(
             view_configs=view_configs,
             image_url=image_url,
             vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
+            types=types,
             extra=extra,
         )
 
@@ -6257,8 +6346,16 @@ def _create_inventory_category_internal(
         values: list[object] = [payload.name]
         if module == "vehicle_inventory":
             _ensure_vehicle_category_columns(conn)
+            types = _resolve_vehicle_types_payload(
+                conn,
+                payload_types=payload.types,
+                payload_vehicle_type=payload.vehicle_type,
+            )
+            vehicle_type_value = types[0] if types else payload.vehicle_type
             columns.append("vehicle_type")
-            values.append(payload.vehicle_type)
+            values.append(vehicle_type_value)
+            columns.append("types_json")
+            values.append(_dump_vehicle_types_json(types))
             columns.append("extra_json")
             values.append(_dump_extra_json(extra))
         cur = conn.execute(
@@ -6298,9 +6395,17 @@ def _update_inventory_category_internal(
         if payload.name is not None:
             updates.append("name = ?")
             values.append(payload.name)
-        if module == "vehicle_inventory" and payload.vehicle_type is not None:
-            updates.append("vehicle_type = ?")
-            values.append(payload.vehicle_type)
+        if module == "vehicle_inventory":
+            types = _resolve_vehicle_types_payload(
+                conn,
+                payload_types=payload.types,
+                payload_vehicle_type=payload.vehicle_type,
+            )
+            if types is not None:
+                updates.append("vehicle_type = ?")
+                values.append(types[0] if types else None)
+                updates.append("types_json = ?")
+                values.append(_dump_vehicle_types_json(types))
         if module == "vehicle_inventory" and payload.extra is not None:
             row = conn.execute(
                 "SELECT extra_json FROM vehicle_categories WHERE id = ?",
