@@ -543,6 +543,7 @@ class Category(BaseModel):
     view_configs: list[VehicleViewConfig] | None = None
     image_url: str | None = None
     vehicle_type: VehicleType | None = None
+    types: list[VehicleType] = Field(default_factory=list)
     extra: dict[str, object] = Field(default_factory=dict)
 
 
@@ -550,6 +551,7 @@ class CategoryCreate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     sizes: list[str] = Field(default_factory=list)
     vehicle_type: VehicleType | None = None
+    types: list[VehicleType] | None = None
     extra: dict[str, object] | None = None
 
 
@@ -557,6 +559,7 @@ class CategoryUpdate(BaseModel):
     name: Optional[str] = Field(default=None, min_length=1, max_length=128)
     sizes: Optional[list[str]] = None
     vehicle_type: VehicleType | None = None
+    types: list[VehicleType] | None = None
     extra: dict[str, object] | None = None
 
 
