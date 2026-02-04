@@ -4,12 +4,18 @@ import { isAxiosError } from "axios";
 import { toast } from "sonner";
 import { useNavigate } from "react-router-dom";
 
-import { decideAriCertification, listAriPending, listAriSessions } from "../../api/ari";
+import {
+  decideAriCertification,
+  listAriCertifications,
+  listAriSessions,
+  resetAriCertification
+} from "../../api/ari";
 import { api } from "../../lib/api";
 import { useAuth } from "../auth/useAuth";
 import { useFeatureFlagsStore } from "../../app/featureFlags";
 import type { AriSession } from "../../types/ari";
 import { DecideAriCertificationModal } from "./modals/DecideAriCertificationModal";
+import { ResetAriCertificationModal } from "./modals/ResetAriCertificationModal";
 import { canCertifyARI } from "./permissions";
 
 interface Collaborator {
@@ -24,6 +30,13 @@ type DecisionStatus = "APPROVED" | "REJECTED" | "CONDITIONAL";
 const formatDate = (value: string | null | undefined) =>
   value ? new Date(value).toLocaleString("fr-FR") : "—";
 
+const alertBadges = {
+  valid: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
+  expiring_soon: "border-amber-500/30 bg-amber-500/10 text-amber-200",
+  expired: "border-rose-500/30 bg-rose-500/10 text-rose-200",
+  none: "border-slate-600/30 bg-slate-800/30 text-slate-300"
+} as const;
+
 export function AriCertificationsPage() {
   const { user } = useAuth();
   const navigate = useNavigate();
@@ -36,6 +49,8 @@ export function AriCertificationsPage() {
 
   const [sortMode, setSortMode] = useState<SortMode>("date-desc");
   const [selectedCollaboratorId, setSelectedCollaboratorId] = useState<number | null>(null);
+  const [resetCollaboratorId, setResetCollaboratorId] = useState<number | null>(null);
+  const isAdmin = user?.role === "admin";
 
   useEffect(() => {
     if (isLoaded && !featureAriEnabled) {
@@ -58,9 +73,9 @@ export function AriCertificationsPage() {
     enabled: canView && featureAriEnabled
   });
 
-  const { data: pending = [], isLoading } = useQuery({
-    queryKey: ["ari", "pending"],
-    queryFn: () => listAriPending(),
+  const { data: certifications = [], isLoading } = useQuery({
+    queryKey: ["ari", "certifications"],
+    queryFn: () => listAriCertifications(),
     enabled: canView && featureAriEnabled
   });
 
@@ -80,7 +95,7 @@ export function AriCertificationsPage() {
   }, [sessions]);
 
   const rows = useMemo(() => {
-    const items = pending.map((entry) => {
+    const items = certifications.map((entry) => {
       const collaborator = collaboratorMap.get(entry.collaborator_id);
       const lastSession = lastSessionByCollaborator.get(entry.collaborator_id);
       return { entry, collaborator, lastSession };
@@ -98,14 +113,14 @@ export function AriCertificationsPage() {
     };
 
     return [...items].sort(sorters[sortMode]);
-  }, [collaboratorMap, lastSessionByCollaborator, pending, sortMode]);
+  }, [certifications, collaboratorMap, lastSessionByCollaborator, sortMode]);
 
   const decideCertification = useMutation({
     mutationFn: (payload: { collaborator_id: number; status: DecisionStatus; comment?: string | null }) =>
       decideAriCertification(payload),
     onSuccess: () => {
       toast.success("Décision enregistrée.");
-      queryClient.invalidateQueries({ queryKey: ["ari", "pending"] });
+      queryClient.invalidateQueries({ queryKey: ["ari", "certifications"] });
     },
     onError: (error) => {
       if (isAxiosError(error) && error.response?.status === 403) {
@@ -113,6 +128,23 @@ export function AriCertificationsPage() {
         return;
       }
       toast.error("Impossible d'enregistrer la décision.");
+    }
+  });
+
+  const resetCertification = useMutation({
+    mutationFn: (payload: { collaboratorId: number; reason: string }) =>
+      resetAriCertification(payload.collaboratorId, { reason: payload.reason }),
+    onSuccess: () => {
+      toast.success("Certification réinitialisée.");
+      queryClient.invalidateQueries({ queryKey: ["ari", "certifications"] });
+      queryClient.invalidateQueries({ queryKey: ["ari", "pending"] });
+    },
+    onError: (error) => {
+      if (isAxiosError(error) && error.response?.status === 403) {
+        toast.error("Vous n'avez pas les droits pour réinitialiser.");
+        return;
+      }
+      toast.error("Impossible de réinitialiser la certification.");
     }
   });
 
@@ -131,7 +163,7 @@ export function AriCertificationsPage() {
         <div>
           <h1 className="text-2xl font-semibold text-white">Certifications ARI</h1>
           <p className="text-sm text-slate-300">
-            Consultez les séances en attente et validez les certifications.
+            Consultez le statut des certifications et gérez les alertes d'expiration.
           </p>
         </div>
         <div className="flex items-center gap-2 text-sm text-slate-200">
@@ -157,20 +189,21 @@ export function AriCertificationsPage() {
                 <th className="px-4 py-3 font-semibold">Collaborateur</th>
                 <th className="px-4 py-3 font-semibold">Dernière séance</th>
                 <th className="px-4 py-3 font-semibold">Statut</th>
+                <th className="px-4 py-3 font-semibold">Expiration</th>
                 <th className="px-4 py-3 font-semibold text-right">Actions</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 text-slate-100">
               {isLoading ? (
                 <tr>
-                  <td className="px-4 py-4 text-slate-400" colSpan={4}>
+                  <td className="px-4 py-4 text-slate-400" colSpan={5}>
                     Chargement des certifications...
                   </td>
                 </tr>
               ) : rows.length === 0 ? (
                 <tr>
-                  <td className="px-4 py-4 text-slate-400" colSpan={4}>
-                    Aucune certification en attente.
+                  <td className="px-4 py-4 text-slate-400" colSpan={5}>
+                    Aucune certification disponible.
                   </td>
                 </tr>
               ) : (
@@ -188,18 +221,48 @@ export function AriCertificationsPage() {
                     </td>
                     <td className="px-4 py-3 text-slate-200">{formatDate(lastSession?.performed_at)}</td>
                     <td className="px-4 py-3">
-                      <span className="inline-flex items-center rounded-full border border-amber-500/30 bg-amber-500/10 px-2 py-1 text-xs font-semibold text-amber-200">
-                        En attente
+                      <span
+                        className={`inline-flex items-center rounded-full border px-2 py-1 text-xs font-semibold ${
+                          alertBadges[entry.alert_state ?? "none"]
+                        }`}
+                      >
+                        {entry.alert_state === "valid" ? "Valide" : null}
+                        {entry.alert_state === "expired" ? "Expirée" : null}
+                        {entry.alert_state === "none" ? "Non certifié" : null}
+                        {entry.alert_state === "expiring_soon" ? (
+                          <>
+                            Expire bientôt
+                            {typeof entry.days_until_expiry === "number"
+                              ? ` (J-${Math.max(entry.days_until_expiry, 0)})`
+                              : null}
+                          </>
+                        ) : null}
                       </span>
                     </td>
+                    <td className="px-4 py-3 text-slate-200">
+                      {entry.expires_at ? formatDate(entry.expires_at) : "—"}
+                    </td>
                     <td className="px-4 py-3 text-right">
-                      <button
-                        type="button"
-                        className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
-                        onClick={() => setSelectedCollaboratorId(entry.collaborator_id)}
-                      >
-                        Décider
-                      </button>
+                      <div className="flex justify-end gap-2">
+                        {canView && entry.status === "PENDING" ? (
+                          <button
+                            type="button"
+                            className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:bg-slate-800"
+                            onClick={() => setSelectedCollaboratorId(entry.collaborator_id)}
+                          >
+                            Décider
+                          </button>
+                        ) : null}
+                        {isAdmin ? (
+                          <button
+                            type="button"
+                            className="rounded-md border border-rose-500/50 px-3 py-1 text-xs font-semibold text-rose-200 hover:bg-rose-500/10"
+                            onClick={() => setResetCollaboratorId(entry.collaborator_id)}
+                          >
+                            Reset
+                          </button>
+                        ) : null}
+                      </div>
                     </td>
                   </tr>
                 ))
@@ -216,6 +279,23 @@ export function AriCertificationsPage() {
         onSubmit={async (payload) => {
           await decideCertification.mutateAsync(payload);
           setSelectedCollaboratorId(null);
+        }}
+      />
+      <ResetAriCertificationModal
+        open={resetCollaboratorId !== null}
+        onClose={() => setResetCollaboratorId(null)}
+        collaboratorName={
+          resetCollaboratorId ? collaboratorMap.get(resetCollaboratorId)?.full_name : undefined
+        }
+        onSubmit={async (payload) => {
+          if (!resetCollaboratorId) {
+            return;
+          }
+          await resetCertification.mutateAsync({
+            collaboratorId: resetCollaboratorId,
+            reason: payload.reason
+          });
+          setResetCollaboratorId(null);
         }}
       />
     </div>

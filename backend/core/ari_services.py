@@ -2,12 +2,16 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time, timedelta, timezone
+import math
 import logging
 import sqlite3
 
 from backend.core import db, models_ari
 
 logger = logging.getLogger(__name__)
+
+DEFAULT_CERT_VALIDITY_DAYS = 365
+DEFAULT_CERT_WARNING_DAYS = 30
 
 
 def _format_date_bound(value: date, *, end: bool) -> str:
@@ -75,6 +79,47 @@ def _format_timestamp(value: datetime | None) -> str:
     return value.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
 
 
+def _parse_timestamp(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    return datetime.fromisoformat(value.replace("Z", "+00:00"))
+
+
+def _compute_alert_state(
+    *,
+    certified_at: str | None,
+    expires_at: str | None,
+    warning_days: int,
+) -> tuple[str, int | None]:
+    if not certified_at or not expires_at:
+        return "none", None
+    expires_dt = _parse_timestamp(expires_at)
+    if expires_dt is None:
+        return "none", None
+    now = datetime.now(timezone.utc)
+    delta = expires_dt - now
+    days_until = math.ceil(delta.total_seconds() / 86400)
+    if expires_dt < now:
+        return "expired", days_until
+    if expires_dt <= now + timedelta(days=warning_days):
+        return "expiring_soon", days_until
+    return "valid", days_until
+
+
+def _get_cert_settings(conn: sqlite3.Connection, site_id: str) -> tuple[int, int]:
+    row = conn.execute(
+        "SELECT cert_validity_days, cert_expiry_warning_days FROM ari_settings WHERE site_id = ?",
+        (site_id,),
+    ).fetchone()
+    if not row:
+        return DEFAULT_CERT_VALIDITY_DAYS, DEFAULT_CERT_WARNING_DAYS
+    validity = int(row["cert_validity_days"] or DEFAULT_CERT_VALIDITY_DAYS)
+    warning = int(row["cert_expiry_warning_days"] or DEFAULT_CERT_WARNING_DAYS)
+    if warning >= validity:
+        warning = max(0, validity - 1)
+    return validity, warning
+
+
 def _ensure_settings(conn: sqlite3.Connection, site_id: str) -> None:
     existing = conn.execute(
         "SELECT 1 FROM ari_settings WHERE site_id = ?",
@@ -89,12 +134,14 @@ def _ensure_settings(conn: sqlite3.Connection, site_id: str) -> None:
               stress_required,
               rpe_enabled,
               min_sessions_for_certification,
+              cert_validity_days,
+              cert_expiry_warning_days,
               created_at,
               updated_at
             )
-            VALUES (?, 0, 1, 0, 1, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, 0, 1, 0, 1, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
-            (site_id,),
+            (site_id, DEFAULT_CERT_VALIDITY_DAYS, DEFAULT_CERT_WARNING_DAYS),
         )
         conn.commit()
 
@@ -122,6 +169,8 @@ def get_ari_settings(site: str | None, fallback_site: str | None = None) -> mode
             stress_required=True,
             rpe_enabled=False,
             min_sessions_for_certification=1,
+            cert_validity_days=DEFAULT_CERT_VALIDITY_DAYS,
+            cert_expiry_warning_days=DEFAULT_CERT_WARNING_DAYS,
         )
     return models_ari.AriSettings(**row)
 
@@ -142,15 +191,19 @@ def update_ari_settings(
               stress_required,
               rpe_enabled,
               min_sessions_for_certification,
+              cert_validity_days,
+              cert_expiry_warning_days,
               created_at,
               updated_at
             )
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(site_id) DO UPDATE SET
               feature_enabled = excluded.feature_enabled,
               stress_required = excluded.stress_required,
               rpe_enabled = excluded.rpe_enabled,
               min_sessions_for_certification = excluded.min_sessions_for_certification,
+              cert_validity_days = excluded.cert_validity_days,
+              cert_expiry_warning_days = excluded.cert_expiry_warning_days,
               updated_at = CURRENT_TIMESTAMP
             """,
             (
@@ -159,6 +212,8 @@ def update_ari_settings(
                 int(payload.stress_required),
                 int(payload.rpe_enabled),
                 payload.min_sessions_for_certification,
+                payload.cert_validity_days,
+                payload.cert_expiry_warning_days,
             ),
         )
         conn.commit()
@@ -294,10 +349,17 @@ def _ensure_certification_row(
               comment,
               decision_at,
               decided_by,
+              certified_at,
+              expires_at,
+              certified_by_user_id,
+              notes,
+              reset_at,
+              reset_by_user_id,
+              reset_reason,
               created_at,
               updated_at
             )
-            VALUES (?, ?, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             """,
             (collaborator_id, status),
         )
@@ -493,10 +555,75 @@ def get_ari_certification(
             "SELECT * FROM ari_certifications WHERE collaborator_id = ?",
             (collaborator_id,),
         ).fetchone()
+        _, warning_days = _get_cert_settings(conn, site_id)
         conn.commit()
     finally:
         conn.close()
-    return models_ari.AriCertification(**row)
+    alert_state, days_until_expiry = _compute_alert_state(
+        certified_at=row.get("certified_at"),
+        expires_at=row.get("expires_at"),
+        warning_days=warning_days,
+    )
+    payload = dict(row)
+    payload["alert_state"] = alert_state
+    payload["days_until_expiry"] = days_until_expiry
+    return models_ari.AriCertification(**payload)
+
+
+def list_ari_certifications(
+    site: str | None,
+    *,
+    query: str | None = None,
+    fallback_site: str | None = None,
+) -> list[models_ari.AriCertification]:
+    from backend.core import services
+
+    site_id = _normalize_site(site, fallback_site)
+    conn = _ensure_ari_db(site_id)
+    try:
+        certification_rows = conn.execute("SELECT * FROM ari_certifications").fetchall()
+        _, warning_days = _get_cert_settings(conn, site_id)
+    finally:
+        conn.close()
+
+    certifications_by_collaborator = {
+        row["collaborator_id"]: dict(row) for row in certification_rows
+    }
+    normalized_query = query.strip().lower() if query else ""
+    collaborators = services.list_collaborators()
+    results: list[models_ari.AriCertification] = []
+    for collaborator in collaborators:
+        if normalized_query:
+            haystack = f"{collaborator.full_name} {collaborator.department or ''} {collaborator.id}".lower()
+            if normalized_query not in haystack:
+                continue
+        row = certifications_by_collaborator.get(collaborator.id)
+        if row is None:
+            row = {
+                "collaborator_id": collaborator.id,
+                "status": "NONE",
+                "comment": None,
+                "decision_at": None,
+                "decided_by": None,
+                "certified_at": None,
+                "expires_at": None,
+                "certified_by_user_id": None,
+                "notes": None,
+                "reset_at": None,
+                "reset_by_user_id": None,
+                "reset_reason": None,
+                "created_at": None,
+                "updated_at": None,
+            }
+        alert_state, days_until_expiry = _compute_alert_state(
+            certified_at=row.get("certified_at"),
+            expires_at=row.get("expires_at"),
+            warning_days=warning_days,
+        )
+        row["alert_state"] = alert_state
+        row["days_until_expiry"] = days_until_expiry
+        results.append(models_ari.AriCertification(**row))
+    return results
 
 
 def list_pending_certifications(
@@ -510,21 +637,43 @@ def list_pending_certifications(
         rows = conn.execute(
             "SELECT * FROM ari_certifications WHERE status = 'PENDING' ORDER BY updated_at DESC"
         ).fetchall()
+        _, warning_days = _get_cert_settings(conn, site_id)
     finally:
         conn.close()
-    return [models_ari.AriCertification(**row) for row in rows]
+    results: list[models_ari.AriCertification] = []
+    for row in rows:
+        payload = dict(row)
+        alert_state, days_until_expiry = _compute_alert_state(
+            certified_at=payload.get("certified_at"),
+            expires_at=payload.get("expires_at"),
+            warning_days=warning_days,
+        )
+        payload["alert_state"] = alert_state
+        payload["days_until_expiry"] = days_until_expiry
+        results.append(models_ari.AriCertification(**payload))
+    return results
 
 
 def decide_certification(
     payload: models_ari.AriCertificationDecision,
     *,
     decided_by: str,
+    decided_by_id: int,
     site: str | None,
     fallback_site: str | None = None,
 ) -> models_ari.AriCertification:
     site_id = _normalize_site(site, fallback_site)
     conn = _ensure_ari_db(site_id)
-    decision_at = _format_timestamp(datetime.now(timezone.utc))
+    decision_time = datetime.now(timezone.utc)
+    decision_at = _format_timestamp(decision_time)
+    validity_days, warning_days = _get_cert_settings(conn, site_id)
+    certified_at = None
+    expires_at = None
+    certified_by_user_id = None
+    if payload.status == "APPROVED":
+        certified_at = decision_at
+        expires_at = _format_timestamp(decision_time + timedelta(days=validity_days))
+        certified_by_user_id = decided_by_id
     try:
         conn.execute(
             """
@@ -534,15 +683,27 @@ def decide_certification(
               comment,
               decision_at,
               decided_by,
+              certified_at,
+              expires_at,
+              certified_by_user_id,
+              reset_at,
+              reset_by_user_id,
+              reset_reason,
               created_at,
               updated_at
             )
-            VALUES (?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, NULL, NULL, NULL, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
             ON CONFLICT(collaborator_id) DO UPDATE SET
               status = excluded.status,
               comment = excluded.comment,
               decision_at = excluded.decision_at,
               decided_by = excluded.decided_by,
+              certified_at = excluded.certified_at,
+              expires_at = excluded.expires_at,
+              certified_by_user_id = excluded.certified_by_user_id,
+              reset_at = NULL,
+              reset_by_user_id = NULL,
+              reset_reason = NULL,
               updated_at = CURRENT_TIMESTAMP
             """,
             (
@@ -551,6 +712,9 @@ def decide_certification(
                 payload.comment,
                 decision_at,
                 decided_by,
+                certified_at,
+                expires_at,
+                certified_by_user_id,
             ),
         )
         session_status = None
@@ -570,7 +734,79 @@ def decide_certification(
         conn.commit()
     finally:
         conn.close()
-    return models_ari.AriCertification(**row)
+    alert_state, days_until_expiry = _compute_alert_state(
+        certified_at=row.get("certified_at"),
+        expires_at=row.get("expires_at"),
+        warning_days=warning_days,
+    )
+    payload_out = dict(row)
+    payload_out["alert_state"] = alert_state
+    payload_out["days_until_expiry"] = days_until_expiry
+    return models_ari.AriCertification(**payload_out)
+
+
+def reset_ari_certification(
+    collaborator_id: int,
+    *,
+    reason: str,
+    reset_by_user_id: int,
+    site: str | None,
+    fallback_site: str | None = None,
+) -> models_ari.AriCertification:
+    site_id = _normalize_site(site, fallback_site)
+    conn = _ensure_ari_db(site_id)
+    reset_at = _format_timestamp(datetime.now(timezone.utc))
+    try:
+        existing = conn.execute(
+            "SELECT * FROM ari_certifications WHERE collaborator_id = ?",
+            (collaborator_id,),
+        ).fetchone()
+        if existing is None:
+            raise LookupError("Certification ARI introuvable")
+        conn.execute(
+            """
+            UPDATE ari_certifications
+            SET
+              status = 'NONE',
+              comment = NULL,
+              decision_at = NULL,
+              decided_by = NULL,
+              certified_at = NULL,
+              expires_at = NULL,
+              certified_by_user_id = NULL,
+              notes = NULL,
+              reset_at = ?,
+              reset_by_user_id = ?,
+              reset_reason = ?,
+              updated_at = CURRENT_TIMESTAMP
+            WHERE collaborator_id = ?
+            """,
+            (reset_at, reset_by_user_id, reason.strip(), collaborator_id),
+        )
+        conn.execute(
+            """
+            INSERT INTO ari_audit_log (actor_user_id, action, entity_type, entity_id, details_json, created_at)
+            VALUES (?, 'CERT_RESET', 'ari_certification', ?, NULL, CURRENT_TIMESTAMP)
+            """,
+            (str(reset_by_user_id), str(collaborator_id)),
+        )
+        row = conn.execute(
+            "SELECT * FROM ari_certifications WHERE collaborator_id = ?",
+            (collaborator_id,),
+        ).fetchone()
+        validity_days, warning_days = _get_cert_settings(conn, site_id)
+        conn.commit()
+    finally:
+        conn.close()
+    alert_state, days_until_expiry = _compute_alert_state(
+        certified_at=row.get("certified_at"),
+        expires_at=row.get("expires_at"),
+        warning_days=warning_days,
+    )
+    payload_out = dict(row)
+    payload_out["alert_state"] = alert_state
+    payload_out["days_until_expiry"] = days_until_expiry
+    return models_ari.AriCertification(**payload_out)
 
 
 def purge_ari_sessions(
@@ -686,7 +922,7 @@ def get_ari_collaborator_stats(
             "avg_stress_level": None,
             "last_session_at": None,
         }
-    status = certification["status"] if certification else "PENDING"
+    status = certification["status"] if certification else "NONE"
     decision_at = certification["decision_at"] if certification else None
     return models_ari.AriCollaboratorStats(
         sessions_count=row["sessions_count"] or 0,
@@ -814,7 +1050,7 @@ def get_ari_stats_by_collaborator(
               AVG(s.air_consumption_lpm) AS avg_air_lpm,
               MAX(s.air_consumption_lpm) AS max_air_lpm,
               MAX(s.performed_at) AS last_session_at,
-              COALESCE(c.status, 'PENDING') AS certification_status
+              COALESCE(c.status, 'NONE') AS certification_status
             FROM ari_sessions AS s
             LEFT JOIN ari_certifications AS c ON c.collaborator_id = s.collaborator_id
             {where_clause}

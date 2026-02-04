@@ -2,6 +2,8 @@ import { api } from "../lib/api";
 
 export interface AdminSettings {
   feature_ari_enabled: boolean;
+  ari_cert_validity_days: number;
+  ari_cert_expiry_warning_days: number;
 }
 
 export async function fetchAdminSettings(): Promise<AdminSettings> {

@@ -467,10 +467,14 @@ class SecuritySettings(BaseModel):
 
 class AdminSettingsResponse(BaseModel):
     feature_ari_enabled: bool
+    ari_cert_validity_days: int
+    ari_cert_expiry_warning_days: int
 
 
 class AdminSettingsUpdate(BaseModel):
     feature_ari_enabled: bool | None = None
+    ari_cert_validity_days: int | None = Field(default=None, ge=1)
+    ari_cert_expiry_warning_days: int | None = Field(default=None, ge=0)
 
     model_config = ConfigDict(extra="forbid")
 

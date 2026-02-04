@@ -40,14 +40,16 @@ const statusLabelMap: Record<AriCertification["status"], string> = {
   PENDING: "En attente",
   APPROVED: "Approuvée",
   REJECTED: "Refusée",
-  CONDITIONAL: "Conditionnelle"
+  CONDITIONAL: "Conditionnelle",
+  NONE: "Non certifiée"
 };
 
 const statusClasses: Record<AriCertification["status"], string> = {
   PENDING: "border-amber-500/30 bg-amber-500/10 text-amber-200",
   APPROVED: "border-emerald-500/30 bg-emerald-500/10 text-emerald-200",
   REJECTED: "border-red-500/30 bg-red-500/10 text-red-200",
-  CONDITIONAL: "border-sky-500/30 bg-sky-500/10 text-sky-200"
+  CONDITIONAL: "border-sky-500/30 bg-sky-500/10 text-sky-200",
+  NONE: "border-slate-600/30 bg-slate-800/30 text-slate-300"
 };
 
 export function AriPage() {

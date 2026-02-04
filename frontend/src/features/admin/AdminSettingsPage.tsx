@@ -196,6 +196,10 @@ export function AdminSettingsPage() {
     isLogPersistenceEnabled()
   );
   const [ariModuleEnabled, setAriModuleEnabled] = useState<boolean>(false);
+  const [ariCertValidityDays, setAriCertValidityDays] = useState<number>(365);
+  const [ariCertWarningDays, setAriCertWarningDays] = useState<number>(30);
+  const [ariCertMessage, setAriCertMessage] = useState<string | null>(null);
+  const [ariCertError, setAriCertError] = useState<string | null>(null);
   const [isAriPurgeModalOpen, setIsAriPurgeModalOpen] = useState<boolean>(false);
   const [isAriPurgeConfirmOpen, setIsAriPurgeConfirmOpen] = useState<boolean>(false);
   const [ariPurgeForm, setAriPurgeForm] = useState<AriPurgeFormState>(DEFAULT_ARI_PURGE_FORM);
@@ -333,6 +337,8 @@ export function AdminSettingsPage() {
     }
     setAriModuleEnabled(adminSettingsData.feature_ari_enabled);
     setFeatureAriEnabled(adminSettingsData.feature_ari_enabled);
+    setAriCertValidityDays(adminSettingsData.ari_cert_validity_days ?? 365);
+    setAriCertWarningDays(adminSettingsData.ari_cert_expiry_warning_days ?? 30);
   }, [adminSettingsData, setFeatureAriEnabled]);
 
   const resetVehicleTypeForm = () => {
@@ -490,6 +496,25 @@ export function AdminSettingsPage() {
     onError: (_error, _enabled, context) => {
       setAriModuleEnabled(context?.previous ?? false);
       toast.error("Impossible de mettre à jour le module ARI.");
+    }
+  });
+
+  const updateAriCertificationSettings = useMutation({
+    mutationFn: async () =>
+      updateAdminSettings({
+        ari_cert_validity_days: ariCertValidityDays,
+        ari_cert_expiry_warning_days: ariCertWarningDays
+      }),
+    onSuccess: (data) => {
+      setAriCertValidityDays(data.ari_cert_validity_days);
+      setAriCertWarningDays(data.ari_cert_expiry_warning_days);
+      setAriCertMessage("Paramètres de certification ARI enregistrés.");
+      setAriCertError(null);
+      queryClient.invalidateQueries({ queryKey: ["admin-settings"] });
+    },
+    onError: () => {
+      setAriCertMessage(null);
+      setAriCertError("Impossible de mettre à jour les paramètres de certification ARI.");
     }
   });
 
@@ -1414,6 +1439,16 @@ export function AdminSettingsPage() {
             Activez le module et gérez la purge des sessions par site.
           </p>
         </div>
+        {ariCertMessage ? (
+          <div className="rounded-md border border-emerald-500/40 bg-emerald-500/10 px-3 py-2 text-xs text-emerald-200">
+            {ariCertMessage}
+          </div>
+        ) : null}
+        {ariCertError ? (
+          <div className="rounded-md border border-red-500/40 bg-red-500/10 px-3 py-2 text-xs text-red-200">
+            {ariCertError}
+          </div>
+        ) : null}
         <label className="flex items-center justify-between gap-3 text-xs text-slate-300">
           <div>
             <p className="font-semibold text-slate-200">Activer le module ARI</p>
@@ -1428,6 +1463,47 @@ export function AdminSettingsPage() {
             className="h-5 w-10 rounded border-slate-600 bg-slate-900 text-indigo-500"
           />
         </label>
+        <form
+          className="grid gap-3 rounded-md border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-300 md:grid-cols-2"
+          onSubmit={(event) => {
+            event.preventDefault();
+            setAriCertMessage(null);
+            setAriCertError(null);
+            updateAriCertificationSettings.mutate();
+          }}
+        >
+          <label className="flex flex-col gap-2">
+            Durée de validité (jours)
+            <span className="text-[11px] text-slate-500">Ex: 365 ≈ 12 mois.</span>
+            <AppTextInput
+              type="number"
+              min={1}
+              value={ariCertValidityDays}
+              onChange={(event) => setAriCertValidityDays(Number(event.target.value))}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100"
+            />
+          </label>
+          <label className="flex flex-col gap-2">
+            Alerte avant expiration (jours)
+            <span className="text-[11px] text-slate-500">Ex: 30.</span>
+            <AppTextInput
+              type="number"
+              min={0}
+              value={ariCertWarningDays}
+              onChange={(event) => setAriCertWarningDays(Number(event.target.value))}
+              className="rounded-md border border-slate-700 bg-slate-950 px-3 py-2 text-xs text-slate-100"
+            />
+          </label>
+          <div className="flex items-end md:col-span-2">
+            <button
+              type="submit"
+              className="rounded-md bg-indigo-500 px-4 py-2 text-xs font-semibold text-white hover:bg-indigo-400"
+              disabled={updateAriCertificationSettings.isPending}
+            >
+              Enregistrer
+            </button>
+          </div>
+        </form>
         <div className="rounded-md border border-slate-800 bg-slate-950/60 p-3 text-xs text-slate-300">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>

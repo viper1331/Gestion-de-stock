@@ -9,7 +9,8 @@ const statusLabels: Record<AriCertification["status"], string> = {
   PENDING: "En attente",
   APPROVED: "Validé",
   REJECTED: "Refusé",
-  CONDITIONAL: "Conditionnel"
+  CONDITIONAL: "Conditionnel",
+  NONE: "Non certifié"
 };
 
 interface SessionDetailModalProps {
