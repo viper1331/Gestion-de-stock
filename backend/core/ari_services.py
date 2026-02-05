@@ -590,7 +590,7 @@ def list_ari_certifications(
         row["collaborator_id"]: dict(row) for row in certification_rows
     }
     normalized_query = query.strip().lower() if query else ""
-    collaborators = services.list_collaborators()
+    collaborators = services.list_collaborators(site_id)
     results: list[models_ari.AriCertification] = []
     for collaborator in collaborators:
         if normalized_query:

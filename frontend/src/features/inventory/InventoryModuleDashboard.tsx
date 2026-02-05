@@ -9,6 +9,7 @@ import {
   DndContext,
   MouseSensor,
   TouchSensor,
+  type DragEndEvent,
   closestCenter,
   useSensor,
   useSensors
@@ -37,6 +38,7 @@ import { AppTextInput } from "components/AppTextInput";
 import { EditableBlock } from "../../components/EditableBlock";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { useTablePrefs } from "../../hooks/useTablePrefs";
+import type { Supplier } from "../../types/suppliers";
 
 interface Category {
   id: number;
@@ -130,10 +132,6 @@ interface CategoryFormValues {
   sizes: string[];
 }
 
-interface Supplier {
-  id: number;
-  name: string;
-}
 
 type InventoryModuleDashboardSections = {
   header: ReactNode;
@@ -737,12 +735,14 @@ export function InventoryModuleDashboard({
   );
 
   const handleDragEnd = useCallback(
-    (event: { active: { id: string }; over?: { id: string } | null }) => {
-      if (!event.over || event.active.id === event.over.id) {
+    (event: DragEndEvent) => {
+      const activeId = String(event.active.id);
+      const overId = event.over ? String(event.over.id) : null;
+      if (!overId || activeId === overId) {
         return;
       }
-      const activeIndex = orderedColumns.indexOf(event.active.id);
-      const overIndex = orderedColumns.indexOf(event.over.id);
+      const activeIndex = orderedColumns.indexOf(activeId);
+      const overIndex = orderedColumns.indexOf(overId);
       if (activeIndex === -1 || overIndex === -1) {
         return;
       }

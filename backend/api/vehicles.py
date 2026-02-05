@@ -90,10 +90,8 @@ async def add_vehicle_view_pinned_subview(
         pinned = services.add_vehicle_view_pinned_subview(vehicle_id, view_id, subview_id)
     except ValueError as exc:
         detail = str(exc)
-        if not numeric_input and "sous-vue introuvable" in detail.lower():
-            raise HTTPException(
-                status_code=400, detail="Identifiant sous-vue invalide"
-            ) from exc
+        if "sous-vue introuvable" in detail.lower():
+            raise HTTPException(status_code=400, detail="Identifiant sous-vue invalide") from exc
         status_code = 404 if "introuvable" in detail.lower() else 400
         raise HTTPException(status_code=status_code, detail=detail) from exc
     return models.VehiclePinnedSubviews(

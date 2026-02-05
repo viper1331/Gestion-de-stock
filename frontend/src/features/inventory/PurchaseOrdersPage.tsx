@@ -7,13 +7,7 @@ import { useAuth } from "../auth/useAuth";
 import { useModulePermissions } from "../permissions/useModulePermissions";
 import { EditablePageLayout, type EditablePageBlock } from "../../components/EditablePageLayout";
 import { EditableBlock } from "../../components/EditableBlock";
-
-interface Supplier {
-  id: number;
-  name: string;
-  email: string | null;
-  address: string | null;
-}
+import type { Supplier } from "../../types/suppliers";
 
 export function PurchaseOrdersPage() {
   const { user } = useAuth();

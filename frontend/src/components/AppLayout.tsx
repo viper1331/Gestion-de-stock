@@ -31,7 +31,7 @@ import { fetchSiteContext } from "../lib/sites";
 import { buildModuleTitleMap } from "../lib/moduleTitles";
 import { isDebugEnabled } from "../lib/debug";
 import { mergeMenuOrder } from "../lib/menuOrder";
-import { filterMenuGroups, type MenuGroup, type MenuGroupDefinition } from "../lib/menuVisibility";
+import { filterMenuGroups, type MenuGroup, type MenuGroupDefinition, type MenuItem } from "../lib/menuVisibility";
 import { useIdleLogout } from "../hooks/useIdleLogout";
 import { useFeatureFlagsStore } from "../app/featureFlags";
 

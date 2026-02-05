@@ -1,5 +1,5 @@
 import { FormEvent, MouseEvent, useEffect, useMemo, useRef, useState } from "react";
-import { QueryKey, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
+import { QueryKey, keepPreviousData, useMutation, useQueries, useQuery, useQueryClient } from "@tanstack/react-query";
 import { AxiosError } from "axios";
 
 import { api } from "../../lib/api";
@@ -20,13 +20,7 @@ import { StatusBadge } from "components/StatusBadge";
 import { TruncatedText } from "components/TruncatedText";
 import { fetchQolSettings, DEFAULT_QOL_SETTINGS } from "../../lib/qolSettings";
 import { fetchSiteContext, type SiteContext } from "../../lib/sites";
-
-interface Supplier {
-  id: number;
-  name: string;
-  email: string | null;
-  address: string | null;
-}
+import type { Supplier } from "../../types/suppliers";
 
 interface Collaborator {
   id: number;
@@ -109,6 +103,8 @@ interface PurchaseOrderReceipt {
   note?: string | null;
   created_by?: string | null;
   created_at: string;
+  is_non_conforming?: boolean;
+  non_conforming?: boolean;
 }
 
 interface PurchaseOrderNonconformity {
@@ -155,6 +151,8 @@ interface ClothingSupplierReturn {
   reason?: string | null;
   status: "prepared" | "shipped" | "supplier_received";
   created_at: string;
+  is_non_conforming?: boolean;
+  non_conforming?: boolean;
 }
 
 interface PurchaseOrderDetail {
@@ -707,7 +705,7 @@ export function PurchaseOrdersPanel({
     isLoading: loadingOrders,
     isFetching: isFetchingOrders,
     refetch: refetchOrders
-  } = useQuery({
+  } = useQuery<PurchaseOrderDetail[]>({
     queryKey: resolvedOrdersQueryKey,
     queryFn: async () => {
       try {
@@ -730,7 +728,7 @@ export function PurchaseOrdersPanel({
           pending_assignments: order.pending_assignments ?? [],
           supplier_returns: order.supplier_returns ?? []
         }));
-      } catch (requestError) {
+      } catch (requestError: unknown) {
         const status = (requestError as AxiosError<ApiErrorResponse>)?.response?.status;
         if (status === 404) {
           setListError("Impossible de charger les bons de commande pour ce module.");
@@ -740,7 +738,7 @@ export function PurchaseOrdersPanel({
         return [] as PurchaseOrderDetail[];
       }
     },
-    keepPreviousData: true
+    placeholderData: keepPreviousData
   });
 
   const { data: items = [] } = useQuery({
@@ -760,7 +758,7 @@ export function PurchaseOrdersPanel({
     enabled: replacementAccess
   });
 
-  const { data: assignees = [] } = useQuery({
+  const { data: assignees = [], error: assigneesError } = useQuery<DotationAssignee[], AxiosError>({
     queryKey: ["clothing-dotations-assignees"],
     queryFn: async () => {
       const response = await api.get<DotationAssigneesResponse>("/dotations/assignees", {
@@ -768,14 +766,20 @@ export function PurchaseOrdersPanel({
       });
       return response.data.assignees;
     },
-    enabled: replacementAccess,
-    onError: (requestError) => {
-      const status = (requestError as AxiosError)?.response?.status;
-      if (status === 403) {
-        setReplacementAccess(false);
-      }
-    }
+    enabled: replacementAccess
   });
+
+  useEffect(() => {
+    if ((assignees as unknown) === undefined) {
+      return;
+    }
+  }, [assignees]);
+
+  useEffect(() => {
+    if (assigneesError?.response?.status === 403) {
+      setReplacementAccess(false);
+    }
+  }, [assigneesError]);
 
   const buildOrderSignature = (order: PurchaseOrderDetail) => {
     const supplierKey = order.supplier_id ?? "none";
@@ -1556,7 +1560,7 @@ export function PurchaseOrdersPanel({
           return_employee_item_id: targetDotationId,
           target_dotation_id: targetDotationId,
           return_qty: lineType === "replacement" ? line.returnQty ?? line.quantity : null
-        } satisfies { quantity_ordered: number } & Partial<Record<ItemIdKey, number>>;
+        } satisfies CreateOrderPayload["items"][number];
       });
     if (normalizedLines.length === 0) {
       setError("Ajoutez au moins une ligne de commande valide.");

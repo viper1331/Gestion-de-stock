@@ -150,7 +150,7 @@ export function AriSessionsPage() {
   }, [searchParams, sessions]);
 
   const createSession = useMutation({
-    mutationFn: createAriSession,
+    mutationFn: (payload: Parameters<typeof createAriSession>[0]) => createAriSession(payload),
     onSuccess: () => {
       toast.success("Séance ARI créée.");
       queryClient.invalidateQueries({ queryKey: ["ari", "sessions"] });
