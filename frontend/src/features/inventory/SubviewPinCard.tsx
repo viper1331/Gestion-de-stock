@@ -64,6 +64,8 @@ export function SubviewPinCard({ pin, onOpen, onRemove }: SubviewPinCardProps) {
   return (
     <div
       ref={setNodeRef}
+      {...attributes}
+      {...listeners}
       role={onOpen ? "button" : undefined}
       tabIndex={onOpen ? 0 : -1}
       onClick={handleOpen}
@@ -77,8 +79,6 @@ export function SubviewPinCard({ pin, onOpen, onRemove }: SubviewPinCardProps) {
         "absolute z-20 flex max-w-[220px] cursor-grab flex-col gap-2 rounded-lg border border-slate-200 bg-white/90 px-3 py-2 text-left text-xs text-slate-700 shadow-md backdrop-blur-md transition hover:border-indigo-300 hover:text-slate-900 dark:border-slate-600 dark:bg-slate-900/90 dark:text-slate-200 dark:hover:border-indigo-400",
         isDragging && "cursor-grabbing opacity-80"
       )}
-      {...attributes}
-      {...listeners}
     >
       <div className="flex items-start justify-between gap-2">
         <div className="min-w-0">

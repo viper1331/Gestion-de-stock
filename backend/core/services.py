@@ -9335,7 +9335,6 @@ def list_low_stock(threshold: int) -> list[models.LowStockReport]:
                     id=row["id"],
                     name=row["name"],
                     sku=row["sku"],
-                    category_id=row["category_id"],
                     size=row["size"],
                     quantity=row["quantity"],
                     low_stock_threshold=row["low_stock_threshold"],
@@ -14730,9 +14729,9 @@ def receive_remise_purchase_order(
     return get_remise_purchase_order(order_id)
 
 
-def list_collaborators() -> list[models.Collaborator]:
+def list_collaborators(site_key: str | None = None) -> list[models.Collaborator]:
     ensure_database_ready()
-    with db.get_stock_connection() as conn:
+    with db.get_stock_connection(site_key) as conn:
         cur = conn.execute("SELECT * FROM collaborators ORDER BY full_name COLLATE NOCASE")
         return [
             models.Collaborator(
@@ -16295,6 +16294,7 @@ def list_vehicle_library_items(
         resolved_types = [value for value in vehicle_types if value]
     if not resolved_types:
         return []
+    primary_vehicle_type = resolved_types[0]
 
     from backend.core.constants_vehicle_types import resolve_vehicle_library_sources
 
@@ -16354,6 +16354,8 @@ def list_vehicle_library_items(
             available_qty={source: quantity},
             remise_item_id=source_item_id if source == "remise" else None,
             pharmacy_item_id=source_item_id if source == "pharmacy" else None,
+            vehicle_type=primary_vehicle_type,
+            category_id=None,
         )
 
     if "remise" in sources:

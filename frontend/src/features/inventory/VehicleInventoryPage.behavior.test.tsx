@@ -4,7 +4,6 @@ import { describe, expect, it, vi } from "vitest";
 import {
   buildDropRequestPayload,
   filterPinnedSubviews,
-  upsertPinnedSubview,
   resolveTargetView
 } from "./VehicleInventoryPage";
 import { useThrottledHoverState } from "./useThrottledHoverState";
@@ -98,7 +97,11 @@ describe("Vehicle inventory interactions", () => {
 
   it("pins a subview when dropped and preserves order", () => {
     const pinned = ["CABINE - CASIER 2"];
-    const nextPinned = upsertPinnedSubview(pinned, "Cabine - Casier 1", "Cabine - Casier 2");
+    const nextPinned = filterPinnedSubviews({
+      pinned: ["Cabine - Casier 1", ...pinned],
+      availableSubViews: ["Cabine - Casier 1", "Cabine - Casier 2"],
+      parentView: "Cabine"
+    });
 
     expect(nextPinned).toEqual(["CABINE - CASIER 1", "CABINE - CASIER 2"]);
   });

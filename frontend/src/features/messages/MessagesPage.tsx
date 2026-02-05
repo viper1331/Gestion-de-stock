@@ -431,6 +431,9 @@ export function MessagesPage() {
     };
   }, [previewMessage, inboxMessages, sentMessages]);
 
+  const activeInboxEntry = activePreviewMessage?.type === "inbox" ? activePreviewMessage.entry : null;
+  const activeSentEntry = activePreviewMessage?.type === "sent" ? activePreviewMessage.entry : null;
+
   useEffect(() => {
     if (previewMessage && !activePreviewMessage?.entry) {
       setPreviewMessage(null);
@@ -782,28 +785,28 @@ export function MessagesPage() {
                 )}
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-4">
-                {activePreviewMessage?.type === "sent" && activePreviewMessage.entry ? (
+                {activePreviewMessage?.type === "sent" && activeSentEntry ? (
                   <div className="space-y-4">
                     <div className="space-y-1">
                       <h4 className="text-sm font-semibold text-white">Message envoyé</h4>
-                      <p className="text-xs text-slate-400">{formatDateTime(activePreviewMessage.entry.created_at)}</p>
+                      <p className="text-xs text-slate-400">{formatDateTime(activeSentEntry.created_at)}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
-                        {activePreviewMessage.entry.category}
+                        {activeSentEntry.category}
                       </span>
                       <span className="rounded border border-emerald-400/40 bg-emerald-400/10 px-2 py-0.5 text-[10px] text-emerald-200">
-                        Lu {activePreviewMessage.entry.recipients_read}/{activePreviewMessage.entry.recipients_total}
+                        Lu {activeSentEntry.recipients_read}/{activeSentEntry.recipients_total}
                       </span>
                     </div>
                     <p className="text-sm text-slate-200 whitespace-pre-wrap break-words">
-                      {activePreviewMessage.entry.content}
+                      {activeSentEntry.content}
                     </p>
                     <div>
                       <p className="text-xs font-semibold text-slate-300">Destinataires</p>
-                      {activePreviewMessage.entry.recipients?.length ? (
+                      {activeSentEntry.recipients?.length ? (
                         <ul className="mt-2 space-y-1 text-xs text-slate-300">
-                          {activePreviewMessage.entry.recipients.map((recipient) => (
+                          {activeSentEntry.recipients.map((recipient: SentMessageRecipient) => (
                             <li key={`${activePreviewMessage.entry?.id}-${recipient.username}`} className="flex flex-wrap gap-2">
                               <span className="font-semibold text-white">{recipient.username}</span>
                               <span className="text-slate-400">
@@ -820,7 +823,7 @@ export function MessagesPage() {
                       <button
                         type="button"
                         className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
-                        onClick={() => handleForward(activePreviewMessage.entry.category, activePreviewMessage.entry.content)}
+                        onClick={() => handleForward(activeSentEntry.category, activeSentEntry.content)}
                       >
                         Transférer
                       </button>
@@ -919,44 +922,44 @@ export function MessagesPage() {
                 )}
               </div>
               <div className="rounded-lg border border-slate-800 bg-slate-950/70 p-4">
-                {activePreviewMessage?.type === "inbox" && activePreviewMessage.entry ? (
+                {activePreviewMessage?.type === "inbox" && activeInboxEntry ? (
                   <div className="space-y-4">
                     <div className="space-y-1">
                       <h4 className="text-sm font-semibold text-white">Message reçu</h4>
-                      <p className="text-xs text-slate-400">{formatDateTime(activePreviewMessage.entry.created_at)}</p>
+                      <p className="text-xs text-slate-400">{formatDateTime(activeInboxEntry.created_at)}</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
                       <span
                         className={`rounded px-2 py-0.5 text-xs font-semibold uppercase tracking-wide ${
-                          activePreviewMessage.entry.sender_role === "admin"
+                          activeInboxEntry.sender_role === "admin"
                             ? "bg-red-500/20 text-red-200"
                             : "bg-indigo-500/20 text-indigo-200"
                         }`}
                       >
-                        {activePreviewMessage.entry.sender_username}
+                        {activeInboxEntry.sender_username}
                       </span>
                       <span className="rounded border border-slate-700 px-2 py-0.5 text-[10px] uppercase text-slate-300">
-                        {activePreviewMessage.entry.category}
+                        {activeInboxEntry.category}
                       </span>
-                      {!activePreviewMessage.entry.is_read ? (
+                      {!activeInboxEntry.is_read ? (
                         <span className="rounded border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] text-amber-200">
                           Non lu
                         </span>
                       ) : null}
-                      {activePreviewMessage.entry.is_archived ? (
+                      {activeInboxEntry.is_archived ? (
                         <span className="rounded border border-slate-600 px-2 py-0.5 text-[10px] text-slate-300">
                           Archivé
                         </span>
                       ) : null}
                     </div>
                     <p className="text-sm text-slate-200 whitespace-pre-wrap break-words">
-                      {activePreviewMessage.entry.content}
+                      {activeInboxEntry.content}
                     </p>
                     <div className="flex flex-wrap gap-2">
                       <button
                         type="button"
                         className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
-                        onClick={() => handleReply(activePreviewMessage.entry)}
+                        onClick={() => handleReply(activeInboxEntry)}
                       >
                         Répondre
                       </button>
@@ -964,7 +967,7 @@ export function MessagesPage() {
                         type="button"
                         className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white"
                         onClick={() =>
-                          handleForward(activePreviewMessage.entry.category, activePreviewMessage.entry.content)
+                          handleForward(activeInboxEntry.category, activeInboxEntry.content)
                         }
                       >
                         Transférer
@@ -974,34 +977,34 @@ export function MessagesPage() {
                         className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={() =>
                           activePreviewMessage.entry?.is_read
-                            ? markUnread.mutate(activePreviewMessage.entry.id)
-                            : markRead.mutate(activePreviewMessage.entry.id)
+                            ? markUnread.mutate(activeInboxEntry.id)
+                            : markRead.mutate(activeInboxEntry.id)
                         }
                         disabled={!canEdit || markRead.isPending || markUnread.isPending}
                       >
-                        {activePreviewMessage.entry.is_read ? "Marquer non lu" : "Marquer lu"}
+                        {activeInboxEntry.is_read ? "Marquer non lu" : "Marquer lu"}
                       </button>
                       <button
                         type="button"
                         className="rounded-md border border-slate-700 px-3 py-1 text-xs font-semibold text-slate-200 hover:border-indigo-500 hover:text-white disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={() =>
                           activePreviewMessage.entry?.is_archived
-                            ? unarchiveMessage.mutate(activePreviewMessage.entry.id)
-                            : archiveMessage.mutate(activePreviewMessage.entry.id)
+                            ? unarchiveMessage.mutate(activeInboxEntry.id)
+                            : archiveMessage.mutate(activeInboxEntry.id)
                         }
                         disabled={!canEdit || archiveMessage.isPending || unarchiveMessage.isPending}
                       >
-                        {activePreviewMessage.entry.is_archived ? "Désarchiver" : "Archiver"}
+                        {activeInboxEntry.is_archived ? "Désarchiver" : "Archiver"}
                       </button>
                       <button
                         type="button"
                         className="rounded-md border border-red-500/40 px-3 py-1 text-xs font-semibold text-red-200 hover:border-red-400 hover:text-red-100 disabled:cursor-not-allowed disabled:opacity-60"
                         onClick={() => {
-                          if (!activePreviewMessage.entry) {
+                          if (!activeInboxEntry) {
                             return;
                           }
                           if (window.confirm("Supprimer ce message de votre boîte de réception ?")) {
-                            deleteMessage.mutate(activePreviewMessage.entry.id);
+                            deleteMessage.mutate(activeInboxEntry.id);
                           }
                         }}
                         disabled={!canEdit || deleteMessage.isPending}

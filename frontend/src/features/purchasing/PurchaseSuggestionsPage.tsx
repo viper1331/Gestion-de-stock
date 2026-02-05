@@ -405,7 +405,7 @@ export function PurchaseSuggestionsPage() {
   }, [baseModuleOptions]);
 
   const gateContent = (() => {
-    if (modulePermissions.isLoading && user?.role !== "admin") {
+    if (modulePermissions.isPending && user?.role !== "admin") {
       return (
         <section className="space-y-4">
           <header className="space-y-1">
@@ -472,9 +472,9 @@ export function PurchaseSuggestionsPage() {
                     type="button"
                     className="ml-auto rounded border border-indigo-500/40 bg-indigo-500/10 px-3 py-2 text-xs font-semibold text-indigo-200 transition hover:bg-indigo-500/20 disabled:cursor-not-allowed disabled:border-slate-800 disabled:text-slate-500"
                     onClick={handleRefresh}
-                    disabled={!canRefresh || refreshMutation.isLoading}
+                    disabled={!canRefresh || refreshMutation.isPending}
                   >
-                    {refreshMutation.isLoading ? "Mise à jour..." : "Rafraîchir"}
+                    {refreshMutation.isPending ? "Mise à jour..." : "Rafraîchir"}
                   </button>
                   {refreshMutation.isError ? (
                     <span className="text-xs text-rose-300">Échec de la mise à jour.</span>
@@ -501,8 +501,8 @@ export function PurchaseSuggestionsPage() {
                         canEdit={canEdit}
                         onUpdateLines={handleUpdateLines}
                         onConvert={handleConvert}
-                        isUpdating={updateLinesMutation.isLoading}
-                        isConverting={convertMutation.isLoading}
+                        isUpdating={updateLinesMutation.isPending}
+                        isConverting={convertMutation.isPending}
                       />
                     );
                   })}
@@ -515,7 +515,7 @@ export function PurchaseSuggestionsPage() {
     ],
     [
       canRefresh,
-      convertMutation.isLoading,
+      convertMutation.isPending,
       gateContent,
       handleConvert,
       handleRefresh,
@@ -524,10 +524,10 @@ export function PurchaseSuggestionsPage() {
       moduleFilter,
       moduleLabelByKey,
       moduleOptions,
-      refreshMutation.isLoading,
+      refreshMutation.isPending,
       refreshMutation.isError,
       suggestions,
-      updateLinesMutation.isLoading,
+      updateLinesMutation.isPending,
       user,
       modulePermissions
     ]

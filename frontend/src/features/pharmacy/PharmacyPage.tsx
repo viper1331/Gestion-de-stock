@@ -6,6 +6,7 @@ import {
   DndContext,
   MouseSensor,
   TouchSensor,
+  type DragEndEvent,
   closestCenter,
   useSensor,
   useSensors
@@ -478,12 +479,14 @@ export function PharmacyPage() {
   );
 
   const handleDragEnd = useCallback(
-    (event: { active: { id: string }; over?: { id: string } | null }) => {
-      if (!event.over || event.active.id === event.over.id) {
+    (event: DragEndEvent) => {
+      const activeId = String(event.active.id);
+      const overId = event.over ? String(event.over.id) : null;
+      if (!overId || activeId === overId) {
         return;
       }
-      const activeIndex = orderedColumns.indexOf(event.active.id);
-      const overIndex = orderedColumns.indexOf(event.over.id);
+      const activeIndex = orderedColumns.indexOf(activeId);
+      const overIndex = orderedColumns.indexOf(overId);
       if (activeIndex === -1 || overIndex === -1) {
         return;
       }
@@ -1976,7 +1979,7 @@ export function PharmacyPage() {
       title: "En-tête pharmacie",
       required: true,
       permissions: ["pharmacy"],
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 0, y: 0, w: 12, h: 4 },
         md: { x: 0, y: 0, w: 10, h: 4 },
@@ -1990,7 +1993,7 @@ export function PharmacyPage() {
       title: "Recherche pharmacie",
       required: true,
       permissions: ["pharmacy"],
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 0, y: 4, w: 8, h: 4 },
         md: { x: 0, y: 4, w: 10, h: 4 },
@@ -2003,7 +2006,7 @@ export function PharmacyPage() {
       id: "pharmacy-stats",
       title: "Statistiques pharmacie",
       permissions: ["pharmacy"],
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 8, y: 4, w: 4, h: 8 },
         md: { x: 0, y: 8, w: 10, h: 8 },
@@ -2018,7 +2021,7 @@ export function PharmacyPage() {
             id: "pharmacy-movements",
             title: "Mouvements de stock",
             permissions: ["pharmacy"],
-            variant: "plain",
+            variant: "plain" as const,
             defaultLayout: {
               lg: { x: 8, y: 12, w: 4, h: 6 },
               md: { x: 0, y: 36, w: 10, h: 6 },
@@ -2034,7 +2037,7 @@ export function PharmacyPage() {
       title: "Articles pharmacie",
       required: true,
       permissions: ["pharmacy"],
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 0, y: 8, w: 8, h: 20 },
         md: { x: 0, y: 16, w: 10, h: 20 },
@@ -2048,7 +2051,7 @@ export function PharmacyPage() {
       title: "Alertes stock faible",
       permissions: ["pharmacy"],
       minH: 10,
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 0, y: 28, w: 8, h: 10 },
         md: { x: 0, y: 56, w: 10, h: 10 },
@@ -2062,7 +2065,7 @@ export function PharmacyPage() {
       title: "Catégories pharmacie",
       permissions: ["pharmacy"],
       minH: 12,
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 8, y: 32, w: 4, h: 12 },
         md: { x: 0, y: 66, w: 10, h: 12 },
@@ -2076,7 +2079,7 @@ export function PharmacyPage() {
       title: "Lots pharmacie",
       permissions: ["pharmacy"],
       minH: 16,
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 0, y: 44, w: 12, h: 16 },
         md: { x: 0, y: 78, w: 10, h: 16 },
@@ -2094,7 +2097,7 @@ export function PharmacyPage() {
       title: "Bons de commande",
       permissions: ["pharmacy"],
       minH: 16,
-      variant: "plain",
+      variant: "plain" as const,
       defaultLayout: {
         lg: { x: 0, y: 60, w: 12, h: 16 },
         md: { x: 0, y: 94, w: 10, h: 16 },

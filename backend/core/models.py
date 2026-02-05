@@ -581,6 +581,8 @@ class Item(BaseModel):
     expiration_date: date | None = None
     remise_item_id: int | None = None
     pharmacy_item_id: int | None = None
+    vehicle_type: VehicleType | None = None
+    category_id: int | None = None
     remise_quantity: int | None = None
     pharmacy_quantity: int | None = None
     image_url: str | None = None
@@ -1839,6 +1841,8 @@ class VehicleLibraryItem(BaseModel):
     available_qty: dict[str, int] = Field(default_factory=dict)
     remise_item_id: int | None = None
     pharmacy_item_id: int | None = None
+    vehicle_type: VehicleType | None = None
+    category_id: int | None = None
 
 
 class VehicleLibraryLotItem(BaseModel):

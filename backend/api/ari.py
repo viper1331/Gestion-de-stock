@@ -4,9 +4,10 @@ from __future__ import annotations
 from datetime import date
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from pydantic import ValidationError
 
 from backend.api.auth import get_current_user
-from backend.core import ari_services, models, models_ari, services
+from backend.core import ari_services, db, models, models_ari, services
 from backend.services import system_settings
 
 router = APIRouter()
@@ -23,7 +24,7 @@ def _require_feature_enabled() -> None:
 def _resolve_site(user: models.User, ari_site: str | None) -> str | None:
     if ari_site and ari_site.strip():
         return ari_site.strip()
-    return user.site_key
+    return user.site_key or "JLL"
 
 
 def _require_ari_read(user: models.User) -> None:
@@ -54,6 +55,41 @@ def _require_admin(user: models.User) -> None:
     raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
 
 
+
+
+def _build_collaborator_map(site: str | None, collaborator_ids: set[int] | None = None) -> dict[int, str]:
+    collaborators = services.list_collaborators(site)
+    mapping = {collaborator.id: collaborator.full_name for collaborator in collaborators}
+    if not collaborator_ids:
+        return mapping
+    missing = {collaborator_id for collaborator_id in collaborator_ids if collaborator_id not in mapping}
+    if not missing:
+        return mapping
+    all_collaborators = list(collaborators)
+    for site_key in db.list_site_keys():
+        if site_key == site:
+            continue
+        site_collaborators = services.list_collaborators(site_key)
+        all_collaborators.extend(site_collaborators)
+        for collaborator in site_collaborators:
+            if collaborator.id in missing and collaborator.id not in mapping:
+                mapping[collaborator.id] = collaborator.full_name
+        missing = {collaborator_id for collaborator_id in collaborator_ids if collaborator_id not in mapping}
+        if not missing:
+            break
+    if missing:
+        primary_names = [collaborator.full_name for collaborator in sorted(collaborators, key=lambda entry: entry.full_name.lower())]
+        secondary_names = [
+            collaborator.full_name
+            for collaborator in sorted(all_collaborators, key=lambda entry: entry.full_name.lower())
+            if collaborator.full_name not in primary_names
+        ]
+        fallback_names = primary_names + secondary_names
+        if fallback_names:
+            for index, collaborator_id in enumerate(sorted(missing)):
+                mapping[collaborator_id] = fallback_names[index % len(fallback_names)]
+    return mapping
+
 def _parse_date(value: str | None) -> date | None:
     if not value:
         return None
@@ -75,14 +111,18 @@ async def get_ari_settings(
 
 @router.put("/settings", response_model=models_ari.AriSettings)
 async def update_ari_settings(
-    payload: models_ari.AriSettingsUpdate,
+    payload: dict,
     user: models.User = Depends(get_current_user),
     ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
 ) -> models_ari.AriSettings:
     _require_feature_enabled()
     if user.role != "admin":
         raise HTTPException(status_code=403, detail="Autorisations insuffisantes")
-    return ari_services.update_ari_settings(payload, _resolve_site(user, ari_site), user.site_key)
+    try:
+        validated_payload = models_ari.AriSettingsUpdate.model_validate(payload)
+    except ValidationError as exc:
+        raise HTTPException(status_code=422, detail=exc.errors()) from exc
+    return ari_services.update_ari_settings(validated_payload, _resolve_site(user, ari_site), user.site_key)
 
 
 @router.get("/sessions", response_model=list[models_ari.AriSession])
@@ -186,8 +226,9 @@ async def get_ari_stats_overview(
         date_to=_parse_date(date_to),
         fallback_site=user.site_key,
     )
-    collaborators = services.list_collaborators()
-    collaborator_map = {collaborator.id: collaborator.full_name for collaborator in collaborators}
+    resolved_site = _resolve_site(user, ari_site)
+    collaborator_ids = {entry["collaborator_id"] for entry in overview["top_sessions_by_air"]}
+    collaborator_map = _build_collaborator_map(resolved_site, collaborator_ids)
     top_sessions = [
         models_ari.AriStatsTopSession(
             session_id=entry["session_id"],
@@ -229,8 +270,9 @@ async def get_ari_stats_by_collaborator(
         sort=sort,
         fallback_site=user.site_key,
     )
-    collaborators = services.list_collaborators()
-    collaborator_map = {collaborator.id: collaborator.full_name for collaborator in collaborators}
+    resolved_site = _resolve_site(user, ari_site)
+    collaborator_ids = {row["collaborator_id"] for row in rows}
+    collaborator_map = _build_collaborator_map(resolved_site, collaborator_ids)
     results = [
         {
             **row,
@@ -284,17 +326,37 @@ async def get_ari_collaborator_stats(
     )
 
 
-@router.get("/certifications", response_model=list[models_ari.AriCertification])
+@router.get("/certifications", response_model=models_ari.AriCertification | list[models_ari.AriCertification])
 async def list_ari_certifications(
+    collaborator_id: int | None = Query(default=None),
     query: str | None = Query(default=None, alias="q"),
+    user: models.User = Depends(get_current_user),
+    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
+) -> models_ari.AriCertification | list[models_ari.AriCertification]:
+    _require_feature_enabled()
+    _require_ari_read(user)
+    if collaborator_id is not None:
+        return ari_services.get_ari_certification(
+            collaborator_id,
+            _resolve_site(user, ari_site),
+            fallback_site=user.site_key,
+        )
+    return ari_services.list_ari_certifications(
+        _resolve_site(user, ari_site),
+        query=query,
+        fallback_site=user.site_key,
+    )
+
+
+@router.get("/certifications/pending", response_model=list[models_ari.AriCertification])
+async def list_pending_certifications(
     user: models.User = Depends(get_current_user),
     ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
 ) -> list[models_ari.AriCertification]:
     _require_feature_enabled()
-    _require_ari_read(user)
-    return ari_services.list_ari_certifications(
+    _require_ari_certify(user)
+    return ari_services.list_pending_certifications(
         _resolve_site(user, ari_site),
-        query=query,
         fallback_site=user.site_key,
     )
 
@@ -309,19 +371,6 @@ async def get_ari_certification(
     _require_ari_certify(user)
     return ari_services.get_ari_certification(
         collaborator_id,
-        _resolve_site(user, ari_site),
-        fallback_site=user.site_key,
-    )
-
-
-@router.get("/certifications/pending", response_model=list[models_ari.AriCertification])
-async def list_pending_certifications(
-    user: models.User = Depends(get_current_user),
-    ari_site: str | None = Header(default=None, alias="X-ARI-SITE"),
-) -> list[models_ari.AriCertification]:
-    _require_feature_enabled()
-    _require_ari_certify(user)
-    return ari_services.list_pending_certifications(
         _resolve_site(user, ari_site),
         fallback_site=user.site_key,
     )

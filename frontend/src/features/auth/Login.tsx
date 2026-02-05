@@ -163,8 +163,8 @@ export function Login() {
     }
     const result = await resendEmailOtp({ challengeId });
     if (result.status === "resent") {
-      setEmailResendCooldown(result.data.resend_cooldown_seconds ?? 0);
-      setEmailOtpDevCode(result.data.dev_code ?? null);
+      setEmailResendCooldown(result.data?.resend_cooldown_seconds ?? 0);
+      setEmailOtpDevCode(result.data?.dev_code ?? null);
     }
   };
 

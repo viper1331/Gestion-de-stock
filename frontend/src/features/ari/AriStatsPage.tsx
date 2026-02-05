@@ -377,13 +377,13 @@ export function AriStatsPage() {
         />
         <StatCard
           title="Durée moyenne"
-          value={isLoadingOverview ? "…" : `${formatStatValue(overview?.avg_duration_min)} min`}
+          value={isLoadingOverview ? "…" : `${formatStatValue(overview?.avg_duration_min ?? null)} min`}
           subtitle="Durée moyenne par séance"
           variant="warning"
         />
         <StatCard
           title="Air moyen"
-          value={isLoadingOverview ? "…" : `${formatStatValue(overview?.avg_air_lpm)} L/min`}
+          value={isLoadingOverview ? "…" : `${formatStatValue(overview?.avg_air_lpm ?? null)} L/min`}
           subtitle="Consommation moyenne"
           variant="warning"
         />

@@ -1054,7 +1054,7 @@ export function VehicleInventoryPage() {
                 cover_image_url: lot.cover_image_url,
                 item_count: lot.item_count,
                 total_quantity: lot.total_quantity,
-                origin: "remise",
+                origin: "remise" as const,
                 items: lot.items.map((item) => ({
                   id: item.id,
                   name: item.remise_name,
@@ -1073,7 +1073,7 @@ export function VehicleInventoryPage() {
                 cover_image_url: lot.cover_image_url,
                 item_count: lot.item_count,
                 total_quantity: lot.total_quantity,
-                origin: "pharmacy",
+                origin: "pharmacy" as const,
                 items: lot.items.map((item) => ({
                   id: item.id,
                   name: item.pharmacy_name,

@@ -8,6 +8,8 @@ interface DraggableModalProps {
   children: ReactNode;
   footer?: ReactNode;
   maxWidthClassName?: string;
+  width?: string;
+  maxHeight?: string;
   bodyClassName?: string;
 }
 
@@ -20,6 +22,8 @@ export function DraggableModal({
   children,
   footer,
   maxWidthClassName = "max-w-3xl",
+  width,
+  maxHeight,
   bodyClassName = "px-4 py-4"
 }: DraggableModalProps) {
   const modalRef = useRef<HTMLDivElement | null>(null);
