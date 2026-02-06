@@ -399,6 +399,20 @@ const VEHICLE_SUBVIEW_CARDS_ENABLED =
 
 export const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
+type VehicleOrganizationMode = "detailed" | "general";
+
+interface ZoneInventoryItem {
+  id: string;
+  label: string;
+  qty: number;
+}
+
+interface ZoneInventory {
+  zoneId: string;
+  zoneLabel: string;
+  items: ZoneInventoryItem[];
+}
+
 type DragKind =
   | "pharmacy_lot"
   | "remise_lot"
@@ -765,6 +779,7 @@ export function VehicleInventoryPage() {
     [debugEnabled]
   );
   const [selectedView, setSelectedView] = useState<string | null>(null);
+  const [organizationMode, setOrganizationMode] = useState<VehicleOrganizationMode>("detailed");
   const requestViewChange = useCallback(
     (next: string | null) => {
       setSelectedView(next);
@@ -956,6 +971,28 @@ export function VehicleInventoryPage() {
     () => vehicles.find((vehicle) => vehicle.id === selectedVehicleId) ?? null,
     [vehicles, selectedVehicleId]
   );
+
+  useEffect(() => {
+    if (!selectedVehicle || typeof window === "undefined") {
+      setOrganizationMode("detailed");
+      return;
+    }
+    const storageKey = `vehicleInventory:organizationMode:${selectedVehicle.id}`;
+    const stored = window.localStorage.getItem(storageKey);
+    if (stored === "general" || stored === "detailed") {
+      setOrganizationMode(stored);
+      return;
+    }
+    setOrganizationMode("detailed");
+  }, [selectedVehicle]);
+
+  useEffect(() => {
+    if (!selectedVehicle || typeof window === "undefined") {
+      return;
+    }
+    const storageKey = `vehicleInventory:organizationMode:${selectedVehicle.id}`;
+    window.localStorage.setItem(storageKey, organizationMode);
+  }, [organizationMode, selectedVehicle]);
 
   const selectedVehicleTypes = useMemo(
     () => getVehicleTypes(selectedVehicle),
@@ -2326,6 +2363,15 @@ export function VehicleInventoryPage() {
     [visibleVehicleItems, normalizedSelectedView]
   );
 
+  const generalInventoryZones = useMemo(
+    () =>
+      buildGeneralInventoryByZone({
+        views: normalizedVehicleViews,
+        items: visibleVehicleItems
+      }),
+    [normalizedVehicleViews, visibleVehicleItems]
+  );
+
   const itemsWaitingAssignment = useMemo(
     () => visibleVehicleItems.filter((item) => !getItemView(item)),
     [visibleVehicleItems]
@@ -3251,7 +3297,7 @@ export function VehicleInventoryPage() {
               <VehicleHeader
                 vehicle={selectedVehicle}
                 itemsCount={vehicleItems.length}
-                fallbackIllustration={selectedVehicleFallback}
+                fallbackIllustration={selectedVehicleFallback ?? VEHICLE_ILLUSTRATIONS[0]}
                 onEdit={handleToggleVehicleEdition}
                 onDelete={handleDeleteVehicle}
                 isEditing={isEditingVehicle}
@@ -3426,6 +3472,40 @@ export function VehicleInventoryPage() {
             </form>
           ) : null}
 
+          <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-700 dark:bg-slate-900">
+            <button
+              type="button"
+              onClick={() => setOrganizationMode("detailed")}
+              className={clsx(
+                "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                organizationMode === "detailed"
+                  ? "bg-indigo-500 text-white shadow"
+                  : "text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-slate-100"
+              )}
+            >
+              Vues détaillées
+            </button>
+            <button
+              type="button"
+              onClick={() => setOrganizationMode("general")}
+              className={clsx(
+                "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                organizationMode === "general"
+                  ? "bg-indigo-500 text-white shadow"
+                  : "text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-slate-100"
+              )}
+            >
+              Inventaire général
+            </button>
+          </div>
+
+          {organizationMode === "general" ? (
+            <VehicleGeneralInventory
+              vehicle={selectedVehicle}
+              zones={generalInventoryZones}
+              fallbackIllustration={selectedVehicleFallback ?? VEHICLE_ILLUSTRATIONS[0]}
+            />
+          ) : (
           <DndContext
             sensors={sensors}
             collisionDetection={pointerWithin}
@@ -3794,6 +3874,7 @@ export function VehicleInventoryPage() {
               ) : null}
             </DragOverlay>
           </DndContext>
+          )}
           <VehiclePhotosPanel />
         </section>
           </EditableBlock>
@@ -4111,6 +4192,121 @@ function splitViewHierarchy(view: string | null): { parent: string; subView: str
     parent: cleanedParent,
     subView: subView.length > 0 ? view : null,
   };
+}
+
+export function buildGeneralInventoryByZone(params: {
+  views: string[];
+  items: VehicleItem[];
+}): ZoneInventory[] {
+  const parentZonesInOrder: string[] = [];
+  const seenParents = new Set<string>();
+
+  params.views.forEach((view) => {
+    const parentZone = splitViewHierarchy(view).parent;
+    const normalizedParent = normalizeViewName(parentZone);
+    if (seenParents.has(normalizedParent)) {
+      return;
+    }
+    seenParents.add(normalizedParent);
+    parentZonesInOrder.push(normalizedParent);
+  });
+
+  const groupedByZone = new Map<string, Map<string, ZoneInventoryItem>>();
+
+  params.items.forEach((item) => {
+    const itemView = getItemView(item);
+    const parentZone = splitViewHierarchy(itemView).parent;
+    const normalizedParent = normalizeViewName(parentZone);
+    if (!seenParents.has(normalizedParent)) {
+      seenParents.add(normalizedParent);
+      parentZonesInOrder.push(normalizedParent);
+    }
+
+    const zoneMap = groupedByZone.get(normalizedParent) ?? new Map<string, ZoneInventoryItem>();
+    const itemKey =
+      item.pharmacy_item_id !== null
+        ? `pharmacy:${item.pharmacy_item_id}`
+        : item.remise_item_id !== null
+          ? `remise:${item.remise_item_id}`
+          : `name:${normalizeViewNameStrict(item.name) || item.name.toLowerCase()}`;
+
+    const existing = zoneMap.get(itemKey);
+    const nextQty = (existing?.qty ?? 0) + (item.quantity > 0 ? item.quantity : 1);
+    zoneMap.set(itemKey, {
+      id: existing?.id ?? String(item.id),
+      label: existing?.label ?? item.name,
+      qty: nextQty
+    });
+    groupedByZone.set(normalizedParent, zoneMap);
+  });
+
+  return parentZonesInOrder
+    .map<ZoneInventory>((zone) => {
+      const zoneItems = Array.from(groupedByZone.get(zone)?.values() ?? []).sort((a, b) =>
+        a.label.localeCompare(b.label, "fr", { sensitivity: "base" })
+      );
+      return {
+        zoneId: zone,
+        zoneLabel: zone,
+        items: zoneItems
+      };
+    })
+    .filter((zone) => zone.items.length > 0);
+}
+
+function VehicleGeneralInventory({
+  vehicle,
+  zones,
+  fallbackIllustration
+}: {
+  vehicle: VehicleCategory;
+  zones: ZoneInventory[];
+  fallbackIllustration: string;
+}) {
+  const vehicleImage = resolveMediaUrl(vehicle.image_url);
+
+  return (
+    <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/60">
+      <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px),1fr] lg:items-start">
+        <figure className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950/70 dark:border-slate-700">
+          <img
+            src={vehicleImage ?? fallbackIllustration}
+            alt={`Vue générale du véhicule ${vehicle.name}`}
+            className="h-56 w-full object-cover"
+          />
+          <figcaption className="border-t border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
+            Inventaire général par zone
+          </figcaption>
+        </figure>
+
+        <div className="grid gap-3 sm:grid-cols-2">
+          {zones.map((zone) => (
+            <section
+              key={zone.zoneId}
+              className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950"
+            >
+              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-200">
+                {zone.zoneLabel}
+              </p>
+              <ul className="mt-2 space-y-1 text-sm text-slate-700 dark:text-slate-200">
+                {zone.items.map((item) => (
+                  <li key={`${zone.zoneId}-${item.id}`} className="flex items-start gap-2">
+                    <span className="font-semibold text-slate-500 dark:text-slate-400">{item.qty} ×</span>
+                    <span>{item.label}</span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ))}
+          {zones.length === 0 ? (
+            <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
+              Aucun matériel affecté au véhicule pour le moment.
+            </p>
+          ) : null}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function formatSubViewLabel(subView: string, parent: string) {
