@@ -16,7 +16,7 @@ from backend.core.pdf_config_models import PdfExportConfig
 DEFAULT_CORS_ORIGINS = [
     "http://localhost:5151",
     "http://127.0.0.1:5151",
-    "http://80.9.171.118:5151",
+    "https://gestionstockv2.duckdns.org",
 ]
 
 CONFIG_PATH = Path(__file__).resolve().parent.parent / "system_config.json"

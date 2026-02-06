@@ -1,0 +1,25 @@
+gestionstockv2.duckdns.org {
+  encode zstd gzip
+
+  @api path /api/*
+  handle @api {
+    reverse_proxy 127.0.0.1:8000 {
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Forwarded-Host {host}
+      header_up Host {host}
+    }
+  }
+
+  @ws path /ws/*
+  handle @ws {
+    reverse_proxy 127.0.0.1:8000 {
+      header_up X-Forwarded-Proto {scheme}
+      header_up X-Forwarded-Host {host}
+      header_up Host {host}
+    }
+  }
+
+  root * "C:\\Users\\sebou\\Documents\\Gestion-de-stock\\frontend\\dist"
+  try_files {path} /index.html
+  file_server
+}

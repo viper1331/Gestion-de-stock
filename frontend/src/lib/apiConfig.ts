@@ -9,7 +9,7 @@ export interface SystemConfigSnapshot {
 
 export interface ResolvedApiConfig {
   baseUrl: string;
-  source: "lan" | "public" | "env_default";
+  source: "lan" | "public" | "env_default" | "same_origin";
 }
 
 const FALLBACK_BASE_URL = API_BASE_URL.replace(/\/$/, "");
@@ -41,6 +41,16 @@ function isPrivateHostname(hostname: string): boolean {
   return false;
 }
 
+function wouldCauseMixedContent(candidateBaseUrl: string): boolean {
+  if (typeof window === "undefined") return false;
+  if (window.location.protocol !== "https:") return false;
+  return candidateBaseUrl.startsWith("http://");
+}
+
+function sameOriginApiBaseUrl(): string {
+  return "/api";
+}
+
 function resolveFromConfig(
   config: SystemConfigSnapshot | null,
   hostname: string
@@ -55,29 +65,37 @@ function resolveFromConfig(
   const publicCandidate = publicUrl ?? lanUrl ?? FALLBACK_BASE_URL;
 
   if (mode === "lan") {
+    if (wouldCauseMixedContent(lanCandidate)) {
+      return { baseUrl: sameOriginApiBaseUrl(), source: "same_origin" };
+    }
     return { baseUrl: lanCandidate, source: lanUrl ? "lan" : "env_default" };
   }
 
   if (mode === "public") {
+    if (wouldCauseMixedContent(publicCandidate)) {
+      return { baseUrl: sameOriginApiBaseUrl(), source: "same_origin" };
+    }
     return { baseUrl: publicCandidate, source: publicUrl ? "public" : "env_default" };
   }
 
   const isPrivate = isPrivateHostname(hostname);
   if (isPrivate) {
+    const resolved = lanUrl ?? publicUrl ?? FALLBACK_BASE_URL;
+    if (wouldCauseMixedContent(resolved)) {
+      return { baseUrl: sameOriginApiBaseUrl(), source: "same_origin" };
+    }
     if (lanUrl) return { baseUrl: lanUrl, source: "lan" };
     if (publicUrl) return { baseUrl: publicUrl, source: "public" };
     return { baseUrl: FALLBACK_BASE_URL, source: "env_default" };
   }
 
-  if (publicUrl) return { baseUrl: publicUrl, source: "public" };
-  if (lanUrl) return { baseUrl: lanUrl, source: "lan" };
-  return { baseUrl: FALLBACK_BASE_URL, source: "env_default" };
+  return { baseUrl: sameOriginApiBaseUrl(), source: "same_origin" };
 }
 
 async function fetchSystemConfig(): Promise<SystemConfigSnapshot | null> {
   const token = typeof window !== "undefined" ? localStorage.getItem("gsp/token") : null;
   try {
-    const response = await fetch(`${FALLBACK_BASE_URL}/system/public-config`, {
+    const response = await fetch(`${sameOriginApiBaseUrl()}/system/public-config`, {
       headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       credentials: "include"
     });
@@ -86,7 +104,7 @@ async function fetchSystemConfig(): Promise<SystemConfigSnapshot | null> {
     }
     return (await response.json()) as SystemConfigSnapshot;
   } catch (error) {
-    console.warn("Impossible de charger la configuration système, fallback sur VITE_API_BASE_URL.", error);
+    console.warn("Impossible de charger la configuration système, fallback sur l'API same-origin.", error);
     return null;
   }
 }
