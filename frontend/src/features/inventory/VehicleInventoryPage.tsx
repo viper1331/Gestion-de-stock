@@ -50,6 +50,11 @@ interface VehicleViewConfig {
   background_url: string | null;
 }
 
+interface VehicleGeneralInventoryPhotoResponse {
+  vehicle_id: number;
+  photo_url: string | null;
+}
+
 interface VehicleSubviewPin {
   id: number;
   vehicle_id: number;
@@ -993,6 +998,50 @@ export function VehicleInventoryPage() {
     const storageKey = `vehicleInventory:organizationMode:${selectedVehicle.id}`;
     window.localStorage.setItem(storageKey, organizationMode);
   }, [organizationMode, selectedVehicle]);
+
+  const { data: generalInventoryPhoto } = useQuery({
+    queryKey: ["vehicle-general-inventory-photo", selectedVehicle?.id],
+    queryFn: async () => {
+      if (!selectedVehicle?.id) {
+        return null;
+      }
+      const response = await api.get<VehicleGeneralInventoryPhotoResponse>(
+        `/vehicles/${selectedVehicle.id}/general-inventory/photo`
+      );
+      return response.data;
+    },
+    enabled: Boolean(selectedVehicle?.id)
+  });
+
+  const uploadGeneralInventoryPhoto = useMutation({
+    mutationFn: async ({ vehicleId, file }: { vehicleId: number; file: File }) => {
+      const formData = new FormData();
+      formData.append("file", file);
+      const response = await api.post<VehicleGeneralInventoryPhotoResponse>(
+        `/vehicles/${vehicleId}/general-inventory/photo`,
+        formData,
+        { headers: { "Content-Type": "multipart/form-data" } }
+      );
+      return response.data;
+    },
+    onSuccess: (_, payload) => {
+      void queryClient.invalidateQueries({ queryKey: ["vehicle-general-inventory-photo", payload.vehicleId] });
+      void queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
+    }
+  });
+
+  const removeGeneralInventoryPhoto = useMutation({
+    mutationFn: async ({ vehicleId }: { vehicleId: number }) => {
+      const response = await api.delete<VehicleGeneralInventoryPhotoResponse>(
+        `/vehicles/${vehicleId}/general-inventory/photo`
+      );
+      return response.data;
+    },
+    onSuccess: (_, payload) => {
+      void queryClient.invalidateQueries({ queryKey: ["vehicle-general-inventory-photo", payload.vehicleId] });
+      void queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
+    }
+  });
 
   const selectedVehicleTypes = useMemo(
     () => getVehicleTypes(selectedVehicle),
@@ -3504,6 +3553,21 @@ export function VehicleInventoryPage() {
               vehicle={selectedVehicle}
               zones={generalInventoryZones}
               fallbackIllustration={selectedVehicleFallback ?? VEHICLE_ILLUSTRATIONS[0]}
+              photoUrl={generalInventoryPhoto?.photo_url ?? null}
+              onUploadPhoto={(file) => {
+                if (!selectedVehicle?.id) {
+                  return;
+                }
+                uploadGeneralInventoryPhoto.mutate({ vehicleId: selectedVehicle.id, file });
+              }}
+              onRemovePhoto={() => {
+                if (!selectedVehicle?.id) {
+                  return;
+                }
+                removeGeneralInventoryPhoto.mutate({ vehicleId: selectedVehicle.id });
+              }}
+              isUploadingPhoto={uploadGeneralInventoryPhoto.isPending}
+              isRemovingPhoto={removeGeneralInventoryPhoto.isPending}
             />
           ) : (
           <DndContext
@@ -4257,54 +4321,113 @@ export function buildGeneralInventoryByZone(params: {
 function VehicleGeneralInventory({
   vehicle,
   zones,
-  fallbackIllustration
+  fallbackIllustration,
+  photoUrl,
+  onUploadPhoto,
+  onRemovePhoto,
+  isUploadingPhoto,
+  isRemovingPhoto
 }: {
   vehicle: VehicleCategory;
   zones: ZoneInventory[];
   fallbackIllustration: string;
+  photoUrl: string | null;
+  onUploadPhoto: (file: File) => void;
+  onRemovePhoto: () => void;
+  isUploadingPhoto: boolean;
+  isRemovingPhoto: boolean;
 }) {
-  const vehicleImage = resolveMediaUrl(vehicle.image_url);
+  const inputRef = useRef<HTMLInputElement | null>(null);
+  const [photoVersion, setPhotoVersion] = useState<number>(Date.now());
+  const resolvedPhoto = resolveMediaUrl(photoUrl);
+  const effectivePhotoUrl = resolvedPhoto ? `${resolvedPhoto}${resolvedPhoto.includes("?") ? "&" : "?"}v=${photoVersion}` : null;
+  const displayImage = effectivePhotoUrl ?? resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration;
+
+  const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) {
+      return;
+    }
+    onUploadPhoto(file);
+    setPhotoVersion(Date.now());
+    event.target.value = "";
+  };
+
+  const leftZones = zones.filter((_, index) => index % 2 === 0);
+  const rightZones = zones.filter((_, index) => index % 2 === 1);
 
   return (
-    <div className="space-y-4 rounded-xl border border-slate-200 bg-slate-50 p-4 shadow-sm dark:border-slate-700 dark:bg-slate-900/60">
-      <div className="grid gap-4 lg:grid-cols-[minmax(260px,340px),1fr] lg:items-start">
-        <figure className="overflow-hidden rounded-xl border border-slate-200 bg-slate-950/70 dark:border-slate-700">
-          <img
-            src={vehicleImage ?? fallbackIllustration}
-            alt={`Vue générale du véhicule ${vehicle.name}`}
-            className="h-56 w-full object-cover"
-          />
-          <figcaption className="border-t border-slate-200 bg-white px-3 py-2 text-xs text-slate-500 dark:border-slate-700 dark:bg-slate-900 dark:text-slate-300">
-            Inventaire général par zone
-          </figcaption>
-        </figure>
+    <div className="rounded-xl border-2 border-slate-300 bg-white p-4 shadow-sm dark:border-slate-600 dark:bg-slate-900">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-700">
+        <div>
+          <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-300">Inventaire véhicules</p>
+          <h3 className="text-lg font-black tracking-wide text-slate-900 dark:text-white">{vehicle.name}</h3>
+        </div>
+        <div className="flex gap-2">
+          <input ref={inputRef} type="file" accept="image/*" className="hidden" onChange={handleFileChange} />
+          <button
+            type="button"
+            onClick={() => inputRef.current?.click()}
+            disabled={isUploadingPhoto}
+            className="rounded-md border border-indigo-300 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 dark:border-indigo-500/50 dark:text-indigo-200 dark:hover:bg-indigo-900/30"
+          >
+            {resolvedPhoto ? "Importer / Remplacer la photo" : "Importer la photo"}
+          </button>
+          <button
+            type="button"
+            onClick={onRemovePhoto}
+            disabled={!resolvedPhoto || isRemovingPhoto}
+            className="rounded-md border border-slate-300 px-3 py-1.5 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50 dark:border-slate-600 dark:text-slate-200 dark:hover:bg-slate-800"
+          >
+            Retirer
+          </button>
+        </div>
+      </div>
 
-        <div className="grid gap-3 sm:grid-cols-2">
-          {zones.map((zone) => (
-            <section
-              key={zone.zoneId}
-              className="rounded-lg border border-slate-200 bg-white p-3 dark:border-slate-700 dark:bg-slate-950"
-            >
-              <p className="text-xs font-semibold uppercase tracking-wide text-indigo-600 dark:text-indigo-200">
-                {zone.zoneLabel}
-              </p>
-              <ul className="mt-2 space-y-1 text-sm text-slate-700 dark:text-slate-200">
+      <div className="grid gap-4 xl:grid-cols-[1fr,minmax(340px,460px),1fr]">
+        <div className="space-y-3">
+          {leftZones.map((zone) => (
+            <section key={zone.zoneId} className="rounded border-2 border-slate-800 p-3 dark:border-slate-300">
+              <p className="text-sm font-extrabold uppercase">{zone.zoneLabel}</p>
+              <ul className="mt-2 space-y-1 text-sm">
                 {zone.items.map((item) => (
-                  <li key={`${zone.zoneId}-${item.id}`} className="flex items-start gap-2">
-                    <span className="font-semibold text-slate-500 dark:text-slate-400">{item.qty} ×</span>
-                    <span>{item.label}</span>
-                  </li>
+                  <li key={`${zone.zoneId}-${item.id}`}>• {item.qty} {item.label}</li>
                 ))}
               </ul>
             </section>
           ))}
-          {zones.length === 0 ? (
-            <p className="rounded-lg border border-dashed border-slate-300 bg-white p-4 text-sm text-slate-500 dark:border-slate-700 dark:bg-slate-950 dark:text-slate-300">
-              Aucun matériel affecté au véhicule pour le moment.
-            </p>
-          ) : null}
+        </div>
+
+        <button
+          type="button"
+          onClick={() => inputRef.current?.click()}
+          className="group flex h-full min-h-[340px] flex-col overflow-hidden rounded border-2 border-slate-800 bg-slate-50 text-left dark:border-slate-300 dark:bg-slate-950"
+        >
+          <img src={displayImage} alt={`Photo inventaire ${vehicle.name}`} className="h-full min-h-[280px] w-full object-cover" />
+          <span className="border-t border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300">
+            Cliquez pour importer/remplacer la photo de cette fiche
+          </span>
+        </button>
+
+        <div className="space-y-3">
+          {rightZones.map((zone) => (
+            <section key={zone.zoneId} className="rounded border-2 border-slate-800 p-3 dark:border-slate-300">
+              <p className="text-sm font-extrabold uppercase">{zone.zoneLabel}</p>
+              <ul className="mt-2 space-y-1 text-sm">
+                {zone.items.map((item) => (
+                  <li key={`${zone.zoneId}-${item.id}`}>• {item.qty} {item.label}</li>
+                ))}
+              </ul>
+            </section>
+          ))}
         </div>
       </div>
+
+      {zones.length === 0 ? (
+        <p className="mt-4 rounded border border-dashed border-slate-300 p-3 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-300">
+          Aucun matériel affecté au véhicule pour le moment.
+        </p>
+      ) : null}
     </div>
   );
 }
