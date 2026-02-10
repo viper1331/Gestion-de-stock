@@ -673,6 +673,7 @@ class VehiclePhoto(BaseModel):
 
 class VehicleGeneralInventoryPhoto(BaseModel):
     vehicle_id: int
+    side: Literal["left", "right"] = "left"
     photo_url: str | None = None
 
 

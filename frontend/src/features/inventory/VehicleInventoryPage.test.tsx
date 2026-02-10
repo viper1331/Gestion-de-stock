@@ -4,6 +4,7 @@ import {
   buildGeneralInventoryByZone,
   DEFAULT_VIEW_LABEL,
   getVehicleViews,
+  groupGeneralInventoryZones,
   normalizeVehicleViewsInput,
   normalizeViewName,
   resolvePinnedView
@@ -132,6 +133,30 @@ describe("VehicleInventoryPage helpers", () => {
         items: [{ id: "3", label: "Extincteur 2kg", qty: 1 }]
       }
     ]);
+  });
+
+  it("groupe les zones selon les compartiments gauche/droit", () => {
+    const groups = groupGeneralInventoryZones([
+      { zoneId: "CABINE", zoneLabel: "CABINE", items: [{ id: "1", label: "Radio", qty: 1 }] },
+      {
+        zoneId: "COFFRE DROIT - PARTIE 1",
+        zoneLabel: "COFFRE DROIT - PARTIE 1",
+        items: [{ id: "2", label: "Tuyau", qty: 2 }]
+      },
+      {
+        zoneId: "COFFRE ARRIERE DROIT",
+        zoneLabel: "COFFRE ARRIERE DROIT",
+        items: [{ id: "3", label: "Kit ARI", qty: 1 }]
+      },
+      { zoneId: "TOIT", zoneLabel: "TOIT", items: [{ id: "4", label: "Échelle", qty: 1 }] },
+      { zoneId: "INCONNU", zoneLabel: "INCONNU", items: [{ id: "5", label: "Divers", qty: 1 }] }
+    ]);
+
+    expect(groups.cabine).toHaveLength(1);
+    expect(groups.coffreDroit).toHaveLength(1);
+    expect(groups.coffreArriereDroit).toHaveLength(1);
+    expect(groups.toit).toHaveLength(1);
+    expect(groups.autres).toHaveLength(1);
   });
 
 });

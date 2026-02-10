@@ -237,11 +237,12 @@ async def delete_vehicle_view_subview_pin(
 )
 async def get_vehicle_general_inventory_photo(
     vehicle_id: int,
+    side: str = Query(default="left", pattern="^(left|right)$"),
     user: models.User = Depends(get_current_user),
 ) -> models.VehicleGeneralInventoryPhoto:
     _require_vehicle_permission(user, action="view")
     try:
-        return services.get_vehicle_general_inventory_photo(vehicle_id)
+        return services.get_vehicle_general_inventory_photo(vehicle_id, side=side)
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400
@@ -254,6 +255,7 @@ async def get_vehicle_general_inventory_photo(
 )
 async def upload_vehicle_general_inventory_photo(
     vehicle_id: int,
+    side: str = Query(default="left", pattern="^(left|right)$"),
     file: UploadFile = File(...),
     user: models.User = Depends(get_current_user),
 ) -> models.VehicleGeneralInventoryPhoto:
@@ -262,7 +264,7 @@ async def upload_vehicle_general_inventory_photo(
         await file.close()
         raise HTTPException(status_code=400, detail="Seules les images sont autorisées.")
     try:
-        return services.upload_vehicle_general_inventory_photo(vehicle_id, file.file, file.filename)
+        return services.upload_vehicle_general_inventory_photo(vehicle_id, file.file, file.filename, side=side)
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400
@@ -277,11 +279,12 @@ async def upload_vehicle_general_inventory_photo(
 )
 async def delete_vehicle_general_inventory_photo(
     vehicle_id: int,
+    side: str = Query(default="left", pattern="^(left|right)$"),
     user: models.User = Depends(get_current_user),
 ) -> models.VehicleGeneralInventoryPhoto:
     _require_vehicle_permission(user, action="edit")
     try:
-        return services.delete_vehicle_general_inventory_photo(vehicle_id)
+        return services.delete_vehicle_general_inventory_photo(vehicle_id, side=side)
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400
