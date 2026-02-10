@@ -3193,6 +3193,21 @@ def _ensure_vehicle_category_columns(
         execute("ALTER TABLE vehicle_categories ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
     if "general_inventory_photo_path" not in category_columns:
         execute("ALTER TABLE vehicle_categories ADD COLUMN general_inventory_photo_path TEXT")
+    if "general_inventory_photo_path_left" not in category_columns:
+        execute("ALTER TABLE vehicle_categories ADD COLUMN general_inventory_photo_path_left TEXT")
+    if "general_inventory_photo_path_right" not in category_columns:
+        execute("ALTER TABLE vehicle_categories ADD COLUMN general_inventory_photo_path_right TEXT")
+    if "general_inventory_photo_path" in category_columns and "general_inventory_photo_path_left" in {
+        row["name"] for row in execute("PRAGMA table_info(vehicle_categories)").fetchall()
+    }:
+        execute(
+            """
+            UPDATE vehicle_categories
+            SET general_inventory_photo_path_left = general_inventory_photo_path
+            WHERE general_inventory_photo_path_left IS NULL
+              AND general_inventory_photo_path IS NOT NULL
+            """
+        )
 
 
 def _normalize_vehicle_types(raw_types: Iterable[object] | None) -> list[str]:
@@ -8711,69 +8726,101 @@ def remove_vehicle_category_image(category_id: int) -> models.Category:
 
 
 
-def get_vehicle_general_inventory_photo(vehicle_id: int) -> models.VehicleGeneralInventoryPhoto:
+def _resolve_general_inventory_photo_column(side: str) -> str:
+    normalized_side = side.strip().lower()
+    if normalized_side == "left":
+        return "general_inventory_photo_path_left"
+    if normalized_side == "right":
+        return "general_inventory_photo_path_right"
+    raise ValueError("Côté de photo invalide")
+
+
+def get_vehicle_general_inventory_photo(
+    vehicle_id: int, side: str = "left"
+) -> models.VehicleGeneralInventoryPhoto:
     ensure_database_ready()
     config = _get_inventory_config("vehicle_inventory")
+    target_column = _resolve_general_inventory_photo_column(side)
     with db.get_stock_connection() as conn:
         _ensure_vehicle_category_columns(conn)
         row = conn.execute(
-            f"SELECT id, general_inventory_photo_path FROM {config.tables.categories} WHERE id = ?",
+            (
+                "SELECT id, general_inventory_photo_path, "
+                "general_inventory_photo_path_left, general_inventory_photo_path_right "
+                f"FROM {config.tables.categories} WHERE id = ?"
+            ),
             (vehicle_id,),
         ).fetchone()
     if row is None:
         raise ValueError("Véhicule introuvable")
+    photo_path = row[target_column] or (
+        row["general_inventory_photo_path"] if side.strip().lower() == "left" else None
+    )
     return models.VehicleGeneralInventoryPhoto(
         vehicle_id=row["id"],
-        photo_url=_build_media_url(row["general_inventory_photo_path"]),
+        side="right" if side.strip().lower() == "right" else "left",
+        photo_url=_build_media_url(photo_path),
     )
 
 
 def upload_vehicle_general_inventory_photo(
-    vehicle_id: int, stream: BinaryIO, filename: str | None
+    vehicle_id: int, stream: BinaryIO, filename: str | None, side: str = "left"
 ) -> models.VehicleGeneralInventoryPhoto:
     ensure_database_ready()
     config = _get_inventory_config("vehicle_inventory")
+    target_column = _resolve_general_inventory_photo_column(side)
     with db.get_stock_connection() as conn:
         _ensure_vehicle_category_columns(conn)
         row = conn.execute(
-            f"SELECT general_inventory_photo_path FROM {config.tables.categories} WHERE id = ?",
+            f"SELECT {target_column} FROM {config.tables.categories} WHERE id = ?",
             (vehicle_id,),
         ).fetchone()
         if row is None:
             raise ValueError("Véhicule introuvable")
-        previous_path = row["general_inventory_photo_path"]
+        previous_path = row[target_column]
         stored_path = _store_media_file(VEHICLE_GENERAL_INVENTORY_MEDIA_DIR, stream, filename)
         conn.execute(
-            f"UPDATE {config.tables.categories} SET general_inventory_photo_path = ? WHERE id = ?",
+            f"UPDATE {config.tables.categories} SET {target_column} = ? WHERE id = ?",
             (stored_path, vehicle_id),
         )
         _persist_after_commit(conn, "vehicle_inventory")
     if previous_path and previous_path != stored_path:
         _delete_media_file(previous_path)
-    return models.VehicleGeneralInventoryPhoto(vehicle_id=vehicle_id, photo_url=_build_media_url(stored_path))
+    return models.VehicleGeneralInventoryPhoto(
+        vehicle_id=vehicle_id,
+        side="right" if side.strip().lower() == "right" else "left",
+        photo_url=_build_media_url(stored_path),
+    )
 
 
-def delete_vehicle_general_inventory_photo(vehicle_id: int) -> models.VehicleGeneralInventoryPhoto:
+def delete_vehicle_general_inventory_photo(
+    vehicle_id: int, side: str = "left"
+) -> models.VehicleGeneralInventoryPhoto:
     ensure_database_ready()
     config = _get_inventory_config("vehicle_inventory")
+    target_column = _resolve_general_inventory_photo_column(side)
     with db.get_stock_connection() as conn:
         _ensure_vehicle_category_columns(conn)
         row = conn.execute(
-            f"SELECT general_inventory_photo_path FROM {config.tables.categories} WHERE id = ?",
+            f"SELECT {target_column} FROM {config.tables.categories} WHERE id = ?",
             (vehicle_id,),
         ).fetchone()
         if row is None:
             raise ValueError("Véhicule introuvable")
-        previous_path = row["general_inventory_photo_path"]
+        previous_path = row[target_column]
         if previous_path:
             conn.execute(
-                f"UPDATE {config.tables.categories} SET general_inventory_photo_path = NULL WHERE id = ?",
+                f"UPDATE {config.tables.categories} SET {target_column} = NULL WHERE id = ?",
                 (vehicle_id,),
             )
             _persist_after_commit(conn, "vehicle_inventory")
     if previous_path:
         _delete_media_file(previous_path)
-    return models.VehicleGeneralInventoryPhoto(vehicle_id=vehicle_id, photo_url=None)
+    return models.VehicleGeneralInventoryPhoto(
+        vehicle_id=vehicle_id,
+        side="right" if side.strip().lower() == "right" else "left",
+        photo_url=None,
+    )
 
 
 def list_vehicle_photos() -> list[models.VehiclePhoto]:

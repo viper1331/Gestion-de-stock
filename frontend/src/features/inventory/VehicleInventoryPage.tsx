@@ -52,6 +52,7 @@ interface VehicleViewConfig {
 
 interface VehicleGeneralInventoryPhotoResponse {
   vehicle_id: number;
+  side: "left" | "right";
   photo_url: string | null;
 }
 
@@ -405,6 +406,7 @@ const VEHICLE_SUBVIEW_CARDS_ENABLED =
 export const DEFAULT_VIEW_LABEL = "VUE PRINCIPALE";
 
 type VehicleOrganizationMode = "detailed" | "general";
+type GeneralInventorySide = "left" | "right";
 
 interface ZoneInventoryItem {
   id: string;
@@ -416,6 +418,16 @@ interface ZoneInventory {
   zoneId: string;
   zoneLabel: string;
   items: ZoneInventoryItem[];
+}
+
+interface GeneralInventoryGroups {
+  cabine: ZoneInventoryItem[];
+  coffreGauche: ZoneInventoryItem[];
+  coffreArriere: ZoneInventoryItem[];
+  coffreDroit: ZoneInventoryItem[];
+  coffreArriereDroit: ZoneInventoryItem[];
+  toit: ZoneInventoryItem[];
+  autres: ZoneInventoryItem[];
 }
 
 type DragKind =
@@ -785,6 +797,7 @@ export function VehicleInventoryPage() {
   );
   const [selectedView, setSelectedView] = useState<string | null>(null);
   const [organizationMode, setOrganizationMode] = useState<VehicleOrganizationMode>("detailed");
+  const [generalSide, setGeneralSide] = useState<GeneralInventorySide>("left");
   const requestViewChange = useCallback(
     (next: string | null) => {
       setSelectedView(next);
@@ -999,14 +1012,37 @@ export function VehicleInventoryPage() {
     window.localStorage.setItem(storageKey, organizationMode);
   }, [organizationMode, selectedVehicle]);
 
+  useEffect(() => {
+    if (!selectedVehicle || typeof window === "undefined") {
+      setGeneralSide("left");
+      return;
+    }
+    const storageKey = `vehicleInventory:generalSide:${selectedVehicle.id}`;
+    const stored = window.localStorage.getItem(storageKey);
+    if (stored === "left" || stored === "right") {
+      setGeneralSide(stored);
+      return;
+    }
+    setGeneralSide("left");
+  }, [selectedVehicle]);
+
+  useEffect(() => {
+    if (!selectedVehicle || typeof window === "undefined") {
+      return;
+    }
+    const storageKey = `vehicleInventory:generalSide:${selectedVehicle.id}`;
+    window.localStorage.setItem(storageKey, generalSide);
+  }, [generalSide, selectedVehicle]);
+
   const { data: generalInventoryPhoto } = useQuery({
-    queryKey: ["vehicle-general-inventory-photo", selectedVehicle?.id],
+    queryKey: ["vehicle-general-inventory-photo", selectedVehicle?.id, generalSide],
     queryFn: async () => {
       if (!selectedVehicle?.id) {
         return null;
       }
       const response = await api.get<VehicleGeneralInventoryPhotoResponse>(
-        `/vehicles/${selectedVehicle.id}/general-inventory/photo`
+        `/vehicles/${selectedVehicle.id}/general-inventory/photo`,
+        { params: { side: generalSide } }
       );
       return response.data;
     },
@@ -1014,31 +1050,35 @@ export function VehicleInventoryPage() {
   });
 
   const uploadGeneralInventoryPhoto = useMutation({
-    mutationFn: async ({ vehicleId, file }: { vehicleId: number; file: File }) => {
+    mutationFn: async ({ vehicleId, file, side }: { vehicleId: number; file: File; side: GeneralInventorySide }) => {
       const formData = new FormData();
       formData.append("file", file);
       const response = await api.post<VehicleGeneralInventoryPhotoResponse>(
         `/vehicles/${vehicleId}/general-inventory/photo`,
         formData,
-        { headers: { "Content-Type": "multipart/form-data" } }
+        {
+          headers: { "Content-Type": "multipart/form-data" },
+          params: { side }
+        }
       );
       return response.data;
     },
     onSuccess: (_, payload) => {
-      void queryClient.invalidateQueries({ queryKey: ["vehicle-general-inventory-photo", payload.vehicleId] });
+      void queryClient.invalidateQueries({ queryKey: ["vehicle-general-inventory-photo", payload.vehicleId, payload.side] });
       void queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
     }
   });
 
   const removeGeneralInventoryPhoto = useMutation({
-    mutationFn: async ({ vehicleId }: { vehicleId: number }) => {
+    mutationFn: async ({ vehicleId, side }: { vehicleId: number; side: GeneralInventorySide }) => {
       const response = await api.delete<VehicleGeneralInventoryPhotoResponse>(
-        `/vehicles/${vehicleId}/general-inventory/photo`
+        `/vehicles/${vehicleId}/general-inventory/photo`,
+        { params: { side } }
       );
       return response.data;
     },
     onSuccess: (_, payload) => {
-      void queryClient.invalidateQueries({ queryKey: ["vehicle-general-inventory-photo", payload.vehicleId] });
+      void queryClient.invalidateQueries({ queryKey: ["vehicle-general-inventory-photo", payload.vehicleId, payload.side] });
       void queryClient.invalidateQueries({ queryKey: ["vehicle-categories"] });
     }
   });
@@ -2421,6 +2461,11 @@ export function VehicleInventoryPage() {
     [normalizedVehicleViews, visibleVehicleItems]
   );
 
+  const generalInventoryGroups = useMemo(
+    () => groupGeneralInventoryZones(generalInventoryZones),
+    [generalInventoryZones]
+  );
+
   const itemsWaitingAssignment = useMemo(
     () => visibleVehicleItems.filter((item) => !getItemView(item)),
     [visibleVehicleItems]
@@ -3549,26 +3594,56 @@ export function VehicleInventoryPage() {
           </div>
 
           {organizationMode === "general" ? (
-            <VehicleGeneralInventory
-              vehicle={selectedVehicle}
-              zones={generalInventoryZones}
-              fallbackIllustration={selectedVehicleFallback ?? VEHICLE_ILLUSTRATIONS[0]}
-              photoUrl={generalInventoryPhoto?.photo_url ?? null}
-              onUploadPhoto={(file) => {
-                if (!selectedVehicle?.id) {
-                  return;
-                }
-                uploadGeneralInventoryPhoto.mutate({ vehicleId: selectedVehicle.id, file });
-              }}
-              onRemovePhoto={() => {
-                if (!selectedVehicle?.id) {
-                  return;
-                }
-                removeGeneralInventoryPhoto.mutate({ vehicleId: selectedVehicle.id });
-              }}
-              isUploadingPhoto={uploadGeneralInventoryPhoto.isPending}
-              isRemovingPhoto={removeGeneralInventoryPhoto.isPending}
-            />
+            <div className="space-y-3">
+              <div className="inline-flex rounded-lg border border-slate-200 bg-slate-100 p-1 dark:border-slate-700 dark:bg-slate-900">
+                <button
+                  type="button"
+                  onClick={() => setGeneralSide("left")}
+                  className={clsx(
+                    "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                    generalSide === "left"
+                      ? "bg-indigo-500 text-white shadow"
+                      : "text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-slate-100"
+                  )}
+                >
+                  Côté gauche
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setGeneralSide("right")}
+                  className={clsx(
+                    "rounded-md px-3 py-1.5 text-xs font-semibold transition",
+                    generalSide === "right"
+                      ? "bg-indigo-500 text-white shadow"
+                      : "text-slate-600 hover:text-slate-800 dark:text-slate-300 dark:hover:text-slate-100"
+                  )}
+                >
+                  Côté droit
+                </button>
+              </div>
+
+              <VehicleGeneralInventory
+                side={generalSide}
+                vehicle={selectedVehicle}
+                groups={generalInventoryGroups}
+                fallbackIllustration={selectedVehicleFallback ?? VEHICLE_ILLUSTRATIONS[0]}
+                photoUrl={generalInventoryPhoto?.photo_url ?? null}
+                onUploadPhoto={(file) => {
+                  if (!selectedVehicle?.id) {
+                    return;
+                  }
+                  uploadGeneralInventoryPhoto.mutate({ vehicleId: selectedVehicle.id, file, side: generalSide });
+                }}
+                onRemovePhoto={() => {
+                  if (!selectedVehicle?.id) {
+                    return;
+                  }
+                  removeGeneralInventoryPhoto.mutate({ vehicleId: selectedVehicle.id, side: generalSide });
+                }}
+                isUploadingPhoto={uploadGeneralInventoryPhoto.isPending}
+                isRemovingPhoto={removeGeneralInventoryPhoto.isPending}
+              />
+            </div>
           ) : (
           <DndContext
             sensors={sensors}
@@ -4319,8 +4394,9 @@ export function buildGeneralInventoryByZone(params: {
 }
 
 function VehicleGeneralInventory({
+  side,
   vehicle,
-  zones,
+  groups,
   fallbackIllustration,
   photoUrl,
   onUploadPhoto,
@@ -4328,8 +4404,9 @@ function VehicleGeneralInventory({
   isUploadingPhoto,
   isRemovingPhoto
 }: {
+  side: GeneralInventorySide;
   vehicle: VehicleCategory;
-  zones: ZoneInventory[];
+  groups: GeneralInventoryGroups;
   fallbackIllustration: string;
   photoUrl: string | null;
   onUploadPhoto: (file: File) => void;
@@ -4339,26 +4416,55 @@ function VehicleGeneralInventory({
 }) {
   const inputRef = useRef<HTMLInputElement | null>(null);
   const [photoVersion, setPhotoVersion] = useState<number>(Date.now());
+  const [localPreviewUrl, setLocalPreviewUrl] = useState<string | null>(null);
+
+  useEffect(
+    () => () => {
+      if (localPreviewUrl) {
+        URL.revokeObjectURL(localPreviewUrl);
+      }
+    },
+    [localPreviewUrl]
+  );
+
   const resolvedPhoto = resolveMediaUrl(photoUrl);
+  const resolvedPreview = resolveMediaUrl(localPreviewUrl);
   const effectivePhotoUrl = resolvedPhoto ? `${resolvedPhoto}${resolvedPhoto.includes("?") ? "&" : "?"}v=${photoVersion}` : null;
-  const displayImage = effectivePhotoUrl ?? resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration;
+  const displayImage = resolvedPreview ?? effectivePhotoUrl ?? resolveMediaUrl(vehicle.image_url) ?? fallbackIllustration;
 
   const handleFileChange = (event: ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     if (!file) {
       return;
     }
+    if (!["image/jpeg", "image/png", "image/jpg", "image/webp"].includes(file.type)) {
+      event.target.value = "";
+      return;
+    }
+    if (file.size > 8 * 1024 * 1024) {
+      event.target.value = "";
+      return;
+    }
+    if (localPreviewUrl) {
+      URL.revokeObjectURL(localPreviewUrl);
+    }
+    setLocalPreviewUrl(URL.createObjectURL(file));
     onUploadPhoto(file);
     setPhotoVersion(Date.now());
     event.target.value = "";
   };
-
-  const leftZones = zones.filter((_, index) => index % 2 === 0);
-  const rightZones = zones.filter((_, index) => index % 2 === 1);
+  useEffect(() => {
+    if (!isUploadingPhoto && resolvedPhoto) {
+      if (localPreviewUrl) {
+        URL.revokeObjectURL(localPreviewUrl);
+      }
+      setLocalPreviewUrl(null);
+    }
+  }, [isUploadingPhoto, localPreviewUrl, resolvedPhoto]);
 
   return (
-    <div className="rounded-xl border-2 border-slate-300 bg-white p-4 shadow-sm dark:border-slate-600 dark:bg-slate-900">
-      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-200 pb-3 dark:border-slate-700">
+    <div className="rounded-xl border border-slate-300 bg-[#f7f7f5] p-4 shadow-sm dark:border-slate-600 dark:bg-slate-900">
+      <div className="mb-4 flex flex-wrap items-center justify-between gap-3 border-b border-slate-300 pb-3 dark:border-slate-700">
         <div>
           <p className="text-xs uppercase tracking-[0.2em] text-slate-500 dark:text-slate-300">Inventaire véhicules</p>
           <h3 className="text-lg font-black tracking-wide text-slate-900 dark:text-white">{vehicle.name}</h3>
@@ -4371,7 +4477,7 @@ function VehicleGeneralInventory({
             disabled={isUploadingPhoto}
             className="rounded-md border border-indigo-300 px-3 py-1.5 text-xs font-semibold text-indigo-700 hover:bg-indigo-50 disabled:opacity-60 dark:border-indigo-500/50 dark:text-indigo-200 dark:hover:bg-indigo-900/30"
           >
-            {resolvedPhoto ? "Importer / Remplacer la photo" : "Importer la photo"}
+            {resolvedPhoto ? "Changer la photo" : "Importer une photo"}
           </button>
           <button
             type="button"
@@ -4384,52 +4490,204 @@ function VehicleGeneralInventory({
         </div>
       </div>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr,minmax(340px,460px),1fr]">
-        <div className="space-y-3">
-          {leftZones.map((zone) => (
-            <section key={zone.zoneId} className="rounded border-2 border-slate-800 p-3 dark:border-slate-300">
-              <p className="text-sm font-extrabold uppercase">{zone.zoneLabel}</p>
-              <ul className="mt-2 space-y-1 text-sm">
-                {zone.items.map((item) => (
-                  <li key={`${zone.zoneId}-${item.id}`}>• {item.qty} {item.label}</li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
+      {side === "left" ? (
+        <GeneralInventoryLayoutLeft
+          displayImage={displayImage}
+          vehicleName={vehicle.name}
+          groups={groups}
+          hasUploadedPhoto={Boolean(resolvedPhoto || resolvedPreview)}
+          onPickPhoto={() => inputRef.current?.click()}
+        />
+      ) : (
+        <GeneralInventoryLayoutRight
+          displayImage={displayImage}
+          vehicleName={vehicle.name}
+          groups={groups}
+          hasUploadedPhoto={Boolean(resolvedPhoto || resolvedPreview)}
+          onPickPhoto={() => inputRef.current?.click()}
+        />
+      )}
 
-        <button
-          type="button"
-          onClick={() => inputRef.current?.click()}
-          className="group flex h-full min-h-[340px] flex-col overflow-hidden rounded border-2 border-slate-800 bg-slate-50 text-left dark:border-slate-300 dark:bg-slate-950"
-        >
-          <img src={displayImage} alt={`Photo inventaire ${vehicle.name}`} className="h-full min-h-[280px] w-full object-cover" />
-          <span className="border-t border-slate-300 bg-white px-3 py-2 text-xs text-slate-600 dark:border-slate-600 dark:bg-slate-900 dark:text-slate-300">
-            Cliquez pour importer/remplacer la photo de cette fiche
-          </span>
-        </button>
-
-        <div className="space-y-3">
-          {rightZones.map((zone) => (
-            <section key={zone.zoneId} className="rounded border-2 border-slate-800 p-3 dark:border-slate-300">
-              <p className="text-sm font-extrabold uppercase">{zone.zoneLabel}</p>
-              <ul className="mt-2 space-y-1 text-sm">
-                {zone.items.map((item) => (
-                  <li key={`${zone.zoneId}-${item.id}`}>• {item.qty} {item.label}</li>
-                ))}
-              </ul>
-            </section>
-          ))}
-        </div>
-      </div>
-
-      {zones.length === 0 ? (
+      {countInventoryGroups(groups) === 0 ? (
         <p className="mt-4 rounded border border-dashed border-slate-300 p-3 text-sm text-slate-500 dark:border-slate-600 dark:text-slate-300">
           Aucun matériel affecté au véhicule pour le moment.
         </p>
       ) : null}
     </div>
   );
+}
+
+function countInventoryGroups(groups: GeneralInventoryGroups): number {
+  return Object.values(groups).reduce((count, items) => count + items.length, 0);
+}
+
+function formatInventoryItem(item: ZoneInventoryItem): string {
+  if (item.qty > 1) {
+    return `${item.qty} ${item.label}`;
+  }
+  return item.label;
+}
+
+function InventoryDocumentBox({
+  title,
+  items,
+  className,
+  columns = 1
+}: {
+  title: string;
+  items: ZoneInventoryItem[];
+  className?: string;
+  columns?: 1 | 2;
+}) {
+  return (
+    <section className={clsx("rounded border border-[#111] bg-[#fdfdfb] p-3 text-black", className)}>
+      <p className="text-sm font-extrabold uppercase">{title}</p>
+      {items.length > 0 ? (
+        <ul className={clsx("mt-2 list-disc pl-4 text-xs leading-5", columns === 2 && "columns-2 gap-6") }>
+          {items.map((item) => (
+            <li key={`${title}-${item.id}-${item.label}`}>{formatInventoryItem(item)}</li>
+          ))}
+        </ul>
+      ) : (
+        <p className="mt-2 text-xs italic text-slate-600">Aucun élément</p>
+      )}
+    </section>
+  );
+}
+
+function InventoryPhotoCard({
+  displayImage,
+  vehicleName,
+  hasUploadedPhoto,
+  onPickPhoto,
+  className
+}: {
+  displayImage: string;
+  vehicleName: string;
+  hasUploadedPhoto: boolean;
+  onPickPhoto: () => void;
+  className?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onPickPhoto}
+      className={clsx(
+        "group relative flex min-h-[240px] overflow-hidden rounded border border-[#111] bg-white text-left",
+        className
+      )}
+    >
+      <img src={displayImage} alt={`Photo inventaire ${vehicleName}`} className="h-full w-full object-cover" />
+      <span className="absolute right-2 top-2 rounded border border-slate-200 bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm">
+        {hasUploadedPhoto ? "Changer la photo" : "Importer une photo"}
+      </span>
+    </button>
+  );
+}
+
+function GeneralInventoryLayoutLeft({
+  displayImage,
+  vehicleName,
+  groups,
+  hasUploadedPhoto,
+  onPickPhoto
+}: {
+  displayImage: string;
+  vehicleName: string;
+  groups: GeneralInventoryGroups;
+  hasUploadedPhoto: boolean;
+  onPickPhoto: () => void;
+}) {
+  return (
+    <div className="mx-auto grid max-w-[1200px] gap-3 md:grid-cols-12 md:grid-rows-[auto_auto_auto]">
+      <InventoryDocumentBox title="Coffre latéral gauche" items={groups.coffreGauche} className="md:col-span-3 md:row-span-2" />
+      <InventoryPhotoCard
+        displayImage={displayImage}
+        vehicleName={vehicleName}
+        hasUploadedPhoto={hasUploadedPhoto}
+        onPickPhoto={onPickPhoto}
+        className="md:col-span-6 md:row-span-2"
+      />
+      <InventoryDocumentBox title="Cabine" items={groups.cabine} columns={2} className="md:col-span-3 md:row-span-2" />
+      <InventoryDocumentBox title="Autres" items={groups.autres} className="md:col-span-4" />
+      <InventoryDocumentBox title="Coffre arrière" items={groups.coffreArriere} className="md:col-span-3 md:col-start-10" />
+    </div>
+  );
+}
+
+function GeneralInventoryLayoutRight({
+  displayImage,
+  vehicleName,
+  groups,
+  hasUploadedPhoto,
+  onPickPhoto
+}: {
+  displayImage: string;
+  vehicleName: string;
+  groups: GeneralInventoryGroups;
+  hasUploadedPhoto: boolean;
+  onPickPhoto: () => void;
+}) {
+  return (
+    <div className="mx-auto grid max-w-[1200px] gap-3 md:grid-cols-12 md:grid-rows-[auto_auto_auto]">
+      <InventoryDocumentBox title="Coffre droit" items={groups.coffreDroit} className="md:col-span-5 md:row-span-3" />
+      <InventoryPhotoCard
+        displayImage={displayImage}
+        vehicleName={vehicleName}
+        hasUploadedPhoto={hasUploadedPhoto}
+        onPickPhoto={onPickPhoto}
+        className="md:col-span-4 md:col-start-6 md:row-span-2"
+      />
+      <InventoryDocumentBox title="Coffre arrière droit" items={groups.coffreArriereDroit} className="md:col-span-3 md:col-start-10" />
+      <InventoryDocumentBox title="Toit" items={groups.toit} className="md:col-span-3 md:col-start-10" />
+      <InventoryDocumentBox title="Autres" items={groups.autres} className="md:col-span-4 md:col-start-6" />
+    </div>
+  );
+}
+
+export function groupGeneralInventoryZones(zones: ZoneInventory[]): GeneralInventoryGroups {
+  const groups: GeneralInventoryGroups = {
+    cabine: [],
+    coffreGauche: [],
+    coffreArriere: [],
+    coffreDroit: [],
+    coffreArriereDroit: [],
+    toit: [],
+    autres: []
+  };
+
+  zones.forEach((zone) => {
+    const name = normalizeViewName(zone.zoneLabel);
+
+    if (name.includes("CABINE") || name.includes("TABLEAU") || name.includes("SIEGE")) {
+      groups.cabine.push(...zone.items);
+      return;
+    }
+    if (name.includes("COFFRE LATERAL GAUCHE") || name.includes("COFFRE GAUCHE")) {
+      groups.coffreGauche.push(...zone.items);
+      return;
+    }
+    if (name.includes("COFFRE ARRIERE DROIT")) {
+      groups.coffreArriereDroit.push(...zone.items);
+      return;
+    }
+    if (name.includes("COFFRE ARRIERE")) {
+      groups.coffreArriere.push(...zone.items);
+      return;
+    }
+    if (name.includes("COFFRE DROIT")) {
+      groups.coffreDroit.push(...zone.items);
+      return;
+    }
+    if (name.includes("TOIT")) {
+      groups.toit.push(...zone.items);
+      return;
+    }
+
+    groups.autres.push(...zone.items);
+  });
+
+  return groups;
 }
 
 function formatSubViewLabel(subView: string, parent: string) {
