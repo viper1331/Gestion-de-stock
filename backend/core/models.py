@@ -671,6 +671,11 @@ class VehiclePhoto(BaseModel):
     uploaded_at: datetime
 
 
+class VehicleGeneralInventoryPhoto(BaseModel):
+    vehicle_id: int
+    photo_url: str | None = None
+
+
 class VehicleViewBackgroundUpdate(BaseModel):
     name: str = Field(..., min_length=1, max_length=128)
     photo_id: int | None = Field(default=None, ge=1)

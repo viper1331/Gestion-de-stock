@@ -1,7 +1,7 @@
 """Routes for vehicle subview pinning."""
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, File, HTTPException, Query, UploadFile
 
 from backend.api.auth import get_current_user
 from backend.core import models, services
@@ -225,6 +225,63 @@ async def delete_vehicle_view_subview_pin(
         raise HTTPException(status_code=404, detail="Épinglage introuvable")
     try:
         services.delete_subview_pin(pin_id, user.username)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.get(
+    "/vehicles/{vehicle_id}/general-inventory/photo",
+    response_model=models.VehicleGeneralInventoryPhoto,
+)
+async def get_vehicle_general_inventory_photo(
+    vehicle_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.VehicleGeneralInventoryPhoto:
+    _require_vehicle_permission(user, action="view")
+    try:
+        return services.get_vehicle_general_inventory_photo(vehicle_id)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post(
+    "/vehicles/{vehicle_id}/general-inventory/photo",
+    response_model=models.VehicleGeneralInventoryPhoto,
+)
+async def upload_vehicle_general_inventory_photo(
+    vehicle_id: int,
+    file: UploadFile = File(...),
+    user: models.User = Depends(get_current_user),
+) -> models.VehicleGeneralInventoryPhoto:
+    _require_vehicle_permission(user, action="edit")
+    if not file.content_type or not file.content_type.startswith("image/"):
+        await file.close()
+        raise HTTPException(status_code=400, detail="Seules les images sont autorisées.")
+    try:
+        return services.upload_vehicle_general_inventory_photo(vehicle_id, file.file, file.filename)
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if "introuvable" in detail.lower() else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+    finally:
+        await file.close()
+
+
+@router.delete(
+    "/vehicles/{vehicle_id}/general-inventory/photo",
+    response_model=models.VehicleGeneralInventoryPhoto,
+)
+async def delete_vehicle_general_inventory_photo(
+    vehicle_id: int,
+    user: models.User = Depends(get_current_user),
+) -> models.VehicleGeneralInventoryPhoto:
+    _require_vehicle_permission(user, action="edit")
+    try:
+        return services.delete_vehicle_general_inventory_photo(vehicle_id)
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if "introuvable" in detail.lower() else 400

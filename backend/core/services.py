@@ -42,6 +42,7 @@ from backend.core.storage import (
     VEHICLE_CATEGORY_MEDIA_DIR,
     VEHICLE_ITEM_MEDIA_DIR,
     VEHICLE_PHOTO_MEDIA_DIR,
+    VEHICLE_GENERAL_INVENTORY_MEDIA_DIR,
     relative_to_media,
 )
 from backend.services import barcode as barcode_service
@@ -3190,6 +3191,8 @@ def _ensure_vehicle_category_columns(
         execute("ALTER TABLE vehicle_categories ADD COLUMN types_json TEXT")
     if "extra_json" not in category_columns:
         execute("ALTER TABLE vehicle_categories ADD COLUMN extra_json TEXT NOT NULL DEFAULT '{}'")
+    if "general_inventory_photo_path" not in category_columns:
+        execute("ALTER TABLE vehicle_categories ADD COLUMN general_inventory_photo_path TEXT")
 
 
 def _normalize_vehicle_types(raw_types: Iterable[object] | None) -> list[str]:
@@ -6177,7 +6180,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
             _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path, vehicle_type, types_json, extra_json"
+            select_columns += ", image_path, vehicle_type, types_json, extra_json, general_inventory_photo_path"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} ORDER BY name COLLATE NOCASE"
         )
@@ -6241,6 +6244,11 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
             image_url = None
             if module == "vehicle_inventory" and "image_path" in row.keys():
                 image_url = _build_media_url(row["image_path"])
+            general_inventory_photo_url = (
+                _build_media_url(row["general_inventory_photo_path"])
+                if module == "vehicle_inventory" and "general_inventory_photo_path" in row.keys()
+                else None
+            )
             extra = _parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None)
             types = (
                 _parse_vehicle_types(
@@ -6259,7 +6267,7 @@ def _list_inventory_categories_internal(module: str) -> list[models.Category]:
                     image_url=image_url,
                     vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
                     types=types,
-                    extra=extra,
+                    extra={**extra, "general_inventory_photo_url": general_inventory_photo_url} if module == "vehicle_inventory" else extra,
                 )
             )
         return categories
@@ -6275,7 +6283,7 @@ def _get_inventory_category_internal(
             _ensure_vehicle_category_columns(conn)
         select_columns = "id, name"
         if module == "vehicle_inventory":
-            select_columns += ", image_path, vehicle_type, types_json, extra_json"
+            select_columns += ", image_path, vehicle_type, types_json, extra_json, general_inventory_photo_path"
         cur = conn.execute(
             f"SELECT {select_columns} FROM {config.tables.categories} WHERE id = ?",
             (category_id,),
@@ -6313,6 +6321,11 @@ def _get_inventory_category_internal(
         image_url = None
         if "image_path" in row.keys():
             image_url = _build_media_url(row["image_path"])
+        general_inventory_photo_url = (
+            _build_media_url(row["general_inventory_photo_path"])
+            if "general_inventory_photo_path" in row.keys()
+            else None
+        )
         extra = _parse_extra_json(row["extra_json"] if "extra_json" in row.keys() else None)
         types = (
             _parse_vehicle_types(
@@ -6330,7 +6343,7 @@ def _get_inventory_category_internal(
             image_url=image_url,
             vehicle_type=row["vehicle_type"] if module == "vehicle_inventory" else None,
             types=types,
-            extra=extra,
+            extra={**extra, "general_inventory_photo_url": general_inventory_photo_url} if module == "vehicle_inventory" else extra,
         )
 
 
@@ -8695,6 +8708,72 @@ def remove_vehicle_category_image(category_id: int) -> models.Category:
     if updated is None:  # pragma: no cover - deleted row in concurrent context
         raise ValueError("Catégorie introuvable")
     return updated
+
+
+
+def get_vehicle_general_inventory_photo(vehicle_id: int) -> models.VehicleGeneralInventoryPhoto:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_category_columns(conn)
+        row = conn.execute(
+            f"SELECT id, general_inventory_photo_path FROM {config.tables.categories} WHERE id = ?",
+            (vehicle_id,),
+        ).fetchone()
+    if row is None:
+        raise ValueError("Véhicule introuvable")
+    return models.VehicleGeneralInventoryPhoto(
+        vehicle_id=row["id"],
+        photo_url=_build_media_url(row["general_inventory_photo_path"]),
+    )
+
+
+def upload_vehicle_general_inventory_photo(
+    vehicle_id: int, stream: BinaryIO, filename: str | None
+) -> models.VehicleGeneralInventoryPhoto:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_category_columns(conn)
+        row = conn.execute(
+            f"SELECT general_inventory_photo_path FROM {config.tables.categories} WHERE id = ?",
+            (vehicle_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Véhicule introuvable")
+        previous_path = row["general_inventory_photo_path"]
+        stored_path = _store_media_file(VEHICLE_GENERAL_INVENTORY_MEDIA_DIR, stream, filename)
+        conn.execute(
+            f"UPDATE {config.tables.categories} SET general_inventory_photo_path = ? WHERE id = ?",
+            (stored_path, vehicle_id),
+        )
+        _persist_after_commit(conn, "vehicle_inventory")
+    if previous_path and previous_path != stored_path:
+        _delete_media_file(previous_path)
+    return models.VehicleGeneralInventoryPhoto(vehicle_id=vehicle_id, photo_url=_build_media_url(stored_path))
+
+
+def delete_vehicle_general_inventory_photo(vehicle_id: int) -> models.VehicleGeneralInventoryPhoto:
+    ensure_database_ready()
+    config = _get_inventory_config("vehicle_inventory")
+    with db.get_stock_connection() as conn:
+        _ensure_vehicle_category_columns(conn)
+        row = conn.execute(
+            f"SELECT general_inventory_photo_path FROM {config.tables.categories} WHERE id = ?",
+            (vehicle_id,),
+        ).fetchone()
+        if row is None:
+            raise ValueError("Véhicule introuvable")
+        previous_path = row["general_inventory_photo_path"]
+        if previous_path:
+            conn.execute(
+                f"UPDATE {config.tables.categories} SET general_inventory_photo_path = NULL WHERE id = ?",
+                (vehicle_id,),
+            )
+            _persist_after_commit(conn, "vehicle_inventory")
+    if previous_path:
+        _delete_media_file(previous_path)
+    return models.VehicleGeneralInventoryPhoto(vehicle_id=vehicle_id, photo_url=None)
 
 
 def list_vehicle_photos() -> list[models.VehiclePhoto]:
