@@ -4577,7 +4577,11 @@ function InventoryPhotoCard({
         className
       )}
     >
-      <img src={displayImage} alt={`Photo inventaire ${vehicleName}`} className="h-full w-full object-cover" />
+      <img
+        src={displayImage}
+        alt={`Photo inventaire ${vehicleName}`}
+        className="h-full w-full bg-slate-100 object-contain"
+      />
       <span className="absolute right-2 top-2 rounded border border-slate-200 bg-white/90 px-2 py-1 text-[11px] font-semibold text-slate-700 shadow-sm">
         {hasUploadedPhoto ? "Changer la photo" : "Importer une photo"}
       </span>
