@@ -4064,7 +4064,7 @@ function VehicleCard({
           src={imageSource}
           alt={`Illustration du véhicule ${vehicle.name}`}
           onError={() => setHasImageError(true)}
-          className="absolute inset-0 h-full w-full object-cover object-center"
+          className="absolute inset-0 h-full w-full object-contain object-center p-2"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-900/30 via-transparent" />
       </div>
@@ -4146,12 +4146,12 @@ function VehicleHeader({
     <div className="rounded-2xl border border-slate-200 bg-white p-6 shadow-sm dark:border-slate-700 dark:bg-slate-900">
       <div className="flex flex-col gap-6 md:flex-row md:items-center md:justify-between">
         <div className="flex items-center gap-4">
-          <div className="hidden h-20 w-36 overflow-hidden rounded-xl bg-slate-100 shadow-inner dark:bg-slate-800 md:block">
+          <div className="hidden h-20 w-36 overflow-hidden rounded-xl bg-slate-100 p-1 shadow-inner dark:bg-slate-800 md:block">
             <img
               src={imageSource}
               alt="Vue du véhicule"
               onError={() => setHasImageError(true)}
-              className="h-full w-full object-cover"
+              className="h-full w-full object-contain"
             />
           </div>
           <div className="space-y-3">
